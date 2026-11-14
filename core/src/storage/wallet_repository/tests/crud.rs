@@ -266,3 +266,102 @@ async fn test_update_missing_wallet_is_not_found() {
         .expect_err("updating a missing wallet must fail");
     assert!(matches!(err, PersonaError::NotFound(_)));
 }
+
+// 深审 Critical 回归（2026-11-13）：update 全程单事务——地址重建中途
+// 约束失败（同 wallet 重复 address 撞 UNIQUE(wallet_id, address)）必须
+// 整体回滚，钱包行保持原值。老实现 UPDATE 先行提交，失败后留下新密钥
+// 与残缺地址的混合状态。
+#[tokio::test]
+async fn update_rolls_back_as_a_whole_on_address_conflict() {
+    let db = Database::in_memory().await.unwrap();
+    db.migrate().await.unwrap();
+    let identity_id = seed_identity(&db).await;
+    let repo = CryptoWalletRepository::new(Arc::new(db));
+
+    let mut wallet = make_wallet(identity_id, "Orig Name");
+    wallet.addresses.push(make_address("1Original", 0));
+    let created = repo.create(&wallet).await.unwrap();
+
+    let mut bad = created.clone();
+    bad.name = "Changed Name".to_string();
+    bad.encrypted_private_key = vec![9, 9, 9, 9];
+    bad.updated_at = chrono::Utc::now();
+    bad.addresses = vec![make_address("1Duplicate", 0), make_address("1Duplicate", 1)];
+
+    assert!(
+        repo.update(&bad).await.is_err(),
+        "duplicate address must fail the update"
+    );
+
+    // 整体回滚：名字与密钥保持原值，地址仍是原来的那一条
+    let after = repo.find_by_id(&created.id).await.unwrap().unwrap();
+    assert_eq!(after.name, "Orig Name");
+    assert_eq!(after.encrypted_private_key, vec![1, 2, 3, 4]);
+    assert_eq!(after.addresses.len(), 1);
+    assert_eq!(after.addresses[0].address, "1Original");
+}
+
+// 深审 Critical 回归（2026-11-13）：delete 改为单条父表删除，四张子表
+// 经 ON DELETE CASCADE 在同一语句内清除——中途失败不再可能留下半删除
+// 状态（老实现逐表独立删除）。
+#[tokio::test]
+async fn delete_cascades_to_all_child_rows() {
+    let db = Database::in_memory().await.unwrap();
+    db.migrate().await.unwrap();
+    let identity_id = seed_identity(&db).await;
+    let repo = CryptoWalletRepository::new(Arc::new(db.clone()));
+
+    let mut wallet = make_wallet(identity_id, "Cascade Wallet");
+    wallet.addresses.push(make_address("1Cascade", 0));
+    let created = repo.create(&wallet).await.unwrap();
+
+    let request = TransactionRequest {
+        id: Uuid::new_v4(),
+        wallet_id: created.id,
+        network: BlockchainNetwork::Bitcoin,
+        from_address: "1Cascade".to_string(),
+        to_address: "1Sink".to_string(),
+        amount: "5".to_string(),
+        fee: "1".to_string(),
+        gas_price: None,
+        gas_limit: None,
+        nonce: None,
+        memo: None,
+        raw_transaction_data: None,
+        required_signatures: 1,
+        created_at: chrono::Utc::now(),
+        expires_at: None,
+        metadata: std::collections::HashMap::new(),
+    };
+    repo.create_transaction_request(&request).await.unwrap();
+    repo.create_signed_transaction(&SignedTransaction {
+        id: Uuid::new_v4(),
+        request: request.clone(),
+        signatures: vec![],
+        raw_signed_transaction: vec![1],
+        transaction_hash: "deadbeef".to_string(),
+        signed_at: chrono::Utc::now(),
+        broadcast_status: crate::models::wallet::BroadcastStatus::NotBroadcast,
+    })
+    .await
+    .unwrap();
+
+    assert!(repo.delete(&created.id).await.unwrap());
+
+    for table in [
+        "wallet_addresses",
+        "wallet_metadata",
+        "transaction_requests",
+        "signed_transactions",
+    ] {
+        let sql = format!("SELECT COUNT(*) FROM {table} WHERE wallet_id = ?");
+        let n: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(sql))
+            .bind(created.id.to_string())
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
+        assert_eq!(n, 0, "{table} rows must cascade away");
+    }
+    assert!(repo.find_by_id(&created.id).await.unwrap().is_none());
+    assert!(!repo.delete(&created.id).await.unwrap());
+}

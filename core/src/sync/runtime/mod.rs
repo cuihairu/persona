@@ -267,22 +267,23 @@ impl<R: SyncRemote> SyncSession<R> {
             tracing::warn!(error = %e, "oplog gc skipped");
         }
         // 快照触发（S2）：head − 上次快照位点 > 阈值才重打包。失败仅记
-        // 日志不阻断——快照是优化层，缺位只是回退全量重放。
+        // 日志不阻断——快照是优化层，缺位只是回退全量重放。打包经回调
+        // 在引擎收敛（push/pull）之后执行：水位与快照内容同取收敛后的
+        // 一致视图，收敛拉进的 op 不会既被服务器裁剪又不在快照里。
         if let Ok(true) = self
             .engine
             .library_snapshot_needed(UPLOAD_THRESHOLD_OPS)
             .await
         {
-            match self.snapshot_payload().await {
-                Ok(payload) => match payload.seal(&self.group_key) {
-                    Ok(sealed) => {
-                        if let Err(e) = self.engine.upload_library_snapshot(&sealed).await {
-                            tracing::warn!(error = %e, "snapshot upload skipped");
-                        }
-                    }
-                    Err(e) => tracing::warn!(error = %e, "snapshot pack failed"),
-                },
-                Err(e) => tracing::warn!(error = %e, "snapshot payload failed"),
+            if let Err(e) = self
+                .engine
+                .upload_library_snapshot(|| async {
+                    let payload = self.snapshot_payload().await?;
+                    payload.seal(&self.group_key)
+                })
+                .await
+            {
+                tracing::warn!(error = %e, "snapshot upload skipped");
             }
         }
         Ok(SyncNowReport {

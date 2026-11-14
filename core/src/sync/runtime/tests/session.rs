@@ -111,13 +111,15 @@ async fn snapshot_bootstrap_converges_like_full_replay() {
     session_a.backfill_existing(&master_a).await.unwrap();
     session_a.run_cycle(&master_a).await.unwrap();
 
-    // A 手动打包上传（阈值 1000 不触发，集成路径直接驱动）
-    let payload = session_a.snapshot_payload().await.unwrap();
-    assert_eq!(payload.ops.len(), 2);
-    let sealed = payload.seal(&group).unwrap();
+    // A 手动打包上传（阈值 1000 不触发，集成路径直接驱动）。打包回调在
+    // 引擎收敛之后执行——快照内容与覆盖水位同取收敛后的一致视图。
     let (seq, _) = session_a
         .engine
-        .upload_library_snapshot(&sealed)
+        .upload_library_snapshot(|| async {
+            let payload = session_a.snapshot_payload().await.unwrap();
+            assert_eq!(payload.ops.len(), 2);
+            payload.seal(&group)
+        })
         .await
         .unwrap();
     assert_eq!(seq, 2, "覆盖位点 = 已推平水位");
@@ -154,6 +156,55 @@ async fn snapshot_bootstrap_converges_like_full_replay() {
         .await
         .unwrap();
     assert_eq!(watermark, 2);
+}
+
+// 深审 Critical 回归（2026-11-13）：快照打包必须在收敛（push/pull）之后。
+// 并发设备在打包前推上服务器的新 op 会进上传时的收敛 pull 与覆盖水位，
+// 若不在快照密文里就被服务器 `seq ≤ S` 裁剪——restore 永久丢该 op。
+// 老签名（先打包密文再上传）正是这个顺序；现签名把打包钉在收敛后。
+#[tokio::test]
+async fn snapshot_upload_packs_after_convergence() {
+    let (db_a, identity_a, master_a) = seeded_db().await;
+    let cred_a = CredentialRepository::new(db_a.clone());
+    store_credential(&cred_a, identity_a.id, "alpha", &master_a, "s1").await;
+
+    let group = GroupKey::generate().unwrap();
+    let remote = SharedRemote {
+        state: Arc::new(Mutex::new(SharedState {
+            ops: Vec::new(),
+            snapshot: None,
+        })),
+    };
+    let session_a = shared_session(&db_a, Uuid::new_v4(), group.clone(), remote.clone());
+    session_a.backfill_existing(&master_a).await.unwrap();
+    session_a.run_cycle(&master_a).await.unwrap();
+
+    // 并发设备 C 在 A 打包前把一条新 op 推上远端
+    let (db_c, identity_c, master_c) = seeded_db().await;
+    let cred_c = CredentialRepository::new(db_c.clone());
+    store_credential(&cred_c, identity_c.id, "gamma", &master_c, "s3").await;
+    let session_c = shared_session(&db_c, Uuid::new_v4(), group.clone(), remote.clone());
+    session_c.backfill_existing(&master_c).await.unwrap();
+    session_c.run_cycle(&master_c).await.unwrap();
+    assert_eq!(remote.state.lock().unwrap().ops.len(), 2);
+
+    // A 上传快照：打包回调此时必须已看到收敛 pull 拉进的 gamma op，
+    // 否则服务器按水位裁剪后 gamma 既不在快照也不在 oplog。
+    let (seq, _) = session_a
+        .engine
+        .upload_library_snapshot(|| async {
+            let payload = session_a.snapshot_payload().await.unwrap();
+            assert_eq!(payload.ops.len(), 2, "gamma 必须在快照密文里（收敛后打包）");
+            payload.seal(&group)
+        })
+        .await
+        .unwrap();
+
+    // 上传的密文可解且含 gamma；覆盖位点 = 收敛后的 head
+    let (_, sealed) = remote.state.lock().unwrap().snapshot.clone().unwrap();
+    let payload = LibrarySnapshotPayload::open(&sealed, &group).unwrap();
+    assert_eq!(payload.ops.len(), 2);
+    assert_eq!(seq, 2, "覆盖位点 = 收敛后的水位");
 }
 
 // 会话编排核心：backfill 幂等（首次灌入 N 条，再跑 0 条）+ run_cycle

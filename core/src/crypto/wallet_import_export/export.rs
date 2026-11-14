@@ -2,6 +2,7 @@
 //! 与 HD 地址私钥批量导出。`double_sha256`、`WalletExport` 自枢纽引入。
 
 use super::{double_sha256, WalletExport};
+use crate::crypto::wallet_crypto::Ed25519Key;
 use crate::crypto::wallet_encryption::{
     decrypt_master_key, decrypt_mnemonic, decrypt_private_key, EncryptedMnemonic,
     EncryptedWalletKey,
@@ -164,6 +165,48 @@ fn export_private_keys(
         .map_err(|e| {
         PersonaError::CryptographicError(format!("Deserialization error: {}", e))
     })?;
+
+    // Solana HD 钱包存的是 64 字节 SLIP-0010 根节点（secret+chain code，
+    // 经 encrypt_private_key 加密），不能按 secp256k1 XPrv 解析——逐地址
+    // 沿派生路径重派生后导出子密钥（2026-11-13 深审 Major 修复：此前
+    // Solana HD 导出私钥必然报错）。
+    if wallet.network == BlockchainNetwork::Solana
+        && matches!(
+            wallet.wallet_type,
+            WalletType::HierarchicalDeterministic { .. }
+        )
+    {
+        let root_material = decrypt_private_key(&encrypted_key, password)?;
+        let secret: [u8; 32] = root_material
+            .get(..32)
+            .and_then(|s| s.try_into().ok())
+            .ok_or_else(|| {
+                PersonaError::CryptographicError("Invalid Solana key material length".to_string())
+            })?;
+        let chain_code: [u8; 32] = root_material
+            .get(32..64)
+            .and_then(|c| c.try_into().ok())
+            .ok_or_else(|| {
+                PersonaError::CryptographicError("Invalid Solana key material length".to_string())
+            })?;
+        let root = Ed25519Key::from_parts(secret, chain_code)?;
+        let mut private_keys = HashMap::new();
+
+        for address in &wallet.addresses {
+            let derivation_path = address.derivation_path.as_deref().ok_or_else(|| {
+                PersonaError::InvalidInput(format!(
+                    "Wallet address {} is missing a derivation path",
+                    address.address
+                ))
+            })?;
+
+            let derived = root.derive_path(derivation_path)?;
+            let (child_secret, _chain_code) = derived.to_parts();
+            private_keys.insert(address.address.clone(), hex::encode(child_secret));
+        }
+
+        return Ok(private_keys);
+    }
 
     match wallet.wallet_type {
         WalletType::HierarchicalDeterministic { .. } => {

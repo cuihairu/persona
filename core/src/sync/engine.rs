@@ -202,15 +202,24 @@ impl<R: SyncRemote> SyncEngine<R> {
     }
 
     /// 库级快照上传原语（S2，E2EE_SYNC_DESIGN §5）：调用方（service 层，
-    /// 持密钥层）把整库打包成 group key 密文传入，引擎负责收敛与覆盖位点
-    /// 的确定——先推平本机待推队列（上云拿到 seq）再拉平远端增量，然后以
-    /// 「本机已同步水位」为覆盖位点 S 上云。先 push 后 pull 的周期顺序保证
-    /// 服务器上 seq ≤ S 的每条 op 都已反映进本机状态（pull 按 (seq, op_id)
-    /// 全序分页，拉到空页 = 水位即当时的 head），快照声称的覆盖区间因此
-    /// 成立（周期顺序消竞态，无需快照点协议）。成功后记
+    /// 持密钥层）经 `pack` 回调把整库打包成 group key 密文，引擎负责收敛
+    /// 与覆盖位点的确定——先推平本机待推队列（上云拿到 seq）再拉平远端
+    /// 增量，然后以「本机已同步水位」为覆盖位点 S 上云。先 push 后 pull
+    /// 的周期顺序保证服务器上 seq ≤ S 的每条 op 都已反映进本机状态（pull
+    /// 按 (seq, op_id) 全序分页，拉到空页 = 水位即当时的 head）。
+    ///
+    /// **打包必须在收敛之后**（2026-11-13 codex 深审 Critical 修复）：
+    /// 早先签名让调用方先 `snapshot_payload()` 再上传，收敛 pull 拉进的
+    /// 远端 op 不在已打包的密文里、却进水位被服务器 `seq ≤ S` 裁剪——
+    /// 快照外的增量被永久删除。现在引擎先收敛，水位与打包同取收敛后的
+    /// 一致视图（水位先读、打包紧随；收敛后本任务不再推进水位），覆盖
+    /// 区间与内容一致；`pack` 内不得调用引擎的 push/pull。成功后记
     /// `last_snapshot_seq`（触发阈值基线）。
     /// 返回 (覆盖位点 S, 服务器压缩的 op 条数)。
-    pub async fn upload_library_snapshot(&self, ciphertext: &[u8]) -> Result<(i64, u64)> {
+    pub async fn upload_library_snapshot<F>(&self, pack: F) -> Result<(i64, u64)>
+    where
+        F: AsyncFnOnce() -> Result<Vec<u8>>,
+    {
         if (self.travel_active)() {
             return Err(PersonaError::InvalidInput(
                 "library snapshot upload is blocked while travel mode is active".to_string(),
@@ -220,9 +229,10 @@ impl<R: SyncRemote> SyncEngine<R> {
         self.push_cycle().await?;
         self.pull_cycle().await?;
         let seq = self.repo.local_watermark().await?;
+        let ciphertext = pack().await?;
         let pruned = self
             .remote
-            .put_library_snapshot(seq, &self.device_id.to_string(), ciphertext)
+            .put_library_snapshot(seq, &self.device_id.to_string(), &ciphertext)
             .await?;
         self.repo.set_last_snapshot_seq(seq).await?;
         Ok((seq, pruned))
@@ -707,7 +717,10 @@ mod tests {
                 .unwrap();
         }
 
-        let (seq, pruned) = engine.upload_library_snapshot(&[7u8; 5]).await.unwrap();
+        let (seq, pruned) = engine
+            .upload_library_snapshot(|| async { Ok(vec![7u8; 5]) })
+            .await
+            .unwrap();
         assert_eq!(seq, 5, "远端 3 条 + 本机推上的 2 条 = 水位 5");
         assert_eq!(pruned, 5, "服务器压缩了覆盖区间内的全部 ops");
         assert_eq!(
@@ -737,7 +750,7 @@ mod tests {
     async fn upload_snapshot_blocked_during_travel() {
         let (engine, remote) = fixture(true).await;
         let err = engine
-            .upload_library_snapshot(&[1u8; 4])
+            .upload_library_snapshot(|| async { Ok(vec![1u8; 4]) })
             .await
             .unwrap_err()
             .to_string();
@@ -854,7 +867,10 @@ mod tests {
         assert!(!engine.library_snapshot_needed(5).await.unwrap());
 
         // 上传后基线 = 水位 5：head 5 − 5 = 0，任何阈值都不再触发
-        engine.upload_library_snapshot(&[1u8; 3]).await.unwrap();
+        engine
+            .upload_library_snapshot(|| async { Ok(vec![1u8; 3]) })
+            .await
+            .unwrap();
         assert!(!engine.library_snapshot_needed(0).await.unwrap());
 
         // 组继续前进：head 8 − 基线 5 = 3 → 超 2 触发、等于 3 不触发

@@ -94,15 +94,17 @@ const SyncServerPane: React.FC = () => {
           aria-checked={enabled}
           aria-label={t('settings.sync.enable')}
           data-testid="sync-toggle"
+          disabled={saving}
           onClick={() => {
-            const next = !enabled;
-            if (next) {
+            if (!enabled) {
               // 隐私红线：开启 = 先明示数据范围，确认才展开配置表单
               setConsentOpen(true);
               return;
             }
-            setEnabled(false);
-            save(false);
+            // 关闭不提前乐观翻转：保存成功后由服务端真相回填，失败保持
+            // 真实状态（2026-11-13 深审 Major 修复）；saving 期间按钮禁用
+            // 不产生叠写
+            void save(false);
           }}
           className={`relative inline-flex h-6 w-11 flex-shrink-0 items-center rounded-full transition-colors ${
             enabled ? 'bg-primary-600' : 'bg-gray-200 dark:bg-gray-700'

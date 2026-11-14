@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import toast from 'react-hot-toast';
 import { useTranslation } from 'react-i18next';
 import i18n from '@/i18n';
@@ -62,48 +62,63 @@ const GeneralPane: React.FC<{
   const setTheme = useAppStore((s) => s.setTheme);
 
   const [locale, setLocale] = useState(i18n.language.startsWith('en') ? 'en' : 'zh-CN');
+  // 写入串行链：上一笔结算后才发下一笔（2026-11-13 深审 Major 修复：
+  // 并发写各自携带陈旧基线，迟到失败会把后来成功的写入打回去）。
+  const localeChain = useRef<Promise<void>>(Promise.resolve());
+  const localeRef = useRef(locale);
+  const flagsChain = useRef<Promise<void>>(Promise.resolve());
 
   // 语言切换：optimistic 先换渲染语言再持久化；失败回滚（UI + i18n 双回退）
-  const changeLocale = async (next: string) => {
-    const previous = locale;
-    setLocale(next);
-    void i18n.changeLanguage(next);
-    try {
-      const resp = await personaAPI.setLocale(next);
-      if (!resp.success) {
-        setLocale(previous);
-        void i18n.changeLanguage(previous);
-        toast.error(resp.error || t('settings.saveFailed'));
-      } else {
+  const changeLocale = (next: string) => {
+    const run = async () => {
+      const previous = localeRef.current;
+      localeRef.current = next;
+      setLocale(next);
+      void i18n.changeLanguage(next);
+      try {
+        const resp = await personaAPI.setLocale(next);
+        if (!resp.success) {
+          localeRef.current = previous;
+          setLocale(previous);
+          void i18n.changeLanguage(previous);
+          toast.error(resp.error || t('settings.saveFailed'));
+          return;
+        }
         // 托盘右键菜单同步换文案（原生菜单走 set_tray_locale，不另起一套）；
         // 用全局 i18n.t 取切换后的语言——组件级 t 是 getFixedT 旧语言快照
         void personaAPI.setTrayLocale(trayLocaleLabels((key) => i18n.t(key)));
+      } catch (err) {
+        localeRef.current = previous;
+        setLocale(previous);
+        void i18n.changeLanguage(previous);
+        toast.error(err instanceof Error ? err.message : t('settings.saveFailed'));
       }
-    } catch (err) {
-      setLocale(previous);
-      void i18n.changeLanguage(previous);
-      toast.error(err instanceof Error ? err.message : t('settings.saveFailed'));
-    }
+    };
+    localeChain.current = localeChain.current.then(run, run);
   };
 
-  // optimistic 写入 → 服务端真相回填；失败回滚并 toast
-  const toggle = async (key: keyof FeatureFlags) => {
-    const previous = featureFlags;
-    const next = { ...previous, [key]: !previous[key] };
-    setFeatureFlags(next);
+  // optimistic 写入 → 服务端真相回填；失败回滚并 toast。基线在链内取
+  // store 最新值（可能已被上一笔的成功回填刷新），失败只回滚自己那一笔。
+  const toggle = (key: keyof FeatureFlags) => {
+    const run = async () => {
+      const previous = useAppStore.getState().featureFlags;
+      const next = { ...previous, [key]: !previous[key] };
+      setFeatureFlags(next);
 
-    try {
-      const resp = await personaAPI.setFeatureFlags(next);
-      if (resp.success && resp.data) {
-        setFeatureFlags(resp.data.features);
-      } else {
+      try {
+        const resp = await personaAPI.setFeatureFlags(next);
+        if (resp.success && resp.data) {
+          setFeatureFlags(resp.data.features);
+        } else {
+          setFeatureFlags(previous);
+          toast.error(resp.error || t('settings.saveFailed'));
+        }
+      } catch (err) {
         setFeatureFlags(previous);
-        toast.error(resp.error || t('settings.saveFailed'));
+        toast.error(err instanceof Error ? err.message : t('settings.saveFailed'));
       }
-    } catch (err) {
-      setFeatureFlags(previous);
-      toast.error(err instanceof Error ? err.message : t('settings.saveFailed'));
-    }
+    };
+    flagsChain.current = flagsChain.current.then(run, run);
   };
 
   return (
