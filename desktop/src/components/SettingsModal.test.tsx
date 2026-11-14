@@ -341,6 +341,54 @@ describe('components/SettingsModal', () => {
     });
   });
 
+  // 深审 Major 回归（2026-11-13）：语言切换写入串行化——第一笔在途时
+  // 第二笔必须排队，迟到失败只回滚自己，不得把后来的成功打回去。
+  it('serializes stacked locale switches so a late failure cannot roll back a newer one', async () => {
+    (usePersonaService as jest.Mock).mockReturnValue({
+      identities: [],
+      currentIdentity: null,
+      updateIdentity: jest.fn(),
+      deleteIdentity: jest.fn(),
+      isLoading: false,
+    });
+    let rejectFirst!: (e: Error) => void;
+    mockSetLocale
+      .mockImplementationOnce(
+        () =>
+          new Promise((_resolve, reject) => {
+            rejectFirst = reject;
+          }),
+      )
+      .mockResolvedValueOnce({ success: true, data: {} });
+
+    await act(async () => {
+      render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    });
+
+    fireEvent.change(screen.getByTestId('locale-select'), { target: { value: 'en' } });
+    // 冲掉链首微任务：第一笔已发出（optimistic + IPC 调用，仍在途）
+    await act(async () => {});
+    // 第一笔在途：第二笔必须排队，不得并发携带陈旧基线
+    fireEvent.change(screen.getByTestId('locale-select'), { target: { value: 'zh-CN' } });
+    expect(mockSetLocale).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      rejectFirst(new Error('first failed'));
+    });
+
+    await waitFor(() => {
+      expect(mockSetLocale).toHaveBeenCalledTimes(2);
+    });
+    expect(mockSetLocale).toHaveBeenLastCalledWith('zh-CN');
+    // 最终停在第二笔的目标语言；第一笔的迟到失败只 toast
+    expect(screen.getByTestId('locale-select')).toHaveValue('zh-CN');
+    expect(toast.error).toHaveBeenCalledWith('first failed');
+
+    await act(async () => {
+      await i18n.changeLanguage('zh-CN');
+    });
+  });
+
   it('toggles a flag optimistically and adopts the server truth', async () => {
     (usePersonaService as jest.Mock).mockReturnValue({
       identities: [],
@@ -424,6 +472,71 @@ describe('components/SettingsModal', () => {
       fetch_favicons: false,
     });
     expect(screen.getByRole('switch', { name: '钱包' })).toHaveAttribute(
+      'aria-checked',
+      'false',
+    );
+  });
+
+  // 深审 Major 回归（2026-11-13）：功能开关写入串行化——第一笔慢失败
+  // 不得回滚第二笔的成功；第二笔的基线是第一笔回滚后的最新真相。
+  it('serializes stacked feature toggles so a late failure cannot roll back a newer save', async () => {
+    (usePersonaService as jest.Mock).mockReturnValue({
+      identities: [],
+      currentIdentity: null,
+      updateIdentity: jest.fn(),
+      deleteIdentity: jest.fn(),
+      isLoading: false,
+    });
+    let rejectFirst!: (e: Error) => void;
+    mockSetFlags
+      .mockImplementationOnce(
+        () =>
+          new Promise((_resolve, reject) => {
+            rejectFirst = reject;
+          }),
+      )
+      .mockResolvedValueOnce({
+        success: true,
+        data: {
+          features: { ssh_agent: false, wallet: true, passkeys: false, fetch_favicons: false },
+        },
+      });
+
+    await act(async () => {
+      render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    });
+
+    fireEvent.click(screen.getByTestId('feature-toggle-ssh_agent'));
+    // 冲掉链首微任务：第一笔已发出（optimistic + IPC 调用，仍在途）
+    await act(async () => {});
+    // 第一笔在途：第二笔必须排队
+    fireEvent.click(screen.getByTestId('feature-toggle-wallet'));
+    expect(mockSetFlags).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      rejectFirst(new Error('first failed'));
+    });
+
+    // 第二笔以回滚后的真相为基线：wallet 单独为 on
+    await waitFor(() => {
+      expect(mockSetFlags).toHaveBeenLastCalledWith({
+        ssh_agent: false,
+        wallet: true,
+        passkeys: false,
+        fetch_favicons: false,
+      });
+    });
+    await waitFor(() => {
+      expect(useAppStore.getState().featureFlags).toEqual({
+        ssh_agent: false,
+        wallet: true,
+        passkeys: false,
+        fetch_favicons: false,
+      });
+    });
+    expect(toast.error).toHaveBeenCalledWith('first failed');
+    expect(screen.getByRole('switch', { name: '钱包' })).toHaveAttribute('aria-checked', 'true');
+    expect(screen.getByRole('switch', { name: 'SSH Agent' })).toHaveAttribute(
       'aria-checked',
       'false',
     );
@@ -707,6 +820,40 @@ describe('components/SettingsModal', () => {
     await waitFor(() => {
       expect(screen.getByTestId('sync-toggle')).toHaveAttribute('aria-checked', 'false');
     });
+  });
+
+  // 深审 Major 回归（2026-11-13）：关闭同步失败不得乐观翻转——状态只在
+  // 保存成功后由服务端真相回填，失败停在真实（开）状态。
+  it('keeps the sync toggle on when switching off fails server-side', async () => {
+    mockIdentityHook();
+    mockGetSettings.mockResolvedValue({
+      success: true,
+      data: {
+        features: { ...DEFAULT_FEATURE_FLAGS },
+        sync: { enabled: true, server_url: 'https://s.example.com', server_token: '' },
+      },
+    });
+    mockSetSync.mockRejectedValueOnce(new Error('sync down'));
+
+    await act(async () => {
+      render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId('sync-toggle')).toHaveAttribute('aria-checked', 'true');
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('sync-toggle'));
+    });
+
+    await waitFor(() => {
+      expect(toast.error).toHaveBeenCalledWith('sync down');
+    });
+    expect(screen.getByTestId('sync-toggle')).toHaveAttribute('aria-checked', 'true');
+    expect(screen.getByTestId('sync-url-input')).toBeInTheDocument();
+    expect(mockSetSync).toHaveBeenCalledWith(
+      expect.objectContaining({ enabled: false, server_url: 'https://s.example.com' }),
+    );
   });
 
   // -------------------------------------------------------------------------
