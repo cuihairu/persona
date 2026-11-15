@@ -50,11 +50,11 @@ docker build -f docker/Dockerfile.server -t persona-server:local .
 服务端同时以 musl 静态链接二进制的形态打包为 `packaging/openwrt/` 下的三个
 OpenWrt ipk：
 
-| 包                 | 架构                 | 内容                                                                                   |
-| ------------------ | -------------------- | --------------------------------------------------------------------------------------- |
-| `persona`          | `x86_64` / `aarch64` | `/usr/bin/persona-server`、procd init 脚本、UCI 样例                                    |
-| `luci-app-persona` | `all`                | LuCI 应用包：controller、CBI 设置页与状态视图（`Depends: persona`）                     |
-| `app-meta-persona` | `all`                | iStore 元数据：应用清单与图标（`Depends: luci-app-persona`）                            |
+| 包                 | 架构                 | 内容                                                                |
+| ------------------ | -------------------- | ------------------------------------------------------------------- |
+| `persona`          | `x86_64` / `aarch64` | `/usr/bin/persona-server`、procd init 脚本、UCI 样例                |
+| `luci-app-persona` | `all`                | LuCI 应用包：controller、CBI 设置页与状态视图（`Depends: persona`） |
+| `app-meta-persona` | `all`                | iStore 元数据：应用清单与图标（`Depends: luci-app-persona`）        |
 
 安装顺序 `persona` → `luci-app-persona` → `app-meta-persona`（opkg 会解析
 `Depends:` 链，从 iStore 直接选 `app-meta-persona` 会按序带上另外两个）。
