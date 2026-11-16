@@ -40,6 +40,8 @@ export default {
     favorites: '收藏',
     recent: '最近使用',
     searchPlaceholder: '搜索条目…',
+    collapse: '收起侧栏',
+    expand: '展开侧栏',
     group: {
       categories: '类别',
       vaults: '保险库',

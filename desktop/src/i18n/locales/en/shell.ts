@@ -40,6 +40,8 @@ export default {
     favorites: 'Favorites',
     recent: 'Recents',
     searchPlaceholder: 'Search items…',
+    collapse: 'Collapse sidebar',
+    expand: 'Expand sidebar',
     group: {
       categories: 'Categories',
       vaults: 'Vaults',

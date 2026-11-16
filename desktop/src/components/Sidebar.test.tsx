@@ -60,12 +60,15 @@ const renderSidebar = (overrides: Partial<SidebarProps> = {}) => {
 
 describe('components/Sidebar', () => {
   beforeEach(() => {
+    localStorage.clear();
     useAppStore.setState({
       featureFlags: { ...DEFAULT_FEATURE_FLAGS },
       credentials: [],
       identities: [],
       sidebarFilter: { kind: 'all' },
       credentialSearchQuery: '',
+      sidebarCollapsed: false,
+      collapsedSidebarGroups: [],
     });
   });
 
@@ -242,4 +245,49 @@ describe('components/Sidebar', () => {
     fireEvent.click(screen.getByRole('button', { name: 'API 密钥' }));
     expect(useAppStore.getState().sidebarFilter).toEqual({ kind: 'category', value: 'api_keys' });
   });
+  it('collapses to the icon rail and hides labels and search', () => {
+    useAppStore.setState({ identities: [makeIdentity()] });
+    renderSidebar();
+    fireEvent.click(screen.getByTestId('sidebar-toggle'));
+    expect(screen.getByTestId('app-sidebar').className).toContain('w-14');
+    expect(screen.queryByTestId('sidebar-search')).toBeNull();
+    expect(screen.queryByTestId('identity-switcher')).toBeNull();
+  });
+
+  it('rail rows keep their label as tooltip and accessible name', () => {
+    renderSidebar();
+    fireEvent.click(screen.getByTestId('sidebar-toggle'));
+    expect(screen.getByTestId('nav-all')).toHaveAttribute('aria-label');
+  });
+
+  it('expanding restores the search bar', () => {
+    renderSidebar();
+    fireEvent.click(screen.getByTestId('sidebar-toggle'));
+    fireEvent.click(screen.getByTestId('sidebar-toggle'));
+    expect(screen.getByTestId('sidebar-search')).toBeInTheDocument();
+  });
+
+  it('group headers collapse and expand their rows', () => {
+    renderSidebar();
+    const header = screen.getByTestId('sidebar-group-tools');
+    expect(header).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByTestId('nav-statistics')).toBeInTheDocument();
+    fireEvent.click(header);
+    expect(screen.getByTestId('sidebar-group-tools')).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByTestId('nav-statistics')).toBeNull();
+    fireEvent.click(screen.getByTestId('sidebar-group-tools'));
+    expect(screen.getByTestId('nav-statistics')).toBeInTheDocument();
+  });
+
+  it('persists the collapsed rail across remounts', () => {
+    const view = render(
+      <Sidebar onNavigate={jest.fn()} onOpenSettings={jest.fn()} onLock={jest.fn()} />,
+    );
+    fireEvent.click(screen.getByTestId('sidebar-toggle'));
+    view.unmount();
+    render(<Sidebar onNavigate={jest.fn()} onOpenSettings={jest.fn()} onLock={jest.fn()} />);
+    expect(screen.getByTestId('app-sidebar').className).toContain('w-14');
+    expect(screen.queryByTestId('sidebar-search')).toBeNull();
+  });
+
 });

@@ -12,6 +12,7 @@ import type {
   PendingCredentialSelection,
 } from '@/types';
 import { readStoredTheme } from '@/utils/theme';
+import { readSidebarPrefs, writeSidebarPrefs, type SidebarGroupKey, type SidebarPrefs } from '@/utils/sidebarPrefs';
 
 /** 高级功能开关出厂值：1Password 式默认全关，解锁后从 workspace settings 拉取 */
 export const DEFAULT_FEATURE_FLAGS: FeatureFlags = {
@@ -52,6 +53,10 @@ interface AppState {
   theme: ThemePreference;
   /** 侧栏分类树选中项（单选；Sidebar 写、CredentialList 读，换身份时 reset） */
   sidebarFilter: SidebarFilter;
+  /** 侧栏整栏收起（图标条形态；localStorage 持久化，跨会话记忆） */
+  sidebarCollapsed: boolean;
+  /** 侧栏内折叠的分组 key（类别/保险库/标签/工具；同上持久化） */
+  collapsedSidebarGroups: SidebarGroupKey[];
   /** 凭据列表本地搜索词（CredentialList 读写；换身份/锁屏清空）。
    *  放 store 而非组件 state：pending 注入需与选中/侧栏筛选同一批更新，
    *  React state 慢一帧会产生"选中已置、搜索词未清"的中间帧误触清选中 */
@@ -80,6 +85,8 @@ interface AppState {
   setTheme: (theme: ThemePreference) => void;
   setSidebarFilter: (filter: SidebarFilter) => void;
   resetSidebarFilter: () => void;
+  toggleSidebarCollapsed: () => void;
+  toggleSidebarGroup: (key: SidebarGroupKey) => void;
   setCredentialSearchQuery: (query: string) => void;
   setPendingCredentialSelection: (selection: PendingCredentialSelection) => void;
   clearPendingCredentialSelection: () => void;
@@ -97,6 +104,8 @@ interface AppState {
   setPasswordChangeRequired: (required: boolean) => void;
 }
 
+const initialSidebarPrefs: SidebarPrefs = readSidebarPrefs();
+
 export const useAppStore = create<AppState>((set) => ({
   // Initial state
   isUnlocked: false,
@@ -112,6 +121,8 @@ export const useAppStore = create<AppState>((set) => ({
   passwordChangeRequired: false,
   theme: readStoredTheme(),
   sidebarFilter: DEFAULT_SIDEBAR_FILTER,
+  sidebarCollapsed: initialSidebarPrefs.collapsed,
+  collapsedSidebarGroups: initialSidebarPrefs.collapsedGroups,
   credentialSearchQuery: '',
   pendingCredentialSelection: null,
   selectedCredentialId: null,
@@ -131,6 +142,20 @@ export const useAppStore = create<AppState>((set) => ({
   setTheme: (theme) => set({ theme }),
   setSidebarFilter: (filter) => set({ sidebarFilter: filter }),
   resetSidebarFilter: () => set({ sidebarFilter: DEFAULT_SIDEBAR_FILTER }),
+  toggleSidebarCollapsed: () =>
+    set((s) => {
+      const sidebarCollapsed = !s.sidebarCollapsed;
+      writeSidebarPrefs({ collapsed: sidebarCollapsed, collapsedGroups: s.collapsedSidebarGroups });
+      return { sidebarCollapsed };
+    }),
+  toggleSidebarGroup: (key: SidebarGroupKey) =>
+    set((s) => {
+      const collapsedSidebarGroups = s.collapsedSidebarGroups.includes(key)
+        ? s.collapsedSidebarGroups.filter((k) => k !== key)
+        : [...s.collapsedSidebarGroups, key];
+      writeSidebarPrefs({ collapsed: s.sidebarCollapsed, collapsedGroups: collapsedSidebarGroups });
+      return { collapsedSidebarGroups };
+    }),
   setCredentialSearchQuery: (query) => set({ credentialSearchQuery: query }),
   setPendingCredentialSelection: (selection) => set({ pendingCredentialSelection: selection }),
   clearPendingCredentialSelection: () => set({ pendingCredentialSelection: null }),
