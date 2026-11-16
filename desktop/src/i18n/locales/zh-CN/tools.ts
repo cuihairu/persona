@@ -1,0 +1,86 @@
+/**
+ * 简体中文资源（基准语言——新增文案先在这里定稿，en.ts 跟随）。
+ * 顶层 key 按组件/领域分 namespace：common 为跨组件复用词。
+ */
+export default {
+  generator: {
+    title: '密码生成器',
+    description:
+      '生成本地随机密码：可选长度、字符集与可发音模式。生成是纯计算，不写入密码库；复制后 30 秒自动清除剪贴板。',
+    generate: '生成',
+    generating: '生成中…',
+    generateFailed: '生成失败',
+    length: '长度',
+    count: '候选数量',
+    charsets: '字符集',
+    lowercase: '小写字母',
+    uppercase: '大写字母',
+    numbers: '数字',
+    symbols: '符号',
+    pronounceable: '可发音',
+    pronounceableNeedsLetters: '可发音模式需要至少勾选一个字母集',
+    needsOneCharset: '至少需要勾选一个字符集',
+    words: '词组（Diceware）',
+    wordsCount: '词数',
+    wordsHint: '从内嵌 EFF 大词表抽取单词，以「-」连接成 passphrase。',
+    entropy: '强度估计',
+    entropyValue: '≈ {{bits}} 比特 · 字符池 {{pool}}',
+    strengthLabel: '强度',
+    passwordLabel: '密码',
+    copy: '复制',
+    strength: {
+      veryWeak: '非常弱',
+      weak: '弱',
+      fair: '一般',
+      strong: '强',
+      veryStrong: '极强',
+    },
+  },
+  watchtower: {
+    title: '安全瞭望',
+    description:
+      '扫描库中的弱口令、复用、泄露、过期与陈旧凭据，以及提供两步验证但未存储 TOTP 的站点。报告只含元数据——绝不包含密文。',
+    checkBreaches: '检查泄露库（HIBP）',
+    checkBreachesHint:
+      'k-anonymity：只发送每个密码的 5 字符哈希前缀。网络不可用时跳过泄露检查，离线规则照常运行。',
+    scanning: '扫描中…',
+    runScan: '开始扫描',
+    results: '扫描结果',
+    scannedSummary: '{{total}} 条凭据已扫描 · {{time}}',
+    rescan: '重新扫描',
+    serviceLocked: '服务已锁定，解锁后重试。',
+    scanFailed: '健康扫描失败',
+    guidance: '运行一次扫描来检查你的密码库。',
+    noIssues: '✓ 未发现问题，共扫描 {{total}} 条凭据。',
+    severity: { high: '高', medium: '中', low: '低' },
+    kind: {
+      weak_password: '弱口令',
+      reused_password: '复用口令',
+      breached_password: '已泄露',
+      expired: '已过期',
+      expiring_soon: '即将过期',
+      stale_unchanged: '长期未更新',
+      two_factor_available: '可开两步验证',
+    },
+    // 与 Rust HealthIssueKind::detail 的固定模板对应（后端 detail 是英文，
+    // CLI 消费；前端按结构化字段本地化渲染）
+    detail: {
+      weak: '密码强度评分 {{score}}（低于阈值），建议轮换。',
+      reused: '该机密被 {{group_size}} 条凭据复用，一处泄露全部暴露。',
+      breached: '该密码在已知泄露库中出现 {{count}} 次，请立即轮换。',
+      expired: '该条目已过期，应替换或移除。',
+      expiring: '该条目将在 {{days}} 天内过期，请计划轮换。',
+      stale: '已 {{days}} 天未更新，请确认是否仍需要、仍有效。',
+      twoFactor: '{{site}} 提供两步验证，但库中未存储该站点的 TOTP。添加 TOTP 凭据可加固登录。',
+    },
+  },
+  statistics: {
+    title: '统计',
+    totalIdentities: '身份总数',
+    totalCredentials: '凭据总数',
+    activeCredentials: '活跃凭据',
+    favorites: '收藏',
+    credentialTypes: '凭据类型',
+    securityLevels: '安全等级',
+  },
+};
