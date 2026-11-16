@@ -1,24 +1,29 @@
 import React, { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
-  WalletIcon,
-  PlusIcon,
-  EyeIcon,
   ArrowDownTrayIcon,
-  ArrowUpTrayIcon,
-  QrCodeIcon,
-  ArrowTrendingUpIcon,
-  PaperAirplaneIcon,
-  TrashIcon,
+  PlusIcon,
+  WalletIcon,
 } from '@heroicons/react/24/outline';
 import { LoadingSpinner, ErrorDisplay, ErrorBoundary } from '@/components/ErrorHandling';
 import { personaAPI } from '@/utils/api';
 import { usePersonaService } from '@/hooks/usePersonaService';
 import TransactionConfirmModal from '@/components/TransactionConfirmModal';
-import { QRCodeSVG } from 'qrcode.react';
+import WalletCard from './wallet/WalletCard';
+import SelectedWalletAddresses from './wallet/SelectedWalletAddresses';
+import AddressQrModal from './wallet/AddressQrModal';
+import CreateWalletModal from './wallet/CreateWalletModal';
+import type { CreateWalletForm } from './wallet/CreateWalletModal';
+import ImportWalletModal from './wallet/ImportWalletModal';
+import type { ImportWalletForm } from './wallet/ImportWalletModal';
+import AddAddressModal from './wallet/AddAddressModal';
+import ExportWalletModal from './wallet/ExportWalletModal';
+import {
+  getAvailableExportFormats,
+  getExportRestrictionHint,
+  type WalletExportFormat,
+} from './wallet/walletExport';
 import type { WalletAddress, WalletGenerateResponse, WalletSummary } from '@/types';
-
-type WalletExportFormat = 'json' | 'xpub' | 'mnemonic' | 'private_key' | 'wif' | 'keystore';
 
 const WalletPanel: React.FC = () => {
   const { t } = useTranslation();
@@ -41,17 +46,17 @@ const WalletPanel: React.FC = () => {
   const [exportIncludePrivate, setExportIncludePrivate] = useState(false);
   const [exportPassword, setExportPassword] = useState('');
   const [exportOutput, setExportOutput] = useState<string | null>(null);
-  const [createForm, setCreateForm] = useState({
+  const [createForm, setCreateForm] = useState<CreateWalletForm>({
     name: '',
     network: 'Ethereum',
     password: '',
     addressCount: 5,
   });
   const [createResult, setCreateResult] = useState<WalletGenerateResponse | null>(null);
-  const [importForm, setImportForm] = useState({
+  const [importForm, setImportForm] = useState<ImportWalletForm>({
     name: '',
     network: 'Ethereum',
-    importType: 'mnemonic' as 'mnemonic' | 'private_key' | 'wif' | 'keystore',
+    importType: 'mnemonic',
     data: '',
     password: '',
     addressCount: 5,
@@ -103,9 +108,9 @@ const WalletPanel: React.FC = () => {
     }
   };
 
-  const exportWallet = (walletId: string, walletName: string) => {
-    setExportWalletId(walletId);
-    setExportWalletName(walletName);
+  const exportWallet = (wallet: WalletSummary) => {
+    setExportWalletId(wallet.id);
+    setExportWalletName(wallet.name);
     setExportFormat('json');
     setExportIncludePrivate(false);
     setExportPassword('');
@@ -202,6 +207,17 @@ const WalletPanel: React.FC = () => {
     }
   };
 
+  const closeCreateModal = () => {
+    setShowCreateModal(false);
+    setCreateResult(null);
+    setCreateForm({
+      name: '',
+      network: 'Ethereum',
+      password: '',
+      addressCount: 5,
+    });
+  };
+
   const importWallet = async () => {
     try {
       if (!currentIdentity) {
@@ -234,6 +250,18 @@ const WalletPanel: React.FC = () => {
     }
   };
 
+  const closeImportModal = () => {
+    setShowImportModal(false);
+    setImportForm({
+      name: '',
+      network: 'Ethereum',
+      importType: 'mnemonic',
+      data: '',
+      password: '',
+      addressCount: 5,
+    });
+  };
+
   const addAddress = async () => {
     try {
       if (!selectedWallet) {
@@ -251,6 +279,11 @@ const WalletPanel: React.FC = () => {
     } catch (err: any) {
       setError(err.message || t('wallet.errors.generateAddressFailed'));
     }
+  };
+
+  const closeAddAddressModal = () => {
+    setShowAddAddressModal(false);
+    setAddAddressPassword('');
   };
 
   const deleteWallet = async (wallet: WalletSummary) => {
@@ -277,36 +310,12 @@ const WalletPanel: React.FC = () => {
     }
   };
 
-  const getNetworkIcon = (network: string) => {
-    switch (network.toLowerCase()) {
-      case 'bitcoin':
-      case 'btc':
-        return '₿';
-      case 'ethereum':
-      case 'eth':
-        return 'Ξ';
-      case 'solana':
-      case 'sol':
-        return '◎';
-      default:
-        return '💰';
+  /** 卡片发送按钮：未选中先选中（触发地址加载做投毒检测），再开签名弹窗 */
+  const sendFromCard = (wallet: WalletSummary) => {
+    if (selectedWallet?.id !== wallet.id) {
+      setSelectedWallet(wallet);
     }
-  };
-
-  const getNetworkColor = (network: string) => {
-    switch (network.toLowerCase()) {
-      case 'bitcoin':
-      case 'btc':
-        return 'text-orange-600 dark:text-orange-400 bg-orange-100 dark:bg-orange-500/10';
-      case 'ethereum':
-      case 'eth':
-        return 'text-blue-600 dark:text-blue-400 bg-blue-100 dark:bg-blue-500/10';
-      case 'solana':
-      case 'sol':
-        return 'text-purple-600 dark:text-purple-400 bg-purple-100 dark:bg-purple-500/10';
-      default:
-        return 'text-gray-600 dark:text-gray-300 bg-gray-100 dark:bg-gray-800';
-    }
+    setSendWallet(wallet);
   };
 
   return (
@@ -379,244 +388,33 @@ const WalletPanel: React.FC = () => {
         {wallets.length > 0 && (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             {wallets.map((wallet) => (
-              <div
+              <WalletCard
                 key={wallet.id}
-                className={`bg-white dark:bg-gray-900 rounded-lg border ${
-                  selectedWallet?.id === wallet.id
-                    ? 'border-indigo-500 ring-2 ring-indigo-200 dark:ring-indigo-500/30'
-                    : 'border-gray-200 dark:border-gray-700'
-                } p-4 cursor-pointer hover:shadow-lg transition-all`}
-                onClick={() => setSelectedWallet(wallet)}
-              >
-                {/* Wallet Header */}
-                <div className="flex items-start justify-between mb-3">
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <span className="text-2xl">{getNetworkIcon(wallet.network)}</span>
-                      <h3 className="font-semibold text-gray-900 dark:text-gray-100">{wallet.name}</h3>
-                    </div>
-                    <span
-                      className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium mt-1 ${getNetworkColor(
-                        wallet.network
-                      )}`}
-                    >
-                      {wallet.network}
-                    </span>
-                  </div>
-                  {wallet.watch_only && (
-                    <EyeIcon className="h-5 w-5 text-gray-400 dark:text-gray-500" title={t('wallet.watchOnly')} />
-                  )}
-                </div>
-
-                {/* Balance */}
-                <div className="mb-3">
-                  <p className="text-sm text-gray-500 dark:text-gray-400">{t('wallet.balance')}</p>
-                  <p className="text-2xl font-bold text-gray-900 dark:text-gray-100">{wallet.balance}</p>
-                </div>
-
-                {/* Wallet Info */}
-                <div className="space-y-1 text-sm text-gray-600 dark:text-gray-300">
-                  <div className="flex justify-between">
-                    <span>{t('wallet.typeLabel')}</span>
-                    <span className="font-medium">{wallet.wallet_type}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span>{t('wallet.addressesLabel')}</span>
-                    <span className="font-medium">{wallet.address_count}</span>
-                  </div>
-                </div>
-
-                {/* Actions */}
-                <div className="mt-4 flex gap-2">
-                  <button
-                    onClick={async (e) => {
-                      e.stopPropagation();
-                      // 地址列表用于投毒检测：未选中时先选中（触发地址加载）
-                      if (selectedWallet?.id !== wallet.id) {
-                        setSelectedWallet(wallet);
-                      }
-                      setSendWallet(wallet);
-                    }}
-                    className="flex-1 flex items-center justify-center gap-1 px-2 py-1 text-sm bg-indigo-600 text-white rounded hover:bg-indigo-700 transition-colors"
-                    data-testid={`send-button-${wallet.id}`}
-                  >
-                    <PaperAirplaneIcon className="h-4 w-4" />
-                    {t('wallet.send')}
-                  </button>
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      exportWallet(wallet.id, wallet.name);
-                    }}
-                    className="flex-1 flex items-center justify-center gap-1 px-2 py-1 text-sm bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 rounded hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
-                  >
-                    <ArrowUpTrayIcon className="h-4 w-4" />
-                    {t('wallet.export')}
-                  </button>
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      // Refresh wallet balance
-                      loadWallets();
-                    }}
-                    className="flex-1 flex items-center justify-center gap-1 px-2 py-1 text-sm bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 rounded hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
-                    >
-                      <ArrowTrendingUpIcon className="h-4 w-4" />
-                      {t('wallet.refresh')}
-                    </button>
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      deleteWallet(wallet);
-                    }}
-                    className="flex items-center justify-center gap-1 px-2 py-1 text-sm bg-red-50 dark:bg-red-500/10 text-red-700 dark:text-red-300 rounded hover:bg-red-100 dark:hover:bg-red-500/20 transition-colors"
-                    aria-label={t('wallet.deleteWalletAria', { name: wallet.name })}
-                  >
-                    <TrashIcon className="h-4 w-4" />
-                    {t('common.delete')}
-                  </button>
-                </div>
-              </div>
+                wallet={wallet}
+                selected={selectedWallet?.id === wallet.id}
+                onSelect={setSelectedWallet}
+                onSend={sendFromCard}
+                onExport={exportWallet}
+                onRefresh={loadWallets}
+                onDelete={deleteWallet}
+              />
             ))}
           </div>
         )}
 
         {/* Selected Wallet Details */}
         {selectedWallet && (
-          <div className="bg-white dark:bg-gray-900 rounded-lg border border-gray-200 dark:border-gray-700 p-6">
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100">
-                {t('wallet.addressesTitle', { name: selectedWallet.name })}
-              </h3>
-              <button
-                onClick={() => {
-                  setShowAddAddressModal(true);
-                }}
-                className="flex items-center gap-2 px-3 py-1 text-sm bg-indigo-600 text-white rounded hover:bg-indigo-700 transition-colors"
-              >
-                <PlusIcon className="h-4 w-4" />
-                {t('wallet.generateAddress')}
-              </button>
-            </div>
-
-            <div className="overflow-x-auto">
-              <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
-                <thead>
-                  <tr>
-                    <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">
-                      {t('wallet.colIndex')}
-                    </th>
-                    <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">
-                      {t('wallet.colAddress')}
-                    </th>
-                    <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">
-                      {t('wallet.colType')}
-                    </th>
-                    <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">
-                      {t('wallet.colBalance')}
-                    </th>
-                    <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">
-                      {t('wallet.colStatus')}
-                    </th>
-                    <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">
-                      {t('wallet.colActions')}
-                    </th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
-                  {addresses.map((address, index) => (
-                    <tr key={index}>
-                      <td className="px-4 py-2 text-sm text-gray-900 dark:text-gray-100">
-                        {address.index}
-                      </td>
-                      <td className="px-4 py-2">
-                        <div className="flex items-center gap-2">
-                          <code className="text-sm font-mono text-gray-900 dark:text-gray-100">
-                            {address.address}
-                          </code>
-                          <button
-                            onClick={() => setShowAddressQr(address.address)}
-                            className="text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300"
-                            title={t('wallet.showQr')}
-                          >
-                            <QrCodeIcon className="h-4 w-4" />
-                          </button>
-                        </div>
-                      </td>
-                      <td className="px-4 py-2 text-sm text-gray-900 dark:text-gray-100">
-                        {address.address_type}
-                      </td>
-                      <td className="px-4 py-2 text-sm text-gray-900 dark:text-gray-100">
-                        {address.balance}
-                      </td>
-                      <td className="px-4 py-2">
-                        <span
-                          className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${
-                            address.used
-                              ? 'bg-gray-100 dark:bg-gray-800 text-gray-800 dark:text-gray-200'
-                              : 'bg-green-100 dark:bg-green-500/10 text-green-800 dark:text-green-300'
-                          }`}
-                        >
-                          {address.used ? t('wallet.used') : t('wallet.unused')}
-                        </span>
-                      </td>
-                      <td className="px-4 py-2">
-                        <button
-                          onClick={() => {
-                            navigator.clipboard.writeText(address.address);
-                          }}
-                          className="text-indigo-600 hover:text-indigo-800 text-sm"
-                        >
-                          {t('common.copy')}
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-
-              {addresses.length === 0 && (
-                <div className="text-center py-8 text-gray-500 dark:text-gray-400">
-                  {t('wallet.noAddresses')}
-                </div>
-              )}
-            </div>
-          </div>
+          <SelectedWalletAddresses
+            wallet={selectedWallet}
+            addresses={addresses}
+            onGenerate={() => setShowAddAddressModal(true)}
+            onShowQr={setShowAddressQr}
+          />
         )}
 
         {/* QR Code Modal */}
         {showAddressQr && (
-          <div
-            className="fixed inset-0 bg-black/50 flex items-center justify-center z-50"
-            onClick={() => setShowAddressQr(null)}
-          >
-            <div
-              className="bg-white dark:bg-gray-900 rounded-lg p-6 max-w-sm w-full mx-4"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <h3 className="text-lg font-semibold mb-4">{t('wallet.receiveAddress')}</h3>
-              <div className="bg-gray-100 dark:bg-gray-800 p-4 rounded-lg mb-4 flex items-center justify-center">
-                <QRCodeSVG
-                  value={showAddressQr}
-                  size={192}
-                  level="M"
-                  data-testid="address-qr"
-                />
-              </div>
-              <code className="block text-sm text-center text-gray-600 dark:text-gray-300 mb-4 break-all">
-                {showAddressQr}
-              </code>
-              <button
-                onClick={() => {
-                  navigator.clipboard.writeText(showAddressQr);
-                  setShowAddressQr(null);
-                }}
-                className="w-full px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors"
-              >
-                {t('wallet.copyAddress')}
-              </button>
-            </div>
-          </div>
+          <AddressQrModal address={showAddressQr} onClose={() => setShowAddressQr(null)} />
         )}
 
         {/* Send / Sign Transaction Modal */}
@@ -634,483 +432,64 @@ const WalletPanel: React.FC = () => {
           />
         )}
 
-        {/* Create Wallet Modal Placeholder */}
+        {/* Create Wallet Modal */}
         {showCreateModal && (
-          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-            <div className="bg-white dark:bg-gray-900 rounded-lg p-6 max-w-md w-full mx-4">
-              <h3 className="text-lg font-semibold mb-4">{t('wallet.createTitle')}</h3>
-              {!createResult ? (
-                <div className="space-y-4">
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">{t('wallet.nameLabel')}</label>
-                    <input
-                      value={createForm.name}
-                      onChange={(e) => setCreateForm({ ...createForm, name: e.target.value })}
-                      className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg"
-                      placeholder={t('wallet.namePlaceholder')}
-                    />
-                  </div>
-                  <div className="grid grid-cols-2 gap-3">
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">{t('wallet.networkLabel')}</label>
-                      <select
-                        value={createForm.network}
-                        onChange={(e) => setCreateForm({ ...createForm, network: e.target.value })}
-                        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg"
-                      >
-                        <option>Ethereum</option>
-                        <option>Bitcoin</option>
-                        <option>Polygon</option>
-                        <option>Arbitrum</option>
-                        <option>Optimism</option>
-                        <option>Binance Smart Chain</option>
-                      </select>
-                    </div>
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">{t('wallet.addressesCountLabel')}</label>
-                      <input
-                        type="number"
-                        min={1}
-                        max={100}
-                        value={createForm.addressCount}
-                        onChange={(e) =>
-                          setCreateForm({
-                            ...createForm,
-                            addressCount: Number(e.target.value || 5),
-                          })
-                        }
-                        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg"
-                      />
-                    </div>
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">{t('wallet.walletPassword')}</label>
-                    <input
-                      type="password"
-                      value={createForm.password}
-                      onChange={(e) => setCreateForm({ ...createForm, password: e.target.value })}
-                      className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg"
-                      placeholder={t('wallet.passwordHint')}
-                    />
-                  </div>
-                  <div className="flex gap-2">
-                    <button
-                      onClick={() => {
-                        setShowCreateModal(false);
-                        setCreateResult(null);
-                        setCreateForm({
-                          name: '',
-                          network: 'Ethereum',
-                          password: '',
-                          addressCount: 5,
-                        });
-                      }}
-                      className="flex-1 px-4 py-2 bg-gray-200 dark:bg-gray-700 text-gray-800 dark:text-gray-200 rounded-lg hover:bg-gray-300 dark:hover:bg-gray-600 transition-colors"
-                    >
-                      {t('common.cancel')}
-                    </button>
-                    <button
-                      onClick={createWallet}
-                      className="flex-1 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors"
-                      disabled={!createForm.name.trim() || !createForm.password}
-                    >
-                      {t('wallet.create')}
-                    </button>
-                  </div>
-                </div>
-              ) : (
-                <div className="space-y-3">
-                  <p className="text-sm text-gray-700 dark:text-gray-300">
-                    {t('wallet.saveMnemonicHint')}
-                  </p>
-                  <textarea
-                    readOnly
-                    value={createResult.mnemonic}
-                    className="w-full h-28 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg font-mono text-sm"
-                  />
-                  <div className="text-sm text-gray-600 dark:text-gray-300">
-                    {t('wallet.firstAddress')}<code className="font-mono">{createResult.first_address}</code>
-                  </div>
-                  <button
-                    onClick={() => {
-                      setShowCreateModal(false);
-                      setCreateResult(null);
-                      setCreateForm({
-                        name: '',
-                        network: 'Ethereum',
-                        password: '',
-                        addressCount: 5,
-                      });
-                    }}
-                    className="w-full px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors"
-                  >
-                    {t('wallet.done')}
-                  </button>
-                </div>
-              )}
-            </div>
-          </div>
+          <CreateWalletModal
+            form={createForm}
+            setForm={setCreateForm}
+            result={createResult}
+            onCreate={createWallet}
+            onClose={closeCreateModal}
+          />
         )}
 
         {/* Import Wallet Modal */}
         {showImportModal && (
-          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-            <div className="bg-white dark:bg-gray-900 rounded-lg p-6 max-w-md w-full mx-4">
-              <h3 className="text-lg font-semibold mb-4">{t('wallet.importTitle')}</h3>
-              <div className="space-y-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">{t('wallet.nameLabel')}</label>
-                  <input
-                    value={importForm.name}
-                    onChange={(e) => setImportForm({ ...importForm, name: e.target.value })}
-                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg"
-                    placeholder={t('wallet.importedPlaceholder')}
-                  />
-                </div>
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">{t('wallet.networkLabel')}</label>
-                    <select
-                      value={importForm.network}
-                      onChange={(e) => setImportForm({ ...importForm, network: e.target.value })}
-                      className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg"
-                      disabled={importForm.importType === 'wif' || importForm.importType === 'keystore'}
-                    >
-                      <option>Ethereum</option>
-                      <option>Bitcoin</option>
-                      <option>Polygon</option>
-                      <option>Arbitrum</option>
-                      <option>Optimism</option>
-                      <option>Binance Smart Chain</option>
-                    </select>
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">{t('wallet.colType')}</label>
-                    <select
-                      value={importForm.importType}
-                      onChange={(e) =>
-                        setImportForm({
-                          ...importForm,
-                          importType: e.target.value as 'mnemonic' | 'private_key' | 'wif' | 'keystore',
-                          network:
-                            e.target.value === 'wif'
-                              ? 'Bitcoin'
-                              : e.target.value === 'keystore'
-                                ? 'Ethereum'
-                                : importForm.network,
-                        })
-                      }
-                      className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg"
-                    >
-                      <option value="mnemonic">{t('wallet.importMnemonic')}</option>
-                      <option value="private_key">{t('wallet.importPrivateKey')}</option>
-                      <option value="wif">Bitcoin WIF</option>
-                      <option value="keystore">Ethereum keystore v3</option>
-                    </select>
-                  </div>
-                </div>
-                {importForm.importType === 'mnemonic' && (
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">{t('wallet.addressesCountLabel')}</label>
-                    <input
-                      type="number"
-                      min={1}
-                      max={100}
-                      value={importForm.addressCount}
-                      onChange={(e) =>
-                        setImportForm({
-                          ...importForm,
-                          addressCount: Number(e.target.value || 5),
-                        })
-                      }
-                      className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg"
-                    />
-                  </div>
-                )}
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                    {importForm.importType === 'mnemonic'
-                      ? t('wallet.importMnemonic')
-                      : importForm.importType === 'wif'
-                        ? 'Bitcoin WIF'
-                        : importForm.importType === 'keystore'
-                          ? 'Ethereum keystore v3'
-                          : t('wallet.importPrivateKey')}
-                  </label>
-                  <textarea
-                    value={importForm.data}
-                    onChange={(e) => setImportForm({ ...importForm, data: e.target.value })}
-                    className="w-full h-24 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg font-mono text-sm"
-                    placeholder={
-                      importForm.importType === 'mnemonic'
-                        ? 'word1 word2 word3 ...'
-                        : importForm.importType === 'wif'
-                          ? 'K... / L...'
-                          : importForm.importType === 'keystore'
-                            ? '{"crypto": {"cipher": "aes-128-ctr"}}'
-                            : '0x... / hex'
-                    }
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">{t('wallet.walletPassword')}</label>
-                  <input
-                    type="password"
-                    value={importForm.password}
-                    onChange={(e) => setImportForm({ ...importForm, password: e.target.value })}
-                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg"
-                    placeholder={t('wallet.passwordHint')}
-                  />
-                </div>
-                <div className="flex gap-2">
-                  <button
-                    onClick={() => {
-                      setShowImportModal(false);
-                      setImportForm({
-                        name: '',
-                        network: 'Ethereum',
-                        importType: 'mnemonic',
-                        data: '',
-                        password: '',
-                        addressCount: 5,
-                      });
-                    }}
-                    className="flex-1 px-4 py-2 bg-gray-200 dark:bg-gray-700 text-gray-800 dark:text-gray-200 rounded-lg hover:bg-gray-300 dark:hover:bg-gray-600 transition-colors"
-                  >
-                    {t('common.cancel')}
-                  </button>
-                  <button
-                    onClick={importWallet}
-                    className="flex-1 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors"
-                    disabled={!importForm.name.trim() || !importForm.data.trim() || !importForm.password}
-                  >
-                    {t('wallet.import')}
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
+          <ImportWalletModal
+            form={importForm}
+            setForm={setImportForm}
+            onImport={importWallet}
+            onClose={closeImportModal}
+          />
         )}
 
         {/* Add Address Modal */}
         {showAddAddressModal && (
-          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-            <div className="bg-white dark:bg-gray-900 rounded-lg p-6 max-w-md w-full mx-4">
-              <h3 className="text-lg font-semibold mb-4">{t('wallet.generateAddress')}</h3>
-              <div className="space-y-4">
-                <div className="text-sm text-gray-600 dark:text-gray-300">
-                  {t('wallet.enterPasswordPrefix')}<span className="font-medium">{selectedWallet?.name}</span>{t('wallet.enterPasswordSuffix')}
-                </div>
-                <input
-                  type="password"
-                  value={addAddressPassword}
-                  onChange={(e) => setAddAddressPassword(e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg"
-                  placeholder={t('wallet.passwordPlaceholder')}
-                />
-                <div className="flex gap-2">
-                  <button
-                    onClick={() => {
-                      setShowAddAddressModal(false);
-                      setAddAddressPassword('');
-                    }}
-                    className="flex-1 px-4 py-2 bg-gray-200 dark:bg-gray-700 text-gray-800 dark:text-gray-200 rounded-lg hover:bg-gray-300 dark:hover:bg-gray-600 transition-colors"
-                  >
-                    {t('common.cancel')}
-                  </button>
-                  <button
-                    onClick={addAddress}
-                    className="flex-1 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors"
-                    disabled={!addAddressPassword}
-                  >
-                    {t('wallet.generate')}
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
+          <AddAddressModal
+            walletName={selectedWallet?.name}
+            password={addAddressPassword}
+            setPassword={setAddAddressPassword}
+            onGenerate={addAddress}
+            onClose={closeAddAddressModal}
+          />
         )}
 
         {/* Export Modal */}
         {showExportModal && (
-          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-            <div className="bg-white dark:bg-gray-900 rounded-lg p-6 max-w-md w-full mx-4">
-              <h3 className="text-lg font-semibold mb-4">{t('wallet.exportTitle')}</h3>
-              <div className="text-sm text-gray-600 dark:text-gray-300 mb-4">
-                {exportWalletName ? (
-                  <>
-                    {t('wallet.exportWalletPrefix')}<span className="font-medium">{exportWalletName}</span>
-                  </>
-                ) : (
-                  t('wallet.exportWalletGeneric')
-                )}
-              </div>
-
-              <div className="space-y-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">{t('wallet.format')}</label>
-                  <select
-                    value={exportFormat}
-                    onChange={(e) => {
-                      const value = e.target.value as WalletExportFormat;
-                      setExportFormat(value);
-                      setExportOutput(null);
-                      if (value !== 'json') {
-                        setExportIncludePrivate(false);
-                      }
-                    }}
-                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg"
-                  >
-                    {availableExportFormats.map((format) => (
-                      <option key={format} value={format}>
-                        {formatLabel(t, format)}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                {exportRestrictionHint && (
-                  <div className="rounded-lg bg-amber-50 dark:bg-amber-500/10 px-3 py-2 text-sm text-amber-800 dark:text-amber-300">
-                    {exportRestrictionHint}
-                  </div>
-                )}
-
-                {exportFormat === 'json' && (
-                  <label className="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
-                    <input
-                      type="checkbox"
-                      checked={exportIncludePrivate}
-                      onChange={(e) => setExportIncludePrivate(e.target.checked)}
-                    />
-                    {t('wallet.includePrivate')}
-                  </label>
-                )}
-
-                {(exportFormat === 'mnemonic' ||
-                  exportFormat === 'private_key' ||
-                  exportFormat === 'wif' ||
-                  exportFormat === 'keystore' ||
-                  (exportFormat === 'json' && exportIncludePrivate)) && (
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">{t('wallet.walletPassword')}</label>
-                    <input
-                      type="password"
-                      value={exportPassword}
-                      onChange={(e) => setExportPassword(e.target.value)}
-                      className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg"
-                      placeholder={t('wallet.passwordPlaceholder')}
-                    />
-                  </div>
-                )}
-
-                {exportOutput && exportFormat !== 'json' && (
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">{t('wallet.exportedData')}</label>
-                    <textarea
-                      readOnly
-                      value={exportOutput}
-                      className="w-full h-28 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg font-mono text-sm"
-                    />
-                    <button
-                      onClick={() => {
-                        navigator.clipboard.writeText(exportOutput).catch(() => {});
-                      }}
-                      className="mt-2 w-full px-4 py-2 bg-gray-100 dark:bg-gray-800 text-gray-800 dark:text-gray-200 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
-                    >
-                      {t('common.copy')}
-                    </button>
-                  </div>
-                )}
-
-                <div className="flex gap-2">
-                  <button
-                    onClick={closeExportModal}
-                    className="flex-1 px-4 py-2 bg-gray-200 dark:bg-gray-700 text-gray-800 dark:text-gray-200 rounded-lg hover:bg-gray-300 dark:hover:bg-gray-600 transition-colors"
-                  >
-                    {t('common.close')}
-                  </button>
-                  <button
-                    onClick={performExport}
-                    className="flex-1 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors"
-                  >
-                    {t('wallet.export')}
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
+          <ExportWalletModal
+            walletName={exportWalletName}
+            formats={availableExportFormats}
+            restrictionHint={exportRestrictionHint}
+            format={exportFormat}
+            onFormatChange={(format) => {
+              setExportFormat(format);
+              setExportOutput(null);
+              if (format !== 'json') {
+                setExportIncludePrivate(false);
+              }
+            }}
+            includePrivate={exportIncludePrivate}
+            onIncludePrivateChange={setExportIncludePrivate}
+            password={exportPassword}
+            onPasswordChange={setExportPassword}
+            output={exportOutput}
+            onPerform={performExport}
+            onClose={closeExportModal}
+          />
         )}
       </div>
     </ErrorBoundary>
   );
-};
-
-const formatLabel = (t: (key: string) => string, format: WalletExportFormat): string => {
-  switch (format) {
-    case 'json':
-      return 'JSON';
-    case 'xpub':
-      return 'XPUB';
-    case 'mnemonic':
-      return t('wallet.importMnemonic');
-    case 'private_key':
-      return t('wallet.importPrivateKey');
-    case 'wif':
-      return 'Bitcoin WIF';
-    case 'keystore':
-      return 'Ethereum keystore v3';
-  }
-};
-
-const getAvailableExportFormats = (wallet: WalletSummary | null): WalletExportFormat[] => {
-  if (!wallet) {
-    return ['json'];
-  }
-
-  const formats: WalletExportFormat[] = ['json'];
-
-  if (wallet.wallet_type.includes('HierarchicalDeterministic') || wallet.wallet_type.includes('HD')) {
-    formats.push('xpub');
-  }
-
-  if (!wallet.watch_only) {
-    formats.push('private_key');
-  }
-
-  if (!wallet.watch_only && wallet.wallet_type.includes('HierarchicalDeterministic')) {
-    formats.push('mnemonic');
-  }
-
-  if (!wallet.watch_only && wallet.network.toLowerCase() === 'bitcoin' && wallet.wallet_type === 'SingleAddress') {
-    formats.push('wif');
-  }
-
-  // Web3 Secret Storage v3 is defined over secp256k1 keys: Ethereum only
-  if (!wallet.watch_only && wallet.network.toLowerCase() === 'ethereum') {
-    formats.push('keystore');
-  }
-
-  return formats;
-};
-
-const getExportRestrictionHint = (
-  t: (key: string) => string,
-  wallet: WalletSummary | null,
-  format: WalletExportFormat,
-): string | null => {
-  if (!wallet || format !== 'json') {
-    return null;
-  }
-
-  if (wallet.watch_only) {
-    return t('wallet.restrictions.watchOnly');
-  }
-
-  if (wallet.wallet_type === 'SingleAddress' && wallet.network.toLowerCase() === 'bitcoin') {
-    return t('wallet.restrictions.btcSingle');
-  }
-
-  return null;
 };
 
 export default WalletPanel;
