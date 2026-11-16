@@ -1,0 +1,85 @@
+/**
+ * English resources. zh-CN is the source of truth; keep keys in sync
+ * (a missing key falls back to zh-CN by init config).
+ */
+export default {
+  generator: {
+    title: 'Password Generator',
+    description:
+      'Generate random passwords locally: choose length, character sets and pronounceable mode. Generation is pure computation and never touches the vault; copied values auto-clear from the clipboard after 30 seconds.',
+    generate: 'Generate',
+    generating: 'Generating…',
+    generateFailed: 'Failed to generate',
+    length: 'Length',
+    count: 'Candidates',
+    charsets: 'Character sets',
+    lowercase: 'Lowercase',
+    uppercase: 'Uppercase',
+    numbers: 'Digits',
+    symbols: 'Symbols',
+    pronounceable: 'Pronounceable',
+    pronounceableNeedsLetters: 'Pronounceable mode needs at least one letter set',
+    needsOneCharset: 'At least one character set is required',
+    words: 'Words (Diceware)',
+    wordsCount: 'Word count',
+    wordsHint: 'Passphrase drawn from the embedded EFF large wordlist, joined with "-".',
+    entropy: 'Strength estimate',
+    entropyValue: '≈ {{bits}} bits · pool {{pool}}',
+    strengthLabel: 'Strength',
+    passwordLabel: 'Password',
+    copy: 'Copy',
+    strength: {
+      veryWeak: 'Very weak',
+      weak: 'Weak',
+      fair: 'Fair',
+      strong: 'Strong',
+      veryStrong: 'Very strong',
+    },
+  },
+  watchtower: {
+    title: 'Watchtower',
+    description:
+      'Scan the vault for weak, reused, breached, expired and stale credentials, plus sites that offer two-factor authentication but have no TOTP stored. Reports contain metadata only — secret material is never included.',
+    checkBreaches: 'Check breach corpora (HIBP)',
+    checkBreachesHint:
+      'k-anonymity: only a 5-char hash prefix of each password is sent. If the network is unavailable the breach check is skipped and offline rules still run.',
+    scanning: 'Scanning…',
+    runScan: 'Run Scan',
+    results: 'Scan Results',
+    scannedSummary: '{{total}} credential(s) scanned · {{time}}',
+    rescan: 'Rescan',
+    serviceLocked: 'Service is locked. Unlock and try again.',
+    scanFailed: 'Health scan failed',
+    guidance: 'Run a scan to check your vault.',
+    noIssues: '✓ No issues found across {{total}} credential(s).',
+    severity: { high: 'high', medium: 'medium', low: 'low' },
+    kind: {
+      weak_password: 'weak password',
+      reused_password: 'reused password',
+      breached_password: 'breached password',
+      expired: 'expired',
+      expiring_soon: 'expiring soon',
+      stale_unchanged: 'stale',
+      two_factor_available: '2FA available',
+    },
+    detail: {
+      weak: 'Password strength score is {{score}} (below threshold). Consider rotating it.',
+      reused: 'This secret is reused by {{group_size}} credentials. A breach of one exposes all.',
+      breached: 'This password appears {{count}} time(s) in known breach corpora. Rotate it now.',
+      expired: 'This item has expired and should be replaced or removed.',
+      expiring: 'This item expires in {{days}} day(s). Plan a rotation.',
+      stale: 'Unchanged for {{days}} day(s). Verify it is still needed and current.',
+      twoFactor:
+        '{{site}} offers two-factor authentication, but no TOTP is stored for it in this vault. Add a TOTP credential to strengthen the login.',
+    },
+  },
+  statistics: {
+    title: 'Statistics',
+    totalIdentities: 'Total Identities',
+    totalCredentials: 'Total Credentials',
+    activeCredentials: 'Active Credentials',
+    favorites: 'Favorites',
+    credentialTypes: 'Credential Types',
+    securityLevels: 'Security Levels',
+  },
+};
