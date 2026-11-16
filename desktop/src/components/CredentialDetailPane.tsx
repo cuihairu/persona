@@ -1,18 +1,9 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import {
-  ArrowDownTrayIcon,
   ArrowPathIcon,
-  ChevronDownIcon,
-  ChevronUpIcon,
-  ClockIcon,
   DocumentDuplicateIcon,
-  EyeIcon,
-  EyeSlashIcon,
   HeartIcon,
-  LockClosedIcon,
-  PaperClipIcon,
   PencilIcon,
-  PlusIcon,
   TrashIcon,
 } from '@heroicons/react/24/outline';
 import { HeartIcon as HeartSolidIcon } from '@heroicons/react/24/solid';
@@ -26,7 +17,6 @@ import FaviconImg from './FaviconImg';
 import { useFavicons } from '@/hooks/useFavicons';
 import type { AttachmentEntry, Credential, CredentialHistoryEntry, CustomField } from '@/types';
 import { clsx } from 'clsx';
-import RevealSecretButton from '@/components/RevealSecretButton';
 import {
   credentialTypeLabel,
   getCredentialIcon,
@@ -34,12 +24,10 @@ import {
   securityLevelLabel,
 } from './credentialDisplay';
 
-/** 人类可读的附件大小（B → KB → MB） */
-function formatFileSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}
+import AttachmentsSection from './credentialDetail/AttachmentsSection';
+import CredentialDataSection from './credentialDetail/CredentialDataSection';
+import CustomFieldsSection from './credentialDetail/CustomFieldsSection';
+import HistorySection from './credentialDetail/HistorySection';
 
 /**
  * 右侧常驻详情面板：原 CredentialDetailModal 平移，外壳从全屏 overlay
@@ -343,470 +331,6 @@ const CredentialDetailPane: React.FC<CredentialDetailPaneProps> = ({
     }
   };
 
-  const renderCredentialData = () => {
-    if (!credentialData?.data) return null;
-
-    const data = credentialData.data;
-
-    switch (credentialData.credential_type) {
-      case 'Password':
-        return (
-          <div className="space-y-3">
-            {data.email && (
-              <div>
-                <label className="label text-gray-600 dark:text-gray-300">{t('detail.labels.email')}</label>
-                <div className="flex items-center gap-2">
-                  <span className="text-sm font-mono">{data.email}</span>
-                  <button
-                    onClick={() => onCopy(data.email, t('detail.labels.email'))}
-                    aria-label={t('detail.copyLabel', { name: t('detail.labels.email') })}
-                    className="p-1 hover:bg-gray-100 dark:hover:bg-gray-800 rounded"
-                  >
-                    <DocumentDuplicateIcon className="w-4 h-4 text-gray-400 dark:text-gray-500" />
-                  </button>
-                </div>
-              </div>
-            )}
-            <div>
-              <label className="label text-gray-600 dark:text-gray-300">{t('detail.labels.password')}</label>
-              <RevealSecretButton credentialId={credential.id} field="password" label={t('detail.labels.password')} />
-            </div>
-          </div>
-        );
-
-      case 'CryptoWallet':
-        return (
-          <div className="space-y-3">
-            <div className="flex items-center gap-1.5 text-xs text-amber-600 dark:text-amber-400">
-              <LockClosedIcon className="w-3.5 h-3.5" />
-              <span>{t('detail.walletSensitiveHint')}</span>
-            </div>
-            <div>
-              <label className="label text-gray-600 dark:text-gray-300">{t('detail.labels.walletType')}</label>
-              <span className="text-sm">{data.wallet_type}</span>
-            </div>
-            <div>
-              <label className="label text-gray-600 dark:text-gray-300">{t('detail.labels.address')}</label>
-              <div className="flex items-center gap-2">
-                <span className="text-sm font-mono break-all">{data.address}</span>
-                <button
-                  onClick={() => onCopy(data.address, t('detail.labels.address'))}
-                  aria-label={t('detail.copyLabel', { name: t('detail.labels.address') })}
-                  className="p-1 hover:bg-gray-100 dark:hover:bg-gray-800 rounded"
-                >
-                  <DocumentDuplicateIcon className="w-4 h-4 text-gray-400 dark:text-gray-500" />
-                </button>
-              </div>
-            </div>
-            <div>
-              <label className="label text-gray-600 dark:text-gray-300">{t('detail.labels.network')}</label>
-              <span className="text-sm">{data.network}</span>
-            </div>
-            {data.mnemonic_phrase && (
-              <div>
-                <label className="label text-gray-600 dark:text-gray-300">{t('detail.labels.mnemonic')}</label>
-                <RevealSecretButton
-                  credentialId={credential.id}
-                  field="wallet_mnemonic"
-                  label={t('detail.labels.mnemonic')}
-                />
-              </div>
-            )}
-            {data.bip39_passphrase && (
-              <div>
-                <label className="label text-gray-600 dark:text-gray-300">
-                  {t('detail.labels.bip39Passphrase')}
-                </label>
-                <RevealSecretButton
-                  credentialId={credential.id}
-                  field="wallet_bip39_passphrase"
-                  label={t('detail.labels.bip39Passphrase')}
-                />
-              </div>
-            )}
-            {data.private_key && (
-              <div>
-                <label className="label text-gray-600 dark:text-gray-300">{t('detail.labels.privateKey')}</label>
-                <RevealSecretButton
-                  credentialId={credential.id}
-                  field="wallet_private_key"
-                  label={t('detail.labels.privateKey')}
-                />
-              </div>
-            )}
-            {data.public_key && (
-              <div>
-                <label className="label text-gray-600 dark:text-gray-300">{t('detail.labels.publicKey')}</label>
-                <div className="flex items-center gap-2">
-                  <span className="text-sm font-mono break-all">{data.public_key}</span>
-                  <button
-                    onClick={() => onCopy(data.public_key, t('detail.labels.publicKey'))}
-                    aria-label={t('detail.copyLabel', { name: t('detail.labels.publicKey') })}
-                    className="p-1 hover:bg-gray-100 dark:hover:bg-gray-800 rounded"
-                  >
-                    <DocumentDuplicateIcon className="w-4 h-4 text-gray-400 dark:text-gray-500" />
-                  </button>
-                </div>
-              </div>
-            )}
-            <div className="border-t border-gray-100 dark:border-gray-800 pt-3">
-              <div className="flex items-center justify-between">
-                <div>
-                  <label className="label text-gray-600 dark:text-gray-300">
-                    {t('detail.itemPwdTitle')}
-                  </label>
-                  <span
-                    className={`ml-2 inline-block rounded px-1.5 py-0.5 text-xs ${
-                      itemPwdEnabled
-                        ? 'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300'
-                        : 'bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-400'
-                    }`}
-                  >
-                    {itemPwdEnabled ? t('detail.itemPwdEnabled') : t('detail.itemPwdNotEnabled')}
-                  </span>
-                </div>
-                {itemPwdForm === null && (
-                  <button
-                    type="button"
-                    onClick={() => setItemPwdForm(itemPwdEnabled ? 'clear' : 'set')}
-                    className="text-xs text-blue-600 dark:text-blue-400 hover:underline"
-                  >
-                    {itemPwdEnabled ? t('detail.itemPwdClear') : t('detail.itemPwdEnable')}
-                  </button>
-                )}
-              </div>
-              <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">{t('detail.itemPwdDesc')}</p>
-              {itemPwdError && (
-                <p className="mt-1 text-xs text-red-600 dark:text-red-400">{itemPwdError}</p>
-              )}
-              {itemPwdForm !== null && (
-                <form
-                  className="mt-2 space-y-2"
-                  onSubmit={(e) => {
-                    e.preventDefault();
-                    void handleItemPwdSubmit();
-                  }}
-                >
-                  <input
-                    type="password"
-                    value={itemPwdValue}
-                    onChange={(e) => setItemPwdValue(e.target.value)}
-                    className="input h-8 text-sm"
-                    placeholder={
-                      itemPwdForm === 'set'
-                        ? t('detail.itemPwdNewPlaceholder')
-                        : t('detail.itemPwdCurrentPlaceholder')
-                    }
-                    autoComplete="off"
-                    required
-                  />
-                  {itemPwdForm === 'set' && (
-                    <input
-                      type="text"
-                      value={itemPwdHintValue}
-                      onChange={(e) => setItemPwdHintValue(e.target.value)}
-                      className="input h-8 text-sm"
-                      placeholder={t('detail.itemPwdHintPlaceholder')}
-                      autoComplete="off"
-                    />
-                  )}
-                  <div className="flex gap-2">
-                    <button
-                      type="submit"
-                      disabled={isItemPwdBusy || !itemPwdValue}
-                      className="btn-secondary text-xs disabled:opacity-50"
-                    >
-                      {itemPwdForm === 'set' ? t('detail.itemPwdEnable') : t('detail.itemPwdClear')}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setItemPwdForm(null);
-                        setItemPwdValue('');
-                        setItemPwdHintValue('');
-                      }}
-                      className="text-xs text-gray-500 dark:text-gray-400 hover:underline"
-                    >
-                      {t('common.cancel')}
-                    </button>
-                  </div>
-                </form>
-              )}
-            </div>
-          </div>
-        );
-
-      case 'TwoFactor':
-        return (
-          <div className="space-y-3">
-            {credentialData?.data?.issuer && (
-              <div>
-                <label className="label text-gray-600 dark:text-gray-300">{t('detail.labels.issuer')}</label>
-                <span className="text-sm">{credentialData.data.issuer}</span>
-              </div>
-            )}
-            {credentialData?.data?.account_name && (
-              <div>
-                <label className="label text-gray-600 dark:text-gray-300">{t('detail.labels.account')}</label>
-                <span className="text-sm">{credentialData.data.account_name}</span>
-              </div>
-            )}
-            <div>
-              <label className="label text-gray-600 dark:text-gray-300">{t('detail.labels.totpCode')}</label>
-              <div className="flex items-center gap-2">
-                <span className="text-lg font-mono tracking-widest">
-                  {totpCode ?? '------'}
-                </span>
-                <button
-                  onClick={() => totpCode && onCopy(totpCode, t('detail.labels.totpCode'))}
-                  aria-label={t('detail.copyLabel', { name: t('detail.labels.totpCode') })}
-                  disabled={!totpCode}
-                  className="p-1 hover:bg-gray-100 dark:hover:bg-gray-800 rounded disabled:opacity-50"
-                  title={t('detail.copyCode')}
-                >
-                  <DocumentDuplicateIcon className="w-4 h-4 text-gray-400 dark:text-gray-500" />
-                </button>
-                <button
-                  onClick={refreshTotp}
-                  disabled={isTotpLoading}
-                  className="px-2 py-1 text-xs rounded bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 disabled:opacity-50"
-                >
-                  {isTotpLoading ? t('detail.refreshing') : t('detail.refresh')}
-                </button>
-              </div>
-              {totpRemaining !== null && (
-                <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                  {t('detail.expiresIn', { seconds: totpRemaining })}
-                </p>
-              )}
-            </div>
-          </div>
-        );
-
-      case 'SshKey':
-        return (
-          <div className="space-y-3">
-            <div>
-              <label className="label text-gray-600 dark:text-gray-300">{t('detail.labels.keyType')}</label>
-              <span className="text-sm">{data.key_type}</span>
-            </div>
-            {data.public_key && (
-              <div>
-                <label className="label text-gray-600 dark:text-gray-300">{t('detail.labels.publicKey')}</label>
-                <div className="flex items-start gap-2">
-                  <span className="text-sm font-mono break-all">{data.public_key}</span>
-                  <button
-                    onClick={() => onCopy(data.public_key, t('detail.labels.publicKey'))}
-                    aria-label={t('detail.copyLabel', { name: t('detail.labels.publicKey') })}
-                    className="p-1 hover:bg-gray-100 dark:hover:bg-gray-800 rounded shrink-0"
-                  >
-                    <DocumentDuplicateIcon className="w-4 h-4 text-gray-400 dark:text-gray-500" />
-                  </button>
-                </div>
-              </div>
-            )}
-            <div>
-              <label className="label text-gray-600 dark:text-gray-300">{t('detail.labels.privateKey')}</label>
-              <RevealSecretButton
-                credentialId={credential.id}
-                field="ssh_private_key"
-                label={t('detail.labels.privateKey')}
-              />
-            </div>
-            <div>
-              <label className="label text-gray-600 dark:text-gray-300">{t('detail.labels.passphrase')}</label>
-              <RevealSecretButton
-                credentialId={credential.id}
-                field="ssh_passphrase"
-                label={t('detail.labels.passphrase')}
-              />
-            </div>
-          </div>
-        );
-
-      case 'ApiKey':
-        return (
-          <div className="space-y-3">
-            <div>
-              <label className="label text-gray-600 dark:text-gray-300">{t('detail.labels.apiKey')}</label>
-              <RevealSecretButton credentialId={credential.id} field="api_key" label={t('detail.labels.apiKey')} />
-            </div>
-            <div>
-              <label className="label text-gray-600 dark:text-gray-300">{t('detail.labels.apiSecret')}</label>
-              <RevealSecretButton
-                credentialId={credential.id}
-                field="api_secret"
-                label={t('detail.labels.apiSecret')}
-              />
-            </div>
-            <div>
-              <label className="label text-gray-600 dark:text-gray-300">{t('detail.labels.token')}</label>
-              <RevealSecretButton credentialId={credential.id} field="token" label={t('detail.labels.token')} />
-            </div>
-            {data.permissions?.length > 0 && (
-              <div>
-                <label className="label text-gray-600 dark:text-gray-300">{t('detail.labels.permissions')}</label>
-                <div className="flex flex-wrap gap-1">
-                  {data.permissions.map((perm: string) => (
-                    <span
-                      key={perm}
-                      className="px-2 py-0.5 text-xs bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 rounded-full"
-                    >
-                      {perm}
-                    </span>
-                  ))}
-                </div>
-              </div>
-            )}
-            {data.expires_at && (
-              <div>
-                <label className="label text-gray-600 dark:text-gray-300">Expires</label>
-                <span className="text-sm">
-                  {new Date(data.expires_at).toLocaleString()}
-                </span>
-              </div>
-            )}
-          </div>
-        );
-
-      case 'BankCard':
-        return (
-          <div className="space-y-3">
-            {data.cardholder_name && (
-              <div>
-                <label className="label text-gray-600 dark:text-gray-300">{t('detail.labels.cardholder')}</label>
-                <span className="text-sm">{data.cardholder_name}</span>
-              </div>
-            )}
-            {data.bank_name && (
-              <div>
-                <label className="label text-gray-600 dark:text-gray-300">{t('detail.labels.bank')}</label>
-                <span className="text-sm">{data.bank_name}</span>
-              </div>
-            )}
-            {data.last4 && (
-              <div>
-                <label className="label text-gray-600 dark:text-gray-300">{t('detail.labels.cardNumber')}</label>
-                <span className="text-sm font-mono">•••• •••• •••• {data.last4}</span>
-              </div>
-            )}
-            {data.expiry_date && (
-              <div>
-                <label className="label text-gray-600 dark:text-gray-300">Expires</label>
-                <span className="text-sm">{data.expiry_date}</span>
-              </div>
-            )}
-          </div>
-        );
-
-      case 'SecureNote':
-        return (
-          <div>
-            <label className="label text-gray-600 dark:text-gray-300">{t('detail.labels.note')}</label>
-            <div className="flex items-start gap-2">
-              <pre className="flex-1 text-sm font-mono whitespace-pre-wrap break-words bg-gray-50 dark:bg-gray-800 rounded p-2">
-                {data.note}
-              </pre>
-              <button
-                onClick={() => onCopy(data.note, t('detail.labels.note'))}
-                aria-label={t('detail.copyLabel', { name: t('detail.labels.note') })}
-                className="p-1 hover:bg-gray-100 dark:hover:bg-gray-800 rounded"
-              >
-                <DocumentDuplicateIcon className="w-4 h-4 text-gray-400 dark:text-gray-500" />
-              </button>
-            </div>
-          </div>
-        );
-
-      case 'Identity': {
-        // 证件号等敏感字段随 per-item key 加密，读回走敏感操作门禁
-        const fields: Array<[string, string | undefined, boolean]> = [
-          [t('detail.labels.fullName'), [data.first_name, data.last_name].filter(Boolean).join(' '), false],
-          [t('detail.labels.email'), data.email, false],
-          [t('detail.labels.phone'), data.phone, false],
-          [t('detail.labels.birthday'), data.birthday, false],
-          [t('detail.labels.address'), data.address, false],
-          [t('detail.labels.idNumber'), data.id_number, true],
-          [t('detail.labels.passportNo'), data.passport_number, true],
-          [t('detail.labels.driverLicense'), data.driver_license, true],
-          [t('detail.labels.taxId'), data.tax_id, true],
-          [t('detail.labels.organization'), data.organization, false],
-          [t('detail.labels.jobTitle'), data.job_title, false],
-        ];
-        return (
-          <div className="space-y-3">
-            {fields
-              .filter(([, value]) => value)
-              .map(([label, value, mono]) => (
-                <div key={label}>
-                  <label className="label text-gray-600 dark:text-gray-300">{label}</label>
-                  <div className="flex items-center gap-2">
-                    <span
-                      className={`text-sm break-words whitespace-pre-wrap ${mono ? 'font-mono' : ''}`}
-                    >
-                      {value}
-                    </span>
-                    <button
-                      onClick={() => onCopy(value!, label)}
-                      aria-label={t('detail.copyLabel', { name: label })}
-                      className="p-1 hover:bg-gray-100 dark:hover:bg-gray-800 rounded shrink-0"
-                    >
-                      <DocumentDuplicateIcon className="w-4 h-4 text-gray-400 dark:text-gray-500" />
-                    </button>
-                  </div>
-                </div>
-              ))}
-          </div>
-        );
-      }
-
-      case 'SoftwareLicense': {
-        const fields: Array<[string, string | undefined, boolean]> = [
-          [t('detail.labels.licenseKey'), data.license_key, true],
-          [t('detail.labels.version'), data.version, false],
-          [t('detail.labels.publisher'), data.publisher, false],
-          [t('detail.labels.purchaseDate'), data.purchase_date, false],
-          [t('detail.labels.orderNumber'), data.order_number, true],
-          [t('detail.labels.supportEmail'), data.support_email, false],
-          [t('detail.labels.downloadUrl'), data.download_url, false],
-          [t('detail.labels.seats'), data.seats != null ? String(data.seats) : undefined, false],
-          [t('detail.labels.validUntil'), data.valid_until, false],
-        ];
-        return (
-          <div className="space-y-3">
-            {fields
-              .filter(([, value]) => value)
-              .map(([label, value, mono]) => (
-                <div key={label}>
-                  <label className="label text-gray-600 dark:text-gray-300">{label}</label>
-                  <div className="flex items-center gap-2">
-                    <span
-                      className={`text-sm break-words whitespace-pre-wrap ${mono ? 'font-mono' : ''}`}
-                    >
-                      {value}
-                    </span>
-                    <button
-                      onClick={() => onCopy(value!, label)}
-                      aria-label={t('detail.copyLabel', { name: label })}
-                      className="p-1 hover:bg-gray-100 dark:hover:bg-gray-800 rounded shrink-0"
-                    >
-                      <DocumentDuplicateIcon className="w-4 h-4 text-gray-400 dark:text-gray-500" />
-                    </button>
-                  </div>
-                </div>
-              ))}
-          </div>
-        );
-      }
-
-      default:
-        return (
-          <div className="text-sm text-gray-500 dark:text-gray-400">
-            {t('detail.encryptedNote')}
-          </div>
-        );
-    }
-  };
 
   return (
     <div
@@ -913,7 +437,25 @@ const CredentialDetailPane: React.FC<CredentialDetailPaneProps> = ({
         )}
 
         {credentialData ? (
-          renderCredentialData()
+          <CredentialDataSection
+            credential={credential}
+            credentialData={credentialData}
+            onCopy={onCopy}
+            refreshTotp={refreshTotp}
+            totpCode={totpCode}
+            totpRemaining={totpRemaining}
+            isTotpLoading={isTotpLoading}
+            itemPwdEnabled={itemPwdEnabled}
+            itemPwdForm={itemPwdForm}
+            itemPwdValue={itemPwdValue}
+            itemPwdHintValue={itemPwdHintValue}
+            itemPwdError={itemPwdError}
+            isItemPwdBusy={isItemPwdBusy}
+            handleItemPwdSubmit={handleItemPwdSubmit}
+            setItemPwdForm={setItemPwdForm}
+            setItemPwdValue={setItemPwdValue}
+            setItemPwdHintValue={setItemPwdHintValue}
+          />
         ) : (
           <div className="text-sm text-gray-400 dark:text-gray-500" data-testid="detail-loading">
             {t('detail.loadingDetails')}
@@ -942,246 +484,29 @@ const CredentialDetailPane: React.FC<CredentialDetailPaneProps> = ({
             </div>
           </div>
         )}
+        <AttachmentsSection
+          attachments={attachments}
+          isAttachmentBusy={isAttachmentBusy}
+          handleAttachFile={handleAttachFile}
+          handleSaveAttachment={handleSaveAttachment}
+          handleDeleteAttachment={handleDeleteAttachment}
+        />
 
-        {/* Attachments（1Password 对齐）：附件经凭据 item key 加密封存 */}
-        <div className="border-t pt-3">
-          <div className="flex items-center justify-between">
-            <span className="flex items-center gap-1 text-sm text-gray-600 dark:text-gray-300">
-              <PaperClipIcon className="w-4 h-4" />
-              {t('detail.attachments')}
-            </span>
-            <button
-              type="button"
-              onClick={handleAttachFile}
-              disabled={isAttachmentBusy}
-              data-testid="attachment-add"
-              className="flex items-center gap-1 text-xs px-2 py-1 rounded border border-gray-300 dark:border-gray-600 text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-800 disabled:opacity-50"
-            >
-              <PlusIcon className="w-3.5 h-3.5" />
-              {t('detail.addFile')}
-            </button>
-          </div>
+        <CustomFieldsSection
+          customFields={customFields}
+          customFieldsError={customFieldsError}
+          revealedFieldIds={revealedFieldIds}
+          setRevealedFieldIds={setRevealedFieldIds}
+          onCopy={onCopy}
+        />
 
-          <div className="mt-2" data-testid="attachment-list">
-            {attachments.length === 0 ? (
-              <p className="text-xs text-gray-400 dark:text-gray-500">
-                {t('detail.noAttachments')}
-              </p>
-            ) : (
-              <ul className="space-y-1.5">
-                {attachments.map((attachment) => (
-                  <li
-                    key={attachment.id}
-                    className="flex items-center justify-between gap-2 text-xs bg-gray-50 dark:bg-gray-800 rounded p-2"
-                    data-testid="attachment-entry"
-                  >
-                    <div className="min-w-0">
-                      <p
-                        className="truncate font-medium text-gray-700 dark:text-gray-200"
-                        data-testid="attachment-filename"
-                      >
-                        {attachment.filename}
-                      </p>
-                      <p className="text-gray-400 dark:text-gray-500">
-                        {formatFileSize(attachment.size)}
-                        {attachment.is_encrypted && t('detail.encryptedBadge')}
-                      </p>
-                    </div>
-                    <div className="flex items-center gap-1 shrink-0">
-                      <button
-                        type="button"
-                        onClick={() => handleSaveAttachment(attachment)}
-                        disabled={isAttachmentBusy}
-                        title={t('detail.saveToDisk', { name: attachment.filename })}
-                        data-testid={`attachment-save-${attachment.id}`}
-                        className="p-1 rounded text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 disabled:opacity-50"
-                      >
-                        <ArrowDownTrayIcon className="w-4 h-4" />
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => handleDeleteAttachment(attachment)}
-                        disabled={isAttachmentBusy}
-                        title={t('detail.deleteFile', { name: attachment.filename })}
-                        data-testid={`attachment-delete-${attachment.id}`}
-                        className="p-1 rounded text-gray-500 dark:text-gray-400 hover:bg-red-50 dark:hover:bg-red-900/30 hover:text-red-600 dark:hover:text-red-400 disabled:opacity-50"
-                      >
-                        <TrashIcon className="w-4 h-4" />
-                      </button>
-                    </div>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
-        </div>
-
-        {/* 自定义字段（1Password 对齐）：per-item key 密封的整表，读失败如实显示；
-            加载中/空表整节隐藏（不闪空标题） */}
-        {((customFields !== null && customFields.length > 0) || customFieldsError) && (
-          <div className="border-t pt-3" data-testid="custom-fields-section">
-            <span className="flex items-center gap-1 text-sm text-gray-600 dark:text-gray-300">
-              <DocumentDuplicateIcon className="w-4 h-4" />
-              {t('detail.customFields')}
-            </span>
-            {customFieldsError ? (
-              <p className="mt-2 text-xs text-red-500 dark:text-red-400" data-testid="custom-fields-error">
-                {customFieldsError}
-              </p>
-            ) : customFields === null ? null : (
-              <ul className="mt-2 space-y-1.5">
-                {customFields.map((field) => {
-                  const revealed = revealedFieldIds.has(field.id);
-                  return (
-                    <li
-                      key={field.id}
-                      className="flex items-center justify-between gap-2 text-xs bg-gray-50 dark:bg-gray-800 rounded p-2"
-                      data-testid="custom-field-entry"
-                    >
-                      <div className="min-w-0">
-                        <p
-                          className="truncate font-medium text-gray-700 dark:text-gray-200"
-                          data-testid="custom-field-label"
-                        >
-                          {field.label}
-                        </p>
-                        <p
-                          className={clsx(
-                            'font-mono break-all',
-                            field.type === 'concealed' && !revealed
-                              ? 'tracking-widest select-none'
-                              : 'text-gray-600 dark:text-gray-300'
-                          )}
-                          data-testid={`custom-field-value-${field.id}`}
-                        >
-                          {field.type === 'concealed' && !revealed
-                            ? '••••••••'
-                            : field.value}
-                        </p>
-                      </div>
-                      <div className="flex items-center gap-1 shrink-0">
-                        {field.type === 'concealed' && (
-                          <button
-                            type="button"
-                            onClick={() =>
-                              setRevealedFieldIds((prev) => {
-                                const next = new Set(prev);
-                                if (next.has(field.id)) next.delete(field.id);
-                                else next.add(field.id);
-                                return next;
-                              })
-                            }
-                            title={revealed ? t('detail.hideFieldValue') : t('detail.showFieldValue')}
-                            aria-label={revealed ? t('detail.hideFieldValue') : t('detail.showFieldValue')}
-                            data-testid={`custom-field-reveal-${field.id}`}
-                            className="p-1 rounded text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700"
-                          >
-                            {revealed ? (
-                              <EyeSlashIcon className="w-4 h-4" />
-                            ) : (
-                              <EyeIcon className="w-4 h-4" />
-                            )}
-                          </button>
-                        )}
-                        <button
-                          type="button"
-                          onClick={() => onCopy(field.value, field.label)}
-                          title={t('detail.copyLabel', { name: field.label })}
-                          aria-label={t('detail.copyLabel', { name: field.label })}
-                          data-testid={`custom-field-copy-${field.id}`}
-                          className="p-1 rounded text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700"
-                        >
-                          <DocumentDuplicateIcon className="w-4 h-4" />
-                        </button>
-                      </div>
-                    </li>
-                  );
-                })}
-              </ul>
-            )}
-          </div>
-        )}
-
-        {/* Item history（1Password 对齐）：懒加载的变更时间线 */}
-        <div className="border-t pt-3">
-          <button
-            type="button"
-            onClick={() => setIsHistoryOpen(!isHistoryOpen)}
-            data-testid="history-toggle"
-            className="flex items-center gap-1 text-sm text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100"
-          >
-            <ClockIcon className="w-4 h-4" />
-            {t('detail.itemHistory')}
-            {isHistoryOpen ? (
-              <ChevronUpIcon className="w-4 h-4" />
-            ) : (
-              <ChevronDownIcon className="w-4 h-4" />
-            )}
-          </button>
-
-          {isHistoryOpen && (
-            <div className="mt-2" data-testid="history-list">
-              {history === null ? (
-                <p className="text-xs text-gray-400 dark:text-gray-500">{t('common.loading')}</p>
-              ) : history.length === 0 ? (
-                <p className="text-xs text-gray-400 dark:text-gray-500">
-                  {t('detail.noChanges')}
-                </p>
-              ) : (
-                <ul className="space-y-2">
-                  {history.map((entry) => (
-                    <li
-                      key={entry.id}
-                      className="text-xs bg-gray-50 dark:bg-gray-800 rounded p-2"
-                      data-testid="history-entry"
-                    >
-                      <div className="flex items-center justify-between">
-                        <span className="font-medium text-gray-700 dark:text-gray-200">
-                          v{entry.version} · {entry.change_type}
-                        </span>
-                        <span className="flex items-center gap-2 text-gray-400 dark:text-gray-500">
-                          {entry.restorable && (
-                            <button
-                              type="button"
-                              data-testid="history-restore"
-                              disabled={isRestoringVersion}
-                              onClick={() => handleRestoreVersion(entry)}
-                              className="px-1.5 py-0.5 rounded border border-gray-300 dark:border-gray-600 text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 disabled:opacity-50"
-                            >
-                              {t('detail.restoreVersion')}
-                            </button>
-                          )}
-                          {new Date(entry.timestamp).toLocaleString()}
-                        </span>
-                      </div>
-                      {entry.changes.length > 0 && (
-                        <ul className="mt-1 space-y-0.5 font-mono text-gray-600 dark:text-gray-300">
-                          {entry.changes.map((change) => (
-                            <li key={change.field}>
-                              {change.field}:{' '}
-                              <span className="text-red-500 dark:text-red-400">
-                                {change.old_value || t('detail.emptyValue')}
-                              </span>{' '}
-                              →{' '}
-                              <span className="text-green-600 dark:text-green-400">
-                                {change.new_value || t('detail.emptyValue')}
-                              </span>
-                            </li>
-                          ))}
-                        </ul>
-                      )}
-                    </li>
-                  ))}
-                </ul>
-              )}
-              {history !== null && history.length > 0 && (
-                <p className="mt-2 text-[10px] text-gray-400 dark:text-gray-500">
-                  {t('detail.restoreHint')}
-                </p>
-              )}
-            </div>
-          )}
-        </div>
+        <HistorySection
+          isHistoryOpen={isHistoryOpen}
+          setIsHistoryOpen={setIsHistoryOpen}
+          history={history}
+          isRestoringVersion={isRestoringVersion}
+          handleRestoreVersion={handleRestoreVersion}
+        />
 
         <div className="flex items-center justify-between pt-4 border-t">
           <span className={clsx(
