@@ -32,6 +32,7 @@ updates:
     # mermaid 不走 dependabot：vitepress-plugin-mermaid@2.0.17 的 peer 只到
     # mermaid 11，dependabot 的 major 升级 PR（#132/#159）合入即让 docs 的
     # npm ci 以 ERESOLVE 红。升级改为等插件放开 peer 后人工评估（见 todo.md）。
+    # 2026-11-17 复核：插件 latest 仍 2.0.17 / peer 仍 `10 || 11`，未放开。
     ignore:
       - dependency-name: "mermaid"
         update-types:
