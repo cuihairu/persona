@@ -52,6 +52,10 @@ ignore = [
     # persona 只打开自建 vault 库（不读不可信第三方 db+wal），暴露面低。
     # 待 sqlx-sqlite 发布接入 libsqlite3-sys >=0.39 的版本后升级并删除此 ignore。
     "RUSTSEC-2026-0459",
+    # chrono 0.4 全版本被标记 unmaintained（建议迁移 jiff/time），无安全补丁、
+    # 无升级路径；advisory 无漏洞内容，仅维护状态。待主仓与 src-tauri 一并
+    # 迁移时间库后删除此 ignore。
+    "RUSTSEC-2026-0543",
 ]
 
 [licenses]
