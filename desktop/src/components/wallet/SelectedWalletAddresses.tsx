@@ -27,7 +27,7 @@ const SelectedWalletAddresses: React.FC<SelectedWalletAddressesProps> = ({
         </h3>
         <button
           onClick={onGenerate}
-          className="flex items-center gap-2 px-3 py-1 text-sm bg-indigo-600 text-white rounded hover:bg-indigo-700 transition-colors"
+          className="whitespace-nowrap flex items-center gap-2 px-3 py-1 text-sm bg-indigo-600 text-white rounded hover:bg-indigo-700 transition-colors"
         >
           <PlusIcon className="h-4 w-4" />
           {t('wallet.generateAddress')}
@@ -38,22 +38,22 @@ const SelectedWalletAddresses: React.FC<SelectedWalletAddressesProps> = ({
         <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
           <thead>
             <tr>
-              <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">
+              <th className="whitespace-nowrap px-4 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">
                 {t('wallet.colIndex')}
               </th>
-              <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">
+              <th className="whitespace-nowrap px-4 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">
                 {t('wallet.colAddress')}
               </th>
-              <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">
+              <th className="whitespace-nowrap px-4 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">
                 {t('wallet.colType')}
               </th>
-              <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">
+              <th className="whitespace-nowrap px-4 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">
                 {t('wallet.colBalance')}
               </th>
-              <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">
+              <th className="whitespace-nowrap px-4 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">
                 {t('wallet.colStatus')}
               </th>
-              <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">
+              <th className="whitespace-nowrap px-4 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">
                 {t('wallet.colActions')}
               </th>
             </tr>
@@ -71,7 +71,7 @@ const SelectedWalletAddresses: React.FC<SelectedWalletAddressesProps> = ({
                     </code>
                     <button
                       onClick={() => onShowQr(address.address)}
-                      className="text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300"
+                      className="whitespace-nowrap text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300"
                       title={t('wallet.showQr')}
                     >
                       <QrCodeIcon className="h-4 w-4" />
@@ -86,7 +86,7 @@ const SelectedWalletAddresses: React.FC<SelectedWalletAddressesProps> = ({
                 </td>
                 <td className="px-4 py-2">
                   <span
-                    className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${
+                    className={`whitespace-nowrap inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${
                       address.used
                         ? 'bg-gray-100 dark:bg-gray-800 text-gray-800 dark:text-gray-200'
                         : 'bg-green-100 dark:bg-green-500/10 text-green-800 dark:text-green-300'

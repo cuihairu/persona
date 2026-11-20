@@ -51,7 +51,7 @@ const WalletCard: React.FC<WalletCardProps> = ({
             <h3 className="font-semibold text-gray-900 dark:text-gray-100">{wallet.name}</h3>
           </div>
           <span
-            className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium mt-1 ${getNetworkColor(
+            className={`whitespace-nowrap inline-flex items-center px-2 py-1 rounded-full text-xs font-medium mt-1 ${getNetworkColor(
               wallet.network
             )}`}
           >
@@ -88,7 +88,7 @@ const WalletCard: React.FC<WalletCardProps> = ({
             e.stopPropagation();
             onSend(wallet);
           }}
-          className="flex-1 flex items-center justify-center gap-1 px-2 py-1 text-sm bg-indigo-600 text-white rounded hover:bg-indigo-700 transition-colors"
+          className="whitespace-nowrap flex-1 flex items-center justify-center gap-1 px-2 py-1 text-sm bg-indigo-600 text-white rounded hover:bg-indigo-700 transition-colors"
           data-testid={`send-button-${wallet.id}`}
         >
           <PaperAirplaneIcon className="h-4 w-4" />
@@ -99,7 +99,7 @@ const WalletCard: React.FC<WalletCardProps> = ({
             e.stopPropagation();
             onExport(wallet);
           }}
-          className="flex-1 flex items-center justify-center gap-1 px-2 py-1 text-sm bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 rounded hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
+          className="whitespace-nowrap flex-1 flex items-center justify-center gap-1 px-2 py-1 text-sm bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 rounded hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
         >
           <ArrowUpTrayIcon className="h-4 w-4" />
           {t('wallet.export')}
@@ -109,7 +109,7 @@ const WalletCard: React.FC<WalletCardProps> = ({
             e.stopPropagation();
             onRefresh();
           }}
-          className="flex-1 flex items-center justify-center gap-1 px-2 py-1 text-sm bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 rounded hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
+          className="whitespace-nowrap flex-1 flex items-center justify-center gap-1 px-2 py-1 text-sm bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 rounded hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
           >
           <ArrowTrendingUpIcon className="h-4 w-4" />
           {t('wallet.refresh')}

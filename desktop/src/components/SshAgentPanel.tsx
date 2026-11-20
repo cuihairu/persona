@@ -511,7 +511,7 @@ const SshAgentPanel: React.FC = () => {
                           {key.tags.map((tag) => (
                             <span
                               key={tag}
-                              className="px-2 py-0.5 text-xs font-medium bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-300 rounded-full"
+                              className="whitespace-nowrap px-2 py-0.5 text-xs font-medium bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-300 rounded-full"
                             >
                               {tag}
                             </span>
@@ -609,7 +609,7 @@ const SshAgentPanel: React.FC = () => {
                 <dd className="font-mono text-gray-900 dark:text-gray-100">
                   {importSession.inspection.ssh_algorithm}
                   {importSession.inspection.encrypted && (
-                    <span className="ml-2 inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold bg-amber-100 dark:bg-amber-500/10 text-amber-800 dark:text-amber-300">
+                    <span className="whitespace-nowrap ml-2 inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold bg-amber-100 dark:bg-amber-500/10 text-amber-800 dark:text-amber-300">
                       {t('sshAgent.importEncrypted')}
                     </span>
                   )}

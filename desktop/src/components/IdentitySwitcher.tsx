@@ -137,7 +137,7 @@ const IdentitySwitcher: React.FC<IdentitySwitcherProps> = ({ onCreateIdentity })
               <div className="border-t border-gray-200 dark:border-gray-700 mt-1 pt-1">
                 <button
                   onClick={onCreateIdentity}
-                  className="w-full text-left px-3 py-2 text-sm text-primary-600 dark:text-primary-400 hover:bg-primary-50 dark:hover:bg-primary-500/10 flex items-center"
+                  className="whitespace-nowrap w-full text-left px-3 py-2 text-sm text-primary-600 dark:text-primary-400 hover:bg-primary-50 dark:hover:bg-primary-500/10 flex items-center"
                 >
                   <PlusIcon className="w-4 h-4 mr-2" />
                   {t('identity.createNew')}

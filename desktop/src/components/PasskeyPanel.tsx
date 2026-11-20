@@ -121,13 +121,13 @@ const PasskeyPanel: React.FC = () => {
             <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
               <thead className="bg-gray-50 dark:bg-gray-800/50">
                 <tr>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">{t('passkey.colIdentity')}</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">{t('passkey.colRp')}</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">{t('passkey.colAccount')}</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">{t('passkey.colUv')}</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">{t('passkey.colExport')}</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">{t('passkey.colCreated')}</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">{t('passkey.colLastUsed')}</th>
+                  <th className="whitespace-nowrap px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">{t('passkey.colIdentity')}</th>
+                  <th className="whitespace-nowrap px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">{t('passkey.colRp')}</th>
+                  <th className="whitespace-nowrap px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">{t('passkey.colAccount')}</th>
+                  <th className="whitespace-nowrap px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">{t('passkey.colUv')}</th>
+                  <th className="whitespace-nowrap px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">{t('passkey.colExport')}</th>
+                  <th className="whitespace-nowrap px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">{t('passkey.colCreated')}</th>
+                  <th className="whitespace-nowrap px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">{t('passkey.colLastUsed')}</th>
                 </tr>
               </thead>
               <tbody className="bg-white dark:bg-gray-900 divide-y divide-gray-200 dark:divide-gray-700">
@@ -138,15 +138,15 @@ const PasskeyPanel: React.FC = () => {
                     className="hover:bg-gray-50 dark:hover:bg-gray-800 cursor-pointer"
                     data-testid={`passkey-row-${row.passkey.id}`}
                   >
-                    <td className="px-6 py-3 text-sm text-gray-500 dark:text-gray-400">{row.identityName}</td>
-                    <td className="px-6 py-3 text-sm text-gray-900 dark:text-gray-100 font-medium">
+                    <td className="px-4 py-3 text-sm text-gray-500 dark:text-gray-400">{row.identityName}</td>
+                    <td className="px-4 py-3 text-sm text-gray-900 dark:text-gray-100 font-medium">
                       {row.passkey.rp_name ?? row.passkey.rp_id}
                     </td>
-                    <td className="px-6 py-3 text-sm text-gray-700 dark:text-gray-300">{row.passkey.user_name ?? '—'}</td>
-                    <td className="px-6 py-3 text-sm text-gray-700 dark:text-gray-300">{row.passkey.uv_initialized ? '✓' : '✗'}</td>
-                    <td className="px-6 py-3 text-sm text-gray-700 dark:text-gray-300">{row.passkey.export_allowed ? '✓' : '✗'}</td>
-                    <td className="px-6 py-3 text-sm text-gray-500 dark:text-gray-400">{formatDate(row.passkey.created_at)}</td>
-                    <td className="px-6 py-3 text-sm text-gray-500 dark:text-gray-400">{formatDate(row.passkey.last_used_at)}</td>
+                    <td className="px-4 py-3 text-sm text-gray-700 dark:text-gray-300">{row.passkey.user_name ?? '—'}</td>
+                    <td className="px-4 py-3 text-sm text-gray-700 dark:text-gray-300">{row.passkey.uv_initialized ? '✓' : '✗'}</td>
+                    <td className="px-4 py-3 text-sm text-gray-700 dark:text-gray-300">{row.passkey.export_allowed ? '✓' : '✗'}</td>
+                    <td className="px-4 py-3 text-sm text-gray-500 dark:text-gray-400">{formatDate(row.passkey.created_at)}</td>
+                    <td className="px-4 py-3 text-sm text-gray-500 dark:text-gray-400">{formatDate(row.passkey.last_used_at)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -409,7 +409,7 @@ const PasskeyDetailModal: React.FC<PasskeyDetailModalProps> = ({ row, onClose, o
                 <button
                   type="button"
                   onClick={() => void copyWithAutoClear(exportHex)}
-                  className="p-1 hover:bg-gray-100 dark:hover:bg-gray-800 rounded"
+                  className="whitespace-nowrap p-1 hover:bg-gray-100 dark:hover:bg-gray-800 rounded"
                   aria-label={t('passkey.copyPrivate')}
                 >
                   <DocumentDuplicateIcon className="w-4 h-4 text-gray-400 dark:text-gray-500" />

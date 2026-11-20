@@ -132,7 +132,7 @@ const RevealSecretButton: React.FC<RevealSecretButtonProps> = ({
         <button
           onClick={() => doReveal(rememberedItemPwd ?? undefined)}
           disabled={isLoading}
-          className="flex items-center gap-1 text-sm text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 disabled:opacity-50"
+          className="whitespace-nowrap flex items-center gap-1 text-sm text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 disabled:opacity-50"
           data-testid="reveal-trigger"
         >
           {isLoading ? (

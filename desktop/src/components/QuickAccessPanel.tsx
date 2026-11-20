@@ -414,7 +414,7 @@ const QuickAccessPanel: React.FC = () => {
           type="button"
           data-testid="quick-access-unlock-button"
           onClick={() => void personaAPI.focusMainWindow()}
-          className="rounded-md bg-primary-600 hover:bg-primary-700 text-white text-sm px-4 py-2"
+          className="whitespace-nowrap rounded-md bg-primary-600 hover:bg-primary-700 text-white text-sm px-4 py-2"
         >
           {t('quickAccess.openMainWindow')}
         </button>
@@ -481,7 +481,7 @@ const QuickAccessPanel: React.FC = () => {
                       onClick={() => setActiveIndex(index)}
                       onDoubleClick={() => copyPrimary(credential)}
                       onMouseEnter={() => setActiveIndex(index)}
-                      className={`w-full flex items-center gap-3 px-4 py-2 text-left transition-colors ${
+                      className={`whitespace-nowrap w-full flex items-center gap-3 px-4 py-2 text-left transition-colors ${
                         isActive
                           ? 'bg-primary-50 dark:bg-primary-500/10'
                           : 'hover:bg-gray-50 dark:hover:bg-gray-800'
@@ -560,7 +560,7 @@ const QuickAccessPanel: React.FC = () => {
                 type="button"
                 data-testid="quick-access-fill-cancel"
                 onClick={() => setFillConfirm(null)}
-                className="rounded-md px-3 py-1.5 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700"
+                className="whitespace-nowrap rounded-md px-3 py-1.5 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700"
               >
                 {t('quickAccess.fillCancel')}
               </button>
