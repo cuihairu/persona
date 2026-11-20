@@ -132,7 +132,7 @@ const QuickSearch = () => {
         data-testid="quick-search-trigger"
         aria-label={t('quickSearch.search')}
         onClick={() => setOpen(true)}
-        className="flex items-center gap-2 rounded-md border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 px-3 py-1.5 text-sm text-gray-400 dark:text-gray-500 hover:border-gray-300 dark:hover:border-gray-600 hover:text-gray-500 dark:hover:text-gray-400 transition-colors"
+        className="whitespace-nowrap flex items-center gap-2 rounded-md border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 px-3 py-1.5 text-sm text-gray-400 dark:text-gray-500 hover:border-gray-300 dark:hover:border-gray-600 hover:text-gray-500 dark:hover:text-gray-400 transition-colors"
       >
         <MagnifyingGlassIcon className="w-4 h-4" />
         <span>{t('quickSearch.searchHint')}</span>

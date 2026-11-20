@@ -335,14 +335,14 @@ const WalletPanel: React.FC = () => {
           <div className="flex gap-2">
             <button
               onClick={() => setShowImportModal(true)}
-              className="flex items-center gap-2 px-4 py-2 bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors"
+              className="whitespace-nowrap flex items-center gap-2 px-4 py-2 bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors"
             >
               <ArrowDownTrayIcon className="h-5 w-5" />
               {t('wallet.import')}
             </button>
             <button
               onClick={() => setShowCreateModal(true)}
-              className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors"
+              className="whitespace-nowrap flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors"
             >
               <PlusIcon className="h-5 w-5" />
               {t('wallet.newWallet')}
@@ -371,7 +371,7 @@ const WalletPanel: React.FC = () => {
             <div className="mt-6 flex justify-center gap-2">
               <button
                 onClick={() => setShowCreateModal(true)}
-                className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors"
+                className="whitespace-nowrap px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors"
               >
                 {t('wallet.createWallet')}
               </button>

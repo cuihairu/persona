@@ -436,7 +436,7 @@ const SyncDevicesSection: React.FC = () => {
                                   setEditingRemark(true);
                                 }}
                                 disabled={busy}
-                                className="ml-2 text-blue-600 dark:text-blue-400 hover:underline"
+                                className="whitespace-nowrap ml-2 text-blue-600 dark:text-blue-400 hover:underline"
                               >
                                 {t('settings.syncDevices.remarkEdit')}
                               </button>
