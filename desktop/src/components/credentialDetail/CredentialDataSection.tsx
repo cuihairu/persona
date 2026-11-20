@@ -62,7 +62,7 @@ const CredentialDataSection: React.FC<{
                 <button
                   onClick={() => onCopy(data.email, t('detail.labels.email'))}
                   aria-label={t('detail.copyLabel', { name: t('detail.labels.email') })}
-                  className="p-1 hover:bg-gray-100 dark:hover:bg-gray-800 rounded"
+                  className="whitespace-nowrap p-1 hover:bg-gray-100 dark:hover:bg-gray-800 rounded"
                 >
                   <DocumentDuplicateIcon className="w-4 h-4 text-gray-400 dark:text-gray-500" />
                 </button>
@@ -94,7 +94,7 @@ const CredentialDataSection: React.FC<{
               <button
                 onClick={() => onCopy(data.address, t('detail.labels.address'))}
                 aria-label={t('detail.copyLabel', { name: t('detail.labels.address') })}
-                className="p-1 hover:bg-gray-100 dark:hover:bg-gray-800 rounded"
+                className="whitespace-nowrap p-1 hover:bg-gray-100 dark:hover:bg-gray-800 rounded"
               >
                 <DocumentDuplicateIcon className="w-4 h-4 text-gray-400 dark:text-gray-500" />
               </button>
@@ -144,7 +144,7 @@ const CredentialDataSection: React.FC<{
                 <button
                   onClick={() => onCopy(data.public_key, t('detail.labels.publicKey'))}
                   aria-label={t('detail.copyLabel', { name: t('detail.labels.publicKey') })}
-                  className="p-1 hover:bg-gray-100 dark:hover:bg-gray-800 rounded"
+                  className="whitespace-nowrap p-1 hover:bg-gray-100 dark:hover:bg-gray-800 rounded"
                 >
                   <DocumentDuplicateIcon className="w-4 h-4 text-gray-400 dark:text-gray-500" />
                 </button>
@@ -227,7 +227,7 @@ const CredentialDataSection: React.FC<{
                       setItemPwdValue('');
                       setItemPwdHintValue('');
                     }}
-                    className="text-xs text-gray-500 dark:text-gray-400 hover:underline"
+                    className="whitespace-nowrap text-xs text-gray-500 dark:text-gray-400 hover:underline"
                   >
                     {t('common.cancel')}
                   </button>
@@ -263,7 +263,7 @@ const CredentialDataSection: React.FC<{
                 onClick={() => totpCode && onCopy(totpCode, t('detail.labels.totpCode'))}
                 aria-label={t('detail.copyLabel', { name: t('detail.labels.totpCode') })}
                 disabled={!totpCode}
-                className="p-1 hover:bg-gray-100 dark:hover:bg-gray-800 rounded disabled:opacity-50"
+                className="whitespace-nowrap p-1 hover:bg-gray-100 dark:hover:bg-gray-800 rounded disabled:opacity-50"
                 title={t('detail.copyCode')}
               >
                 <DocumentDuplicateIcon className="w-4 h-4 text-gray-400 dark:text-gray-500" />
@@ -300,7 +300,7 @@ const CredentialDataSection: React.FC<{
                 <button
                   onClick={() => onCopy(data.public_key, t('detail.labels.publicKey'))}
                   aria-label={t('detail.copyLabel', { name: t('detail.labels.publicKey') })}
-                  className="p-1 hover:bg-gray-100 dark:hover:bg-gray-800 rounded shrink-0"
+                  className="whitespace-nowrap p-1 hover:bg-gray-100 dark:hover:bg-gray-800 rounded shrink-0"
                 >
                   <DocumentDuplicateIcon className="w-4 h-4 text-gray-400 dark:text-gray-500" />
                 </button>
@@ -352,7 +352,7 @@ const CredentialDataSection: React.FC<{
                 {data.permissions.map((perm: string) => (
                   <span
                     key={perm}
-                    className="px-2 py-0.5 text-xs bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 rounded-full"
+                    className="whitespace-nowrap px-2 py-0.5 text-xs bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 rounded-full"
                   >
                     {perm}
                   </span>
@@ -412,7 +412,7 @@ const CredentialDataSection: React.FC<{
             <button
               onClick={() => onCopy(data.note, t('detail.labels.note'))}
               aria-label={t('detail.copyLabel', { name: t('detail.labels.note') })}
-              className="p-1 hover:bg-gray-100 dark:hover:bg-gray-800 rounded"
+              className="whitespace-nowrap p-1 hover:bg-gray-100 dark:hover:bg-gray-800 rounded"
             >
               <DocumentDuplicateIcon className="w-4 h-4 text-gray-400 dark:text-gray-500" />
             </button>
@@ -451,7 +451,7 @@ const CredentialDataSection: React.FC<{
                   <button
                     onClick={() => onCopy(value!, label)}
                     aria-label={t('detail.copyLabel', { name: label })}
-                    className="p-1 hover:bg-gray-100 dark:hover:bg-gray-800 rounded shrink-0"
+                    className="whitespace-nowrap p-1 hover:bg-gray-100 dark:hover:bg-gray-800 rounded shrink-0"
                   >
                     <DocumentDuplicateIcon className="w-4 h-4 text-gray-400 dark:text-gray-500" />
                   </button>

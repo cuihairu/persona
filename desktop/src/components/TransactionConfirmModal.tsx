@@ -239,7 +239,7 @@ const TransactionConfirmModal: React.FC<TransactionConfirmModalProps> = ({
                   </code>
                   <button
                     onClick={() => void copyWithAutoClear(signed.transaction_hash)}
-                    className="p-1 hover:bg-gray-100 dark:hover:bg-gray-800 rounded shrink-0"
+                    className="whitespace-nowrap p-1 hover:bg-gray-100 dark:hover:bg-gray-800 rounded shrink-0"
                     aria-label={t('tx.copyHash')}
                   >
                     ⧉
