@@ -325,13 +325,13 @@ const SshAgentPanel: React.FC = () => {
   return (
     <div className="space-y-6" data-testid="ssh-agent-panel">
       <section className="bg-white dark:bg-gray-900 shadow rounded-xl p-6 border border-gray-100 dark:border-gray-800">
-        <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-          <div>
+        <div className="flex flex-col flex-wrap gap-4 gap-y-3 lg:flex-row lg:items-center lg:justify-between">
+          <div className="min-w-0">
             <p className="text-sm font-medium text-gray-500 dark:text-gray-400">SSH Agent</p>
-            <div className="flex items-center mt-1">
+            <div className="flex items-center mt-1 min-w-0">
               <span
                 className={clsx(
-                  'inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold',
+                  'inline-flex items-center whitespace-nowrap shrink-0 px-2 py-0.5 rounded-full text-xs font-semibold',
                   sshAgentStatus?.running ? 'bg-green-100 dark:bg-green-500/10 text-green-800 dark:text-green-300' : 'bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-300',
                 )}
               >
@@ -433,25 +433,25 @@ const SshAgentPanel: React.FC = () => {
             <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
               <thead className="bg-gray-50 dark:bg-gray-800/50">
                 <tr>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                  <th className="whitespace-nowrap px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
                     {t('sshAgent.identityCol')}
                   </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                  <th className="whitespace-nowrap px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
                     {t('sshAgent.credentialCol')}
                   </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                  <th className="whitespace-nowrap px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
                     {t('sshAgent.typeCol')}
                   </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                  <th className="whitespace-nowrap px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
                     {t('sshAgent.publicKeyCol')}
                   </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                  <th className="whitespace-nowrap px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
                     {t('sshAgent.tagsCol')}
                   </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                  <th className="whitespace-nowrap px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
                     {t('sshAgent.updatedCol')}
                   </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                  <th className="whitespace-nowrap px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
                     {t('sshAgent.actionsCol')}
                   </th>
                 </tr>
@@ -459,12 +459,14 @@ const SshAgentPanel: React.FC = () => {
               <tbody className="bg-white dark:bg-gray-900 divide-y divide-gray-200 dark:divide-gray-700">
                 {sshKeys.map((key) => (
                   <tr key={key.id}>
-                    <td className="px-6 py-3 text-sm text-gray-900 dark:text-gray-100 font-medium flex items-center gap-2">
-                      <KeyIcon className="w-4 h-4 text-gray-400 dark:text-gray-500" />
-                      {key.identity_name}
+                    <td className="px-4 py-3 text-sm text-gray-900 dark:text-gray-100 font-medium">
+                      <div className="flex items-center gap-2 whitespace-nowrap">
+                        <KeyIcon className="w-4 h-4 shrink-0 text-gray-400 dark:text-gray-500" />
+                        <span className="whitespace-nowrap">{key.identity_name}</span>
+                      </div>
                     </td>
-                    <td className="px-6 py-3 text-sm text-gray-700 dark:text-gray-300">{key.name}</td>
-                    <td className="px-6 py-3 text-sm text-gray-700 dark:text-gray-300">
+                    <td className="px-4 py-3 text-sm text-gray-700 dark:text-gray-300">{key.name}</td>
+                    <td className="px-4 py-3 text-sm text-gray-700 dark:text-gray-300">
                       {key.ssh_algorithm ? (
                         <div className="space-y-0.5">
                           <span className="flex items-center gap-1.5 flex-wrap">
@@ -491,7 +493,7 @@ const SshAgentPanel: React.FC = () => {
                         <span className="text-gray-400 dark:text-gray-500">—</span>
                       )}
                     </td>
-                    <td className="px-6 py-3 text-sm">
+                    <td className="px-4 py-3 text-sm">
                       {key.public_key ? (
                         <span
                           className="font-mono text-xs text-gray-500 dark:text-gray-400 truncate inline-block max-w-[14rem] align-middle"
@@ -503,7 +505,7 @@ const SshAgentPanel: React.FC = () => {
                         <span className="text-gray-400 dark:text-gray-500">—</span>
                       )}
                     </td>
-                    <td className="px-6 py-3 text-sm text-gray-500 dark:text-gray-400">
+                    <td className="px-4 py-3 text-sm text-gray-500 dark:text-gray-400">
                       {key.tags.length > 0 ? (
                         <div className="flex flex-wrap gap-1">
                           {key.tags.map((tag) => (
@@ -519,10 +521,10 @@ const SshAgentPanel: React.FC = () => {
                         <span className="text-gray-400 dark:text-gray-500">—</span>
                       )}
                     </td>
-                    <td className="px-6 py-3 text-sm text-gray-500 dark:text-gray-400">
+                    <td className="px-4 py-3 text-sm text-gray-500 dark:text-gray-400">
                       {new Date(key.updated_at).toLocaleString()}
                     </td>
-                    <td className="px-6 py-3 text-sm whitespace-nowrap">
+                    <td className="px-4 py-3 text-sm whitespace-nowrap">
                       <div className="flex items-center gap-1">
                         {key.public_key && (
                           <button
