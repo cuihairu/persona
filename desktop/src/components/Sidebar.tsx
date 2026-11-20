@@ -400,7 +400,7 @@ const Sidebar: React.FC<SidebarProps> = ({
           title={t('sidebar.settingsTitle')}
           onClick={onOpenSettings}
         >
-          <Cog6ToothIcon className="h-4 w-4 shrink-0 text-secondary-400" aria-hidden="true" />
+          <Cog6ToothIcon className="whitespace-nowrap h-4 w-4 shrink-0 text-secondary-400" aria-hidden="true" />
           {!rail && <span className="truncate">{t('sidebar.settings')}</span>}
         </button>
         <button

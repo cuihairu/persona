@@ -354,7 +354,7 @@ const CredentialDetailPane: React.FC<CredentialDetailPaneProps> = ({
         <div className="flex items-center gap-1">
           <button
             onClick={() => setEditingCredential({ credential, data: credentialData })}
-            className="p-2 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg"
+            className="whitespace-nowrap p-2 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg"
             title={t('common.edit')}
             aria-label={t('detail.editItem')}
             data-testid="edit-credential-button"
@@ -396,7 +396,7 @@ const CredentialDetailPane: React.FC<CredentialDetailPaneProps> = ({
               <button
                 onClick={() => onCopy(credential.url!, t('detail.labels.url'))}
                 aria-label={t('detail.copyLabel', { name: t('detail.labels.url') })}
-                className="p-1 hover:bg-gray-100 dark:hover:bg-gray-800 rounded"
+                className="whitespace-nowrap p-1 hover:bg-gray-100 dark:hover:bg-gray-800 rounded"
               >
                 <DocumentDuplicateIcon className="w-4 h-4 text-gray-400 dark:text-gray-500" />
               </button>
@@ -476,7 +476,7 @@ const CredentialDetailPane: React.FC<CredentialDetailPaneProps> = ({
               {credential.tags.map((tag) => (
                 <span
                   key={tag}
-                  className="px-2 py-0.5 text-xs font-medium bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 rounded-full"
+                  className="whitespace-nowrap px-2 py-0.5 text-xs font-medium bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 rounded-full"
                 >
                   {tag}
                 </span>
@@ -510,7 +510,7 @@ const CredentialDetailPane: React.FC<CredentialDetailPaneProps> = ({
 
         <div className="flex items-center justify-between pt-4 border-t">
           <span className={clsx(
-            'px-2 py-1 text-xs font-medium rounded-full border',
+            'whitespace-nowrap px-2 py-1 text-xs font-medium rounded-full border',
             getSecurityColor(credential.security_level)
           )}>
             {securityLevelLabel(t, credential.security_level)}

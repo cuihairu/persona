@@ -25,8 +25,10 @@
 # Browser extension（2026-11-14）：Chromium MV3 包（manifest.json 在
 # zip 根）进 artifact（extension-chromium）；nightly 双命名资产
 # persona-nightly-extension-chrome.zip / persona-nightly-extension-edge.zip
-# ——Chrome/Edge 同包双名。Safari 需 Xcode 转换 + 签名账号，**不在
-# nightly**（todo 另立）。tag 正式版暂不发扩展，口径与 APK 一致。
+# ——Chrome/Edge 同包双名；另有 persona-nightly-extension.crx（CRX3，
+# Chromium 直接拖装，固定密钥钉扩展 ID）。Safari 需 Xcode 转换 + 签名
+# 账号，**不在 nightly**（todo 另立）。tag 正式版暂不发扩展，口径与
+# APK 一致。
 #
 # OpenWrt（2026-11-14）：persona-server musl 静态编译（x86_64 + aarch64）
 # → packaging/openwrt/build-ipk.sh 出三件套 ipk（persona 主包 arch 相关、
@@ -458,6 +460,27 @@ jobs:
             exit 1
           fi
 
+      - name: Build extension CRX3 (drag-install package)
+        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+        shell: bash
+        # CRX3 = Chromium 可直接拖装的封装（zip 需要开发者模式 load
+        # unpacked）。固定密钥 packaging/extension/persona-crx.pem 钉住
+        # 扩展 ID：换 key = 换 ID = 老版本升级后设置全丢，绝不能每次
+        # 构建重新生成。工具：crx3 npm 包（协议头 Cr24 v3 已本地验证）。
+        run: |
+          test -f dist/persona-nightly-extension-chrome.zip
+          rm -rf /tmp/persona-crx-src && mkdir -p /tmp/persona-crx-src
+          unzip -q dist/persona-nightly-extension-chrome.zip -d /tmp/persona-crx-src
+          test -f /tmp/persona-crx-src/manifest.json
+          npx --yes crx3@latest \
+            --keyPath packaging/extension/persona-crx.pem \
+            --crxPath dist/persona-nightly-extension.crx \
+            /tmp/persona-crx-src
+          # 结构门禁：CRX3 头（Cr24 v3）+ 尺寸非零
+          head -c4 dist/persona-nightly-extension.crx | grep -q "Cr24"
+          [ "$(stat -c%s dist/persona-nightly-extension.crx)" -gt 100 ]
+          echo "crx3 package OK"
+
       - name: Rename OpenWrt ipks (nightly naming)
         if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
         shell: bash
@@ -499,6 +522,7 @@ jobs:
           {
             echo "# persona nightly assets — $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
             echo "# extension-chrome/edge are the same package under two names"
+            echo "# extension .crx is the CRX3 drag-install package (pinned extension id)"
             echo "# Safari is not shipped in nightly (needs Xcode conversion + signing)"
             while IFS= read -r f; do
               printf '%-64s %10s\n' "$f" "$(du -h "$f" | cut -f1)"

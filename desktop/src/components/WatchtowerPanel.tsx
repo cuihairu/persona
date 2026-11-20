@@ -164,7 +164,7 @@ const WatchtowerPanel: React.FC = () => {
                 <span
                   key={sev}
                   className={clsx(
-                    'inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border',
+                    'whitespace-nowrap inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border',
                     getSeverityColor(sev),
                   )}
                 >
@@ -180,7 +180,7 @@ const WatchtowerPanel: React.FC = () => {
                 >
                   <span
                     className={clsx(
-                      'mt-0.5 inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border',
+                      'shrink-0 whitespace-nowrap mt-0.5 inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border',
                       getSeverityColor(issue.severity),
                     )}
                   >
@@ -191,7 +191,7 @@ const WatchtowerPanel: React.FC = () => {
                       <span className="text-sm font-medium text-gray-900 dark:text-gray-100">
                         {issue.credential_name}
                       </span>
-                      <span className="px-2 py-0.5 text-xs font-medium bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 rounded-full">
+                      <span className="whitespace-nowrap px-2 py-0.5 text-xs font-medium bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 rounded-full">
                         {t(KIND_LABELS[issue.type])}
                       </span>
                       <span className="text-xs text-gray-400 dark:text-gray-500">{credentialTypeLabel(t, issue.credential_type)}</span>

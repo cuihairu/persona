@@ -301,7 +301,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose }) => {
                                   {identity.name}
                                 </p>
                                 {isCurrent && (
-                                  <span className="px-2 py-0.5 text-xs font-medium rounded-full bg-primary-100 text-primary-700 dark:bg-primary-500/20 dark:text-primary-300">
+                                  <span className="whitespace-nowrap px-2 py-0.5 text-xs font-medium rounded-full bg-primary-100 text-primary-700 dark:bg-primary-500/20 dark:text-primary-300">
                                     {t('settings.current')}
                                   </span>
                                 )}
@@ -321,7 +321,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose }) => {
                                   {identity.tags.map((tag) => (
                                     <span
                                       key={tag}
-                                      className="px-2 py-0.5 text-xs font-medium bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300 rounded-full"
+                                      className="whitespace-nowrap px-2 py-0.5 text-xs font-medium bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300 rounded-full"
                                     >
                                       {tag}
                                     </span>
@@ -335,7 +335,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose }) => {
                         {!isEditing && (
                           <div className="flex items-center gap-1">
                             <button
-                              className="p-2 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg"
+                              className="whitespace-nowrap p-2 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg"
                               onClick={() => startEdit(identity)}
                               title={t('common.edit')}
                             >

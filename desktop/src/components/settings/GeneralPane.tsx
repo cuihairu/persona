@@ -141,7 +141,7 @@ const GeneralPane: React.FC<{
               aria-checked={theme === opt.value}
               data-testid={`theme-option-${opt.value}`}
               onClick={() => setTheme(opt.value)}
-              className={`flex-1 px-3 py-1 rounded-md text-sm font-medium transition-colors ${
+              className={`whitespace-nowrap flex-1 px-3 py-1 rounded-md text-sm font-medium transition-colors ${
                 theme === opt.value
                   ? 'bg-white text-gray-900 shadow-sm dark:bg-gray-700 dark:text-gray-100'
                   : 'text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-300'

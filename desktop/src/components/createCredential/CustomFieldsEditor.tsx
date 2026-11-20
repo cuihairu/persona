@@ -84,7 +84,7 @@ const CustomFieldsEditor: React.FC<{
                 <button
                   type="button"
                   onClick={() => removeCustomField(field.id)}
-                  className="p-2 rounded text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700"
+                  className="whitespace-nowrap p-2 rounded text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700"
                   aria-label={t('credForm.customFieldRemove')}
                   title={t('credForm.customFieldRemove')}
                   data-testid={`custom-field-remove-${rowId}`}

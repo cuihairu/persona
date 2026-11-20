@@ -125,7 +125,7 @@ const QuickAccessSection: React.FC = () => {
               data-testid="quick-access-save"
               disabled={saving || status === null}
               onClick={() => void apply(enabled, hotkeyInput.trim() || null)}
-              className="rounded-md bg-primary-600 hover:bg-primary-700 text-white text-sm px-3 py-2 disabled:opacity-50"
+              className="whitespace-nowrap rounded-md bg-primary-600 hover:bg-primary-700 text-white text-sm px-3 py-2 disabled:opacity-50"
             >
               {t('common.save')}
             </button>
@@ -134,7 +134,7 @@ const QuickAccessSection: React.FC = () => {
               data-testid="quick-access-reset"
               disabled={saving || status === null}
               onClick={() => void apply(enabled, null)}
-              className="rounded-md border border-gray-300 dark:border-gray-600 text-sm px-3 py-2 disabled:opacity-50"
+              className="whitespace-nowrap rounded-md border border-gray-300 dark:border-gray-600 text-sm px-3 py-2 disabled:opacity-50"
             >
               {t('settings.quickAccess.resetDefault')}
             </button>

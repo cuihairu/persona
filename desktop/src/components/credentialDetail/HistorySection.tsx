@@ -26,7 +26,7 @@ const HistorySection: React.FC<{
         type="button"
         onClick={() => setIsHistoryOpen(!isHistoryOpen)}
         data-testid="history-toggle"
-        className="flex items-center gap-1 text-sm text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100"
+        className="whitespace-nowrap flex items-center gap-1 text-sm text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100"
       >
         <ClockIcon className="w-4 h-4" />
         {t('detail.itemHistory')}
