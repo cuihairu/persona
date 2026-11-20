@@ -37,7 +37,7 @@ const AttachmentsSection: React.FC<{
           onClick={handleAttachFile}
           disabled={isAttachmentBusy}
           data-testid="attachment-add"
-          className="flex items-center gap-1 text-xs px-2 py-1 rounded border border-gray-300 dark:border-gray-600 text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-800 disabled:opacity-50"
+          className="whitespace-nowrap flex items-center gap-1 text-xs px-2 py-1 rounded border border-gray-300 dark:border-gray-600 text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-800 disabled:opacity-50"
         >
           <PlusIcon className="w-3.5 h-3.5" />
           {t('detail.addFile')}
@@ -76,7 +76,7 @@ const AttachmentsSection: React.FC<{
                     disabled={isAttachmentBusy}
                     title={t('detail.saveToDisk', { name: attachment.filename })}
                     data-testid={`attachment-save-${attachment.id}`}
-                    className="p-1 rounded text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 disabled:opacity-50"
+                    className="whitespace-nowrap p-1 rounded text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 disabled:opacity-50"
                   >
                     <ArrowDownTrayIcon className="w-4 h-4" />
                   </button>

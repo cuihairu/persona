@@ -181,7 +181,7 @@ export const ErrorDisplay: React.FC<ErrorDisplayProps> = ({
           <div className="ml-auto pl-3">
             <button
               onClick={onDismiss}
-              className="inline-flex rounded-md p-1.5 hover:bg-black/10 dark:hover:bg-white/10 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-transparent"
+              className="whitespace-nowrap inline-flex rounded-md p-1.5 hover:bg-black/10 dark:hover:bg-white/10 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-transparent"
             >
               <span className="sr-only">{t('common.dismiss')}</span>
               <XCircleIcon className="w-4 h-4" />
