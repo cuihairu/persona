@@ -8,22 +8,22 @@
 
 ## 1. Environment notes (Windows-specific, documented not hidden)
 
-| Item | Detail |
-|---|---|
-| **openssl / vcpkg** | `persona-core`'s dev-dependency enables `openssl` with the `vendored` feature; the vendored build needs `perl` + MSVC `cl` which this box lacks (Git's MinGit has no perl). Routed `openssl-sys` to vcpkg's OpenSSL 3.6.2 instead: `OPENSSL_NO_VENDOR=1`, `OPENSSL_DIR=C:\Users\cui\vcpkg\installed\x64-windows`, plus its `bin` on `PATH` for the DLLs. |
-| **llvm-cov toolchain** | No rustup → `llvm-tools-preview` is unavailable. Pointed `LLVM_COV`/`LLVM_PROFDATA` at scoop's LLVM 23.1.5 (`C:\Users\cui\scoop\apps\llvm\current\bin`). |
-| **clippy** | `scoop` only shims `rustc`/`cargo`; `cargo-clippy` lives in the toolchain bin dir (`C:\Users\cui\scoop\apps\rust\1.99.1\bin`) and is not on `PATH` by default. Added it to the env wrapper so `cargo clippy` resolves. |
+| Item                                    | Detail                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| --------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **openssl / vcpkg**                     | `persona-core`'s dev-dependency enables `openssl` with the `vendored` feature; the vendored build needs `perl` + MSVC `cl` which this box lacks (Git's MinGit has no perl). Routed `openssl-sys` to vcpkg's OpenSSL 3.6.2 instead: `OPENSSL_NO_VENDOR=1`, `OPENSSL_DIR=C:\Users\cui\vcpkg\installed\x64-windows`, plus its `bin` on `PATH` for the DLLs.                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| **llvm-cov toolchain**                  | No rustup → `llvm-tools-preview` is unavailable. Pointed `LLVM_COV`/`LLVM_PROFDATA` at scoop's LLVM 23.1.5 (`C:\Users\cui\scoop\apps\llvm\current\bin`).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| **clippy**                              | `scoop` only shims `rustc`/`cargo`; `cargo-clippy` lives in the toolchain bin dir (`C:\Users\cui\scoop\apps\rust\1.99.1\bin`) and is not on `PATH` by default. Added it to the env wrapper so `cargo clippy` resolves.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | **shell-hook test (fixed, `ffc71d15`)** | `cli::commands::shell_hook` smoke test passed a Windows `temp_dir()` backslash path as an argv to msys `bash` from a non-msys parent. A standalone Rust probe proved argv `C:\…`/`C:/…`/`/c/…` all fail (exit 127 "No such file or directory"; backslashes eaten as escapes) — the only portable feed is **stdin**. Rewrote the bash check to `bash -n` / `bash -s` over stdin, preset `PS1='$ '` so the interactive gate passes non-interactively, and chained with `&&` so a missing function fails. The original smoke also passed vacuously (the trailing `test -z` status wins). This is the only production-file change in the whole task (test-module only); plus a whitespace-only rustfmt join in the same test module so `cargo fmt --all -- --check` stays clean (CI gates on it). |
-| **CI ignore regex** | `ci.yml`'s `--ignore-filename-regex` uses forward slashes which do not match Windows backslash paths. Used a separator-agnostic regex (`[\\/]`) so the same 6 entry-point files are excluded on both platforms — this keeps the Windows number comparable to the CI/project baseline (97.20%). |
-| **cargo-llvm-cov quirk** | If a test binary exits with a failure, its `.profraw` is dropped and the **whole crate shows 0%** coverage. Hence `--ignore-run-fail`; and the shell-hook fix above was a precondition for the `cli` crate's coverage to be measurable at all. |
-| **unix-gated tests** | `#[cfg(unix)]` tests (SSH unix sockets, `/proc/<pid>/cmdline`, `stop_agent_pid` unix branch) do not run on Windows, so those branches are structurally uncovered here; they are covered on the Linux CI. Recorded, not padded. |
+| **CI ignore regex**                     | `ci.yml`'s `--ignore-filename-regex` uses forward slashes which do not match Windows backslash paths. Used a separator-agnostic regex (`[\\/]`) so the same 6 entry-point files are excluded on both platforms — this keeps the Windows number comparable to the CI/project baseline (97.20%).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| **cargo-llvm-cov quirk**                | If a test binary exits with a failure, its `.profraw` is dropped and the **whole crate shows 0%** coverage. Hence `--ignore-run-fail`; and the shell-hook fix above was a precondition for the `cli` crate's coverage to be measurable at all.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| **unix-gated tests**                    | `#[cfg(unix)]` tests (SSH unix sockets, `/proc/<pid>/cmdline`, `stop_agent_pid` unix branch) do not run on Windows, so those branches are structurally uncovered here; they are covered on the Linux CI. Recorded, not padded.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 
 ## 2. Test results (`cargo test --workspace --no-fail-fast`)
 
-| Run | Passed | Failed | Ignored |
-|---|---|---|---|
-| Baseline | 2111 | 0 | 2 |
-| After (10 tests added) | **2121** | 0 | 2 |
+| Run                    | Passed   | Failed | Ignored |
+| ---------------------- | -------- | ------ | ------- |
+| Baseline               | 2111     | 0      | 2       |
+| After (10 tests added) | **2121** | 0      | 2       |
 
 ## 3. Coverage baseline (before)
 
@@ -34,21 +34,21 @@ cargo llvm-cov --workspace --all-features --summary-only --ignore-run-fail \
   --ignore-filename-regex '(cli[\\/]src[\\/]main\.rs|cli[\\/]src[\\/]commands[\\/]tui_runtime\.rs|cli[\\/]src[\\/]utils[\\/]terminal_ui\.rs|server[\\/]src[\\/]main\.rs|agents[\\/]ssh-agent[\\/]src[\\/]daemon\.rs|agents[\\/]ssh-agent[\\/]src[\\/]main\.rs)'
 ```
 
-| Metric | Before | After | Δ |
-|---|---|---|---|
-| **Lines** | 96.63% (2829 / 83883 missed) | **96.65%** (2807 missed) | +0.02 pp, −22 lines |
-| **Regions** | 95.30% (6388 / 135843 missed) | **95.32%** (6355 missed) | +0.02 pp, −33 regions |
-| **Functions** | 89.05% (925 / 8445 missed) | **89.09%** (921 missed) | +0.04 pp, −4 functions |
+| Metric        | Before                        | After                    | Δ                      |
+| ------------- | ----------------------------- | ------------------------ | ---------------------- |
+| **Lines**     | 96.63% (2829 / 83883 missed)  | **96.65%** (2807 missed) | +0.02 pp, −22 lines    |
+| **Regions**   | 95.30% (6388 / 135843 missed) | **95.32%** (6355 missed) | +0.02 pp, −33 regions  |
+| **Functions** | 89.05% (925 / 8445 missed)    | **89.09%** (921 missed)  | +0.04 pp, −4 functions |
 
 ### Lowest 5 modules (baseline, by line %)
 
-| Module | Lines before | Lines after | Regions before | Function before |
-|---|---|---|---|---|
-| `cli/src/commands/bridge/sync.rs` | **22.47%** (69/89) | **25.84%** (66/89) | 14.93% | 36.84% |
-| `cli/src/commands/ssh/agent.rs` | **44.05%** (174/311) | **50.16%** (155/311) | 39.48% | 63.33% |
-| `cli/src/commands/bridge/sync_connect.rs` | **47.73%** (46/88) | **48.86%** (45/88) | 38.06% | 36.84% |
-| `cli/src/commands/bridge/account.rs` | **58.76%** (40/97) | — (untouched) | 54.01% | 50.00% |
-| `cli/src/commands/bridge/paths.rs` | **69.03%** (35/113) | — (untouched) | 60.98% | 70.83% |
+| Module                                    | Lines before         | Lines after          | Regions before | Function before |
+| ----------------------------------------- | -------------------- | -------------------- | -------------- | --------------- |
+| `cli/src/commands/bridge/sync.rs`         | **22.47%** (69/89)   | **25.84%** (66/89)   | 14.93%         | 36.84%          |
+| `cli/src/commands/ssh/agent.rs`           | **44.05%** (174/311) | **50.16%** (155/311) | 39.48%         | 63.33%          |
+| `cli/src/commands/bridge/sync_connect.rs` | **47.73%** (46/88)   | **48.86%** (45/88)   | 38.06%         | 36.84%          |
+| `cli/src/commands/bridge/account.rs`      | **58.76%** (40/97)   | — (untouched)        | 54.01%         | 50.00%          |
+| `cli/src/commands/bridge/paths.rs`        | **69.03%** (35/113)  | — (untouched)        | 60.98%         | 70.83%          |
 
 ## 4. Tests added (Step 4) — 10 behavior tests, 3 lowest modules, no production-code changes
 
