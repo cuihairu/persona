@@ -40,7 +40,7 @@
 - [ ] Watchtower 外联扩展：domain breach alerts / dark web monitoring / OSINT 标识符查询。押后（2026-09-22 决策）；重启条件 = 1Password 对齐完成 + THREAT_MODEL 变更门槛 + 明确 opt-in 形态。2026-10-16 巡检复核：条件仍成立（1Password 对齐虽收口但 THREAT_MODEL 无变更、opt-in 形态未定；FEATURE_GAP_ANALYSIS.md:90 口径未变）
 - [ ] #21 团队与共享：家庭/团队共享库 + 共享条目权限，依赖账号体系。2026-10-01 用户裁定登记待办、暂不实现（docs/FEATURE_GAP_ANALYSIS.md #21）。2026-10-16 巡检复核：裁决未变，维持搁置（不重开）
 
-## 代码深审 2026-11-01（P2/P3 待办；来源 docs/review/2026-11-01-code-review.md）
+## 代码深审 2026-11-01（P2/P3；来源 docs/review/2026-11-01-code-review.md）。【2026-11-21 复核·本段已清】13/13 条全部 [x] 带 hash，段头「待办」字样移除
 
 - [x] P2 · JS-1 · 安全 · 扩展 passkey 桥未绑定 origin：`handlePasskeyPageMessage` 校验 `payload.origin === location.origin`（content.ts:1685-1695,1740-1790），不符丢弃 · 修复 `0e569d1`；`isTrustedPasskeyOrigin`（passkeyOrigin.ts:12，`new URL(origin).origin === pageOrigin`，非字符串/畸形 URL 一律 false）覆盖 dialog/native 门与 assertion/list 路径两处；passkeyOrigin.test.ts 6 例回归全绿（同源 true / 攻击者 / undefined / null / 42 / 畸形字符串 false）
 - [x] P2 · JS-2 · 安全 · NMH 配对 HMAC 密钥持久化：`pairingKeyB64`/`sessionId` 移入 `chrome.storage.session`（nativeBridge.ts:576,376；违反 cloudSync.ts:16 纪律） · 修复 `f9c42ac`；配对状态只写 `chrome.storage.session`（内存区，退出即清），并做一次性迁移：legacy `storage.local` 副本迁入 session 后 `storageLocalRemove` 擦除盘区残留；nativeBridge 测试套件全绿
@@ -153,7 +153,7 @@
 - 产品站点内容与真实状态脱节：`download.tsx` 声明平台文件与尺寸但按钮没有 href，扩展页面仍写“开发中/下一版本”（`website/src/pages/download.tsx:36`；`website/src/pages/docs.tsx:28`）。。**【2026-11-21 复核·部分已解除】**docs.tsx 的「开发中/下一版本」字样已消失（grep 全空，该半条已解除）；download.tsx:154 的「下载」按钮仍无 href（同页 260/263 行的 GitHub 按钮均有 href），且仍硬编码 version 0.1.0 与虚构文件尺寸（Persona-0.1.0-universal.dmg 25 MB 等）。补 href 指向 /releases 是安全默认，但文件名与尺寸需 nightly 真实产物数据，属产品决策（版本号红线亦禁止自行 bump），维持待拍板；【2026-11-21 修复·下载按钮 href】`download.tsx` 每平台「下载」按钮补 `href` 指向 `https://github.com/persona-id/persona/releases`（`target="_blank"`），与同页 GitHub 仓库按钮/Releases 按钮的既有写法一致，按钮不再无动作；未改版本号（红线）与文件名/尺寸文案——两者需 nightly 真实产物数据，仍属待拍板的产品决策
 - Safari 扩展只有壳宿主：manifest 引用的 background/content JS 无源码，Swift handler 只回显消息，与 Chromium 源码成熟度不一致（`browser/safari-extension/Shared/manifest.json:1`；`browser/safari-extension/Sources/PersonaSafariExtensionExtension/SafariWebExtensionHandler.swift:6`）。【2026-11-21 复核 b3a3662·表述过期】「JS 无源码/与 Chromium 成熟度不一致」半条已解除——M5 批5a 起 JS 同份共享（chromium-extension/src 唯一真源，nativeBridge.ts setNativeHost :317 / unavailable 兜底 :341 已实现有锚），双侧 manifest v0.2.0 同步；safari 目录无 JS 属设计（xcrun converter 转换带入）。「Swift handler 只回显消息」半条仍成立，即 L37/SAFARI-EXT-001 的 macOS 实机缺口。
 
-## Codex 深审发现（2026-11-13，luna profile 近5 commit 审核，待修）
+## Codex 深审发现（2026-11-13，luna profile 近5 commit 审核）。【2026-11-21 复核·发现项已全修】11 项 Codex 发现全部 [x] 带 hash（eecaa73/107a1e1/75b2e62/f6f39b2/0c30e25/3c51d0a/0751b3a 等），另含用户令 NIGHTLY-EXT-002/OWRT-001 两项亦 [x]；唯一未勾 SAFARI-EXT-001 为 macOS 实机阻塞拆出项（打包等 xcrun+签名+runner，非待修发现），段头「待修」字样移除
 
 <!-- 来源：~/audit-results-1112/persona.md（codex 深审 2026-11-13）。勾选状态与代码证据在本节逐行维护。 -->
 
