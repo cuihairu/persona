@@ -1,4 +1,5 @@
 use super::*;
+use std::time::{Duration, Instant};
 
 /// Log a successful copy and build the wire response. Split out so the
 /// success tail stays reachable on headless machines without a clipboard.
@@ -65,6 +66,11 @@ pub(super) fn copy_text_to_clipboard(text: &str) -> Result<()> {
     ))
 }
 
+/// Clipboard tools that block on a dead display can hang indefinitely
+/// (xclip/xsel wait on the X selection owner). Bound the wait so a stuck
+/// tool fails the copy instead of blocking the CLI forever.
+const CLIPBOARD_CMD_TIMEOUT: Duration = Duration::from_secs(10);
+
 pub(super) fn pipe_to_command(cmd: &str, args: &[&str], text: &str) -> Result<()> {
     let mut child = Command::new(cmd)
         .args(args)
@@ -81,9 +87,21 @@ pub(super) fn pipe_to_command(cmd: &str, args: &[&str], text: &str) -> Result<()
             .map_err(|e| anyhow!("copy_failed: failed to write stdin for {cmd}: {e}"))?;
     }
 
-    let status = child
-        .wait()
-        .map_err(|e| anyhow!("copy_failed: failed to wait for {cmd}: {e}"))?;
+    let deadline = Instant::now() + CLIPBOARD_CMD_TIMEOUT;
+    let status = loop {
+        match child.try_wait()? {
+            Some(status) => break status,
+            None if Instant::now() >= deadline => {
+                let _ = child.kill();
+                let _ = child.wait(); // reap so no zombie lingers
+                return Err(anyhow!(
+                    "copy_failed: {cmd} timed out after {}s",
+                    CLIPBOARD_CMD_TIMEOUT.as_secs()
+                ));
+            }
+            None => std::thread::sleep(Duration::from_millis(50)),
+        }
+    };
     if !status.success() {
         return Err(anyhow!("copy_failed: {cmd} exited with {status}"));
     }
