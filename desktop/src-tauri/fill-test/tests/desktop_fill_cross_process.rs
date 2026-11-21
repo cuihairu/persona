@@ -25,11 +25,11 @@ use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::{channel, Receiver, RecvTimeoutError};
 use std::time::{Duration, Instant};
 
-use persona_desktop::desktop_fill::{execute_fill, FillError};
 use persona_desktop::desktop_fill::win::{
     enumerate_edit_fields, process_image_path, read_field_text, validate_target, window_class_name,
 };
 use persona_desktop::desktop_fill::FillTarget;
+use persona_desktop::desktop_fill::{execute_fill, FillError};
 
 const HOST_EXE: &str = env!("CARGO_BIN_EXE_fill-test-host");
 
@@ -66,7 +66,12 @@ impl Drop for HostProcess {
 impl HostProcess {
     fn spawn(title: &str, password_style: bool) -> Self {
         let mut child = Command::new(HOST_EXE)
-            .args(["--title", title, "--password-style", if password_style { "1" } else { "0" }])
+            .args([
+                "--title",
+                title,
+                "--password-style",
+                if password_style { "1" } else { "0" },
+            ])
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .spawn()
@@ -81,7 +86,11 @@ impl HostProcess {
                 }
             }
         });
-        let host = Self { child, stdin, stdout_lines: rx };
+        let host = Self {
+            child,
+            stdin,
+            stdout_lines: rx,
+        };
         host.wait_ready();
         host
     }
@@ -103,7 +112,10 @@ impl HostProcess {
         self.stdin.flush().expect("flush stdin");
         let deadline = Instant::now() + Duration::from_secs(10);
         loop {
-            match self.stdout_lines.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
+            match self
+                .stdout_lines
+                .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+            {
                 Ok(line) if line.starts_with("RECREATED") => {
                     return line
                         .split_whitespace()
@@ -131,7 +143,10 @@ impl HostProcess {
         self.stdin.flush().expect("flush stdin");
         let deadline = Instant::now() + Duration::from_secs(10);
         loop {
-            match self.stdout_lines.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
+            match self
+                .stdout_lines
+                .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+            {
                 Ok(line) if line.starts_with("RACE_ARMED") => return,
                 Ok(_) => continue,
                 Err(RecvTimeoutError::Timeout) => panic!("host did not arm race hook in time"),
@@ -177,7 +192,8 @@ fn find_window_by_title(title: &str) -> isize {
     let title_h = HSTRING::from(title);
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
-        let hwnd = unsafe { FindWindowW(PCWSTR::null(), PCWSTR(title_h.as_ptr())).unwrap_or_default() };
+        let hwnd =
+            unsafe { FindWindowW(PCWSTR::null(), PCWSTR(title_h.as_ptr())).unwrap_or_default() };
         if !hwnd.is_invalid() {
             return hwnd.0 as isize;
         }
@@ -226,17 +242,19 @@ fn cross_process_password_field_injection_succeeds() {
     let mut host = HostProcess::spawn("persona xproc login", true);
     let hwnd = find_window_by_title("persona xproc login");
     let snapshot = snapshot_for(hwnd, "persona xproc login", host.pid());
-    assert!(validate_target(&snapshot, std::process::id()), "fresh cross-process snapshot must validate");
+    assert!(
+        validate_target(&snapshot, std::process::id()),
+        "fresh cross-process snapshot must validate"
+    );
 
-    let (user_filled, pwd_filled, title) =
-        execute_fill(
-            &snapshot,
-            "alice@example.com",
-            "s3cret-Пароль⚡",
-            std::process::id(),
-            &no_slot_check,
-        )
-        .expect("cross-process fill into ES_PASSWORD field");
+    let (user_filled, pwd_filled, title) = execute_fill(
+        &snapshot,
+        "alice@example.com",
+        "s3cret-Пароль⚡",
+        std::process::id(),
+        &no_slot_check,
+    )
+    .expect("cross-process fill into ES_PASSWORD field");
     assert!(user_filled, "username must be injected");
     assert!(pwd_filled, "password must be injected");
     assert_eq!(title, "persona xproc login");
@@ -246,7 +264,11 @@ fn cross_process_password_field_injection_succeeds() {
 
     // 普通框（跨进程 WM_GETTEXT 不受限）：值必须原样落在框里
     assert!(!fields[0].is_password, "first edit must be plain");
-    assert_eq!(password_char(fields[0].hwnd), 0, "plain edit must have no password char");
+    assert_eq!(
+        password_char(fields[0].hwnd),
+        0,
+        "plain edit must have no password char"
+    );
     assert_eq!(read_field_text(fields[0].hwnd), "alice@example.com");
 
     // ES_PASSWORD 框：样式与掩码字符跨进程可验证（写入本身由 execute_fill
@@ -275,8 +297,14 @@ fn cross_process_password_field_injection_succeeds() {
     // 密码都必须与注入值逐字符一致（读回在宿主进程内完成，绕开平台对
     // 跨进程读密码框的隐藏，不构成对注入语义的削弱）
     let (host_user, host_pwd) = host.readback();
-    assert_eq!(host_user, "alice@example.com", "same-process read-back: username");
-    assert_eq!(host_pwd, "s3cret-Пароль⚡", "same-process read-back: password");
+    assert_eq!(
+        host_user, "alice@example.com",
+        "same-process read-back: username"
+    );
+    assert_eq!(
+        host_pwd, "s3cret-Пароль⚡",
+        "same-process read-back: password"
+    );
     host.quit();
 }
 
@@ -297,10 +325,17 @@ fn cross_process_plain_edit_window_rejected() {
         )
         .expect_err("plain-edit-only window must be rejected"),
     );
-    assert!(err.contains("ES_PASSWORD"), "rejection must name ES_PASSWORD: {err}");
+    assert!(
+        err.contains("ES_PASSWORD"),
+        "rejection must name ES_PASSWORD: {err}"
+    );
     let fields = enumerate_edit_fields(hwnd);
     for f in &fields {
-        assert_eq!(read_field_text(f.hwnd), "", "no value may land in a plain edit: field {f:?}");
+        assert_eq!(
+            read_field_text(f.hwnd),
+            "",
+            "no value may land in a plain edit: field {f:?}"
+        );
     }
     host.quit();
 }
@@ -317,7 +352,11 @@ fn cross_process_spoofed_title_process_rejected() {
 
     let mut host_b = HostProcess::spawn("persona xproc spoof target", true);
     let hwnd_b = find_window_by_title("persona xproc spoof target");
-    assert_ne!(host_b.pid(), snapshot_a.pid, "decoy must be a different process");
+    assert_ne!(
+        host_b.pid(),
+        snapshot_a.pid,
+        "decoy must be a different process"
+    );
 
     // 快照指向已死的 A：hwnd 失效（或值复用但 pid 不符）→ 注入拒绝
     let err = rejected_of(

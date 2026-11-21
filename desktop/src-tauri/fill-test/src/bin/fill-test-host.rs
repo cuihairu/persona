@@ -113,7 +113,10 @@ fn main() {
         if got <= 0 {
             return String::new();
         }
-        buf[..got as usize].iter().map(|u| format!("{u:04x}")).collect()
+        buf[..got as usize]
+            .iter()
+            .map(|u| format!("{u:04x}"))
+            .collect()
     }
 
     /// 同进程读回两个 Edit 的文本并按**长度前缀协议**打回 READBACK 帧
@@ -128,7 +131,12 @@ fn main() {
 
     unsafe fn create_target_window() -> isize {
         let hinstance = GetModuleHandleW(None).expect("GetModuleHandleW");
-        let title_h = HSTRING::from(TITLE.get().map(|s| s.as_str()).unwrap_or("persona fill test host"));
+        let title_h = HSTRING::from(
+            TITLE
+                .get()
+                .map(|s| s.as_str())
+                .unwrap_or("persona fill test host"),
+        );
         let top = CreateWindowExW(
             WINDOW_EX_STYLE::default(),
             pcw(&HSTRING::from("PersonaFillTestHostClass")),
@@ -386,11 +394,11 @@ fn main() {
                 },
                 "hook-go" => {
                     PAUSE_GO.store(true, Ordering::Release);
-                },
+                }
                 "quit" => {
                     QUITTING.store(true, Ordering::Release);
                     unsafe {
-                    let top = TOP_HWND.load(Ordering::Acquire);
+                        let top = TOP_HWND.load(Ordering::Acquire);
                         if top != 0 {
                             let _ = PostMessageW(
                                 Some(HWND(top as *mut _)),
@@ -401,7 +409,7 @@ fn main() {
                         }
                         return;
                     }
-                },
+                }
                 _ => {}
             }
         }

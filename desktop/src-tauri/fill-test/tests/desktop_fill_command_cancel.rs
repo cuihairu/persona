@@ -44,8 +44,8 @@ use persona_desktop::desktop_fill::win::{process_image_path, window_class_name};
 use persona_desktop::desktop_fill::FillTarget;
 use persona_desktop::token_store::InMemoryTokenStore;
 use persona_desktop::types::{
-    AppState, CreateCredentialRequest, CreateIdentityRequest, CredentialDataRequest,
-    InitRequest, SecurityQuestionRequest,
+    AppState, CreateCredentialRequest, CreateIdentityRequest, CredentialDataRequest, InitRequest,
+    SecurityQuestionRequest,
 };
 use tauri::Manager;
 
@@ -223,10 +223,7 @@ impl HostProcess {
     /// 取出取消插桩线程专用的行通道（HOOK_PAUSED 消费方）；主线程之后
     /// 只再用 `lines`（应答循环）
     fn take_hook_lines(&mut self) -> Receiver<String> {
-        std::mem::replace(
-            &mut self.hook_lines,
-            channel().1,
-        )
+        std::mem::replace(&mut self.hook_lines, channel().1)
     }
 
     fn wait_ready(&self) {
@@ -251,7 +248,10 @@ impl HostProcess {
         self.send("arm-pause-hook");
         let deadline = Instant::now() + Duration::from_secs(10);
         loop {
-            match self.lines.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
+            match self
+                .lines
+                .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+            {
                 Ok(line) if line.starts_with("PAUSE_ARMED") => return,
                 Ok(_) => continue,
                 Err(RecvTimeoutError::Timeout) => panic!("host did not arm pause hook in time"),
@@ -411,7 +411,10 @@ async fn command_layer_requires_snapshot_id() {
         .await
         .unwrap();
     assert!(!resp.success, "missing snapshot_id must be rejected");
-    assert_eq!(resp.error_code.as_deref(), Some("FILL_TARGET_SNAPSHOT_REQUIRED"));
+    assert_eq!(
+        resp.error_code.as_deref(),
+        Some("FILL_TARGET_SNAPSHOT_REQUIRED")
+    );
 }
 
 /// 槽位已空（浮窗收起清槽）：携旧 snapshot_id 的在途请求在解密完成后的
