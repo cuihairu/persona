@@ -46,18 +46,18 @@
 
 按模块拆分：
 
-| 模块 | 已完成 | 未完成 | 总计 | 观察 |
-| --- | ---: | ---: | ---: | --- |
-| Now (current sprint) | 7 | 0 | 7 | 当前冲刺项已完成 |
-| Monorepo & Tooling | 7 | 0 | 7 | 基础工程完成 |
-| Security & Auth | 5 | 0 | 5 | 当前列出的安全认证项已完成 |
-| Storage & Data | 4 | 0 | 4 | 该阶段目标已完成 |
-| CLI | 8 | 0 | 8 | CLI 主流程已完成 |
-| SSH Agent (developer focus) | 15 | 2 | 17 | 最成熟的子系统之一，剩余主要是实机验证 |
-| Browser & Autofill (future) | 4 | 1 | 5 | 骨架和主要流程已落地 |
-| Quality & Security | 2 | 2 | 4 | 仍缺威胁建模与可重现构建 |
-| Server & Sync (optional) | 0 | 5 | 5 | 基本未启动 |
-| Wallet Material (deferred / experimental) | 0 | 11 | 11 | 明确延后 |
+| 模块                                      | 已完成 | 未完成 | 总计 | 观察                                   |
+| ----------------------------------------- | -----: | -----: | ---: | -------------------------------------- |
+| Now (current sprint)                      |      7 |      0 |    7 | 当前冲刺项已完成                       |
+| Monorepo & Tooling                        |      7 |      0 |    7 | 基础工程完成                           |
+| Security & Auth                           |      5 |      0 |    5 | 当前列出的安全认证项已完成             |
+| Storage & Data                            |      4 |      0 |    4 | 该阶段目标已完成                       |
+| CLI                                       |      8 |      0 |    8 | CLI 主流程已完成                       |
+| SSH Agent (developer focus)               |     15 |      2 |   17 | 最成熟的子系统之一，剩余主要是实机验证 |
+| Browser & Autofill (future)               |      4 |      1 |    5 | 骨架和主要流程已落地                   |
+| Quality & Security                        |      2 |      2 |    4 | 仍缺威胁建模与可重现构建               |
+| Server & Sync (optional)                  |      0 |      5 |    5 | 基本未启动                             |
+| Wallet Material (deferred / experimental) |      0 |     11 |   11 | 明确延后                               |
 
 ## 产品边界与优先级判断
 
