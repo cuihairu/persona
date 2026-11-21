@@ -38,27 +38,23 @@ const DownloadPage: React.FC = () => {
       name: 'macOS',
       icon: <AppleOutlined />,
       files: [
-        { label: 'Universal (Intel + Apple Silicon)', filename: `Persona-${version}-universal.dmg`, size: '25 MB' },
-        { label: 'Apple Silicon (M1/M2/M3)', filename: `Persona-${version}-aarch64.dmg`, size: '12 MB' },
-        { label: 'Intel', filename: `Persona-${version}-x64.dmg`, size: '13 MB' },
+        { label: 'Apple Silicon (M1/M2/M3)', filename: `Persona_${version}_aarch64.dmg`, size: '13.3 MB' },
       ],
     },
     windows: {
       name: 'Windows',
       icon: <WindowsOutlined />,
       files: [
-        { label: 'Installer (x64)', filename: `Persona-${version}-x64.msi`, size: '18 MB' },
-        { label: 'Portable (x64)', filename: `Persona-${version}-x64.zip`, size: '20 MB' },
-        { label: 'ARM64', filename: `Persona-${version}-arm64.msi`, size: '17 MB' },
+        { label: 'Installer (x64)', filename: `Persona_${version}_x64-setup.exe`, size: '10.2 MB' },
       ],
     },
     linux: {
       name: 'Linux',
       icon: <LinuxOutlined />,
       files: [
-        { label: 'AppImage (x64)', filename: `Persona-${version}-x86_64.AppImage`, size: '22 MB' },
-        { label: 'Debian/Ubuntu (.deb)', filename: `persona_${version}_amd64.deb`, size: '15 MB' },
-        { label: 'Fedora/RHEL (.rpm)', filename: `persona-${version}-1.x86_64.rpm`, size: '15 MB' },
+        { label: 'AppImage (x64)', filename: `Persona_${version}_amd64.AppImage`, size: '89.9 MB' },
+        { label: 'Debian/Ubuntu (.deb)', filename: `Persona_${version}_amd64.deb`, size: '16.7 MB' },
+        { label: 'Fedora/RHEL (.rpm)', filename: `Persona-${version}-1.x86_64.rpm`, size: '16.7 MB' },
         { label: 'Arch Linux (AUR)', filename: 'persona-bin', size: '-' },
       ],
     },
