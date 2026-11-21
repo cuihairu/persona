@@ -54,6 +54,9 @@ desktop/dist/
 website/src/.umi/
 website/src/.umi-production/
 
+# Browser extension (tsc build output; CI builds its own copy in desktop-build.yml)
+browser/chromium-extension/dist/
+
 # Docs
 docs/book/
 docs/dist/
