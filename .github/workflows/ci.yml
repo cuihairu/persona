@@ -197,7 +197,8 @@ jobs:
             desktop/src-tauri/target
           key: ${{ runner.os }}-cargo-desktop-${{ hashFiles('desktop/src-tauri/Cargo.lock') }}
       - name: Desktop Rust fmt
-        run: cargo fmt --manifest-path desktop/src-tauri/Cargo.toml -- --check
+        # --all: src-tauri 是独立 workspace，缺省只查该包自身，漏掉 fill-test 成员
+        run: cargo fmt --all --manifest-path desktop/src-tauri/Cargo.toml -- --check
       - name: Desktop Rust clippy
         run: cargo clippy --manifest-path desktop/src-tauri/Cargo.toml --all-targets -- -D warnings
       - name: Desktop Rust tests
