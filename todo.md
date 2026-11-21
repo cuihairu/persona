@@ -65,14 +65,14 @@
 
 ### 抽象层清单
 
-安全核心层——派生/包裹主密钥与逐项密钥，执行凭据、钱包、passkey、SSH/TOTP 的本地加密签名（代表模块 `core/src/service.rs:116`）。
+安全核心层——派生/包裹主密钥与逐项密钥，执行凭据、钱包、passkey、SSH/TOTP 的本地加密签名（代表模块 `core/src/service/mod.rs`（原 `core/src/service.rs` 已由 LAY-003 拆为 `service/` 目录 15 文件，2026-11-21 复核；commit `f0d207e`））。
 授权与会话层——统一主体/资源/动作裁决，维护本地会话、自动锁、敏感重认证与 Connect/Agent 能力边界（代表模块 `core/src/authz.rs:141`）。
 持久化层——以 SQLite 保存 vault、审计、同步、连接令牌、favicon，以 OS keyring 保护设备/账号/生物识别凭据（代表模块 `core/src/storage/database.rs:8`）。
-同步与中继层——生成/消费 E2EE oplog 与快照，经 persona-server 密文中继完成推送、拉取、冲突与密钥轮换（代表模块 `core/src/sync/runtime.rs:29`）。
+同步与中继层——生成/消费 E2EE oplog 与快照，经 persona-server 密文中继完成推送、拉取、冲突与密钥轮换（代表模块 `core/src/sync/runtime/mod.rs`（原 `core/src/sync/runtime.rs` 已由 LAY-021 拆为 `sync/runtime/` 目录 4 文件，2026-11-21 复核；commit `61f53b8`））。
 服务通信层——宿主经 Tauri IPC、Native Messaging、本机 HTTP、远端 HTTP/中继把用户请求转接并加固（代表模块 `server/src/lib.rs:34`）。
 应用宿主与界面层——CLI/桌面/浏览器/移动端承担路由、状态、审批与平台填充入口（代表模块 `desktop/src/App.tsx:1`）。
 系统代理层——SSH agent 监听 socket/命名管道、读取库内密钥并按策略签名或审批（代表模块 `agents/ssh-agent/src/lib.rs:125`）。
-平台适配层——封装 OS 生物识别、keyring、窗口、移动 JNI/C-ABI/NAPI 差异（代表模块 `desktop/src-tauri/src/types.rs:15`）。
+平台适配层——封装 OS 生物识别、keyring、窗口、移动 JNI/C-ABI/NAPI 差异（代表模块 `desktop/src-tauri/src/types/mod.rs`（原 `desktop/src-tauri/src/types.rs` 已由 LAY-020 拆为 `types/` 目录 7 文件，2026-11-21 复核；commit `f5c7cac`））。
 可观测层——落库脱敏审计并通过内存队列/事件上报告远端（代表模块 `core/src/events/emitter.rs:47`）。
 构建发布层——工作区、pnpm/CI/docker 打包仓库产物与站点（代表模块 `Cargo.toml:1`）。
 体验内容层——维护官网、文档站与品牌资产（代表模块 `website/src/pages/download.tsx:36`）。
