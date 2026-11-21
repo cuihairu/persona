@@ -65,6 +65,8 @@
 
 ### 抽象层清单
 
+> **【2026-11-21 引用完整性核查】**todo.md 全文 40 个代码/文档路径引用逐个 `os.path.exists` 核实：14 个现存全部有效；26 个「缺失」全部为 LAY 拆分系列的历史对象（拆分前单文件，现为同名目录模块，如 `cli/src/commands/ssh.rs`→`ssh/`、`wallet.rs`→`wallet/`、`server/src/api/accounts.rs`→已拆等）——历史勾行引用拆分对象属合法记录，无需改写；**todo.md 无真失效引用**。后续会话勿重复全量核查
+
 安全核心层——派生/包裹主密钥与逐项密钥，执行凭据、钱包、passkey、SSH/TOTP 的本地加密签名（代表模块 `core/src/service/mod.rs`（原 `core/src/service.rs` 已由 LAY-003 拆为 `service/` 目录 15 文件，2026-11-21 复核；commit `f0d207e`））。
 授权与会话层——统一主体/资源/动作裁决，维护本地会话、自动锁、敏感重认证与 Connect/Agent 能力边界（代表模块 `core/src/authz.rs:141`）。
 持久化层——以 SQLite 保存 vault、审计、同步、连接令牌、favicon，以 OS keyring 保护设备/账号/生物识别凭据（代表模块 `core/src/storage/database.rs:8`）。
