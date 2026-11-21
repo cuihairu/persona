@@ -151,7 +151,13 @@ const DownloadPage: React.FC = () => {
                       {file.size !== '-' && <Text type="secondary"> · {file.size}</Text>}
                     </div>
                   </div>
-                  <Button type="primary" icon={<DownloadOutlined />} size="large">
+                  <Button
+                    type="primary"
+                    icon={<DownloadOutlined />}
+                    size="large"
+                    href="https://github.com/persona-id/persona/releases"
+                    target="_blank"
+                  >
                     下载
                   </Button>
                 </div>
