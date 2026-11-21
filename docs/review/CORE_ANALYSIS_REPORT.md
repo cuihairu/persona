@@ -4,7 +4,7 @@
 
 **分析时间**: 2025-01-14  
 **分析对象**: `/Users/cui/Workspaces/persona/core`  
-**代码规模**: 3,197 行 Rust 代码  
+**代码规模**: 3,197 行 Rust 代码
 
 ---
 
@@ -27,20 +27,21 @@
 
 ### 基本信息
 
-| 项目 | 值 |
-|-----|-----|
-| **项目名称** | Persona Core Library |
-| **主要语言** | Rust |
-| **数据库** | SQLite (sqlx，无 rusqlite) |
-| **异步运行时** | Tokio |
-| **代码规模** | 3,197 行 |
-| **文件数** | 24 个 |
-| **公共 API** | 156+ 个 |
-| **版本** | MVP 阶段 |
+| 项目           | 值                         |
+| -------------- | -------------------------- |
+| **项目名称**   | Persona Core Library       |
+| **主要语言**   | Rust                       |
+| **数据库**     | SQLite (sqlx，无 rusqlite) |
+| **异步运行时** | Tokio                      |
+| **代码规模**   | 3,197 行                   |
+| **文件数**     | 24 个                      |
+| **公共 API**   | 156+ 个                    |
+| **版本**       | MVP 阶段                   |
 
 ### 核心依赖
 
 **加密库**:
+
 - `ring` - 加密原语
 - `aes-gcm` - AES-256-GCM 加密
 - `argon2` - 密码哈希
@@ -48,14 +49,17 @@
 - `zeroize` - 内存清零
 
 **数据库**:
+
 - `sqlx` - 异步数据库访问
 - `rusqlite` - SQLite 驱动
 
 **序列化**:
+
 - `serde` + `serde_json` - JSON 序列化
 - `bincode` - 二进制序列化
 
 **其他**:
+
 - `chrono` - 时间处理
 - `uuid` - 唯一标识符
 - `async-trait` - 异步 trait
@@ -103,14 +107,14 @@
 
 ### 2. 模块划分
 
-| 模块 | 行数 | 完成度 | 职责 |
-|-----|------|--------|------|
-| `service.rs` | 413 | 100% | 高级 API 和业务逻辑编排 |
-| `storage/repository.rs` | 654 | 85% | 数据访问对象 (DAO 模式) |
-| `models/` | 549 | 85% | 数据模型定义 |
-| `auth/` | 495 | 85% | 认证和权限系统 |
-| `crypto/` | 417 | 90% | 加密和密钥管理 |
-| `storage/` (其他) | 421 | 83% | 数据库和文件系统 |
+| 模块                    | 行数 | 完成度 | 职责                    |
+| ----------------------- | ---- | ------ | ----------------------- |
+| `service.rs`            | 413  | 100%   | 高级 API 和业务逻辑编排 |
+| `storage/repository.rs` | 654  | 85%    | 数据访问对象 (DAO 模式) |
+| `models/`               | 549  | 85%    | 数据模型定义            |
+| `auth/`                 | 495  | 85%    | 认证和权限系统          |
+| `crypto/`               | 417  | 90%    | 加密和密钥管理          |
+| `storage/` (其他)       | 421  | 83%    | 数据库和文件系统        |
 
 ---
 
@@ -121,6 +125,7 @@
 **位置**: `/src/models/identity.rs`, `/src/storage/repository.rs`
 
 **数据模型**:
+
 ```rust
 pub struct Identity {
     pub id: Uuid,                          // 唯一标识符
@@ -149,6 +154,7 @@ pub enum IdentityType {
 ```
 
 **已实现操作**:
+
 - 创建身份 - 支持所有字段
 - 获取身份 - 按 ID 或列表获取
 - 更新身份 - 修改任意字段
@@ -163,6 +169,7 @@ pub enum IdentityType {
 **位置**: `/src/models/credential.rs`, `/src/service.rs`
 
 **凭据类型** (10 种):
+
 ```rust
 pub enum CredentialType {
     Password,         // 密码
@@ -186,6 +193,7 @@ pub enum SecurityLevel {
 ```
 
 **已实现操作**:
+
 - 创建凭据 - 自动加密存储
 - 读取凭据 - 解密返回原始数据
 - 更新凭据 - 修改和重新加密
@@ -218,6 +226,7 @@ impl EncryptionService {
 ```
 
 **特点**:
+
 - 认证加密 (AEAD)
 - 随机 nonce 生成
 - Nonce 前缀方式存储
@@ -226,6 +235,7 @@ impl EncryptionService {
 #### 3.3.2 密钥管理
 
 **PBKDF2 密钥推导**:
+
 ```rust
 pub fn derive_key_pbkdf2(
     password: &str,
@@ -235,6 +245,7 @@ pub fn derive_key_pbkdf2(
 ```
 
 **Argon2 密码哈希**:
+
 ```rust
 pub struct PasswordHasher;
 impl PasswordHasher {
@@ -244,6 +255,7 @@ impl PasswordHasher {
 ```
 
 **Ed25519 数字签名**:
+
 ```rust
 pub struct SigningKeyPair {
     pub fn generate() -> Self
@@ -263,6 +275,7 @@ pub struct SigningKeyPair {
 **位置**: `/src/auth/`
 
 **认证因素** (5 种):
+
 ```rust
 pub enum AuthFactor {
     MasterPassword,           // 主密码
@@ -278,6 +291,7 @@ pub enum BiometricType {
 ```
 
 **用户认证结构**:
+
 ```rust
 pub struct UserAuth {
     pub user_id: Uuid,
@@ -294,6 +308,7 @@ pub struct UserAuth {
 ```
 
 **已实现功能**:
+
 - 用户初始化 - initialize_user()
 - 密码验证 - authenticate_password()
 - 失败计数 - 失败次数限制
@@ -302,6 +317,7 @@ pub struct UserAuth {
 - 认证结果 - Success, InvalidCredentials, AccountLocked
 
 **权限系统** (5 级):
+
 ```rust
 pub enum Permission {
     Read,    // 读
@@ -332,6 +348,7 @@ impl Database {
 ```
 
 **特点**:
+
 - 异步连接池
 - 自动迁移执行
 - 内存数据库支持
@@ -340,6 +357,7 @@ impl Database {
 #### 3.5.2 Repository 模式
 
 **IdentityRepository**:
+
 ```rust
 pub async fn create(&self, entity: &Identity) -> Result<Identity>
 pub async fn find_by_id(&self, id: &Uuid) -> Result<Option<Identity>>
@@ -351,6 +369,7 @@ pub async fn delete(&self, id: &Uuid) -> Result<bool>
 ```
 
 **CredentialRepository**:
+
 ```rust
 pub async fn create(&self, credential: &Credential) -> Result<Credential>
 pub async fn find_by_id(&self, id: &Uuid) -> Result<Option<Credential>>
@@ -364,6 +383,7 @@ pub async fn delete(&self, id: &Uuid) -> Result<bool>
 ```
 
 **UserAuthRepository**:
+
 ```rust
 pub async fn create(&self, auth: &UserAuth) -> Result<()>
 pub async fn get_by_id(&self, user_id: &Uuid) -> Result<Option<UserAuth>>
@@ -452,6 +472,7 @@ pub struct PersonaService {
 **位置**: `/src/auth/session.rs`
 
 **已实现**:
+
 ```rust
 pub struct Session {
     pub id: String,
@@ -473,6 +494,7 @@ impl Session {
 ```
 
 **缺失部分**:
+
 - 数据库持久化
 - WebSocket 连接管理
 - 并发会话控制
@@ -483,6 +505,7 @@ impl Session {
 **位置**: `/src/models/workspace.rs`
 
 **已实现**:
+
 ```rust
 pub struct Workspace {
     pub id: Uuid,
@@ -510,6 +533,7 @@ pub enum Role {
 ```
 
 **缺失部分**:
+
 - WorkspaceRepository 实现
 - 成员管理服务
 - 权限继承机制
@@ -520,11 +544,13 @@ pub enum Role {
 **位置**: `/src/auth/permissions.rs`
 
 **已实现**:
+
 - Permission 枚举 (5 级)
 - PermissionChecker 结构体
 - 基本权限检查
 
 **缺失部分**:
+
 - 细粒度权限控制 (RBAC)
 - 权限继承
 - 条件权限检查
@@ -535,6 +561,7 @@ pub enum Role {
 **位置**: 数据库表 `audit_logs` 已创建
 
 **数据库表结构已定义**:
+
 ```sql
 CREATE TABLE audit_logs (
     id TEXT PRIMARY KEY,
@@ -555,6 +582,7 @@ CREATE TABLE audit_logs (
 ```
 
 **缺失部分**:
+
 - 日志写入中间件
 - 日志查询 API
 - 日志清理策略
@@ -566,14 +594,14 @@ CREATE TABLE audit_logs (
 
 ### 5.1 高优先级缺失功能
 
-| 功能 | 影响 | 说明 |
-|-----|------|------|
-| **WorkspaceRepository** | 高 | 数据库表已建，但无 Repository 实现 |
-| **审计日志系统** | 高 | 数据库表已建，但无代码实现 |
-| **会话持久化** | 高 | Session 内存结构已有，但无数据库支持 |
-| **密码强度验证** | 高 | 缺少密码策略检查和验证 |
-| **数据导入** | 中 | 只有导出功能，缺少导入 |
-| **两步认证实现** | 中 | TwoFactor 类型已定义，但无实现 |
+| 功能                    | 影响 | 说明                                 |
+| ----------------------- | ---- | ------------------------------------ |
+| **WorkspaceRepository** | 高   | 数据库表已建，但无 Repository 实现   |
+| **审计日志系统**        | 高   | 数据库表已建，但无代码实现           |
+| **会话持久化**          | 高   | Session 内存结构已有，但无数据库支持 |
+| **密码强度验证**        | 高   | 缺少密码策略检查和验证               |
+| **数据导入**            | 中   | 只有导出功能，缺少导入               |
+| **两步认证实现**        | 中   | TwoFactor 类型已定义，但无实现       |
 
 ### 5.2 中等优先级缺失功能
 
@@ -614,16 +642,16 @@ CREATE TABLE audit_logs (
 
 ### 6.1 代码质量指标
 
-| 评估项 | 得分 | 说明 |
-|-------|------|------|
-| **模块化设计** | 9/10 | 清晰的分层架构，职责分离明确 |
-| **错误处理** | 8/10 | 使用自定义错误类型，有一定统一性 |
-| **异步支持** | 9/10 | 完整的 Tokio 集成，全异步编程 |
-| **加密安全** | 9/10 | 使用行业标准库 (ring, aes-gcm 等) |
-| **代码注释** | 7/10 | 部分函数有文档注释，但不够全面 |
-| **测试覆盖** | 6/10 | 有集成测试，但单元测试较少 |
-| **内存安全** | 9/10 | 使用 Zeroize 清零敏感数据 |
-| **API 设计** | 8/10 | 接口设计合理，但部分功能不完整 |
+| 评估项         | 得分 | 说明                              |
+| -------------- | ---- | --------------------------------- |
+| **模块化设计** | 9/10 | 清晰的分层架构，职责分离明确      |
+| **错误处理**   | 8/10 | 使用自定义错误类型，有一定统一性  |
+| **异步支持**   | 9/10 | 完整的 Tokio 集成，全异步编程     |
+| **加密安全**   | 9/10 | 使用行业标准库 (ring, aes-gcm 等) |
+| **代码注释**   | 7/10 | 部分函数有文档注释，但不够全面    |
+| **测试覆盖**   | 6/10 | 有集成测试，但单元测试较少        |
+| **内存安全**   | 9/10 | 使用 Zeroize 清零敏感数据         |
+| **API 设计**   | 8/10 | 接口设计合理，但部分功能不完整    |
 
 **总体代码质量**: 8.1/10
 
@@ -672,21 +700,25 @@ CREATE TABLE audit_logs (
 #### 核心表 (4 个)
 
 **identities - 身份表**
+
 - 19 字段
 - 3 个索引
 - 支持级联删除
 
 **credentials - 凭据表**
+
 - 15 字段
 - 6 个索引
 - 包含加密数据 (BLOB)
 
 **user_auth - 用户认证表**
+
 - 10 字段
 - 1 个索引
 - 存储密码哈希和盐值
 
 **sessions - 会话表**
+
 - 9 字段
 - 2 个索引
 - 包含过期时间
@@ -694,14 +726,17 @@ CREATE TABLE audit_logs (
 #### 扩展表 (4 个)
 
 **workspaces - 工作区**
+
 - 6 字段，2 个索引
 - **状态**: 表已建，业务逻辑未实现
 
 **workspace_members - 工作区成员**
+
 - 5 字段，复合主键
 - **状态**: 表已建，业务逻辑未实现
 
 **audit_logs - 审计日志**
+
 - 11 字段，4 个索引
 - **状态**: 表已建，写入和查询逻辑未实现
 
@@ -740,12 +775,12 @@ audit_logs (3):
 
 ### 7.3 数据库设计评估
 
-| 方面 | 评分 | 说明 |
-|-----|------|------|
-| **规范化** | 9/10 | 充分的正规化，避免冗余 |
+| 方面         | 评分 | 说明                   |
+| ------------ | ---- | ---------------------- |
+| **规范化**   | 9/10 | 充分的正规化，避免冗余 |
 | **索引设计** | 8/10 | 大部分查询都有对应索引 |
-| **约束设计** | 8/10 | 级联删除，外键约束 |
-| **字段设计** | 8/10 | 字段类型选择合理 |
+| **约束设计** | 8/10 | 级联删除，外键约束     |
+| **字段设计** | 8/10 | 字段类型选择合理       |
 | **可扩展性** | 7/10 | 预留了 JSON 字段供扩展 |
 
 **总体数据库设计评分**: 8/10
@@ -777,30 +812,30 @@ audit_logs (3):
 
 ### 8.2 按功能类别统计
 
-| 类别 | 完成/总计 | 完成度 |
-|-----|----------|--------|
-| 数据模型 | 4/5 | 80% |
-| 业务逻辑 | 6/8 | 75% |
-| 数据访问 | 4/5 | 80% |
-| 安全加密 | 3/4 | 75% |
-| 系统支持 | 2/4 | 50% |
+| 类别     | 完成/总计 | 完成度 |
+| -------- | --------- | ------ |
+| 数据模型 | 4/5       | 80%    |
+| 业务逻辑 | 6/8       | 75%    |
+| 数据访问 | 4/5       | 80%    |
+| 安全加密 | 3/4       | 75%    |
+| 系统支持 | 2/4       | 50%    |
 
 ### 8.3 MVP 功能清单
 
-| 功能 | 状态 | 说明 |
-|-----|------|------|
-| 用户初始化 | | 完成 |
-| 用户认证 | | 完成 |
-| 身份管理 | | 完成 |
-| 凭据加密存储 | | 完成 |
-| 凭据解密读取 | | 完成 |
-| 基本搜索 | | 完成 |
-| 数据导出 | | 完成 |
-| 数据导入 | | 缺失 |
-| 会话管理 | ⚠️ | 部分 |
-| 工作区 | ⚠️ | 部分 |
-| 审计日志 | | 缺失 |
-| 权限管理 | ⚠️ | 部分 |
+| 功能         | 状态 | 说明 |
+| ------------ | ---- | ---- |
+| 用户初始化   |      | 完成 |
+| 用户认证     |      | 完成 |
+| 身份管理     |      | 完成 |
+| 凭据加密存储 |      | 完成 |
+| 凭据解密读取 |      | 完成 |
+| 基本搜索     |      | 完成 |
+| 数据导出     |      | 完成 |
+| 数据导入     |      | 缺失 |
+| 会话管理     | ⚠️   | 部分 |
+| 工作区       | ⚠️   | 部分 |
+| 审计日志     |      | 缺失 |
+| 权限管理     | ⚠️   | 部分 |
 
 ---
 
@@ -867,6 +902,7 @@ pub fn check_session_validity() { ... }
 目标: 单元测试覆盖率从 6% 提升到 70%
 
 重点:
+
 - 加密操作的单元测试
 - 认证流程的单元测试
 - 数据库操作的单元测试
@@ -878,11 +914,11 @@ mod tests {
     // 加密测试
     #[test]
     fn test_encryption_decryption_roundtrip()
-    
+
     // 认证测试
     #[test]
     async fn test_user_authentication_flow()
-    
+
     // 数据库测试
     #[tokio::test]
     async fn test_repository_operations()
@@ -892,6 +928,7 @@ mod tests {
 ### 9.2 中期优先级 (第 3-4 周)
 
 1. **密码强度验证** (1 天)
+
    ```rust
    pub struct PasswordValidator;
    impl PasswordValidator {
@@ -901,12 +938,14 @@ mod tests {
    ```
 
 2. **数据导入功能** (2 天)
+
    ```rust
    pub async fn import_from_json(path: &str) -> Result<ImportStats>
    pub async fn import_from_csv(path: &str) -> Result<ImportStats>
    ```
 
 3. **高级搜索功能** (2 天)
+
    ```rust
    pub struct SearchQuery {
        pub text: String,
@@ -955,7 +994,7 @@ mod tests {
 **数据持久化** - 完整的 SQLite 数据库设计  
 **异步编程** - 全异步编程模型，支持高并发  
 **错误处理** - 统一的错误处理机制  
-**示例文档** - 10 个详细的使用示例  
+**示例文档** - 10 个详细的使用示例
 
 ### 主要不足
 
@@ -963,18 +1002,18 @@ mod tests {
 **权限系统** - 过于简化，缺少 RBAC 实现  
 **审计日志** - 数据库表建立，但代码未实现  
 **测试覆盖** - 集成测试基础，单元测试较少 (6%)  
-**工作区功能** - 数据模型完整，但缺少 Repository  
+**工作区功能** - 数据模型完整，但缺少 Repository
 
 ### 总体评价
 
-| 评估维度 | 评分 | 说明 |
-|---------|------|------|
-| **代码质量** | 8.1/10 | 良好，有优化空间 |
-| **架构设计** | 8.5/10 | 优秀，分层清晰 |
+| 评估维度       | 评分   | 说明                     |
+| -------------- | ------ | ------------------------ |
+| **代码质量**   | 8.1/10 | 良好，有优化空间         |
+| **架构设计**   | 8.5/10 | 优秀，分层清晰           |
 | **功能完整性** | 6.5/10 | 中等，核心完整但扩展不足 |
-| **安全性** | 8.0/10 | 良好，使用标准库 |
-| **可维护性** | 7.5/10 | 良好，但需更多文档 |
-| **可扩展性** | 7.0/10 | 中等，需要增强 |
+| **安全性**     | 8.0/10 | 良好，使用标准库         |
+| **可维护性**   | 7.5/10 | 良好，但需更多文档       |
+| **可扩展性**   | 7.0/10 | 中等，需要增强           |
 
 ### 生产就绪度评估
 
@@ -1029,7 +1068,7 @@ mod tests {
 **PersonaService 方法**: 30+  
 **Repository 方法**: 25+  
 **模型类型**: 20+  
-**错误类型**: 8  
+**错误类型**: 8
 
 ### 主要配置
 
@@ -1068,25 +1107,25 @@ async fn main() -> Result<()> {
     // 初始化
     let db = Database::from_file("persona.db").await?;
     db.migrate().await?;
-    
+
     let mut service = PersonaService::new(db).await?;
-    
+
     // 用户初始化
     let user_id = service.initialize_user("master_password").await?;
-    
+
     // 创建身份
     let identity = service.create_identity(
         "My Identity".to_string(),
         IdentityType::Personal,
     ).await?;
-    
+
     // 创建凭据
     let cred_data = CredentialData::Password(PasswordCredentialData {
         password: "secret".to_string(),
         email: Some("user@example.com".to_string()),
         security_questions: vec![],
     });
-    
+
     let credential = service.create_credential(
         identity.id,
         "Website".to_string(),
@@ -1094,10 +1133,10 @@ async fn main() -> Result<()> {
         SecurityLevel::High,
         &cred_data,
     ).await?;
-    
+
     // 搜索
     let results = service.search_credentials("website").await?;
-    
+
     Ok(())
 }
 ```
@@ -1106,4 +1145,3 @@ async fn main() -> Result<()> {
 
 **报告完成时间**: 2025-01-14  
 **报告版本**: 1.0
-

@@ -154,12 +154,12 @@ Status uses the labels above; the "evidence" column names the existing anchor or
 
 ### Long-running and durability
 
-| ID  | Scenario                                                                   | Layer        | Status                        | Acceptance clause                                                               | Evidence / gap                                       |
-| --- | -------------------------------------------------------------------------- | ------------ | ----------------------------- | ------------------------------------------------------------------------------- | ---------------------------------------------------- |
-| S23 | Restart recovery: unlock state is not persisted; a lock survives a restart | Long-running | ⚠️ Untested                   | Re-authentication is required after restart                                     | No recovery test                                     |
-| S24 | Loss of unflushed batches after a crash                                    | Long-running | ❌ Known limitation, untested | Quantify the loss window, or add a persistent outbox                            | Recorded as a known limitation in `FINAL_SUMMARY.md` |
-| S25 | Multi-hour background residency (agent / connect / bridge)                 | Long-running | ❌ Zero coverage              | No leaks, no lock leaks, no handle growth                                       | No soak job; `Makefile::benchmark` has no benches    |
-| S26 | Concurrent clients writing the same vault                                  | Long-running | ⚠️ Transaction-level only     | SQLite transaction correctness ≠ session consistency (see Session Center C1/C3) | No concurrency stress test                           |
+| ID  | Scenario                                                                   | Layer        | Status                        | Acceptance clause                                                               | Evidence / gap                                                   |
+| --- | -------------------------------------------------------------------------- | ------------ | ----------------------------- | ------------------------------------------------------------------------------- | ---------------------------------------------------------------- |
+| S23 | Restart recovery: unlock state is not persisted; a lock survives a restart | Long-running | ⚠️ Untested                   | Re-authentication is required after restart                                     | No recovery test                                                 |
+| S24 | Loss of unflushed batches after a crash                                    | Long-running | ❌ Known limitation, untested | Quantify the loss window, or add a persistent outbox                            | Recorded as a known limitation in `docs/review/FINAL_SUMMARY.md` |
+| S25 | Multi-hour background residency (agent / connect / bridge)                 | Long-running | ❌ Zero coverage              | No leaks, no lock leaks, no handle growth                                       | No soak job; `Makefile::benchmark` has no benches                |
+| S26 | Concurrent clients writing the same vault                                  | Long-running | ⚠️ Transaction-level only     | SQLite transaction correctness ≠ session consistency (see Session Center C1/C3) | No concurrency stress test                                       |
 
 ### Mobile
 

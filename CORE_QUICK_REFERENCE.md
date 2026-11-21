@@ -290,7 +290,7 @@ uuid = "1.6"            # 唯一标识符
 
 ## 相关文件
 
-- 完整分析报告: `CORE_ANALYSIS_REPORT.md` (32 KB, 1,108 行)
+- 完整分析报告: `docs/review/CORE_ANALYSIS_REPORT.md` (32 KB, 1,108 行)
 - 使用示例: `/core/examples/README.md`
 - 迁移文件: `/core/migrations/`
 - 测试文件: `/core/tests/`
