@@ -120,6 +120,6 @@ Win32 校验非原子——重验证与 `SendMessageW` 之间仍有极小竞态�
   写入前无字段级重查）上，两个 mid-fill 用例在 `assert!(!resp.success)` 处
   必红——旧层不中止剩余写入而是返回成功（其后的密码读回断言未执行，日志
   本身不证明密码已落框）。红证据归档于
-  `docs/review/evidence/openclaw-2026-11-06-desktop-fill/run7-red-cmdcancel-old-impl/`；
+  `docs/evidence/openclaw-2026-11-06-desktop-fill/run7-red-cmdcancel-old-impl/`；
   main 上的绿侧复验将随第五轮报告
   `docs/review/2026-11-06-desktop-fill-fifth-pass.md` 在后续提交归档。

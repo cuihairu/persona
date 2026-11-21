@@ -155,7 +155,7 @@ rather than silently fulfilled later.
   `assert!(!resp.success)` — that layer does not abort the remaining
   writes, it returns success; their password read-back assertions never run
   there, so the log alone does not prove the password landed. The red run is
-  archived in `docs/review/evidence/openclaw-2026-11-06-desktop-fill/run7-red-cmdcancel-old-impl/`;
+  archived in `docs/evidence/openclaw-2026-11-06-desktop-fill/run7-red-cmdcancel-old-impl/`;
   the green re-run on main will be archived together with the fifth-pass
   report `docs/review/2026-11-06-desktop-fill-fifth-pass.md` in a follow-up
   commit.

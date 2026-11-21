@@ -8,7 +8,7 @@
 上席最后状态 `filltest.done` = `lib_exit=101 frame_exit=0 xproc_exit=0`——
 readback_frame 与跨进程套件已绿，只有 `cargo test --lib desktop_fill` 红。
 原始日志归档于
-`docs/review/evidence/openclaw-2026-11-06-desktop-fill/run5-red-4644114/`：
+`docs/evidence/openclaw-2026-11-06-desktop-fill/run5-red-4644114/`：
 17 例中 15 通过、**2 失败，两个都是 Windows-only 剪贴板用例**（`win_tests`
 是 `cfg(windows)`，Linux 侧本地门禁根本编译不到，所以带着病一路推到了
 真机才暴露）：
@@ -54,7 +54,7 @@ readback_frame 与跨进程套件已绿，只有 `cargo test --lib desktop_fill`
 | 跨进程 xproc             | **5 passed / 0 failed**  | 在途销毁重建竞态 `cross_process_inflight_destroy_rebuild_rejected` 等                                             |
 
 原始日志（force-add 入仓）：
-`docs/review/evidence/openclaw-2026-11-06-desktop-fill/run6-green-a9d2eed/`
+`docs/evidence/openclaw-2026-11-06-desktop-fill/run6-green-a9d2eed/`
 （`filltest-lib.log`、`filltest-frame.log`、`filltest-xproc.log`、`filltest.done`）。
 
 ## 本地门禁（Linux）

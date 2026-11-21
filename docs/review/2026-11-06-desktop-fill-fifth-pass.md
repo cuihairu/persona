@@ -52,7 +52,7 @@
     读回断言因此没有执行，**日志本身不直接证明密码已落框**（本席据此把 README、
     两份设计文档与 todo 里的「照写密码并报成功」全部收窄为日志可证的口径）；
   - 原始日志 5 份 force-add 入仓
-    `docs/review/evidence/openclaw-2026-11-06-desktop-fill/run7-red-cmdcancel-old-impl/`。
+    `docs/evidence/openclaw-2026-11-06-desktop-fill/run7-red-cmdcancel-old-impl/`。
 
 ## 三、文档过满表述收紧（codex 三轮复审逐条点名，全部落地）
 
@@ -86,7 +86,7 @@ CI prettier 自动修复）；`persona-desktop` 重编译 `Finished in 1m 56s`�
 | **命令层 cmdcancel**     | **5 passed / 0 failed**  | run7 上必红的两个 mid-fill 用例在此通过       |
 
 原始日志（force-add 入仓）：
-`docs/review/evidence/openclaw-2026-11-06-desktop-fill/run8-green-8cb81c9/`。
+`docs/evidence/openclaw-2026-11-06-desktop-fill/run8-green-8cb81c9/`。
 
 传输注记：该机 `git fetch origin` 两次超时（180s/600s，`ls-remote` 正常、无锁文件），
 改用 `git bundle`（`main ^a283573`，96K，4 个前置 ref 均验证为 `ab42d44` 的祖先）

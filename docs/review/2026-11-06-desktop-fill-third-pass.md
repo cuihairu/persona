@@ -66,7 +66,7 @@ x86_64-pc-windows-gnu` + 同参数 clippy：0 告警（Windows 侧编译面全�
   确认绑定 2 例 + mock 口径调整）；
 - openclaw 真机（Windows Server 2022 交互式会话）：lib `cargo test --lib
 desktop_fill` 12/12、跨进程 5/5，原始日志
-  `docs/review/evidence/openclaw-2026-11-06-desktop-fill/{filltest-lib.log,
+  `docs/evidence/openclaw-2026-11-06-desktop-fill/{filltest-lib.log,
 filltest-xproc.log,filltest.done,run1-d601c14/}`。
 
 ## 提交

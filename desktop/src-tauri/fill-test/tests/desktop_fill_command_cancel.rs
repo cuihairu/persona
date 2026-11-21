@@ -15,7 +15,7 @@
 //! 4. 放行后：新实现必须中止剩余写入并如实报
 //!    `FILL_TARGET_DISCARDED` / `FILL_TARGET_CHANGED`（部分完成）；
 //!    **旧实现则会把密码写进框里并报成功**——因此这两个用例在旧实现上
-//!    必红（真机红跑见 docs/review/evidence/openclaw-2026-11-06-desktop-fill/
+//!    必红（真机红跑见 docs/evidence/openclaw-2026-11-06-desktop-fill/
 //!    run7-red-cmdcancel-old-impl/）。
 //!
 //! 密码残留断言用靶进程**同进程**读回（READBACK 长度前缀协议）：Windows
