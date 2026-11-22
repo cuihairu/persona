@@ -121,6 +121,9 @@ export interface WorkspaceSettings {
   locale: string | null;
   /** 可选同步服务器配置（旧 JSON 缺键时为 null） */
   sync: SyncConfig | null;
+  /** 同步方式开关（跨设备同步默认开、账号同步默认关；旧 JSON 缺键回退默认）。
+   * 只控设置页入口可用性——关闭 ≠ 离开同步组、不删 keyring、不触发网络。 */
+  sync_methods: { cross_device_sync: boolean; account_sync: boolean };
   /** Quick Access 全局热键是否启用（默认 true，旧 JSON 缺键时为 true） */
   quick_access_enabled: boolean;
   /** Quick Access 全局热键绑定串；null = 用桌面端平台默认绑定 */

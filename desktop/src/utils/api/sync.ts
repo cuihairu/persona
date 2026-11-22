@@ -75,6 +75,20 @@ export const syncApi = {
   },
 
 
+  /**
+   * 窄写同步方式开关（跨设备同步 / 账号同步，各自独立）。
+   *
+   * 语义红线：只写偏好（settings.sync_methods），**不删 keyring、不触发网络**
+   * ——关闭某个方式 ≠ 离开同步组。成功返回全量 settings，由调用方回填真相。
+   */
+  async setSyncMethods(
+    cross_device_sync: boolean,
+    account_sync: boolean,
+  ): Promise<ApiResponse<WorkspaceSettings>> {
+    return invoke('set_sync_methods', { cross_device_sync, account_sync });
+  },
+
+
   /** OS keyring 里是否存有 sync token（免解锁只读；真值不经 IPC） */
   async syncTokenPresent(): Promise<ApiResponse<boolean>> {
     return invoke('sync_token_present');

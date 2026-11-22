@@ -19,6 +19,10 @@ export interface DataLossRisk {
   hasBackup: boolean;
   /** 已绑定账号（账号模式警示降一档） */
   hasAccount: boolean;
+  /** 跨设备同步偏好开关是否开启（settings.sync_methods；读取失败按安全侧
+   * true——宁可少提示「可重新开启」，不误报）。**只读偏好，不决定档位**：
+   * 数据是否在组内是 keyring 事实，不受偏好开关改写。 */
+  crossDeviceSyncEnabled: boolean;
   level: DataLossRiskLevel;
   refresh: () => Promise<void>;
 }
@@ -46,6 +50,7 @@ export function useDataLossRisk(): DataLossRisk {
     deviceCount: 0,
     hasBackup: false,
     hasAccount: false,
+    crossDeviceSyncEnabled: true,
     level: 'none',
   });
 
@@ -62,12 +67,15 @@ export function useDataLossRisk(): DataLossRisk {
       const settings = settingsResp.success ? settingsResp.data : undefined;
       const hasBackup = Boolean(settings?.backup);
       const hasAccount = Boolean(settings?.account);
+      // 偏好开关只读展示（不决定档位）；读取失败按安全侧 true（宁可少提示）
+      const crossDeviceSyncEnabled = settings?.sync_methods?.cross_device_sync ?? true;
       setState({
         loading: false,
         joined,
         deviceCount,
         hasBackup,
         hasAccount,
+        crossDeviceSyncEnabled,
         level: computeDataLossRisk({ joined, deviceCount, hasBackup, hasAccount }),
       });
     } catch {

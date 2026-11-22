@@ -193,6 +193,49 @@ pub async fn set_sync_config(
     Ok(ApiResponse::success(settings))
 }
 
+/// 窄写同步方式开关（`settings.sync_methods` 段），返回更新后的全量
+/// settings 作为服务端真相。要求已解锁（照 `set_sync_config` 门禁）。
+///
+/// **只写偏好开关**——绝不删 keyring、绝不触发网络：关闭跨设备同步 =
+/// 停用设置页入口，不离开同步组（组密钥仍在 keyring
+/// `persona-sync-group`，数据仍在组内）。桌面端暂无离开同步组的入口
+/// （`sync_group_store` 只有 get/set，无删除命令），要停用需在另一台
+/// 已授权设备上吊销本机（`sync_revoke`）。与
+/// `SyncConfig.enabled`（审计事件上报）是两套独立语义，绝不合并。
+#[command(rename_all = "snake_case")]
+pub async fn set_sync_methods(
+    cross_device_sync: bool,
+    account_sync: bool,
+    state: State<'_, AppState>,
+) -> std::result::Result<ApiResponse<WorkspaceSettings>, String> {
+    let service_unlocked = {
+        let guard = state.service.lock().await;
+        match guard.as_ref() {
+            Some(service) => service.is_unlocked(),
+            None => return Ok(ApiResponse::error("Service not initialized".to_string())),
+        }
+    };
+    if !service_unlocked {
+        return Ok(ApiResponse::error("Service is locked".to_string()));
+    }
+
+    let db_path = db_path_or_return!(state);
+
+    let db = open_db_or_return!(db_path);
+
+    let workspace_path = workspace_path_for_db_path(&db_path);
+    let repo = WorkspaceRepository::new(db.clone());
+    let mut ws = workspace_or_return!(db, workspace_path);
+
+    ws.settings.sync_methods = persona_core::SyncMethods {
+        cross_device_sync,
+        account_sync,
+    };
+    ws.touch();
+    let updated = ok_or_error_response!(repo.update(&ws).await);
+    Ok(ApiResponse::success(updated.settings))
+}
+
 /// 只读：OS keyring 里是否存有 sync token（免解锁——设置页用它决定
 /// placeholder 提示）。只泄露"是否配置过"这一位元数据（与
 /// `get_workspace_settings` 暴露 `sync.enabled` 同级）；真值永不离开

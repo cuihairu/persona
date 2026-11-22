@@ -24,10 +24,20 @@ const DataLossWarning: React.FC<{ variant?: 'strong' | 'banner' }> = ({
   variant = 'banner',
 }) => {
   const { t } = useTranslation();
-  const { loading, level } = useDataLossRisk();
+  const { loading, level, crossDeviceSyncEnabled } = useDataLossRisk();
 
   if (loading || level === 'none') return null;
   const high = level === 'high';
+  // 关了跨设备同步但数据仍在组内（keyring 事实）：如实地指回开启入口，
+  // 不因为偏好关了就收起风险警示（档位判定不随偏好降级）。
+  const syncDisabledNote = !crossDeviceSyncEnabled ? (
+    <p
+      className="text-xs text-gray-600 dark:text-gray-300 mt-1"
+      data-testid="data-loss-sync-disabled-note"
+    >
+      {t('settings.dataLoss.syncDisabledNote')}
+    </p>
+  ) : null;
 
   if (variant === 'strong') {
     return (
@@ -52,6 +62,7 @@ const DataLossWarning: React.FC<{ variant?: 'strong' | 'banner' }> = ({
         <p className="text-sm text-gray-800 dark:text-gray-200 mt-1" data-testid="data-loss-strong-body">
           {t(high ? 'settings.dataLoss.strongBodyHigh' : 'settings.dataLoss.strongBodyMedium')}
         </p>
+        {syncDisabledNote}
         <div className="flex flex-wrap gap-2 mt-3">
           <button
             type="button"
@@ -84,20 +95,23 @@ const DataLossWarning: React.FC<{ variant?: 'strong' | 'banner' }> = ({
           : 'border-amber-300 bg-amber-50 dark:border-amber-800 dark:bg-amber-950/40'
       }`}
     >
-      <p
-        className={`flex items-center gap-2 text-sm font-medium min-w-0 ${
-          high ? 'text-red-700 dark:text-red-300' : 'text-amber-700 dark:text-amber-300'
-        }`}
-        data-testid="data-loss-banner-text"
-      >
-        <span
-          aria-hidden
-          className={`inline-block w-2 h-2 rounded-full shrink-0 ${
-            high ? 'bg-red-500' : 'bg-amber-500'
+      <div className="min-w-0">
+        <p
+          className={`flex items-center gap-2 text-sm font-medium min-w-0 ${
+            high ? 'text-red-700 dark:text-red-300' : 'text-amber-700 dark:text-amber-300'
           }`}
-        />
-        {t(high ? 'settings.dataLoss.bannerTitleHigh' : 'settings.dataLoss.bannerTitleMedium')}
-      </p>
+          data-testid="data-loss-banner-text"
+        >
+          <span
+            aria-hidden
+            className={`inline-block w-2 h-2 rounded-full shrink-0 ${
+              high ? 'bg-red-500' : 'bg-amber-500'
+            }`}
+          />
+          {t(high ? 'settings.dataLoss.bannerTitleHigh' : 'settings.dataLoss.bannerTitleMedium')}
+        </p>
+        {syncDisabledNote}
+      </div>
       <button
         type="button"
         data-testid="data-loss-banner-action"

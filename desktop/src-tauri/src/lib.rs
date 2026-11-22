@@ -383,6 +383,7 @@ pub fn build<R: tauri::Runtime>(context: tauri::Context<R>) -> tauri::App<R> {
             commands::biometric_wrap_spike,
             commands::biometric_tpm_spike,
             commands::set_sync_config,
+            commands::set_sync_methods,
             commands::sync_token_present,
             commands::sync_device_status,
             commands::sync_join,

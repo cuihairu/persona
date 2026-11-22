@@ -297,6 +297,20 @@ export default {
       analysisRefresh: '重新读取',
       analysisRefreshing: '读取中…',
     },
+    syncMode: {
+      title: '同步方式',
+      crossDeviceSync: '跨设备同步',
+      accountSync: '账号同步',
+      crossDeviceSyncDesc: '默认同步方式：动态密码配对入组，零账号零注册。',
+      accountSyncDesc: '通过服务器与账号加入同步（须显式开启）。',
+      joined: '已加入',
+      notEnabled: '未加入',
+      disableConfirmTitle: '关闭跨设备同步？',
+      disableConfirmBody:
+        '关闭仅停用本页入口，不会离开同步组；组密钥仍在系统钥匙串，已同步的数据保持不变。目前应用内还没有离开同步组的入口——若要停用同步，请在另一台已授权设备上吊销本机。',
+      saved: '同步方式已更新',
+      saveFailed: '保存同步方式失败',
+    },
     syncGroup: {
       title: '跨设备同步',
       description: '跨设备同步：动态密码配对入组，零账号零注册。双方核对 6 位数字指纹，防止中间人。',
@@ -339,6 +353,7 @@ export default {
       bannerTitleHigh: '数据风险——仅一台设备',
       bannerTitleMedium: '数据风险——单台设备',
       bannerAction: '管理风险',
+      syncDisabledNote: '跨设备同步入口已关闭，但数据仍在同步组内——可在「同步方式」中重新开启。',
     },
     account: {
       title: '账号',

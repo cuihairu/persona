@@ -2209,8 +2209,11 @@ describe('components/SettingsModal', () => {
   it('shows the sync status load failure message', async () => {
     mockIdentityHook();
 
-    // 失败响应分支（279）
-    mockSyncStatus.mockResolvedValueOnce({ success: false, error: 'locked' });
+    // 失败响应分支（279）。syncDeviceStatus 现由两个区块消费（同步方式区块
+    // 也读派生态展示「未加入」），用持续 mock 而非 mockResolvedValueOnce——
+    // 否则 Once 值被先挂载的同步方式区块取走，本区块看不到失败（交付物 4
+    // 引入第二个消费者，测试按新事实适配，断言意图不变）。
+    mockSyncStatus.mockResolvedValue({ success: false, error: 'locked' });
     await act(async () => {
       render(<SettingsModal isOpen={true} onClose={() => {}} />);
     });
@@ -2220,7 +2223,7 @@ describe('components/SettingsModal', () => {
 
     // IPC 异常分支（280-281）
     cleanup();
-    mockSyncStatus.mockRejectedValueOnce(new Error('backend gone'));
+    mockSyncStatus.mockRejectedValue(new Error('backend gone'));
     await act(async () => {
       render(<SettingsModal isOpen={true} onClose={() => {}} />);
     });

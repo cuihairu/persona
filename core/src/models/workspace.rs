@@ -61,6 +61,31 @@ pub struct SyncConfig {
     pub server_token: String,
 }
 
+/// 同步方式开关（设置页「同步方式」区块，各自独立；2026-11-23 用户令
+/// 「设置页面中需要对应的设置选项，同步的方式哪些开启」）。
+///
+/// **与 `SyncConfig.enabled`（审计事件上报）是两套独立语义，绝不合并。**
+/// 派生态（实际是否入组/已加入）是运行时的 keyring 事实，不由本字段
+/// 决定——本字段只控设置页入口的可用性（关 = 停用入口，不离开同步组、
+/// 不删 keyring、不触发网络）。
+///
+/// 默认：跨设备同步**开**（默认同步方式），账号同步**关**（须显式开启，
+/// 见 `docs/sync-group-mode.md` §1 的显式开启口径）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SyncMethods {
+    pub cross_device_sync: bool,
+    pub account_sync: bool,
+}
+
+impl Default for SyncMethods {
+    fn default() -> Self {
+        Self {
+            cross_device_sync: true,
+            account_sync: false,
+        }
+    }
+}
+
 /// 账号域绑定（本 vault 关联的账号身份）。非敏感标识存盘：account_id
 /// 是登录唯一标识（persona-server 无 username→account_id 解析端点，登录
 /// 仪式按 account_id 作用域发起）；username/device_name 仅供展示。令牌
@@ -118,6 +143,11 @@ pub struct WorkspaceSettings {
     /// 可选同步服务器配置（旧 JSON 缺键时为 None）
     #[serde(default)]
     pub sync: Option<SyncConfig>,
+
+    /// 同步方式开关（跨设备同步默认开、账号同步默认关；旧 JSON 缺键回退
+    /// 默认）。见 [`SyncMethods`]。
+    #[serde(default)]
+    pub sync_methods: SyncMethods,
 
     /// 主密码有效期（天）；None = 不过期（默认，NIST 取向：仅在用户
     /// 显式选择后强制轮换）。Some(days) 且超期时，解锁返回
@@ -190,6 +220,7 @@ impl Default for WorkspaceSettings {
             default_identity_type: "personal".to_string(),
             features: FeatureFlags::default(),
             sync: None,
+            sync_methods: SyncMethods::default(),
             password_expiry_days: None,
             locale: None,
             travel_mode: false,
@@ -352,6 +383,29 @@ mod tests {
         assert_eq!(settings.account, None);
         // 备份导出凭证缺键回退从未导出过（S5 批次）
         assert_eq!(settings.backup, None);
+        // 同步方式开关缺键回退默认：跨设备同步开（默认同步方式）、
+        // 账号同步关（须显式开启）（交付物 4）
+        assert_eq!(
+            settings.sync_methods,
+            SyncMethods {
+                cross_device_sync: true,
+                account_sync: false
+            }
+        );
+    }
+
+    #[test]
+    fn test_sync_methods_round_trip_preserves_explicit_false() {
+        // 显式存储的开关不受默认值覆盖（显式 false/true 原样往返）
+        let mut ws = Workspace::new("/tmp/persona", "main".to_string());
+        ws.settings.sync_methods = SyncMethods {
+            cross_device_sync: false,
+            account_sync: true,
+        };
+        let json = serde_json::to_string(&ws).unwrap();
+        let restored: Workspace = serde_json::from_str(&json).unwrap();
+        assert!(!restored.settings.sync_methods.cross_device_sync);
+        assert!(restored.settings.sync_methods.account_sync);
     }
 
     #[test]

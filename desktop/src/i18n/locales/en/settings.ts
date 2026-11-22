@@ -306,6 +306,20 @@ export default {
       analysisRefresh: 'Refresh',
       analysisRefreshing: 'Refreshing…',
     },
+    syncMode: {
+      title: 'Sync methods',
+      crossDeviceSync: 'Cross-device sync',
+      accountSync: 'Account sync',
+      crossDeviceSyncDesc: 'Default sync method: pair devices with a one-time dynamic password — no account.',
+      accountSyncDesc: 'Join sync via a server and account (opt-in).',
+      joined: 'Joined',
+      notEnabled: 'Not joined',
+      disableConfirmTitle: 'Turn off cross-device sync?',
+      disableConfirmBody:
+        'Turning this off only disables the entries on this page; it does not leave the sync group. The group key stays in the OS keychain and synced data is unchanged. There is no leave-sync-group action in this app yet — to stop syncing, revoke this device from another authorized device.',
+      saved: 'Sync methods updated',
+      saveFailed: 'Failed to save sync methods',
+    },
     syncGroup: {
       title: 'Cross-device sync',
       description: 'Cross-device sync: pair devices with a one-time dynamic password — no account, no sign-up. Both sides verify a 6-digit fingerprint to stop man-in-the-middle.',
@@ -347,6 +361,8 @@ export default {
       actionDevice: 'Add another device',
       bannerTitleHigh: 'Data at risk — only one device',
       bannerTitleMedium: 'Data at risk — single device',
+      syncDisabledNote:
+        'Cross-device sync entries are turned off, but this vault is still in a sync group — re-enable it under "Sync methods".',
       bannerAction: 'Manage risk',
     },
     account: {

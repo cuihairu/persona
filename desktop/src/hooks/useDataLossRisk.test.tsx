@@ -63,6 +63,36 @@ describe('useDataLossRisk', () => {
     expect(result.current.level).toBe('high');
   });
 
+  it('falls back to crossDeviceSyncEnabled=true when sync_methods is missing (safe side)', async () => {
+    mockStatus.mockResolvedValue({ success: true, data: true });
+    mockDevices.mockResolvedValue({ success: true, data: [{ id: 'd1' }] });
+    // 旧 JSON / 测试桩缺 sync_methods 键：按安全侧 true（宁可少提示「可重新开启」）
+    mockSettings.mockResolvedValue({ success: true, data: { backup: null, account: null } });
+
+    const { result } = renderHook(() => useDataLossRisk());
+    await waitFor(() => {
+      expect(result.current.loading).toBe(false);
+    });
+    expect(result.current.crossDeviceSyncEnabled).toBe(true);
+  });
+
+  it('reports crossDeviceSyncEnabled=false but never downgrades the level while joined', async () => {
+    mockStatus.mockResolvedValue({ success: true, data: true });
+    mockDevices.mockResolvedValue({ success: true, data: [{ id: 'd1' }] });
+    mockSettings.mockResolvedValue({
+      success: true,
+      data: { backup: null, account: null, sync_methods: { cross_device_sync: false, account_sync: false } },
+    });
+
+    const { result } = renderHook(() => useDataLossRisk());
+    await waitFor(() => {
+      expect(result.current.loading).toBe(false);
+    });
+    // 偏好关了但数据仍在组内：档位判定不随偏好降级（仍是 high，不虚报解除）
+    expect(result.current.crossDeviceSyncEnabled).toBe(false);
+    expect(result.current.level).toBe('high');
+  });
+
   it('refresh re-reads the sources and lifts the warning after a backup export', async () => {
     mockStatus.mockResolvedValue({ success: true, data: true });
     mockDevices.mockResolvedValue({ success: true, data: [{ id: 'd1' }] });
