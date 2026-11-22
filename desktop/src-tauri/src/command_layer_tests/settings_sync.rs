@@ -200,6 +200,8 @@ async fn legacy_sync_token_migrates_to_keyring_on_attach() {
         enabled: true,
         server_url: "http://127.0.0.1:1".to_string(),
         server_token: "legacy-plaintext".to_string(),
+        cloud_drive_dir: None,
+        sync_transport: persona_core::SyncTransport::default(),
     });
     ws.touch();
     repo.update(&ws).await.unwrap();

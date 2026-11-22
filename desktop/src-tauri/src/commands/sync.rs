@@ -179,11 +179,21 @@ pub async fn set_sync_config(
         tracing::warn!(%error, "failed to remove sync token from OS keyring; it stays available for a later re-enable");
     }
 
-    // vault JSON 恒存空串占位——真值只在 OS keyring
+    // vault JSON 恒存空串占位——真值只在 OS keyring。云盘字段（Phase 2）
+    // 是独立传输配置，本命令不改它们：读旧值原样保留，避免「改服务器
+    // 配置」把云盘传输选择悄悄清零。
+    let (old_cloud_dir, old_transport) = ws
+        .settings
+        .sync
+        .as_ref()
+        .map(|s| (s.cloud_drive_dir.clone(), s.sync_transport))
+        .unwrap_or((None, persona_core::SyncTransport::default()));
     ws.settings.sync = Some(persona_core::SyncConfig {
         enabled,
         server_url,
         server_token: String::new(),
+        cloud_drive_dir: old_cloud_dir,
+        sync_transport: old_transport,
     });
     ws.touch();
     let updated = ok_or_error_response!(repo.update(&ws).await);

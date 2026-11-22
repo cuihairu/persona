@@ -948,6 +948,8 @@ async fn set_sync_server_url(
         enabled: true,
         server_url: url.to_string(),
         server_token: String::new(),
+        cloud_drive_dir: None,
+        sync_transport: persona_core::SyncTransport::default(),
     });
     ws.touch();
     repo.update(&ws).await.unwrap();

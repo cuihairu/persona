@@ -392,9 +392,14 @@ ciphertext. The price is having to run this yourself by hand (or on a
 timer, via a script), and that a restore is whole-vault.
 
 (A "file-system sync adapter" — a local service that watches for changes and
-pushes/pulls encrypted blobs automatically — is a future item in
-[the design draft](./CLIENT_COMMUNICATION_ARCHITECTURE.md); it is not
-implemented today.)
+pushes/pulls encrypted blobs automatically — is now implemented at the **core
+transport** level: the encrypted command stream, group-key envelopes, and
+snapshots can live in a cloud-drive folder instead of a persona-server relay.
+See [`CLOUD_DRIVE_SYNC.md`](./CLOUD_DRIVE_SYNC.md) for the transport design and
+its honest deviations from the server transport (no physical compaction,
+per-shard watermark cursor). The desktop wiring — a settings UI to pick the
+folder and choose the transport, plus a change watcher — is the follow-up; the
+core transport and the config fields are in place.)
 
 ## Multiple Devices and Travel Mode
 

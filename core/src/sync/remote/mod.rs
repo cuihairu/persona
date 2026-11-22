@@ -16,11 +16,15 @@
 
 mod admin;
 mod client;
+mod cloud;
+mod group_key_store;
 mod http;
 mod wire;
 
 pub use admin::*;
 pub use client::*;
+pub use cloud::*;
+pub use group_key_store::*;
 
 #[cfg(test)]
 mod tests;

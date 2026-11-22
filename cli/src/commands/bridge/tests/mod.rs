@@ -679,6 +679,8 @@ fn workspace_settings_json(sync: Option<(String, String)>) -> String {
                 enabled: true,
                 server_url,
                 server_token,
+                cloud_drive_dir: None,
+                sync_transport: persona_core::models::SyncTransport::default(),
             },
         ),
         ..persona_core::models::WorkspaceSettings::default()

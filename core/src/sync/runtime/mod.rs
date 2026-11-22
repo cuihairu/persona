@@ -90,19 +90,22 @@ pub fn default_tombstone_retention() -> chrono::Duration {
 }
 
 #[cfg(feature = "remote-auth")]
-impl SyncSession<super::remote::HttpSyncRemote> {
-    /// 装配会话：从服务器取全部信封，拆出本机的那份得 group key。
+impl<R: SyncRemote> SyncSession<R> {
+    /// 装配会话的传输无关主体：取全部信封（[`GroupKeyStore`]，具体传输
+    /// 由实现决定）→ 拆本机那份得 group key → 建引擎（[`SyncRemote`]）。
     /// 本机信封缺失（未授权）或拆不开（fail-closed：信封不是包给这把
     /// 私钥的/被篡改）一律 Err——未授权设备拿不到同步能力。
-    pub async fn open(
+    ///
+    /// 两种传输共用的装配逻辑在此：HTTP 传输（[`Self::open`]）与云盘
+    /// 传输（[`Self::open_cloud`]）都只是提供各自的 remote + key_store。
+    pub async fn open_with<K: super::remote::GroupKeyStore>(
         db: &Database,
         identity: &DeviceIdentity,
-        base_url: &str,
-        token: &str,
+        remote: R,
+        key_store: K,
         travel_active: Box<dyn Fn() -> bool + Send + Sync>,
     ) -> Result<Self> {
-        let admin = super::remote::SyncAdminApi::new(base_url, token)?;
-        let keys = admin.group_keys().await?;
+        let keys = key_store.group_keys().await?;
         let own = keys
             .iter()
             .find(|k| k.device_id == identity.device_id)
@@ -120,7 +123,7 @@ impl SyncSession<super::remote::HttpSyncRemote> {
                 })?;
         let engine = Arc::new(SyncEngine::new(
             SyncRepository::new(db.clone()),
-            super::remote::HttpSyncRemote::new(base_url, token)?,
+            remote,
             identity.device_id,
             travel_active,
         ));
@@ -131,6 +134,51 @@ impl SyncSession<super::remote::HttpSyncRemote> {
             group_key: GroupKey::from_bytes(group_bytes),
             device_id: identity.device_id,
         })
+    }
+}
+
+#[cfg(feature = "remote-auth")]
+impl SyncSession<super::remote::HttpSyncRemote> {
+    /// 装配 HTTP 传输会话：从服务器取全部信封，拆出本机的那份得 group key。
+    pub async fn open(
+        db: &Database,
+        identity: &DeviceIdentity,
+        base_url: &str,
+        token: &str,
+        travel_active: Box<dyn Fn() -> bool + Send + Sync>,
+    ) -> Result<Self> {
+        let admin = super::remote::SyncAdminApi::new(base_url, token)?;
+        Self::open_with(
+            db,
+            identity,
+            super::remote::HttpSyncRemote::new(base_url, token)?,
+            super::remote::HttpGroupKeyStore::new(admin),
+            travel_active,
+        )
+        .await
+    }
+}
+
+#[cfg(feature = "remote-auth")]
+impl SyncSession<super::remote::CloudDriveRemote> {
+    /// 装配云盘传输会话：云盘目录即传输与信封交换槽位，无需服务器。
+    /// `cloud_dir` 是本机云盘同步文件夹（iCloud Drive/Dropbox/Google Drive），
+    /// OS 云代理负责跨设备分发；目录不存在会在首次写时创建。
+    pub async fn open_cloud(
+        db: &Database,
+        identity: &DeviceIdentity,
+        cloud_dir: impl Into<std::path::PathBuf>,
+        travel_active: Box<dyn Fn() -> bool + Send + Sync>,
+    ) -> Result<Self> {
+        let dir = cloud_dir.into();
+        Self::open_with(
+            db,
+            identity,
+            super::remote::CloudDriveRemote::new(dir.clone(), identity.device_id),
+            super::remote::CloudGroupKeyStore::new(dir),
+            travel_active,
+        )
+        .await
     }
 }
 

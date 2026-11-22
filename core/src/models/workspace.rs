@@ -59,6 +59,30 @@ pub struct SyncConfig {
     /// 共享 Bearer 令牌；desktop 宿主恒写空串（真值在 OS keyring），
     /// CLI 不落盘（env-only）；提交空串 = 保留旧值
     pub server_token: String,
+    /// 云盘传输（Phase 2）的同步文件夹本机路径（iCloud Drive/Dropbox/
+    /// Google Drive 的本地同步目录）。非 secret → 存 JSON 字段；None =
+    /// 未配置云盘同步。仅 `sync_transport = cloud` 时有意义。
+    #[serde(default)]
+    pub cloud_drive_dir: Option<String>,
+    /// 同步指令流走哪条传输（Phase 2 云盘 + server 双轨，2026-11-23
+    /// 用户令「一起设计」）。默认 Server——既有行为不变。
+    #[serde(default)]
+    pub sync_transport: SyncTransport,
+}
+
+/// 同步指令流的传输选择（Phase 2 云盘双轨）。默认 Server（既有行为）；
+/// `cloud` = 指令流经云盘目录文件交换（同 [`SyncConfig::cloud_drive_dir`]）。
+///
+/// 与 `settings.sync_methods`（设置页方式开关）独立：`sync_methods` 控
+/// 设置页入口可用性（跨设备/账号），`sync_transport` 控引擎用哪条传输。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SyncTransport {
+    /// persona-server HTTP（既有传输，默认）
+    #[default]
+    Server,
+    /// 云盘目录文件传输（Phase 2）
+    Cloud,
 }
 
 /// 同步方式开关（设置页「同步方式」区块，各自独立；2026-11-23 用户令
@@ -530,6 +554,8 @@ mod tests {
                 enabled: true,
                 server_url: "http://127.0.0.1:3000".to_string(),
                 server_token: "s3cret".to_string(),
+                cloud_drive_dir: None,
+                sync_transport: SyncTransport::default(),
             }),
             ..WorkspaceSettings::default()
         };

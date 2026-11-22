@@ -153,6 +153,7 @@ async fn read_request(stream: &mut TcpStream) -> Option<Captured> {
 }
 
 mod admin;
+mod cloud;
 mod http;
 mod snapshot;
 mod wire;
