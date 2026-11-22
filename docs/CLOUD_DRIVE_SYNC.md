@@ -202,16 +202,16 @@ what's implemented here.
 
 ## 8. Transport comparison
 
-| | Server (persona-server) | Cloud drive |
-|---|---|---|
-| Infra | must host / trust a server | none — an OS cloud folder |
-| seq | server AUTOINCREMENT | synthesized `(lamport, device_id)` |
-| cursor | rank `(seq, op_id)` | per-shard line-count watermark |
-| late low-lamport op | never (server order) | never skipped (watermark) |
-| compaction | snapshot prunes covered ops | none (immutable, shards append-only) |
-| snapshot CAS | 409 gate | content-addressed filename |
-| device roster | server table | `registry.json` + `env-*.bin` |
-| trust | relay zero-knowledge | provider sees ciphertext only |
+|                     | Server (persona-server)     | Cloud drive                          |
+| ------------------- | --------------------------- | ------------------------------------ |
+| Infra               | must host / trust a server  | none — an OS cloud folder            |
+| seq                 | server AUTOINCREMENT        | synthesized `(lamport, device_id)`   |
+| cursor              | rank `(seq, op_id)`         | per-shard line-count watermark       |
+| late low-lamport op | never (server order)        | never skipped (watermark)            |
+| compaction          | snapshot prunes covered ops | none (immutable, shards append-only) |
+| snapshot CAS        | 409 gate                    | content-addressed filename           |
+| device roster       | server table                | `registry.json` + `env-*.bin`        |
+| trust               | relay zero-knowledge        | provider sees ciphertext only        |
 
 ## 9. Open questions / follow-ups
 

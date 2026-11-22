@@ -88,7 +88,7 @@ cursor = encode_cursor(水位总和, "<device -> 已消费行数的 JSON map>")
 - `op_id` 槽存 JSON map `{"<device_id>": 行数}`。该槽对所有既有消费者都是
   不透明的（只校验非空），复用是安全的。
 - `pull_ops` 读**每个**分片的全部未消费行，按 `(lamport, device_id,
-  op_id)` 合并，一页全返回。因为从不跳过任何分片的未消费前缀，晚到的低
+op_id)` 合并，一页全返回。因为从不跳过任何分片的未消费前缀，晚到的低
   lamport op **永不被跳过**——正是 rank 游标的洞。`limit` 被忽略（本地
   文件读；引擎「空页才停」循环照常终止）。
 
@@ -170,16 +170,16 @@ pub sync_transport: SyncTransport,     // Server（默认）| Cloud
 
 ## 8. 传输对比
 
-| | Server（persona-server） | 云盘 |
-|---|---|---|
-| 基础设施 | 须自建/信任服务器 | 无——一个 OS 云盘目录 |
-| seq | 服务器 AUTOINCREMENT | 合成 `(lamport, device_id)` |
-| 游标 | rank `(seq, op_id)` | 每分片行数水位 |
-| 晚到低 lamport op | 不会（服务器序） | 不会跳过（水位） |
-| 压缩 | 快照裁剪覆盖 op | 无（不可变、分片 append-only） |
-| 快照 CAS | 409 门控 | 内容寻址文件名 |
-| 设备名册 | 服务器表 | `registry.json` + `env-*.bin` |
-| 信任 | 中转零知识 | 供应商只见密文 |
+|                   | Server（persona-server） | 云盘                           |
+| ----------------- | ------------------------ | ------------------------------ |
+| 基础设施          | 须自建/信任服务器        | 无——一个 OS 云盘目录           |
+| seq               | 服务器 AUTOINCREMENT     | 合成 `(lamport, device_id)`    |
+| 游标              | rank `(seq, op_id)`      | 每分片行数水位                 |
+| 晚到低 lamport op | 不会（服务器序）         | 不会跳过（水位）               |
+| 压缩              | 快照裁剪覆盖 op          | 无（不可变、分片 append-only） |
+| 快照 CAS          | 409 门控                 | 内容寻址文件名                 |
+| 设备名册          | 服务器表                 | `registry.json` + `env-*.bin`  |
+| 信任              | 中转零知识               | 供应商只见密文                 |
 
 ## 9. 开放问题 / 跟进
 
