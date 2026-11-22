@@ -5068,6 +5068,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "persona-relay"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "chrono",
+ "dotenvy",
+ "persona-core",
+ "persona-server",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "persona-server"
 version = "0.1.0"
 dependencies = [

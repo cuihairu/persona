@@ -23,15 +23,33 @@ use axum::{middleware, Router};
 
 pub use state::AppState;
 
-/// Build the application router.
+/// Build the application router (full surface: events/backups/auth/
+/// accounts/sync/pairing). `persona-server` entry.
 pub fn build_router(state: AppState) -> Router {
-    // /api 子路由：请求顺序 payload_size_guard → require_bearer →
-    // RequestDecompressionLayer → 处理器（后 .layer 的在外层）。
-    // body 上限：payload_size_guard 按 Content-Length 预检线上字节
-    //（gzip 传输的真实上限）；DefaultBodyLimit 经 extensions 作用于
-    // extractor 读到的 body——放在解压层内层即"解压后明文"上限
-    //（防解压炸弹，兼兜底无 Content-Length 的 chunked 请求）。
+    with_base(full_api(&state), state)
+}
+
+/// Build the relay-only router (`persona-relay` entry): just the E2EE sync
+/// and pairing mailbox surfaces — a dumb encrypted courier. The base
+/// endpoints `/`, `/health` and `/metrics` plus the metrics/CORS layers
+/// stay so probes and monitoring keep working; the account/backup/auth/
+/// event surfaces are absent by construction (the relay crate never
+/// serves them).
+pub fn build_relay_router(state: AppState) -> Router {
     let api = Router::new()
+        .nest("/sync", sync_routes(&state))
+        .nest("/pairing", pairing_routes());
+    with_base(api, state)
+}
+
+/// `/api/v1` 全量子路由：events/backups/auth/accounts/sync/pairing。
+/// 请求顺序 payload_size_guard → require_bearer → RequestDecompressionLayer
+/// → 处理器（后 .layer 的在外层）。body 上限：payload_size_guard 按
+/// Content-Length 预检线上字节（gzip 传输的真实上限）；DefaultBodyLimit
+/// 经 extensions 作用于 extractor 读到的 body——放在解压层内层即
+/// "解压后明文"上限（防解压炸弹，兼兜底无 Content-Length 的 chunked 请求）。
+fn full_api(state: &AppState) -> Router<AppState> {
+    Router::new()
         .route("/events", post(api::ingest).get(api::query))
         .layer(DefaultBodyLimit::max(api::MAX_DECOMPRESSED_BODY_BYTES))
         .layer(tower_http::decompression::RequestDecompressionLayer::new())
@@ -156,64 +174,68 @@ pub fn build_router(state: AppState) -> Router {
                 )
                 .layer(DefaultBodyLimit::max(api::MAX_BODY_BYTES)),
         )
-        // E2EE 同步子路由（阶段 2 批 3，E2EE_SYNC_DESIGN §5/§6）：密文
-        // 中继 + 设备/信封登记。独立中间件栈（在 api 整体 require_bearer
-        // 之外）：无解压层（密文不可压，兼免第二个解压炸弹面）；body 上限
-        // 沿 events 线上限 1 MiB——凭据密文 KB 级，500 条/批足够（附件走
-        // 备份通道，是 §11 v2 议题）。
-        .nest(
-            "/sync",
-            Router::new()
-                .route(
-                    "/devices",
-                    post(api::sync_register_device).get(api::sync_list_devices),
-                )
-                .route("/devices/{id}", delete(api::sync_delete_device))
-                .route("/devices/remark", put(api::sync_put_device_remark))
-                .route(
-                    "/group-keys",
-                    get(api::sync_get_group_keys).put(api::sync_put_group_key),
-                )
-                .route("/group-key/rotate-begin", post(api::sync_rotate_begin))
-                .route("/oplog", post(api::sync_push).get(api::sync_pull))
-                .route(
-                    "/snapshot",
-                    put(api::sync_put_snapshot).get(api::sync_get_snapshot),
-                )
-                .route("/status", get(api::sync_status))
-                .layer(DefaultBodyLimit::max(api::MAX_BODY_BYTES))
-                .layer(middleware::from_fn_with_state(
-                    state.clone(),
-                    auth::require_bearer,
-                )),
-        )
-        // 同步组配对中转（S1，docs/sync-group-mode.md）：无账号信箱，
-        // 无 Bearer（配对双方本就没有共享凭证）；payload 是客户端加密
-        // 协议消息（SRP 公开消息 + AEAD 密文），中转零知识。TTL/队列
-        // 上限/payload 上限在 handlers 内强制。
-        .nest(
-            "/pairing",
-            Router::new()
-                .route("/sessions", post(api::pairing_create_session))
-                .route(
-                    "/sessions/{id}",
-                    get(api::pairing_session_info).delete(api::pairing_delete_session),
-                )
-                .route(
-                    "/sessions/{id}/messages/to-host",
-                    post(api::pairing_post_to_host).get(api::pairing_take_to_host),
-                )
-                .route(
-                    "/sessions/{id}/messages/to-guest",
-                    post(api::pairing_post_to_guest).get(api::pairing_take_to_guest),
-                )
-                .layer(DefaultBodyLimit::max(api::MAX_BODY_BYTES)),
-        );
+        .nest("/sync", sync_routes(state))
+        .nest("/pairing", pairing_routes())
+}
 
-    // 顶层（后 .layer 在外层）：track_metrics 挂在 CORS 内层——preflight
-    // OPTIONS 在 CORS 短路不计数；Router::layer 在路由后运行，MatchedPath
-    // 可用。fallback 同样被该层包裹，404 无 MatchedPath 自然计 "unmatched"
-    // （405 不经任何一层，属有界遗漏）。
+/// E2EE 同步子路由（阶段 2 批 3，E2EE_SYNC_DESIGN §5/§6）：密文中继 +
+/// 设备/信封登记。独立中间件栈（在 api 整体 require_bearer 之外）：
+/// 无解压层（密文不可压，兼免第二个解压炸弹面）；body 上限沿 events
+/// 线上限 1 MiB——凭据密文 KB 级，500 条/批足够（附件走备份通道，
+/// 是 §11 v2 议题）。
+fn sync_routes(state: &AppState) -> Router<AppState> {
+    Router::new()
+        .route(
+            "/devices",
+            post(api::sync_register_device).get(api::sync_list_devices),
+        )
+        .route("/devices/{id}", delete(api::sync_delete_device))
+        .route("/devices/remark", put(api::sync_put_device_remark))
+        .route(
+            "/group-keys",
+            get(api::sync_get_group_keys).put(api::sync_put_group_key),
+        )
+        .route("/group-key/rotate-begin", post(api::sync_rotate_begin))
+        .route("/oplog", post(api::sync_push).get(api::sync_pull))
+        .route(
+            "/snapshot",
+            put(api::sync_put_snapshot).get(api::sync_get_snapshot),
+        )
+        .route("/status", get(api::sync_status))
+        .layer(DefaultBodyLimit::max(api::MAX_BODY_BYTES))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            auth::require_bearer,
+        ))
+}
+
+/// 同步组配对中转（S1，docs/sync-group-mode.md）：无账号信箱，无 Bearer
+/// （配对双方本就没有共享凭证）；payload 是客户端加密协议消息（SRP
+/// 公开消息 + AEAD 密文），中转零知识。TTL/队列上限/payload 上限在
+/// handlers 内强制。
+fn pairing_routes() -> Router<AppState> {
+    Router::new()
+        .route("/sessions", post(api::pairing_create_session))
+        .route(
+            "/sessions/{id}",
+            get(api::pairing_session_info).delete(api::pairing_delete_session),
+        )
+        .route(
+            "/sessions/{id}/messages/to-host",
+            post(api::pairing_post_to_host).get(api::pairing_take_to_host),
+        )
+        .route(
+            "/sessions/{id}/messages/to-guest",
+            post(api::pairing_post_to_guest).get(api::pairing_take_to_guest),
+        )
+        .layer(DefaultBodyLimit::max(api::MAX_BODY_BYTES))
+}
+
+/// 顶层（后 .layer 在外层）：track_metrics 挂在 CORS 内层——preflight
+/// OPTIONS 在 CORS 短路不计数；Router::layer 在路由后运行，MatchedPath
+/// 可用。fallback 同样被该层包裹，404 无 MatchedPath 自然计 "unmatched"
+/// （405 不经任何一层，属有界遗漏）。
+fn with_base(api: Router<AppState>, state: AppState) -> Router {
     Router::new()
         .route("/", get(root))
         .route("/health", get(health_check))
@@ -417,6 +439,7 @@ pub(crate) mod test_support {
 #[cfg(test)]
 mod tests {
     use super::test_support::*;
+    use super::{build_relay_router, state};
     use tower::ServiceExt as _;
 
     const TOKEN: &str = "test-token";
@@ -574,5 +597,72 @@ mod tests {
         assert!(rendered.contains("persona_events_ingested_total 1"));
         assert!(rendered.contains("persona_events_duplicates_total 0"));
         assert!(rendered.contains("process_uptime_seconds"));
+    }
+
+    // -------------------------------------------------------------------
+    // persona-relay 路由白名单（交付物 3）：sync/pairing 面在，其余 API
+    // 面整体缺席；基线端点（/、/health、/metrics）与 Bearer 门禁不变。
+    // -------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn relay_router_serves_only_sync_and_pairing_surfaces() {
+        let app_state = state::test_state(Some(TOKEN)).await;
+        let router = build_relay_router(app_state);
+
+        // 基线端点在（监控探针不变）
+        for uri in ["/", "/health", "/metrics"] {
+            let (status, _) = send(router.clone(), request("GET", uri, None, None, "")).await;
+            assert!(status.is_success(), "relay must keep serving {uri}");
+        }
+
+        // 同步面可达（Bearer 令牌 + 空库 → head_seq 0）
+        let (status, body) = send(
+            router.clone(),
+            request(
+                "GET",
+                "/api/v1/sync/status",
+                Some(&format!("Bearer {TOKEN}")),
+                None,
+                "",
+            ),
+        )
+        .await;
+        assert!(status.is_success(), "relay must serve /api/v1/sync/status");
+        assert_eq!(body["head_seq"], 0);
+
+        // 非 relay 面整体缺席（404 fallback）——accounts/events/backups/
+        // auth 是 persona-server 全量面，relay 是哑中转，绝不外露。
+        for uri in [
+            "/api/v1/accounts",
+            "/api/v1/accounts/register",
+            "/api/v1/events",
+            "/api/v1/backups",
+            "/api/v1/auth/challenge",
+        ] {
+            let (status, body) = send(
+                router.clone(),
+                request("GET", uri, Some(&format!("Bearer {TOKEN}")), None, ""),
+            )
+            .await;
+            assert_eq!(
+                status,
+                axum::http::StatusCode::NOT_FOUND,
+                "{uri} must be absent on the relay router"
+            );
+            assert_eq!(body["error"]["code"], "not_found");
+        }
+    }
+
+    #[tokio::test]
+    async fn relay_router_requires_bearer_on_sync_surfaces() {
+        let app_state = state::test_state(Some(TOKEN)).await;
+        let router = build_relay_router(app_state);
+        let (status, body) = send(
+            router,
+            request("GET", "/api/v1/sync/status", None, None, ""),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::UNAUTHORIZED);
+        assert_eq!(body["error"]["code"], "unauthorized");
     }
 }

@@ -410,9 +410,79 @@ jobs:
             out/openwrt/app-meta-persona_*_all.ipk
           if-no-files-found: error
 
+  # persona-relay（2026-11-23）：中转节点薄壳二进制（同 persona-server
+  # 路由/迁移，只挂 sync+pairing 面）——仿 Syncthing strelaysrv 的独立
+  # 产物。四 triple 各出 persona-relay-<triple>.tar.gz（二进制+LICENSE+
+  # README-relay）；nightly 改名 persona-nightly-relay-*。tag 正式版暂不
+  # 发，口径与 APK/扩展/OpenWrt 一致。
+  relay:
+    name: relay binary (${{ matrix.name }})
+    needs: gate
+    if: needs.gate.outputs.should_build == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: x86_64-linux
+            triple: x86_64-unknown-linux-gnu
+            runner: ubuntu-latest
+          - name: aarch64-linux
+            triple: aarch64-unknown-linux-gnu
+            runner: ubuntu-24.04-arm
+          - name: aarch64-macos
+            triple: aarch64-apple-darwin
+            runner: macos-latest
+          - name: x86_64-windows
+            triple: x86_64-pc-windows-msvc
+            runner: windows-latest
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - uses: dtolnay/rust-toolchain@1.97.0
+        with:
+          targets: ${{ matrix.triple }}
+
+      - uses: Swatinem/rust-cache@v2.9.3
+        with:
+          workspaces: .
+          key: relay-${{ matrix.triple }}
+
+      - name: Build persona-relay (release)
+        shell: bash
+        run: cargo build -p persona-relay --target ${{ matrix.triple }} --release
+
+      - name: Package relay tarball + structural check
+        shell: bash
+        # 打包二进制+LICENSE+README-relay；结构自检只在 runner 带有 file
+        # 工具时执行（Linux/macOS ELF|Mach-O；Windows runner 无 file，
+        # 以存在性+非空兜底，PE 结构由 MSVC 工具链产出本身保证）。
+        run: |
+          set -euo pipefail
+          BIN="target/${{ matrix.triple }}/release/persona-relay"
+          test -f "$BIN"
+          test -s "$BIN"
+          if command -v file >/dev/null 2>&1; then
+            file "$BIN" | tee /dev/stderr | grep -qE 'ELF|Mach-O|PE32'
+          fi
+          mkdir -p out/relay/stage
+          cp "$BIN" out/relay/stage/persona-relay
+          cp LICENSE out/relay/stage/LICENSE
+          cp README-relay.md out/relay/stage/README-relay.md
+          tar -czf "out/relay/persona-relay-${{ matrix.triple }}.tar.gz" -C out/relay/stage .
+          ls -la out/relay/stage
+
+      - name: Upload relay tarball
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: relay-${{ matrix.triple }}
+          path: out/relay/persona-relay-*.tar.gz
+          if-no-files-found: error
+
   release:
     name: publish
-    needs: [gate, build, android, extension, openwrt]
+    needs: [gate, build, android, extension, openwrt, relay]
     if: >-
       needs.gate.outputs.should_build == 'true' &&
       (startsWith(github.ref, 'refs/tags/v') ||
@@ -422,12 +492,12 @@ jobs:
     steps:
       - uses: actions/checkout@v7.0.1
 
-      # nightly/dispatch 带 APK + 扩展 zip + OpenWrt ipk；tag 正式版只发
-      # 桌面包（见文件头口径）。needs 已含全部 build job，artifact 必然
-      # 已就绪。
+      # nightly/dispatch 带 APK + 扩展 zip + OpenWrt ipk + relay 中转
+      # 二进制；tag 正式版只发桌面包（见文件头口径）。needs 已含全部
+      # build job，artifact 必然已就绪。
       - uses: actions/download-artifact@v8.0.2
         with:
-          pattern: ${{ startsWith(github.ref, 'refs/tags/v') && 'desktop-*' || '{desktop-*,android-apk-arm64,extension-chromium,openwrt-ipk-*}' }}
+          pattern: ${{ startsWith(github.ref, 'refs/tags/v') && 'desktop-*' || '{desktop-*,android-apk-arm64,extension-chromium,openwrt-ipk-*,relay-*}' }}
           path: dist
           merge-multiple: true
 
@@ -505,6 +575,30 @@ jobs:
               echo "renamed to $dst"
             else
               echo "::error::openwrt ipk missing from downloaded artifacts: $src"
+              ok=0
+            fi
+          done
+          [ "$ok" = "1" ] || exit 1
+
+      - name: Rename relay tarballs (nightly naming)
+        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+        shell: bash
+        # 中转节点每 triple 一包，nightly 命名 persona-nightly-relay-<os>.tar.gz。
+        run: |
+          ok=1
+          for pair in \
+            "persona-relay-x86_64-unknown-linux-gnu.tar.gz:persona-nightly-relay-x86_64-linux.tar.gz" \
+            "persona-relay-aarch64-unknown-linux-gnu.tar.gz:persona-nightly-relay-aarch64-linux.tar.gz" \
+            "persona-relay-aarch64-apple-darwin.tar.gz:persona-nightly-relay-aarch64-macos.tar.gz" \
+            "persona-relay-x86_64-pc-windows-msvc.tar.gz:persona-nightly-relay-x86_64-windows.tar.gz"
+          do
+            src="${pair%%:*}"
+            dst="${pair##*:}"
+            if [ -f "dist/$src" ]; then
+              mv "dist/$src" "dist/$dst"
+              echo "renamed to $dst"
+            else
+              echo "::error::relay tarball missing from downloaded artifacts: $src"
               ok=0
             fi
           done

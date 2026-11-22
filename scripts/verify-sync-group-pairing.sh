@@ -1,9 +1,13 @@
 #!/usr/bin/env bash
-# 同步组配对中转（S1）实机勾稽：起真实 persona-server 进程，curl 走
-# /api/v1/pairing/* 信箱全流程。协议数学（SRP/短码/指纹）由 core 单测与
-# server 进程内端到端测试锁定（server/src/api/pairing.rs 的
-# pairing_relay_drives_real_core_protocol_end_to_end）；本脚本验证的是
-# 进程/路由/migration/信箱消费语义在真实 wire 上成立。
+# 同步组配对中转（S1）实机勾稽：起真实 persona-server（或 --relay 时
+# persona-relay）进程，curl 走 /api/v1/pairing/* 信箱全流程。协议数学
+# （SRP/短码/指纹）由 core 单测与 server 进程内端到端测试锁定
+# （server/src/api/pairing.rs 的 pairing_relay_drives_real_core_protocol_end_to_end）；
+# 本脚本验证的是进程/路由/migration/信箱消费语义在真实 wire 上成立。
+#
+# 用法：scripts/verify-sync-group-pairing.sh [--relay]
+#   默认    ：persona-server（全量面）
+#   --relay ：persona-relay（只挂 sync+pairing 面；另加 9/10 裁剪断言）
 #
 # 断言清单：
 #   1. /health 存活
@@ -14,6 +18,8 @@
 #   6. 队列满（4 条）→ 第 5 条 422
 #   7. 未知 session → 404；坏 base64 → 422；超限 payload → 422
 #   8. DELETE → 204，随后 GET 404；重复 DELETE 幂等 204
+#   9. 【仅 --relay】裁剪面：accounts/events/backups/auth 全部 404
+#   10. 【仅 --relay】sync 面无令牌 → 401
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -22,6 +28,8 @@ PORT="${PERSONA_VERIFY_PORT:-18994}"
 BASE="http://127.0.0.1:$PORT"
 TOKEN="verify-static-token"
 SRV_PID=""
+MODE="server"
+[ "${1:-}" = "--relay" ] && MODE="relay"
 
 cleanup() {
   [ -n "$SRV_PID" ] && kill "$SRV_PID" 2>/dev/null || true
@@ -34,18 +42,33 @@ pass() { echo "✓ $1"; }
 
 b64() { base64 -w0; }
 
-echo "== build persona-server =="
-cargo build --manifest-path "$REPO/server/Cargo.toml" --quiet
-BIN="$REPO/target/debug/persona-server"
-[ -x "$BIN" ] || fail "server 二进制不存在: $BIN"
+if [ "$MODE" = "relay" ]; then
+  echo "== build persona-relay (--relay) =="
+  cargo build --manifest-path "$REPO/relay/Cargo.toml" --quiet
+  BIN="$REPO/target/debug/persona-relay"
+else
+  echo "== build persona-server =="
+  cargo build --manifest-path "$REPO/server/Cargo.toml" --quiet
+  BIN="$REPO/target/debug/persona-server"
+fi
+[ -x "$BIN" ] || fail "二进制不存在: $BIN"
 
-echo "== start server on :$PORT =="
-PERSONA_SERVER_DB="$TMP/verify.db" \
-PERSONA_SERVER_TOKENS="verify:$TOKEN" \
-PERSONA_SERVER_BACKUP_DIR="$TMP/backup" \
-PERSONA_SERVER_HOST=127.0.0.1 \
-PERSONA_SERVER_PORT="$PORT" \
-  "$BIN" >"$TMP/server.log" 2>&1 &
+echo "== start $BIN on :$PORT =="
+if [ "$MODE" = "relay" ]; then
+  # relay 无备份/审计面：不设 PERSONA_SERVER_BACKUP_DIR（与 persona-server 区分）
+  PERSONA_SERVER_DB="$TMP/verify.db" \
+  PERSONA_SERVER_TOKENS="verify:$TOKEN" \
+  PERSONA_SERVER_HOST=127.0.0.1 \
+  PERSONA_SERVER_PORT="$PORT" \
+    "$BIN" >"$TMP/server.log" 2>&1 &
+else
+  PERSONA_SERVER_DB="$TMP/verify.db" \
+  PERSONA_SERVER_TOKENS="verify:$TOKEN" \
+  PERSONA_SERVER_BACKUP_DIR="$TMP/backup" \
+  PERSONA_SERVER_HOST=127.0.0.1 \
+  PERSONA_SERVER_PORT="$PORT" \
+    "$BIN" >"$TMP/server.log" 2>&1 &
+fi
 SRV_PID=$!
 
 for _ in $(seq 1 50); do
@@ -127,5 +150,24 @@ code="$(curl -sS -o /dev/null -w '%{http_code}' -X DELETE "$PAIR/sessions/$SID2"
 [ "$code" = "204" ] || fail "重复 DELETE 应幂等 204，得 $code"
 pass "8. DELETE → 204；随后 GET 404；重复 DELETE 幂等"
 
+if [ "$MODE" = "relay" ]; then
+  # ---- 9. 裁剪面：accounts/events/backups/auth 整体缺席 ----
+  for uri in /api/v1/accounts /api/v1/events /api/v1/backups /api/v1/auth/challenge; do
+    code="$(curl -sS -o /dev/null -w '%{http_code}' -X POST \
+      -H "authorization: Bearer $TOKEN" -H 'content-type: application/json' \
+      -d '{}' "$BASE$uri")"
+    [ "$code" = "404" ] || fail "relay 裁剪面 $uri 期望 404，得 $code"
+  done
+  pass "9. relay 裁剪面：accounts/events/backups/auth 全部 404"
+
+  # ---- 10. sync 面无令牌 → 401（有令牌可达由 core/server 测试锁定） ----
+  code="$(curl -sS -o /dev/null -w '%{http_code}' "$BASE/api/v1/sync/status")"
+  [ "$code" = "401" ] || fail "relay sync 无令牌期望 401，得 $code"
+  code="$(curl -sS -o /dev/null -w '%{http_code}' -H "authorization: Bearer $TOKEN" \
+    "$BASE/api/v1/sync/status")"
+  [ "$code" = "200" ] || fail "relay sync 有令牌期望 200，得 $code"
+  pass "10. relay sync 面：无令牌 401，有令牌 200"
+fi
+
 echo ""
-echo "同步组配对中转实机勾稽：全部通过"
+echo "同步组配对中转实机勾稽（$MODE）：全部通过"

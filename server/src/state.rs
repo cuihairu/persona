@@ -110,6 +110,30 @@ pub async fn run_migrations(pool: &SqlitePool) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// persona-relay 只建同步/配对面所需的迁移版本号（0004 设备/信封/oplog、
+/// 0005 oplog 索引、0006 组纪元、0009 配对信箱、0010 快照、0011 设备备注）。
+/// **今后给 sync/pairing 面新增迁移必须同步把版本号补进这里**——
+/// [`crate::state::tests::relay_migration_versions_cover_every_sync_pairing_migration`]
+/// 守住（按 SQL 内容抓，不靠文件名）。
+const RELAY_MIGRATION_VERSIONS: &[i64] = &[4, 5, 6, 9, 10, 11];
+
+/// 运行 relay 子集迁移：只建同步/配对面表，不建 events/backups/auth/
+/// accounts 面（persona-relay 是哑中转）。`ignore_missing` 兼容曾被完整
+/// persona-server 迁移过的同一 db——那些版本（1/2/3/7/8）已在
+/// `_sqlx_migrations` 里但 relay 的集合不认识，不忽略即启动即错。
+pub async fn run_relay_migrations(pool: &SqlitePool) -> anyhow::Result<()> {
+    let all = sqlx::migrate!("./migrations");
+    let mut relay = sqlx::migrate::Migrator::with_migrations(
+        all.iter()
+            .filter(|m| RELAY_MIGRATION_VERSIONS.contains(&m.version))
+            .cloned()
+            .collect(),
+    );
+    relay.set_ignore_missing(true);
+    relay.run(pool).await?;
+    Ok(())
+}
+
 #[cfg(test)]
 pub(crate) async fn test_pool() -> SqlitePool {
     // sqlx 对 `sqlite::memory:` 自动生成 shared-cache 随机名：
@@ -154,6 +178,133 @@ mod tests {
     async fn migrations_are_idempotent() {
         let pool = test_pool().await;
         run_migrations(&pool).await.unwrap();
+    }
+
+    async fn table_exists(pool: &SqlitePool, table: &str) -> bool {
+        let n: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name = ?",
+        )
+        .bind(table)
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        n > 0
+    }
+
+    /// relay 迁移子集：同步/配对面表在，events/backups/auth/accounts 面
+    /// 表不在；重复执行幂等。
+    #[tokio::test]
+    async fn relay_migrations_create_only_sync_and_pairing_tables() {
+        let dir = tempfile::tempdir().unwrap();
+        let pool = init_pool(dir.path().join("relay.db").to_str().unwrap())
+            .await
+            .unwrap();
+        run_relay_migrations(&pool).await.unwrap();
+
+        for table in [
+            "sync_devices",
+            "sync_group_keys",
+            "sync_oplog",
+            "sync_group_epoch",
+            "sync_snapshots",
+            "pairing_sessions",
+            "pairing_messages",
+        ] {
+            assert!(
+                table_exists(&pool, table).await,
+                "{table} must exist for relay"
+            );
+        }
+        for table in [
+            "audit_events",
+            "backups",
+            "auth_devices",
+            "accounts",
+            "account_passkeys",
+            "account_srp_credentials",
+            "account_recovery_codes",
+        ] {
+            assert!(
+                !table_exists(&pool, table).await,
+                "{table} must NOT exist for relay"
+            );
+        }
+
+        // 幂等
+        run_relay_migrations(&pool).await.unwrap();
+    }
+
+    /// 同一 db 先被完整 persona-server 迁移过（版本 1/2/3/7/8 已记录在
+    /// _sqlx_migrations），relay 再跑子集不能报 missing——`ignore_missing`
+    /// 的回归锚（换库/降级部署的兼容路径）。
+    #[tokio::test]
+    async fn relay_migrations_tolerate_a_full_server_db() {
+        let dir = tempfile::tempdir().unwrap();
+        let pool = init_pool(dir.path().join("mixed.db").to_str().unwrap())
+            .await
+            .unwrap();
+        run_migrations(&pool).await.unwrap();
+        run_relay_migrations(&pool).await.unwrap();
+    }
+
+    /// 迁移是否**定义**（CREATE/ALTER/DROP/建索引于）一张 relay 面表。
+    /// 只认 DDL 主体，不认引用：0007 的 `REFERENCES sync_devices(id)` 是
+    /// 账号面外键引用，不是 relay 面表定义——relay 不需要它。
+    fn defines_relay_table(sql: &str, table: &str) -> bool {
+        sql.contains(&format!("create table if not exists {table}"))
+            || sql.contains(&format!("create table {table}"))
+            || sql.contains(&format!("alter table {table}"))
+            || sql.contains(&format!(" on {table}"))
+            || sql.contains(&format!("drop table if exists {table}"))
+            || sql.contains(&format!("drop table {table}"))
+    }
+
+    /// 守门：今后新增任何**定义** sync/pairing 表的迁移，必须同步补进
+    /// [`RELAY_MIGRATION_VERSIONS`]（按 DDL 主体抓，不靠文件名、不认外键
+    /// 引用）；反向核对 relay 集合里每个版本都在全量集合中且确实定义
+    /// relay 面表（relay 集合过时 = 这里抓）。
+    #[test]
+    fn relay_migration_versions_cover_every_sync_pairing_migration() {
+        let all = sqlx::migrate!("./migrations");
+        let surfaces = [
+            "sync_devices",
+            "sync_group_keys",
+            "sync_oplog",
+            "sync_group_epoch",
+            "sync_snapshots",
+            "pairing_sessions",
+            "pairing_messages",
+        ];
+        for migration in all.iter() {
+            let sql = migration.sql.as_str().to_lowercase();
+            let defines_surface = surfaces
+                .iter()
+                .any(|table| defines_relay_table(&sql, table));
+            let in_relay = RELAY_MIGRATION_VERSIONS.contains(&migration.version);
+            if defines_surface {
+                assert!(
+                    in_relay,
+                    "migration {} ({}) defines sync/pairing tables but is not in \
+                     RELAY_MIGRATION_VERSIONS — persona-relay would miss this table",
+                    migration.version, migration.description
+                );
+            }
+        }
+        for version in RELAY_MIGRATION_VERSIONS {
+            let migration = all
+                .iter()
+                .find(|m| m.version == *version)
+                .unwrap_or_else(|| panic!("RELAY version {version} no longer exists"));
+            let sql = migration.sql.as_str().to_lowercase();
+            assert!(
+                surfaces
+                    .iter()
+                    .any(|table| defines_relay_table(&sql, table)),
+                "RELAY lists migration {version} ({}) but it defines no relay-surface table \
+                 — stale entry",
+                migration.description
+            );
+        }
     }
 
     #[tokio::test]
