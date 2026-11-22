@@ -139,9 +139,10 @@ Three full builds (`--docker` mode; in-container cargo full build 9m40s–12m12s
    remaps `$HOME` with `--remap-path-prefix`; measured in-binary `/home/<user>`
    count 1006 → 0, and all registry paths become a constant prefix.
 2. ~~Toolchain not pinned~~ **closed** (2026-09-24): the root repo's `rust-toolchain.toml`
-   pins 1.97.0 (rustup searches upward, so both workspaces are covered) + seven CI uses of
-   `dtolnay/rust-toolchain@1.99.0` (five in `ci.yml` + two in `desktop-build.yml`,
-   raised from 1.97.0 to 1.99.0 as of 2026-10-11, with officially supported version refs); an upgrade means changing both places together.
+   pins 1.97.0 (rustup searches upward, so both workspaces are covered) and every CI
+   `dtolnay/rust-toolchain` use is pinned to the same 1.97.0 (verified 2026-11-23:
+   five in `ci.yml` + four in `desktop-build.yml`), so the action's install never drifts
+   from the pin; an upgrade means changing both places together.
 3. **Upstream bundler does not normalize**: tar mtime/owner is written by tauri-bundler; the
    repo side covers it with `normalize-deb.sh` post-processing. If upstream adds
    `SOURCE_DATE_EPOCH` support, the script can degrade to a validator.

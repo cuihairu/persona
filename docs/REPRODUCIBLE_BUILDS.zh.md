@@ -131,9 +131,9 @@ PERSONA_REPRO_RUNTIME=podman scripts/build-repro.sh --docker   # podman 亦可
    以 `--remap-path-prefix` 重映射 `$HOME`，实测二进制内 `/home/<user>`
    计数 1006 → 0、registry 路径全部变为常量前缀。
 2. ~~工具链未固定~~ **已收口**（2026-09-24）：根仓 `rust-toolchain.toml`
-   钉 1.97.0（rustup 向上查找，双 workspace 同受覆盖）+ CI 七处
-   `dtolnay/rust-toolchain@1.99.0`（`ci.yml` 五处 + `desktop-build.yml`
-   两处，2026-10-11 起由 1.97.0 升至 1.99.0，版本 ref 官方支持）；升级 = 两处一起改。
+   钉 1.97.0（rustup 向上查找，双 workspace 同受覆盖）+ CI 全部
+   `dtolnay/rust-toolchain` 钉同一 1.97.0（2026-11-23 核实：`ci.yml` 五处 +
+   `desktop-build.yml` 四处），action 装的版本与钉版不再漂移；升级 = 两处一起改。
 3. **上游 bundler 不归一**：tar mtime/属主由 tauri-bundler 写入，仓库侧以
    `normalize-deb.sh` 后处理兜底；上游若提供 `SOURCE_DATE_EPOCH` 支持，脚本
    可退化为校验器。

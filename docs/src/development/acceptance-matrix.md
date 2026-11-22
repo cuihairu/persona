@@ -68,8 +68,8 @@ plus two more to describe the mobile side):
 6. **The `ci.yml` biometric spike is `continue-on-error` and explicitly marked non-gating** — the
    runner VM has no Secure Enclave / Touch ID / Windows Hello, so the probe's real OSStatus/HRESULT
    output _is_ the deliverable.
-7. **Toolchain**: `rust-toolchain.toml` pins `1.97.0`; the `dtolnay/rust-toolchain@stable` in the
-   workflows does not take effect (the directory-level override always wins).
+7. **Toolchain**: `rust-toolchain.toml` pins `1.97.0`, and every `dtolnay/rust-toolchain` in the
+   workflows is pinned to the same `1.97.0` (the directory-level override would otherwise win).
 8. **The `Makefile` `release-*` targets call a nonexistent `scripts/release.sh`** — dangling targets
    (consistent with the manual-version-number redline; `git tag` contains only `nightly`).
 9. `agents/ssh-agent/TESTING.md` test counts were updated to match `e2e_test.rs` (8 unit +

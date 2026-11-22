@@ -62,8 +62,8 @@
    全仓零命中。
 6. **`ci.yml` 的 biometric spike 是 `continue-on-error` 且显式标注非门禁**——因为 runner VM 没有
    Secure Enclave / Touch ID / Windows Hello，探针输出本身就是交付物。
-7. **工具链**：`rust-toolchain.toml` 钉 `1.97.0`，workflow 里的 `dtolnay/rust-toolchain@stable`
-   不生效（目录级覆盖优先）。
+7. **工具链**：`rust-toolchain.toml` 钉 `1.97.0`，workflow 里的 `dtolnay/rust-toolchain` 全部
+   钉同一 `1.97.0`（目录级覆盖优先，二者必须同版本）。
 8. **`Makefile` 的 `release-*` 目标调用不存在的 `scripts/release.sh`**——悬空目标（与"版本号只能
    人工给出"的红线一致；`git tag` 里只有 `nightly`）。
 9. `agents/ssh-agent/TESTING.md` 测试计数已与 `e2e_test.rs` 对齐（8 个 unit + 2 个 ignored；
