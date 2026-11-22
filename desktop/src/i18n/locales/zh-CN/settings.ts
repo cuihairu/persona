@@ -172,7 +172,7 @@ export default {
       },
     },
     syncDevices: {
-      title: '端到端加密同步',
+      title: '账号同步',
       description: '多设备间端到端同步凭据。同步密钥永不明文离开设备。',
       nameRequired: '请填写设备名称',
       deviceNameLabel: '设备名称',
@@ -298,8 +298,8 @@ export default {
       analysisRefreshing: '读取中…',
     },
     syncGroup: {
-      title: '同步组配对',
-      description: '动态密码配对入组，零账号零注册。双方核对 6 位数字指纹，防止中间人。',
+      title: '跨设备同步',
+      description: '跨设备同步：动态密码配对入组，零账号零注册。双方核对 6 位数字指纹，防止中间人。',
       hostAction: '本机出码（发起配对）',
       hostHint: '生成动态密码与邀请串，另一台设备粘贴邀请串即可加入本同步组。',
       codeLabel: '动态密码（与对方口头核对）',

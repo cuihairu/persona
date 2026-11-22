@@ -5,7 +5,7 @@
 > 状态：**设计稿，阶段 1–4 均已落地（2026-09，逐阶段状态见 §11 表）**。本文是
 > TODO「第 3 步」（Connect endpoint + E2EE sync + SRP 设备认证）的开工文档：把四个
 > 必须先拍板的设计决策定下来，并给出实施阶段映射与威胁模型登记骨架。当前活跃的
-> 后续批次是同步组模式（[`sync-group-mode.md`](./sync-group-mode.md)）——S2 把现有
+> 后续批次是跨设备同步（[`sync-group-mode.md`](./sync-group-mode.md)）——S2 把现有
 > 快照+LWW oplog 管线向指令流（op_id 幂等+位点续传）收敛。
 >
 > 相关文档：[`ROADMAP.md`](./ROADMAP.md) Milestone 6、[`REMOTE_AUTH.md`](./REMOTE_AUTH.md)

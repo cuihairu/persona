@@ -497,7 +497,7 @@ address-poisoning heuristic; see
 - [Non-Interactive Mode Guide](./docs/NON_INTERACTIVE_MODE.md) – CI/CD integration guide
 - [E2EE Sync Design](./docs/E2EE_SYNC_DESIGN.md) – end-to-end encrypted sync design (phases 1–4 landed)
 - [Storage and Sync Guide](./docs/STORAGE_AND_SYNC.md) – storage and sync modes, dual-device walkthrough
-- [Sync Group Mode](./docs/sync-group-mode.md) – default sync mode: dynamic-password PAKE pairing, implementation status per batch
+- [Cross-device Sync Mode](./docs/sync-group-mode.md) – default sync mode: dynamic-password PAKE pairing, implementation status per batch
 - [Self-Host Server](./docs/SELF_HOST_SERVER.md) – self-hosting guide (deploy, env vars, API endpoints, OpenWrt ipk)
 
 ### Security Documentation
@@ -521,7 +521,7 @@ Priority policy: the password-manager track targets 1Password parity first; wall
 - [x] Watchtower-class health checks (weak/reused/expired, breach checks)
 - [x] Desktop app data wiring and polished UI
 - [x] Optional sync/automation service with a local-first design (E2EE sync, accounts, backups, pairing relay)
-- [x] Sync group mode (default sync): dynamic-password PAKE pairing, instruction-stream sync, three relay forms — S1–S5 all landed (2026-10-05~10-10)
+- [x] Cross-device sync (default sync): dynamic-password PAKE pairing, instruction-stream sync, three relay forms — S1–S5 all landed (2026-10-05~10-10)
 - [x] Wallet experimental track: design doc, signing confirmations (anti address-poisoning), PSBT single-sig, keystore JSON import/export (2026-10-13); graduation still deferred until Milestone 4 parity
 
 ## Contributing

@@ -1,4 +1,4 @@
-# Sync Group Mode (Default Sync Method)
+# Cross-device Sync Mode (Default Sync Method)
 
 > [English](sync-group-mode.md) | [中文](sync-group-mode.zh.md)
 
@@ -6,10 +6,10 @@
 
 ## 1. Two Modes and the Default
 
-- **Sync group mode (default)**: join via one-time-code pairing, zero accounts and zero registration, aimed at users who "don't trust the server".
+- **Cross-device sync (default)**: join via one-time-code pairing, zero accounts and zero registration, aimed at users who "don't trust the server".
 - **Account mode (must be explicitly enabled)**: rides persona's account system, for the convenience crowd; **off unless turned on**, never the default.
 
-## 2. Sync Group Mode Essentials (Shared Origin with unidict)
+## 2. Cross-device Sync Mode Essentials (Shared Origin with unidict)
 
 1. **One-time code + PAKE pairing**: one side presents a short-lived one-time code, the other enters it and derives a strong key over PAKE to join — the short code is never used as a key, so brute force and man-in-the-middle are both blocked; **no account is required**. Implementation choice (2026-10-04): SRP-6a (reusing the existing `core/src/auth/srp.rs` implementation, pinned to RFC 5054 test vectors) + Argon2id domain-separated derivation; SPAKE2/OPAQUE were evaluated during design but not adopted (incremental-risk and correctness concerns).
 2. **The group key never leaves the devices**: the vault master key and the group key are derived on-device, and the server only ever sees ciphertext; item contents and metadata (item name/domain) are always encrypted.
@@ -18,13 +18,13 @@
 5. **Devices see each other, equal rights**: the in-group device list is visible to everyone (you may only edit your own note), and joining/leaving is free.
    5.5 **Version numbers and sync status display (added 2026-10-04)**: the sync group keeps a monotonically increasing version number (= the command-stream offset); the sync UI shows the group's latest version, this device's synced high-water mark, a status verdict ("up to date" / "N commands behind"), plus the time of the last sync — the user can tell at a glance whether they are fully caught up.
 6. **The price and the safety valve**: losing every device means losing the vault (there is no account recovery), and the encrypted backup export is the only way out; this is the cost of "not trusting the server".
-   6.5 **Loud data-loss warnings (added 2026-10-04, hard requirement)**: losing password data is unacceptable, so the UI must keep the user sober — ① a **strong warning** on first enabling sync group mode: "Single device = high risk! Passwords cannot be recovered once lost — connect a second device, or export an encrypted backup right now"; ② a **persistent warning until multiple devices or a backup exist** (standing banner/red dot on the settings page, not a one-shot dialog brushed past); ③ the warning clears automatically once a second device is present or a backup has been exported; ④ the wording names both remedies explicitly: add a device (pair one more via one-time code) and export an encrypted backup. Account mode carries the same backup-habit nudge, but since account mode has a recovery path, its warning is one notch lower.
+   6.5 **Loud data-loss warnings (added 2026-10-04, hard requirement)**: losing password data is unacceptable, so the UI must keep the user sober — ① a **strong warning** on first enabling cross-device sync: "Single device = high risk! Passwords cannot be recovered once lost — connect a second device, or export an encrypted backup right now"; ② a **persistent warning until multiple devices or a backup exist** (standing banner/red dot on the settings page, not a one-shot dialog brushed past); ③ the warning clears automatically once a second device is present or a backup has been exported; ④ the wording names both remedies explicitly: add a device (pair one more via one-time code) and export an encrypted backup. Account mode carries the same backup-habit nudge, but since account mode has a recovery path, its warning is one notch lower.
 
 ## 3. persona-Specific Requirements
 
 - Item-level encryption and zero knowledge: the relay/host operator sees no item contents or metadata.
 - High-sensitivity items such as wallet entries and SSH private keys are not downgraded by sync (local unlock semantics are unchanged; sync only moves ciphertext).
-- Schedule: all TODO "sync group mode" batches S1→S5 have landed (2026-10-04 through 10-10; reconciliation in section 4).
+- Schedule: all TODO "cross-device sync mode" batches S1→S5 have landed (2026-10-04 through 10-10; reconciliation in section 4).
 
 ## 4. Implementation Status (reconciled 2026-10-12, updated per batch)
 

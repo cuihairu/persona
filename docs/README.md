@@ -28,7 +28,7 @@ This directory is the entry point for Persona's design and security documentatio
 - [REMOTE_AUTH](./REMOTE_AUTH.md) – Remote authentication abstraction
 - [KEY_HIERARCHY](./KEY_HIERARCHY.md) – Key hierarchy and KDF paths
 - [E2EE_SYNC_DESIGN](./E2EE_SYNC_DESIGN.md) – E2EE sync design (stages 1–4 landed: device keys / SRP choice / group-key envelope / four conflict-resolution decisions — status and evidence in §10)
-- [sync-group-mode](./sync-group-mode.md) – Sync-group mode (default sync method): dynamic-password + PAKE pairing with no accounts; implementation status marked per batch (S1 protocol + relay implemented, desktop wiring and S2+ not implemented)
+- [sync-group-mode](./sync-group-mode.md) – Cross-device sync (default sync method): dynamic-password + PAKE pairing with no accounts; implementation status marked per batch (S1 protocol + relay implemented, desktop wiring and S2+ not implemented)
 - [SELF_HOST_SERVER](./SELF_HOST_SERVER.md) – Self-hosted server (deployment, environment variables, API endpoints)
 - [CONNECT_AUTOMATION_DESIGN](./CONNECT_AUTOMATION_DESIGN.md) – Local Connect automation endpoint design (127.0.0.1 HTTP + scope tokens)
 - [CONTEXT_AWARE_DESIGN](./CONTEXT_AWARE_DESIGN.md) – Context-aware identity suggestions design

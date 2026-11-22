@@ -32,7 +32,7 @@ pub const DEVICE_SERVICE: &str = "persona-device";
 /// （单一真相源；vault 拷机后 keyring 无条目 = 需重新登录）。
 pub const ACCOUNT_SERVICE: &str = "persona-account";
 
-/// 同步组组密钥的 keyring service（同步组模式，零账号配对入组）。
+/// 同步组组密钥的 keyring service（跨设备同步，零账号配对入组）。
 /// 值 = 32 字节组密钥的 hex，键同 token_store = vault db_path。条目存在
 /// 与否 = 本 vault 是否已加入同步组（单一真相源；vault 拷机后 keyring
 /// 无条目 = 需重新配对——组密钥由 host 经 PAKE 包裹递交，本地无副本）。

@@ -51,7 +51,7 @@ claims about unimplemented features; planned work lives in the
 
 - **Fully local by default, zero network** — with no server configured, nothing phones
   home.
-- **Sync group pairing** (the default sync path): dynamic passwords + PAKE pairing into a
+- **Cross-device sync** (the default sync path): dynamic passwords + PAKE pairing into a
   group, with zero accounts and zero registration; both ends verify a 6-digit numeric
   fingerprint to prevent man-in-the-middle attacks; the group key never leaves the device.
   Implemented at the protocol level (show-code/enter-code pairing can be started from the

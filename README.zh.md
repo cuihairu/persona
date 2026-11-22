@@ -482,7 +482,7 @@ persona wallet passwd "Main"
 - [非交互模式指南](./docs/NON_INTERACTIVE_MODE.md) – CI/CD 集成指南
 - [E2EE 同步设计](./docs/E2EE_SYNC_DESIGN.md) – 端到端加密同步设计（阶段 1–4 已落地）
 - [存储与同步指南](./docs/STORAGE_AND_SYNC.md) – 存储与同步模式、双设备走查
-- [群组同步模式](./docs/sync-group-mode.md) – 默认同步模式：动态口令 PAKE 配对、分批次的实现状态
+- [跨设备同步](./docs/sync-group-mode.md) – 默认同步模式：动态口令 PAKE 配对、分批次的实现状态
 - [自托管服务端](./docs/SELF_HOST_SERVER.md) – 自托管指南（部署、环境变量、API 端点、OpenWrt ipk）
 
 ### 安全文档
@@ -506,7 +506,7 @@ persona wallet passwd "Main"
 - [x] Watchtower 级健康检查（弱口令/复用/过期、泄露检查）
 - [x] 桌面应用的数据打通与界面打磨
 - [x] 可选同步/自动化服务，本地优先设计（E2EE 同步、账号、备份、配对中继）
-- [x] 群组同步模式（默认）：动态口令 PAKE 配对、指令流同步、三种中继形态 —— S1–S5 全部落地（2026-10-05~10-10）
+- [x] 跨设备同步（默认）：动态口令 PAKE 配对、指令流同步、三种中继形态 —— S1–S5 全部落地（2026-10-05~10-10）
 - [x] 钱包实验线：设计文档、签名确认（防地址投毒）、PSBT 单签、keystore JSON 导入导出（2026-10-13）；正式毕业仍等 Milestone 4 对齐之后
 
 ## 参与贡献

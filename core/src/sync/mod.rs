@@ -21,7 +21,7 @@
 //! 设备私钥的持久化（OS keyring `persona-device` / 0600 文件 fallback）由宿主
 //! 负责——core 不依赖 keyring。HTTP wire 层在 [`remote`]（cfg remote-auth）。
 //!
-//! 动态密码配对（同步组模式 S1，`docs/sync-group-mode.md`）在 [`pairing`]：
+//! 动态密码配对（跨设备同步 S1，`docs/sync-group-mode.md`）在 [`pairing`]：
 //! 零账号入组，短码经 Argon2id 域分隔后进 SRP-6a PAKE，组密钥以 pairing
 //! key AEAD 包裹经中转递交，中转零知识。
 

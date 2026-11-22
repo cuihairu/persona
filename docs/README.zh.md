@@ -28,7 +28,7 @@
 - [REMOTE_AUTH](./REMOTE_AUTH.md) – 远程认证抽象
 - [KEY_HIERARCHY](./KEY_HIERARCHY.md) – 密钥层级与 KDF 路径
 - [E2EE_SYNC_DESIGN](./E2EE_SYNC_DESIGN.md) – E2EE 同步设计稿（阶段 1–4 已落地：设备密钥/SRP 选型/组密钥信封/冲突解决四决策，状态与证据见文内 §10）
-- [sync-group-mode](./sync-group-mode.md) – 同步组模式（默认同步方式）：动态密码+PAKE 零账号配对；实现状态随批次标注（S1 协议+中转已实现，桌面接线/S2+ 未实现）
+- [sync-group-mode](./sync-group-mode.md) – 跨设备同步（默认同步方式）：动态密码+PAKE 零账号配对；实现状态随批次标注（S1 协议+中转已实现，桌面接线/S2+ 未实现）
 - [SELF_HOST_SERVER](./SELF_HOST_SERVER.md) – 自建服务端（部署、环境变量、API 端点）
 - [CONNECT_AUTOMATION_DESIGN](./CONNECT_AUTOMATION_DESIGN.md) – 本机 Connect 自动化端点设计（127.0.0.1 HTTP + scope token）
 - [CONTEXT_AWARE_DESIGN](./CONTEXT_AWARE_DESIGN.md) – 上下文感知（按环境推荐身份）设计

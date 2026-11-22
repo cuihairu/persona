@@ -6,7 +6,7 @@
 > This is the kickoff document for TODO "step 3" (Connect endpoint + E2EE sync + SRP device
 > auth): it settles the four design decisions that had to be decided up front, and gives the
 > implementation-stage mapping plus a threat-model registration skeleton. The currently active
-> follow-on batch is sync group mode ([`sync-group-mode.md`](./sync-group-mode.md)) — S2
+> follow-on batch is cross-device sync mode ([`sync-group-mode.md`](./sync-group-mode.md)) — S2
 > converges the existing snapshot + LWW oplog pipeline onto an instruction stream
 > (op_id idempotency + cursor resumption).
 >

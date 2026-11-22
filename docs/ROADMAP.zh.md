@@ -61,7 +61,7 @@ crates（rust-bitcoin、alloy、bech32）上的派生与签名，CLI 钱包流�
 - [x] 端到端加密同步（密钥信封、冲突解决）
   - [x] 同步阶段 2 core（2026-09-22）：设备信封（DR-1，X25519 `persona-dev-env-1`）+ 组密钥层级；oplog + LWW/冲突双版本纯逻辑（DR-4）；本地同步存储（migration 014）；服务器密文中继 `/api/v1/sync/*`（migration 0004：设备注册 / 信封保管 / 幂等 oplog push / 游标分页 pull）；客户端引擎（push/pull 周期 + Lamport clock + 出行门禁）；服务器只持密文、重放幂等、乱序容忍、主密码轮换免疫，以及在真实 TCP 上的双设备收敛（离线并发编辑保留双版本）；THREAT_MODEL "E2EE sync relay" 章节
   - [x] 阶段 3 接线（2026-10-04 审计）：桌面设备管理 UI（SettingsModal sync 段 + SyncConflictsModal）、service 写路径经 `attach_sync_capture` 喂 `record_local_change`、带 epoch 乐观锁互斥的组密钥轮换 —— 命令层测试绿；STORAGE_AND_SYNC.md 一致
-- [x] 同步组模式作为默认同步路径（设计 `sync-group-mode.md`）：动态密码 PAKE 配对、指令流同步、三种中继形态 —— S1 配对协议 + 零知识配对中继 + relay 客户端 + 桌面命令层/UI 于 2026-10-04 落地（测试 + `scripts/verify-sync-group-pairing.sh`，真桌面走查 M6-批2/2b）；S2 指令流收敛（快照水位门禁 + 真实 TCP 收敛）、S3 中继形态（同一 `persona-server` 二进制，`base_url` 三态）、S4 设备面（remark 自助）、S5 自救（加密备份导出/恢复 + 数据丢失强警告）于 2026-10-05~10-10 全部关闭；设计文档中的状态表于 2026-10-12 对齐
+- [x] 跨设备同步作为默认同步路径（设计 `sync-group-mode.md`）：动态密码 PAKE 配对、指令流同步、三种中继形态 —— S1 配对协议 + 零知识配对中继 + relay 客户端 + 桌面命令层/UI 于 2026-10-04 落地（测试 + `scripts/verify-sync-group-pairing.sh`，真桌面走查 M6-批2/2b）；S2 指令流收敛（快照水位门禁 + 真实 TCP 收敛）、S3 中继形态（同一 `persona-server` 二进制，`base_url` 三态）、S4 设备面（remark 自助）、S5 自救（加密备份导出/恢复 + 数据丢失强警告）于 2026-10-05~10-10 全部关闭；设计文档中的状态表于 2026-10-12 对齐
 - [x] 文档化的存储/同步选项：纯本地、自托管云、Persona-server 辅助（`STORAGE_AND_SYNC.md`，2026-09）
 
 ## 里程碑 7 —— 身份运行时（定位与概念；功能轨随后）

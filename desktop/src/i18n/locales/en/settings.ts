@@ -181,7 +181,7 @@ export default {
       },
     },
     syncDevices: {
-      title: 'End-to-end encrypted sync',
+      title: 'Account sync',
       description: 'Sync credentials across your devices, end-to-end encrypted. Sync keys never leave devices in plaintext.',
       nameRequired: 'Device name is required',
       deviceNameLabel: 'Device name',
@@ -307,8 +307,8 @@ export default {
       analysisRefreshing: 'Refreshing…',
     },
     syncGroup: {
-      title: 'Sync group pairing',
-      description: 'Pair devices with a one-time dynamic password — no account, no sign-up. Both sides verify a 6-digit fingerprint to stop man-in-the-middle.',
+      title: 'Cross-device sync',
+      description: 'Cross-device sync: pair devices with a one-time dynamic password — no account, no sign-up. Both sides verify a 6-digit fingerprint to stop man-in-the-middle.',
       hostAction: 'Start pairing on this device',
       hostHint: 'Generates a dynamic password and an invite link; paste the link on the other device to join this sync group.',
       codeLabel: 'Dynamic password (verify verbally with the other side)',
