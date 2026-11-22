@@ -13,6 +13,15 @@ export interface SyncConfig {
    * 提交空串 = 保留 keyring 既有令牌（前端不回填，避免常驻内存）。
    */
   server_token: string;
+  /**
+   * 云盘传输（Phase 2）的同步文件夹本机路径（iCloud Drive / Dropbox /
+   * Google Drive 的本地同步目录）。非 secret，存 settings JSON；null =
+   * 未配置。仅 `sync_transport === 'cloud'` 时有意义。
+   */
+  cloud_drive_dir?: string | null;
+  /** 指令流走哪条传输：`server`（persona-server HTTP，默认）/ `cloud`
+   * （云盘目录文件交换）。旧 JSON 缺键由后端 serde 回退 `server`。 */
+  sync_transport?: 'server' | 'cloud';
 }
 
 /** E2EE sync 设备管理（对应 Rust SyncDeviceStatus / SyncJoinOutcome / SyncDeviceView） */

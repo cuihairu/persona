@@ -76,6 +76,21 @@ export const syncApi = {
 
 
   /**
+   * 窄写同步传输选择（指令流走 persona-server 还是云盘目录）。
+   *
+   * 语义红线：`cloud` 必须带非空目录（后端校验，空目录会被拒）；`null` 目录
+   * = 保留旧值（切回 server 再切回 cloud 不用重选）。成功返回全量 settings，
+   * 由调用方回填真相（不乐观翻转）。
+   */
+  async setSyncTransport(
+    syncTransport: 'server' | 'cloud',
+    cloudDriveDir: string | null = null,
+  ): Promise<ApiResponse<WorkspaceSettings>> {
+    return invoke('set_sync_transport', { syncTransport, cloudDriveDir });
+  },
+
+
+  /**
    * 窄写同步方式开关（跨设备同步 / 账号同步，各自独立）。
    *
    * 语义红线：只写偏好（settings.sync_methods），**不删 keyring、不触发网络**

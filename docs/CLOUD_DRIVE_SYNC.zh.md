@@ -169,8 +169,9 @@ pub sync_transport: SyncTransport,     // Server（默认）| Cloud
 可选目录；空目录保留旧值，云盘须非空）。`open_sync_session` 按传输路由到
 server 或云盘会话，云盘设备生命周期（`sync_join` / `sync_leave` /
 `sync_list_devices` / `sync_authorize` / `sync_revoke` /
-`sync_set_device_remark`）对 UI 可见。设置 UI 本身（目录选择器 + 传输
-切换）仍是剩余跟进项。
+`sync_set_device_remark`）对 UI 可见。设置 UI 两侧齐备：传输选择器
+（server / 云盘目录）+ 云盘目录选择器（`@tauri-apps/plugin-dialog`），
+落在这两个字段上。
 
 ## 8. 传输对比
 
@@ -187,9 +188,10 @@ server 或云盘会话，云盘设备生命周期（`sync_join` / `sync_leave` /
 
 ## 9. 开放问题 / 跟进
 
-1. **桌面设置 UI**（目录选择器 + 传输切换）：宿主 Tauri 命令
-   `set_sync_transport`、server/云盘会话路由、云盘设备生命周期命令均已
-   接线；只剩设置 UI 控件与其 i18n/测试。
+1. **桌面设置 UI**（已落地）：设置页渲染传输选择器（server / 云盘目录，
+   `SyncTransportSection`）——切到 cloud 但没目录时先弹 OS 目录选择器再
+   整体保存；切回 server 保留已配目录。不乐观翻转：写回由服务端返回真相
+   回填。
 2. **变更 watcher**（已落地）：桌面宿主跑一个监督任务
    （`src-tauri/src/sync_watcher.rs`），每 ~5s 重评同步配置；当传输为
    `cloud` 且目录已配时，监听协议文件（`dev-*.jsonl` / `snapshot-*.bin` /

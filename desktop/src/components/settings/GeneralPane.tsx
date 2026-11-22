@@ -17,6 +17,7 @@ import SyncGroupSection from '../SyncGroupSection';
 import SshIntegrationSection from '../SshIntegrationSection';
 import SyncServerPane from './SyncServerPane';
 import SyncMethodsSection from './SyncMethodsSection';
+import SyncTransportSection from './SyncTransportSection';
 import SyncDevicesSection from './SyncDevicesSection';
 import SecurityPane from './SecurityPane';
 
@@ -183,6 +184,10 @@ const GeneralPane: React.FC<{
 
       <section className="mb-5">
         <SyncMethodsSection />
+      </section>
+
+      <section className="mb-5">
+        <SyncTransportSection />
       </section>
 
       <section className="mb-5">

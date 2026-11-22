@@ -202,7 +202,8 @@ preserves the old one, and cloud requires a non-empty one). `open_sync_session`
 routes to the server or cloud session, and the cloud device lifecycle
 (`sync_join` / `sync_leave` / `sync_list_devices` / `sync_authorize` /
 `sync_revoke` / `sync_set_device_remark`) is exposed to the UI. The settings UI
-itself (folder picker + transport toggle) is the remaining follow-up.
+renders both: a transport selector (server / cloud folder) with the cloud
+folder picker (`@tauri-apps/plugin-dialog`), backed by these fields.
 
 ## 8. Transport comparison
 
@@ -219,10 +220,11 @@ itself (folder picker + transport toggle) is the remaining follow-up.
 
 ## 9. Open questions / follow-ups
 
-1. **Desktop settings UI** (folder picker + transport toggle): the host Tauri
-   command `set_sync_transport`, the server/cloud session routing, and the
-   cloud device lifecycle commands are wired; only the settings UI widgets and
-   their i18n/tests remain.
+1. **Desktop settings UI** (landed): the settings page renders a transport
+   selector (server / cloud drive folder) in `SyncTransportSection` — switching
+   to cloud without a folder opens the OS folder picker first and saves the
+   pair atomically; switching back to server preserves the configured folder.
+   No optimistic flips: writes are backfilled from the returned server truth.
 2. **Change watcher** (landed): the desktop host runs a supervisor task
    (`src-tauri/src/sync_watcher.rs`) that re-evaluates the sync config every
    ~5s and, when the transport is `cloud` with a configured folder, watches the
