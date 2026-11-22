@@ -93,6 +93,9 @@ enum Commands {
     /// SSH key operations (developer features)
     Ssh(commands::ssh::SshArgs),
 
+    /// E2EE credential sync (join devices, sync now, status)
+    Sync(commands::sync::SyncArgs),
+
     /// Credential management (password/api key/etc.)
     Credential(commands::credential::CredentialArgs),
 
@@ -194,6 +197,7 @@ async fn main() -> Result<()> {
         Commands::ImportGeneric(args) => commands::import_generic::execute(args, &config).await,
         Commands::Migrate(args) => commands::migrate::execute(args, &config).await,
         Commands::Ssh(args) => commands::ssh::execute(args, &config).await,
+        Commands::Sync(args) => commands::sync::execute(args, &config).await,
         Commands::Credential(args) => commands::credential::execute(args, &config).await,
         Commands::Password(args) => commands::password::execute(args, &config).await,
         Commands::Tui(args) => commands::tui::execute(args, &config).await,

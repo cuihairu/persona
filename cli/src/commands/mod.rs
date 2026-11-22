@@ -25,6 +25,7 @@ pub mod show;
 pub mod ssh;
 pub mod suggest;
 pub mod switch;
+pub mod sync;
 pub mod totp;
 pub mod travel;
 pub mod tui;
