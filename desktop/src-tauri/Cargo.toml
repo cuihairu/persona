@@ -38,6 +38,10 @@ tracing = "0.1"
 dirs = "5.0"
 byteorder = "1.5"
 base64 = "0.22"
+# 云盘同步目录变更 watcher（sync_watcher.rs）：notify 为主触发源，目录在
+# 网络文件系统/监听启动失败时降级为 mtime 轮询。只进 desktop（core 保持
+# 依赖无关）。
+notify = "8"
 # 主密钥包裹层中间值用 Zeroizing 清零（与 core 同版本；desktop 独立
 # workspace，不能用 .workspace 继承——同 axum 先例）
 zeroize = { version = "1.8", features = ["derive"] }

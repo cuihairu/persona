@@ -196,9 +196,13 @@ pub sync_transport: SyncTransport,     // Server (default) | Cloud
   these two fields — editing server settings must not silently reset the
   transport choice.
 
-The desktop **settings UI** (a cloud-folder picker + transport toggle) is a
-follow-up to this core landing; the core transport and the config fields are
-what's implemented here.
+The desktop host wires the transport selection through a Tauri command
+`set_sync_transport` (narrow write: transport + optional folder; a blank folder
+preserves the old one, and cloud requires a non-empty one). `open_sync_session`
+routes to the server or cloud session, and the cloud device lifecycle
+(`sync_join` / `sync_leave` / `sync_list_devices` / `sync_authorize` /
+`sync_revoke` / `sync_set_device_remark`) is exposed to the UI. The settings UI
+itself (folder picker + transport toggle) is the remaining follow-up.
 
 ## 8. Transport comparison
 
@@ -215,12 +219,22 @@ what's implemented here.
 
 ## 9. Open questions / follow-ups
 
-1. **Desktop settings UI + Tauri command** for choosing the transport and
-   picking the folder (the config fields exist; the command/UI is not wired).
-2. **Change watcher**: the engine is pull-driven; nothing yet watches the folder
-   for changes. A follow-up adds a `notify` watcher in the desktop host (core
-   stays dependency-free) that triggers `run_cycle` on folder change, with a
-   polling fallback (shard mtime).
+1. **Desktop settings UI** (folder picker + transport toggle): the host Tauri
+   command `set_sync_transport`, the server/cloud session routing, and the
+   cloud device lifecycle commands are wired; only the settings UI widgets and
+   their i18n/tests remain.
+2. **Change watcher** (landed): the desktop host runs a supervisor task
+   (`src-tauri/src/sync_watcher.rs`) that re-evaluates the sync config every
+   ~5s and, when the transport is `cloud` with a configured folder, watches the
+   protocol files (`dev-*.jsonl` / `snapshot-*.bin` / `env-*` /
+   `registry.json`). Primary source is `notify` (best-effort — falls back
+   silently on network filesystems or watch-start failure); the polling fallback
+   is a 30s mtime+size fingerprint of the protocol files that fires only on
+   change. On a change it runs a full `sync_cycle_once` (the same orchestration
+   as `sync_now`), debounced by the 5s supervisor tick, and suppresses the
+   feedback loop (its own push writes the shards, which would re-trigger) by
+   refreshing the baseline fingerprint to the post-cycle state. Core stays
+   dependency-free (`notify` is a desktop-only dependency).
 3. **Shard growth**: no physical compaction (§4); a shard-rewrite GC is the
    eventual fix if a vault's history grows large.
 4. **Cloud folder availability**: sync only works when the folder is reachable

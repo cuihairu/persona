@@ -22,6 +22,7 @@ mod packaging_tests;
 pub mod passkey_bridge;
 pub mod quick_access;
 pub mod ssh_integration;
+mod sync_watcher;
 #[cfg(test)]
 mod test_support;
 pub mod token_store;
@@ -307,6 +308,10 @@ pub fn build<R: tauri::Runtime>(context: tauri::Context<R>) -> tauri::App<R> {
             } else {
                 tracing::info!("no display session; running headless without tray");
             }
+            // 云盘同步 watcher：传输为 cloud 且目录已配时，云盘目录的远端
+            // 变更自动触发一轮同步周期（notify 主 + mtime 轮询兜底）。切回
+            // server 传输自动停；锁定/未入组时 sync_cycle_once 门禁兜底。
+            sync_watcher::spawn_sync_watcher(app.handle().clone());
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -384,6 +389,7 @@ pub fn build<R: tauri::Runtime>(context: tauri::Context<R>) -> tauri::App<R> {
             commands::biometric_tpm_spike,
             commands::set_sync_config,
             commands::set_sync_methods,
+            commands::set_sync_transport,
             commands::sync_token_present,
             commands::sync_device_status,
             commands::sync_join,

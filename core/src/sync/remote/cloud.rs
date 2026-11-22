@@ -95,15 +95,19 @@ struct CloudRegistry {
     devices: Vec<CloudDevice>,
 }
 
-#[derive(Debug, serde::Serialize, serde::Deserialize)]
-struct CloudDevice {
-    device_id: String,
-    device_name: String,
-    public_key: String,
+/// 云盘设备登记表的单条记录（宿主设备列表/授权目标公钥取用）。
+///
+/// `public_key` 是 base64 的 X25519 公钥——授权设备用它重封组密钥信封
+/// （与服务器侧 [`crate::sync::remote::SyncDevice::public_key`] 同义）。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct CloudDevice {
+    pub device_id: String,
+    pub device_name: String,
+    pub public_key: String,
     #[serde(default)]
-    created_at: String,
+    pub created_at: String,
     #[serde(default)]
-    remark: String,
+    pub remark: String,
 }
 
 async fn read_registry(dir: &Path) -> Result<CloudRegistry> {
@@ -258,6 +262,65 @@ impl GroupKeyStore for CloudGroupKeyStore {
         let envelope = crate::sync::envelope::seal_group_key(group.as_bytes(), device_public)?;
         self.put_group_key(device_id, &envelope).await?;
         Ok(true)
+    }
+}
+
+impl CloudGroupKeyStore {
+    /// 列出云盘登记表的全部设备（含公钥，授权时取目标公钥用）。
+    /// 登记表不存在 = 空组。
+    pub async fn list_devices(&self) -> Result<Vec<CloudDevice>> {
+        Ok(read_registry(&self.dir).await?.devices)
+    }
+
+    /// 从登记表移除设备（吊销/离开）。尽力删除该设备的信封与 meta 文件
+    /// （残留文件不影响正确性：`group_keys` 以登记表为准，已移除设备不再
+    /// 读）。返回是否真的在登记表里删掉了（false = 不在表内，幂等）。
+    pub async fn remove_device(&self, device_id: Uuid) -> Result<bool> {
+        let mut registry = read_registry(&self.dir).await?;
+        let before = registry.devices.len();
+        registry
+            .devices
+            .retain(|d| d.device_id != device_id.to_string());
+        if registry.devices.len() == before {
+            return Ok(false);
+        }
+        write_registry(&self.dir, &registry).await?;
+        // 信封/meta 删除尽力而为：文件系统错误只 warn（登记表已不含该
+        // 设备，孤儿文件由后续 GC 或用户清理兜底）。
+        for name in [
+            format!("{ENV_PREFIX}{device_id}{ENV_SUFFIX}"),
+            format!("{ENV_PREFIX}{device_id}.meta.json"),
+        ] {
+            if let Err(e) = tokio::fs::remove_file(self.dir.join(&name)).await {
+                if e.kind() != std::io::ErrorKind::NotFound {
+                    tracing::warn!(error = %e, file = %name, "remove cloud envelope file failed");
+                }
+            }
+        }
+        Ok(true)
+    }
+
+    /// 写设备备注（登记表内的自由文本；命令层自行保证只写本机设备）。
+    /// 返回规整（trim）后的备注。设备不在登记表 → NotFound（fail-closed）。
+    pub async fn set_device_remark(&self, device_id: Uuid, remark: &str) -> Result<String> {
+        let mut registry = read_registry(&self.dir).await?;
+        let stored = remark.trim().to_string();
+        let mut found = false;
+        for device in &mut registry.devices {
+            if device.device_id == device_id.to_string() {
+                device.remark = stored.clone();
+                found = true;
+                break;
+            }
+        }
+        if !found {
+            return Err(PersonaError::NotFound(format!(
+                "device {device_id} not in cloud sync registry"
+            ))
+            .into());
+        }
+        write_registry(&self.dir, &registry).await?;
+        Ok(stored)
     }
 }
 

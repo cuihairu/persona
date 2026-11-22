@@ -1,4 +1,8 @@
 use super::*;
+// `CloudGroupKeyStore` 的设备管理方法（register/put/group_keys/bootstrap）
+// 是 `GroupKeyStore` trait 方法——必须把 trait 带进作用域。
+use base64::Engine as _;
+use persona_core::sync::remote::GroupKeyStore as _;
 
 /// 读当前 vault 的同步服务器配置段（vault 打不开/行不存在一律 None——
 /// attach 是尽力而为的旁路，不能阻塞解锁主链路）。
@@ -246,6 +250,70 @@ pub async fn set_sync_methods(
     Ok(ApiResponse::success(updated.settings))
 }
 
+/// 窄写同步传输选择（`settings.sync.sync_transport` + `cloud_drive_dir`），
+/// 返回更新后的全量 settings。要求已解锁（照 `set_sync_methods` 门禁）。
+///
+/// **只写传输偏好**——绝不碰 keyring、绝不触发网络/云盘 I/O；云盘目录
+/// 只在 `transport=cloud` 时需要非空（fail-closed：不给目录不落配置，
+/// 前端在设置页选目录）。`transport=server` 时 `cloud_drive_dir` 可保留
+/// 上次值（切回 cloud 不丢），也可由前端传空清掉——本命令保留传空时的
+/// 旧值，避免「切到 server」悄悄丢目录。
+#[command(rename_all = "snake_case")]
+pub async fn set_sync_transport(
+    sync_transport: String,
+    cloud_drive_dir: Option<String>,
+    state: State<'_, AppState>,
+) -> std::result::Result<ApiResponse<WorkspaceSettings>, String> {
+    if let Some(message) = require_unlocked(&state).await {
+        return Ok(ApiResponse::error(message));
+    }
+    let transport = match sync_transport.trim() {
+        "server" => persona_core::SyncTransport::Server,
+        "cloud" => persona_core::SyncTransport::Cloud,
+        _ => {
+            return Ok(ApiResponse::error(format!(
+                "Unknown sync transport: {sync_transport}"
+            )))
+        }
+    };
+    let dir = cloud_drive_dir
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    if transport == persona_core::SyncTransport::Cloud && dir.is_none() {
+        return Ok(ApiResponse::error(
+            "Cloud drive folder is required for the cloud transport".to_string(),
+        ));
+    }
+
+    let db_path = db_path_or_return!(state);
+    let db = open_db_or_return!(db_path);
+    let workspace_path = workspace_path_for_db_path(&db_path);
+    let repo = WorkspaceRepository::new(db.clone());
+    let mut ws = workspace_or_return!(db, workspace_path);
+
+    let old = ws.settings.sync.clone();
+    let (enabled, server_url, old_dir) = match &old {
+        Some(config) => (
+            config.enabled,
+            config.server_url.clone(),
+            config.cloud_drive_dir.clone(),
+        ),
+        None => (false, String::new(), None),
+    };
+    ws.settings.sync = Some(persona_core::SyncConfig {
+        enabled,
+        server_url,
+        server_token: String::new(),
+        // 传空串（前端切到 server / 未动）保留旧目录，防丢配置
+        cloud_drive_dir: dir.map(String::from).or(old_dir),
+        sync_transport: transport,
+    });
+    ws.touch();
+    let updated = ok_or_error_response!(repo.update(&ws).await);
+    Ok(ApiResponse::success(updated.settings))
+}
+
 /// 只读：OS keyring 里是否存有 sync token（免解锁——设置页用它决定
 /// placeholder 提示）。只泄露"是否配置过"这一位元数据（与
 /// `get_workspace_settings` 暴露 `sync.enabled` 同级）；真值永不离开
@@ -380,9 +448,10 @@ pub async fn sync_device_status(
     Ok(ApiResponse::success(status))
 }
 
-/// 加入 E2EE 同步：生成本机设备密钥对 → 向服务器登记 → keyring 落身份。
-/// keyring 写失败时尽力吊销刚登记的服务器记录（不留半态，fail-closed）。
-/// 门禁：已解锁；device_name 1..=128 字节（服务器限制）。
+/// 加入 E2EE 同步：生成本机设备密钥对 → 按当前传输登记（服务器 API /
+/// 云盘 `registry.json`）→ keyring 落身份。keyring 写失败时尽力撤销刚
+/// 写的登记（不留半态，fail-closed）。门禁：已解锁；device_name
+/// 1..=128 字节。
 #[command]
 pub async fn sync_join(
     device_name: String,
@@ -413,60 +482,120 @@ pub async fn sync_join(
         }
         LocalDevice::NotJoined => {}
     }
-    let api = match sync_admin_api_for(&state).await {
-        Ok(api) => api,
-        Err(message) => return Ok(ApiResponse::error(message)),
-    };
-    let identity = match persona_core::sync::device::DeviceIdentity::generate(&device_name) {
-        Ok(identity) => identity,
-        Err(e) => return Ok(ApiResponse::error(format!("Key generation failed: {e}"))),
-    };
-    let device_id = match api
-        .register_device(&device_name, identity.key_pair.public_bytes())
-        .await
-    {
-        Ok(device_id) => device_id,
-        Err(e) => {
-            return Ok(ApiResponse::error(format!(
-                "Server rejected device registration: {e}"
-            )))
+    let (transport, cloud_dir) = sync_transport_config(&state).await;
+    match transport {
+        // 云盘登记：device_id 本地生成（没有服务器分配这一步）；登记表
+        // 写 keyring 失败时回滚登记（删登记条目，信封还没写不必管）。
+        persona_core::SyncTransport::Cloud => {
+            let dir = match cloud_dir {
+                Some(dir) if !dir.trim().is_empty() => dir,
+                _ => {
+                    return Ok(ApiResponse::error(
+                        "Cloud drive folder is not configured; pick one in sync settings"
+                            .to_string(),
+                    ))
+                }
+            };
+            let identity = match persona_core::sync::device::DeviceIdentity::generate(&device_name)
+            {
+                Ok(identity) => identity.with_device_id(uuid::Uuid::new_v4()),
+                Err(e) => return Ok(ApiResponse::error(format!("Key generation failed: {e}"))),
+            };
+            let store = persona_core::sync::remote::CloudGroupKeyStore::new(&dir);
+            if let Err(e) = store.register_device(&identity).await {
+                return Ok(ApiResponse::error(format!(
+                    "Cloud sync registry rejected device registration: {e}"
+                )));
+            }
+            if let Err(e) = state.device_store.set(&db_path, &identity.to_stored_json()) {
+                tracing::warn!(%e, "keyring write failed after cloud registration; removing the registry entry");
+                if let Err(remove_error) = store.remove_device(identity.device_id).await {
+                    tracing::error!(
+                        %remove_error,
+                        device_id = %identity.device_id,
+                        "registry rollback failed; a stray cloud registry entry remains"
+                    );
+                }
+                return Ok(ApiResponse::error(format!(
+                    "Cannot store device identity in OS keyring: {e}"
+                )));
+            }
+            // 空组自举（首台设备自封信封 = 已授权）；非空组 = 等授权。
+            // 查询失败按「等授权」保守处理（fail-closed 同服务器口径）。
+            let pending = match store
+                .bootstrap_group_if_empty(identity.device_id, identity.key_pair.public_bytes())
+                .await
+            {
+                Ok(bootstrapped) => !bootstrapped,
+                Err(_) => true,
+            };
+            Ok(ApiResponse::success(SyncJoinOutcome {
+                device_id: identity.device_id.to_string(),
+                device_name,
+                pending,
+            }))
         }
-    };
-    let identity = identity.with_device_id(device_id);
-    if let Err(e) = state.device_store.set(&db_path, &identity.to_stored_json()) {
-        tracing::warn!(%e, "keyring write failed after registration; revoking the just-registered device");
-        if let Err(revoke_error) = api.delete_device(device_id).await {
-            tracing::error!(
-                %revoke_error,
-                device_id = %device_id,
-                "rollback revoke failed; a stray device record remains on the server"
-            );
+        persona_core::SyncTransport::Server => {
+            let api = match sync_admin_api_for(&state).await {
+                Ok(api) => api,
+                Err(message) => return Ok(ApiResponse::error(message)),
+            };
+            let identity = match persona_core::sync::device::DeviceIdentity::generate(&device_name)
+            {
+                Ok(identity) => identity,
+                Err(e) => return Ok(ApiResponse::error(format!("Key generation failed: {e}"))),
+            };
+            let device_id = match api
+                .register_device(&device_name, identity.key_pair.public_bytes())
+                .await
+            {
+                Ok(device_id) => device_id,
+                Err(e) => {
+                    return Ok(ApiResponse::error(format!(
+                        "Server rejected device registration: {e}"
+                    )))
+                }
+            };
+            let identity = identity.with_device_id(device_id);
+            if let Err(e) = state.device_store.set(&db_path, &identity.to_stored_json()) {
+                tracing::warn!(%e, "keyring write failed after registration; revoking the just-registered device");
+                if let Err(revoke_error) = api.delete_device(device_id).await {
+                    tracing::error!(
+                        %revoke_error,
+                        device_id = %device_id,
+                        "rollback revoke failed; a stray device record remains on the server"
+                    );
+                }
+                return Ok(ApiResponse::error(format!(
+                    "Cannot store device identity in OS keyring: {e}"
+                )));
+            }
+            // pending = group-keys 尚无本机信封；查询失败按「等授权」保守处理
+            // （fail-closed：授权状态宁可显示未授权）。空组时本机自举：全新服务器
+            // 上没有既有设备可代为授权，首台设备生成 group key 自封信封上传——
+            // 否则第一台设备永远停在待授权（无人能授权它）。
+            let pending = match api
+                .bootstrap_group_if_empty(device_id, identity.key_pair.public_bytes())
+                .await
+            {
+                Ok(bootstrapped) => !bootstrapped,
+                Err(_) => true,
+            };
+            Ok(ApiResponse::success(SyncJoinOutcome {
+                device_id: device_id.to_string(),
+                device_name,
+                pending,
+            }))
         }
-        return Ok(ApiResponse::error(format!(
-            "Cannot store device identity in OS keyring: {e}"
-        )));
     }
-    // pending = group-keys 尚无本机信封；查询失败按「等授权」保守处理
-    // （fail-closed：授权状态宁可显示未授权）。空组时本机自举：全新服务器
-    // 上没有既有设备可代为授权，首台设备生成 group key 自封信封上传——
-    // 否则第一台设备永远停在待授权（无人能授权它）。
-    let pending = match api
-        .bootstrap_group_if_empty(device_id, identity.key_pair.public_bytes())
-        .await
-    {
-        Ok(bootstrapped) => !bootstrapped,
-        Err(_) => true,
-    };
-    Ok(ApiResponse::success(SyncJoinOutcome {
-        device_id: device_id.to_string(),
-        device_name,
-        pending,
-    }))
 }
 
 /// 离开同步：尽力吊销服务器侧记录（不可达/未配置仅 warn——本地清理优先，
 /// 残留可由其他设备 revoke），然后无条件清 keyring 身份。私钥随条目删除
 /// 不可恢复；已同步进本库的数据仍可用（主库密文归主密码体系）。
+///
+/// 云盘传输：尽力从 `registry.json` 移除自己 + 删本机信封文件；失败不
+/// 阻塞（本地清理优先，残留登记可由其他设备 revoke 同语义收编）。
 #[command]
 pub async fn sync_leave(
     state: State<'_, AppState>,
@@ -482,25 +611,40 @@ pub async fn sync_leave(
             ))
         }
     };
+    let (transport, cloud_dir) = sync_transport_config(&state).await;
     match local_device(&state, &db_path).await {
         LocalDevice::NotJoined => {
             return Ok(ApiResponse::error(
                 "This vault has not joined sync".to_string(),
             ))
         }
-        LocalDevice::Joined(identity) => {
-            if let Ok(api) = sync_admin_api_for(&state).await {
-                if let Err(e) = api.delete_device(identity.device_id).await {
-                    // 服务器吊销失败不阻塞离开：本地清理优先，残留记录
-                    // 由其他设备 revoke（或管理员清理）
-                    tracing::warn!(%e, device_id = %identity.device_id, "server-side device revoke failed during leave; the record may remain");
+        LocalDevice::Joined(identity) => match transport {
+            persona_core::SyncTransport::Cloud => {
+                if let Some(dir) = cloud_dir {
+                    let store = persona_core::sync::remote::CloudGroupKeyStore::new(&dir);
+                    if let Err(e) = store.remove_device(identity.device_id).await {
+                        tracing::warn!(%e, device_id = %identity.device_id, "cloud registry removal failed during leave; the entry may remain");
+                    }
+                } else {
+                    tracing::warn!(
+                        "cloud drive dir unconfigured during leave; skipping registry removal"
+                    );
                 }
-            } else {
-                tracing::warn!(
-                    "sync admin client unavailable during leave; skipping server-side revoke"
-                );
             }
-        }
+            persona_core::SyncTransport::Server => {
+                if let Ok(api) = sync_admin_api_for(&state).await {
+                    if let Err(e) = api.delete_device(identity.device_id).await {
+                        // 服务器吊销失败不阻塞离开：本地清理优先，残留记录
+                        // 由其他设备 revoke（或管理员清理）
+                        tracing::warn!(%e, device_id = %identity.device_id, "server-side device revoke failed during leave; the record may remain");
+                    }
+                } else {
+                    tracing::warn!(
+                        "sync admin client unavailable during leave; skipping server-side revoke"
+                    );
+                }
+            }
+        },
         LocalDevice::Corrupted => {
             tracing::warn!(
                 "corrupted device record during leave; clearing keyring without server-side revoke"
@@ -516,6 +660,9 @@ pub async fn sync_leave(
 }
 
 /// 列出同步组全部设备（含授权状态与本机标记）。要求已加入、已解锁。
+///
+/// 云盘传输：读 `registry.json` + `env-<device>.bin` 存在性（未授权 =
+/// 登记了但信封未上传）。列表失败/登记表缺失 = 如实报错。
 #[command]
 pub async fn sync_list_devices(
     state: State<'_, AppState>,
@@ -539,34 +686,78 @@ pub async fn sync_list_devices(
             ))
         }
     };
-    let api = match sync_admin_api_for(&state).await {
-        Ok(api) => api,
-        Err(message) => return Ok(ApiResponse::error(message)),
-    };
-    let devices = match api.list_devices().await {
-        Ok(devices) => devices,
-        Err(e) => return Ok(ApiResponse::error(format!("Failed to list devices: {e}"))),
-    };
-    let keys = match api.group_keys().await {
-        Ok(keys) => keys,
-        Err(e) => {
-            return Ok(ApiResponse::error(format!(
-                "Failed to list group keys: {e}"
-            )))
+    let (transport, cloud_dir) = sync_transport_config(&state).await;
+    match transport {
+        persona_core::SyncTransport::Cloud => {
+            let dir = match cloud_dir {
+                Some(dir) if !dir.trim().is_empty() => dir,
+                _ => {
+                    return Ok(ApiResponse::error(
+                        "Cloud drive folder is not configured; pick one in sync settings"
+                            .to_string(),
+                    ))
+                }
+            };
+            let store = persona_core::sync::remote::CloudGroupKeyStore::new(&dir);
+            let devices = match store.list_devices().await {
+                Ok(devices) => devices,
+                Err(e) => return Ok(ApiResponse::error(format!("Failed to list devices: {e}"))),
+            };
+            let keys = match store.group_keys().await {
+                Ok(keys) => keys,
+                Err(e) => {
+                    return Ok(ApiResponse::error(format!(
+                        "Failed to list group keys: {e}"
+                    )))
+                }
+            };
+            let views = devices
+                .into_iter()
+                .map(|device| {
+                    let id = device.device_id.clone();
+                    SyncDeviceView {
+                        id: id.clone(),
+                        device_name: device.device_name,
+                        created_at: device.created_at,
+                        remark: device.remark,
+                        authorized: keys.iter().any(|k| k.device_id.to_string() == id),
+                        this_device: id == identity.device_id.to_string(),
+                    }
+                })
+                .collect();
+            Ok(ApiResponse::success(views))
         }
-    };
-    let views = devices
-        .into_iter()
-        .map(|device| SyncDeviceView {
-            id: device.id.to_string(),
-            device_name: device.device_name,
-            created_at: device.created_at,
-            remark: device.remark,
-            authorized: keys.iter().any(|k| k.device_id == device.id),
-            this_device: device.id == identity.device_id,
-        })
-        .collect();
-    Ok(ApiResponse::success(views))
+        persona_core::SyncTransport::Server => {
+            let api = match sync_admin_api_for(&state).await {
+                Ok(api) => api,
+                Err(message) => return Ok(ApiResponse::error(message)),
+            };
+            let devices = match api.list_devices().await {
+                Ok(devices) => devices,
+                Err(e) => return Ok(ApiResponse::error(format!("Failed to list devices: {e}"))),
+            };
+            let keys = match api.group_keys().await {
+                Ok(keys) => keys,
+                Err(e) => {
+                    return Ok(ApiResponse::error(format!(
+                        "Failed to list group keys: {e}"
+                    )))
+                }
+            };
+            let views = devices
+                .into_iter()
+                .map(|device| SyncDeviceView {
+                    id: device.id.to_string(),
+                    device_name: device.device_name,
+                    created_at: device.created_at,
+                    remark: device.remark,
+                    authorized: keys.iter().any(|k| k.device_id == device.id),
+                    this_device: device.id == identity.device_id,
+                })
+                .collect();
+            Ok(ApiResponse::success(views))
+        }
+    }
 }
 
 /// 设置本设备的自由备注（S4）：服务端按令牌归属锁定设备行，无跨设备
@@ -588,29 +779,57 @@ pub async fn sync_set_device_remark(
             ))
         }
     };
-    match local_device(&state, &db_path).await {
-        LocalDevice::Joined(_) => {}
+    let identity = match local_device(&state, &db_path).await {
+        LocalDevice::Joined(identity) => identity,
         LocalDevice::NotJoined | LocalDevice::Corrupted => {
             return Ok(ApiResponse::error(
                 "This vault has not joined sync".to_string(),
             ))
         }
-    }
-    let api = match sync_admin_api_for(&state).await {
-        Ok(api) => api,
-        Err(message) => return Ok(ApiResponse::error(message)),
     };
-    match api.set_device_remark(&remark).await {
-        Ok(stored) => Ok(ApiResponse::success(stored)),
-        Err(e) => Ok(ApiResponse::error(format!(
-            "Failed to set device remark: {e}"
-        ))),
+    let (transport, cloud_dir) = sync_transport_config(&state).await;
+    match transport {
+        // 云盘备注：登记表是合作信任面（无服务器令牌锁定），命令层强制
+        // 只写本机设备条目——写别人的备注无意义且会互相覆盖。
+        persona_core::SyncTransport::Cloud => {
+            let dir = match cloud_dir {
+                Some(dir) if !dir.trim().is_empty() => dir,
+                _ => {
+                    return Ok(ApiResponse::error(
+                        "Cloud drive folder is not configured; pick one in sync settings"
+                            .to_string(),
+                    ))
+                }
+            };
+            let store = persona_core::sync::remote::CloudGroupKeyStore::new(&dir);
+            match store.set_device_remark(identity.device_id, &remark).await {
+                Ok(stored) => Ok(ApiResponse::success(stored)),
+                Err(e) => Ok(ApiResponse::error(format!(
+                    "Failed to set device remark: {e}"
+                ))),
+            }
+        }
+        persona_core::SyncTransport::Server => {
+            let api = match sync_admin_api_for(&state).await {
+                Ok(api) => api,
+                Err(message) => return Ok(ApiResponse::error(message)),
+            };
+            match api.set_device_remark(&remark).await {
+                Ok(stored) => Ok(ApiResponse::success(stored)),
+                Err(e) => Ok(ApiResponse::error(format!(
+                    "Failed to set device remark: {e}"
+                ))),
+            }
+        }
     }
 }
 
 /// 为目标设备授权：拆本机信封得 group key → 用目标公钥封新信封上传。
 /// 本机未授权（信封拆不开）fail-closed——未授权设备无法授权他人；
 /// 目标必须是已登记的其他设备。
+///
+/// 云盘传输：读 `registry.json` 拿目标公钥（X25519），写
+/// `env-<target>.bin`（登记表里没目标 = 报错，与服务器 404 同语义）。
 #[command]
 pub async fn sync_authorize(
     target_device_id: String,
@@ -644,65 +863,156 @@ pub async fn sync_authorize(
             "This device is already authorized; use leave to remove it".to_string(),
         ));
     }
-    let api = match sync_admin_api_for(&state).await {
-        Ok(api) => api,
-        Err(message) => return Ok(ApiResponse::error(message)),
-    };
-    let keys = match api.group_keys().await {
-        Ok(keys) => keys,
-        Err(e) => {
-            return Ok(ApiResponse::error(format!(
-                "Failed to fetch group keys: {e}"
-            )))
-        }
-    };
-    // 本机信封拆不开 = 本机未授权（fail-closed），无法授权他人
-    let group_key_bytes = match keys.iter().find(|k| k.device_id == identity.device_id) {
-        Some(own) => {
-            match persona_core::sync::envelope::open_group_key(
-                &own.envelope,
-                identity.key_pair.secret_bytes(),
-            ) {
-                Ok(group_key) => group_key,
-                Err(_) => {
+    let (transport, cloud_dir) = sync_transport_config(&state).await;
+    match transport {
+        persona_core::SyncTransport::Cloud => {
+            let dir = match cloud_dir {
+                Some(dir) if !dir.trim().is_empty() => dir,
+                _ => {
+                    return Ok(ApiResponse::error(
+                        "Cloud drive folder is not configured; pick one in sync settings"
+                            .to_string(),
+                    ))
+                }
+            };
+            let store = persona_core::sync::remote::CloudGroupKeyStore::new(&dir);
+            // 拆本机信封得 group key（fail-closed：未授权无法授权他人）
+            let keys = match store.group_keys().await {
+                Ok(keys) => keys,
+                Err(e) => {
+                    return Ok(ApiResponse::error(format!(
+                        "Failed to fetch group keys: {e}"
+                    )))
+                }
+            };
+            let group_key_bytes = match keys.iter().find(|k| k.device_id == identity.device_id) {
+                Some(own) => {
+                    match persona_core::sync::envelope::open_group_key(
+                        &own.envelope,
+                        identity.key_pair.secret_bytes(),
+                    ) {
+                        Ok(group_key) => group_key,
+                        Err(_) => {
+                            return Ok(ApiResponse::error(
+                                "This device is not authorized yet; it cannot authorize others"
+                                    .to_string(),
+                            ))
+                        }
+                    }
+                }
+                None => {
                     return Ok(ApiResponse::error(
                         "This device is not authorized yet; it cannot authorize others".to_string(),
                     ))
                 }
+            };
+            let devices = match store.list_devices().await {
+                Ok(devices) => devices,
+                Err(e) => return Ok(ApiResponse::error(format!("Failed to list devices: {e}"))),
+            };
+            let target = match devices
+                .iter()
+                .find(|d| d.device_id == target_id.to_string())
+            {
+                Some(device) => device,
+                None => {
+                    return Ok(ApiResponse::error(
+                        "Target device not found in the cloud sync registry".to_string(),
+                    ))
+                }
+            };
+            let target_public = match base64::engine::general_purpose::STANDARD
+                .decode(target.public_key.trim())
+                .ok()
+                .and_then(|bytes| <[u8; 32]>::try_from(bytes).ok())
+            {
+                Some(public) => public,
+                None => {
+                    return Ok(ApiResponse::error(
+                        "Target device public key is malformed in the registry".to_string(),
+                    ))
+                }
+            };
+            let envelope = match persona_core::sync::envelope::seal_group_key(
+                &group_key_bytes,
+                &target_public,
+            ) {
+                Ok(envelope) => envelope,
+                Err(e) => return Ok(ApiResponse::error(format!("Failed to seal group key: {e}"))),
+            };
+            match store.put_group_key(target_id, &envelope).await {
+                Ok(()) => Ok(ApiResponse::success(true)),
+                Err(e) => Ok(ApiResponse::error(format!(
+                    "Failed to write group key envelope: {e}"
+                ))),
             }
         }
-        None => {
-            return Ok(ApiResponse::error(
-                "This device is not authorized yet; it cannot authorize others".to_string(),
-            ))
-        }
-    };
-    let target = match api.list_devices().await {
-        Ok(devices) => match devices.into_iter().find(|d| d.id == target_id) {
-            Some(device) => device,
-            None => {
-                return Ok(ApiResponse::error(
-                    "Target device not found on the server".to_string(),
-                ))
+        persona_core::SyncTransport::Server => {
+            let api = match sync_admin_api_for(&state).await {
+                Ok(api) => api,
+                Err(message) => return Ok(ApiResponse::error(message)),
+            };
+            let keys = match api.group_keys().await {
+                Ok(keys) => keys,
+                Err(e) => {
+                    return Ok(ApiResponse::error(format!(
+                        "Failed to fetch group keys: {e}"
+                    )))
+                }
+            };
+            // 本机信封拆不开 = 本机未授权（fail-closed），无法授权他人
+            let group_key_bytes = match keys.iter().find(|k| k.device_id == identity.device_id) {
+                Some(own) => {
+                    match persona_core::sync::envelope::open_group_key(
+                        &own.envelope,
+                        identity.key_pair.secret_bytes(),
+                    ) {
+                        Ok(group_key) => group_key,
+                        Err(_) => {
+                            return Ok(ApiResponse::error(
+                                "This device is not authorized yet; it cannot authorize others"
+                                    .to_string(),
+                            ))
+                        }
+                    }
+                }
+                None => {
+                    return Ok(ApiResponse::error(
+                        "This device is not authorized yet; it cannot authorize others".to_string(),
+                    ))
+                }
+            };
+            let target = match api.list_devices().await {
+                Ok(devices) => match devices.into_iter().find(|d| d.id == target_id) {
+                    Some(device) => device,
+                    None => {
+                        return Ok(ApiResponse::error(
+                            "Target device not found on the server".to_string(),
+                        ))
+                    }
+                },
+                Err(e) => return Ok(ApiResponse::error(format!("Failed to list devices: {e}"))),
+            };
+            let envelope = match persona_core::sync::envelope::seal_group_key(
+                &group_key_bytes,
+                &target.public_key,
+            ) {
+                Ok(envelope) => envelope,
+                Err(e) => return Ok(ApiResponse::error(format!("Failed to seal group key: {e}"))),
+            };
+            match api.put_group_key(target_id, &envelope).await {
+                Ok(()) => Ok(ApiResponse::success(true)),
+                Err(e) => Ok(ApiResponse::error(format!(
+                    "Failed to upload group key: {e}"
+                ))),
             }
-        },
-        Err(e) => return Ok(ApiResponse::error(format!("Failed to list devices: {e}"))),
-    };
-    let envelope =
-        match persona_core::sync::envelope::seal_group_key(&group_key_bytes, &target.public_key) {
-            Ok(envelope) => envelope,
-            Err(e) => return Ok(ApiResponse::error(format!("Failed to seal group key: {e}"))),
-        };
-    match api.put_group_key(target_id, &envelope).await {
-        Ok(()) => Ok(ApiResponse::success(true)),
-        Err(e) => Ok(ApiResponse::error(format!(
-            "Failed to upload group key: {e}"
-        ))),
+        }
     }
 }
 
-/// 吊销设备（服务器侧删登记+信封，幂等）。吊销自己请走 sync_leave。
-/// 已知的 group key 不可追溯撤销（DR-3 诚实边界）——提示文案归前端。
+/// 吊销设备（删登记+信封，幂等；服务器侧删行 / 云盘删登记条目+文件）。
+/// 吊销自己请走 sync_leave。已知的 group key 不可追溯撤销（DR-3 诚实
+/// 边界）——提示文案归前端。
 #[command]
 pub async fn sync_revoke(
     target_device_id: String,
@@ -736,13 +1046,35 @@ pub async fn sync_revoke(
             "Use leave to remove this device from sync".to_string(),
         ));
     }
-    let api = match sync_admin_api_for(&state).await {
-        Ok(api) => api,
-        Err(message) => return Ok(ApiResponse::error(message)),
-    };
-    match api.delete_device(target_id).await {
-        Ok(()) => Ok(ApiResponse::success(true)),
-        Err(e) => Ok(ApiResponse::error(format!("Failed to revoke device: {e}"))),
+    let (transport, cloud_dir) = sync_transport_config(&state).await;
+    match transport {
+        persona_core::SyncTransport::Cloud => {
+            let dir = match cloud_dir {
+                Some(dir) if !dir.trim().is_empty() => dir,
+                _ => {
+                    return Ok(ApiResponse::error(
+                        "Cloud drive folder is not configured; pick one in sync settings"
+                            .to_string(),
+                    ))
+                }
+            };
+            let store = persona_core::sync::remote::CloudGroupKeyStore::new(&dir);
+            match store.remove_device(target_id).await {
+                // 幂等：登记表里没有 = 已吊销（或从未登记），返回成功
+                Ok(_) => Ok(ApiResponse::success(true)),
+                Err(e) => Ok(ApiResponse::error(format!("Failed to revoke device: {e}"))),
+            }
+        }
+        persona_core::SyncTransport::Server => {
+            let api = match sync_admin_api_for(&state).await {
+                Ok(api) => api,
+                Err(message) => return Ok(ApiResponse::error(message)),
+            };
+            match api.delete_device(target_id).await {
+                Ok(()) => Ok(ApiResponse::success(true)),
+                Err(e) => Ok(ApiResponse::error(format!("Failed to revoke device: {e}"))),
+            }
+        }
     }
 }
 
@@ -755,10 +1087,51 @@ pub async fn sync_revoke(
 /// master 密钥不在此取——它是挂 service guard 的借用，须留在命令体内
 /// 与后续 service 调用同锁段；这里只在 travel 采样时短暂持锁（采样值
 /// Copy，与会话生命周期无关）。
+///
+/// 传输路由（Phase 2 云盘双轨）：`settings.sync.sync_transport` 决定
+/// 装配哪条传输——`Server` = HTTP（既有路径零改动），`Cloud` =
+/// `open_cloud`（云盘目录即传输，不需要服务器凭据）。
 pub(crate) async fn open_sync_session(
     state: &State<'_, AppState>,
+) -> std::result::Result<HostSyncSession, String> {
+    let (transport, cloud_dir) = sync_transport_config(state).await;
+    match transport {
+        persona_core::SyncTransport::Cloud => {
+            let dir = cloud_dir.filter(|p| !p.trim().is_empty()).ok_or_else(|| {
+                "Cloud drive folder is not configured; pick one in sync settings".to_string()
+            })?;
+            HostSyncSession::open_cloud(state, dir).await
+        }
+        persona_core::SyncTransport::Server => HostSyncSession::open_server(state).await,
+    }
+}
+
+/// `settings.sync` 的传输选择（transport + cloud dir）。读不到配置段
+/// （fresh vault）= 默认 Server / 无云盘目录。
+pub(crate) async fn sync_transport_config(
+    state: &State<'_, AppState>,
+) -> (persona_core::SyncTransport, Option<String>) {
+    match require_db_path(state).await {
+        Some(db_path) => match read_sync_config(state, &db_path).await {
+            Some(config) => (config.sync_transport, config.cloud_drive_dir),
+            None => (persona_core::SyncTransport::default(), None),
+        },
+        None => (persona_core::SyncTransport::default(), None),
+    }
+}
+
+/// 会话装配共用尾部：解锁门禁 → db_path → 设备身份 → 开库 migrate →
+/// travel 闸采样。两种传输的差异只剩最后一步「拿 remote + key_store」，
+/// 由调用方 [`HostSyncSession`] 各自提供。
+async fn open_session_common(
+    state: &State<'_, AppState>,
 ) -> std::result::Result<
-    persona_core::sync::runtime::SyncSession<persona_core::sync::remote::HttpSyncRemote>,
+    (
+        String,
+        persona_core::sync::device::DeviceIdentity,
+        Database,
+        Box<dyn Fn() -> bool + Send + Sync>,
+    ),
     String,
 > {
     if let Some(message) = require_unlocked(state).await {
@@ -774,36 +1147,154 @@ pub(crate) async fn open_sync_session(
         }
         LocalDevice::NotJoined => return Err("This vault has not joined sync".to_string()),
     };
-    let (server_url, token) = sync_server_creds_for(state).await?;
-
     let db = Database::from_file(&db_path)
         .await
         .map_err(|e| format!("Database connection failed: {e}"))?;
     db.migrate()
         .await
         .map_err(|e| format!("Database migration failed: {e}"))?;
-
     let service_guard = state.service.lock().await;
     let service = service_guard
         .as_ref()
         .ok_or_else(|| "Service not initialized".to_string())?;
-    // travel 闸在装配前采样一次：cycle 是短过程，中途不变；travel 激活
-    // 期间 pull/push 由引擎拒绝（与捕获缝「不设闸」互补，见 engine 模块）
     let travel_active = service
         .travel_mode_active()
         .await
         .map_err(|e| format!("Travel mode check failed: {e}"))?;
     drop(service_guard);
+    Ok((db_path, identity, db, Box::new(move || travel_active)))
+}
 
-    persona_core::sync::runtime::SyncSession::open(
-        &db,
-        &identity,
-        &server_url,
-        &token,
-        Box::new(move || travel_active),
-    )
-    .await
-    .map_err(|e| format!("Sync session failed: {e}"))
+/// 两种传输装配出的会话的宿主侧枚举。`SyncSession<R>` 按传输是不同
+/// 具体类型，而 sync_now/status/冲突裁决四个命令对传输不关心——转发
+/// 这些方法，rotate（需服务器管理面）单独走 [`Self::into_server`]。
+pub(crate) enum HostSyncSession {
+    Server(persona_core::sync::runtime::SyncSession<persona_core::sync::remote::HttpSyncRemote>),
+    Cloud(persona_core::sync::runtime::SyncSession<persona_core::sync::remote::CloudDriveRemote>),
+}
+
+impl HostSyncSession {
+    async fn open_server(state: &State<'_, AppState>) -> std::result::Result<Self, String> {
+        let (_db_path, identity, db, travel) = open_session_common(state).await?;
+        let (server_url, token) = sync_server_creds_for(state).await?;
+        persona_core::sync::runtime::SyncSession::open(&db, &identity, &server_url, &token, travel)
+            .await
+            .map(Self::Server)
+            .map_err(|e| format!("Sync session failed: {e}"))
+    }
+
+    async fn open_cloud(
+        state: &State<'_, AppState>,
+        dir: String,
+    ) -> std::result::Result<Self, String> {
+        let (_db_path, identity, db, travel) = open_session_common(state).await?;
+        persona_core::sync::runtime::SyncSession::open_cloud(&db, &identity, dir, travel)
+            .await
+            .map(Self::Cloud)
+            .map_err(|e| format!("Sync session failed: {e}"))
+    }
+
+    /// 服务器会话（rotate 专用：需要 HTTP 管理面）。云盘会话在这里
+    /// 取不出——调用方应先查传输选择再决定是否走 rotate。
+    fn into_server(
+        self,
+    ) -> std::result::Result<
+        persona_core::sync::runtime::SyncSession<persona_core::sync::remote::HttpSyncRemote>,
+        String,
+    > {
+        match self {
+            Self::Server(session) => Ok(session),
+            Self::Cloud(_) => Err("Group key rotation requires the server transport".to_string()),
+        }
+    }
+
+    async fn backfill_existing(
+        &self,
+        master: &persona_core::crypto::encryption::EncryptionService,
+    ) -> persona_core::Result<u64> {
+        match self {
+            Self::Server(session) => session.backfill_existing(master).await,
+            Self::Cloud(session) => session.backfill_existing(master).await,
+        }
+    }
+
+    async fn run_cycle(
+        &self,
+        master: &persona_core::crypto::encryption::EncryptionService,
+    ) -> persona_core::Result<persona_core::sync::runtime::SyncNowReport> {
+        match self {
+            Self::Server(session) => session.run_cycle(master).await,
+            Self::Cloud(session) => session.run_cycle(master).await,
+        }
+    }
+
+    async fn status(&self) -> persona_core::Result<persona_core::sync::engine::SyncStatusReport> {
+        match self {
+            Self::Server(session) => session.status().await,
+            Self::Cloud(session) => session.status().await,
+        }
+    }
+
+    async fn list_conflicts(
+        &self,
+    ) -> persona_core::Result<Vec<persona_core::sync::resolve::ConflictEntry>> {
+        match self {
+            Self::Server(session) => session.list_conflicts().await,
+            Self::Cloud(session) => session.list_conflicts().await,
+        }
+    }
+
+    async fn resolve_conflict(
+        &self,
+        master: &persona_core::crypto::encryption::EncryptionService,
+        item_id: uuid::Uuid,
+        adopt_op_id: uuid::Uuid,
+    ) -> persona_core::Result<()> {
+        match self {
+            Self::Server(session) => session.resolve_conflict(master, item_id, adopt_op_id).await,
+            Self::Cloud(session) => session.resolve_conflict(master, item_id, adopt_op_id).await,
+        }
+    }
+
+    /// 捕获缝（传输无关：两边的 `OplogCapture<R>` 都实现 `SyncCapture`
+    /// trait 对象，service 槽位只收 trait 对象）。
+    fn capture(&self) -> std::sync::Arc<dyn persona_core::sync::capture::SyncCapture> {
+        match self {
+            Self::Server(session) => session.capture(),
+            Self::Cloud(session) => session.capture(),
+        }
+    }
+}
+
+/// 一轮同步周期的宿主编排主体（`sync_now` 命令与云盘 watcher 共用）：
+/// 装配会话（按当前传输）→ 存量灌入 → pull/materialize/push → 把捕获缝
+/// 挂上 service。协议/密码学/编排全在 core `SyncSession`；这里只做宿主
+/// 编排。返回 `Err(用户可读消息)` 不转 ApiResponse——命令体在边界转，
+/// watcher 记录日志。
+pub(crate) async fn sync_cycle_once(
+    state: &State<'_, AppState>,
+) -> std::result::Result<SyncNowReport, String> {
+    let session = open_sync_session(state).await?;
+    let service_guard = state.service.lock().await;
+    let service = service_guard
+        .as_ref()
+        .ok_or_else(|| "Service not initialized".to_string())?;
+    let master = service
+        .get_master_encryption_service()
+        .map_err(|e| e.to_string())?;
+
+    let backfilled = session
+        .backfill_existing(master)
+        .await
+        .map_err(|e| format!("Sync backfill failed: {e}"))?;
+    let mut report = session
+        .run_cycle(master)
+        .await
+        .map_err(|e| format!("Sync cycle failed: {e}"))?;
+    report.backfilled = backfilled;
+
+    service.attach_sync_capture(Some(session.capture())).await;
+    Ok(SyncNowReport::from(report))
 }
 
 /// 立即同步（E2EE sync 阶段 3b 的宿主入口）：拆本机信封装配会话 →
@@ -815,37 +1306,10 @@ pub(crate) async fn open_sync_session(
 pub async fn sync_now(
     state: State<'_, AppState>,
 ) -> std::result::Result<ApiResponse<SyncNowReport>, String> {
-    let session = match open_sync_session(&state).await {
-        Ok(session) => session,
-        Err(message) => return Ok(ApiResponse::error(message)),
-    };
-    let service_guard = state.service.lock().await;
-    let service = match service_guard.as_ref() {
-        Some(service) => service,
-        None => return Ok(ApiResponse::error("Service not initialized".to_string())),
-    };
-    let master = match service.get_master_encryption_service() {
-        Ok(master) => master,
-        Err(e) => return Ok(ApiResponse::error(e.to_string())),
-    };
-
-    let backfilled = match session.backfill_existing(master).await {
-        Ok(backfilled) => backfilled,
-        Err(e) => return Ok(ApiResponse::error(format!("Sync backfill failed: {e}"))),
-    };
-    let mut report = match session.run_cycle(master).await {
-        Ok(report) => report,
-        Err(e) => return Ok(ApiResponse::error(format!("Sync cycle failed: {e}"))),
-    };
-    report.backfilled = backfilled;
-
-    service
-        .attach_sync_capture(Some(
-            session.capture() as std::sync::Arc<dyn persona_core::sync::capture::SyncCapture>
-        ))
-        .await;
-
-    Ok(ApiResponse::success(SyncNowReport::from(report)))
+    match sync_cycle_once(&state).await {
+        Ok(report) => Ok(ApiResponse::success(report)),
+        Err(message) => Ok(ApiResponse::error(message)),
+    }
 }
 
 /// 同步状态快照（sync-group-mode §二.5.5）：组最新版本号 / 本机已同步水位 /
@@ -877,6 +1341,12 @@ pub async fn sync_rotate(
     state: State<'_, AppState>,
 ) -> std::result::Result<ApiResponse<SyncRotateReport>, String> {
     let session = match open_sync_session(&state).await {
+        Ok(session) => session,
+        Err(message) => return Ok(ApiResponse::error(message)),
+    };
+    // 云盘传输没有管理面可换全部信封（轮换 = 换信封 + 全量重包，服务器
+    // 由 epoch 乐观锁互斥）——诚实报错，登记于 CLOUD_DRIVE_SYNC §9。
+    let session = match session.into_server() {
         Ok(session) => session,
         Err(message) => return Ok(ApiResponse::error(message)),
     };

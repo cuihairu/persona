@@ -165,8 +165,12 @@ pub sync_transport: SyncTransport,     // Server（默认）| Cloud
 - `set_sync_config`（写服务器配置的 Tauri 命令）**保留**这两个字段——
   改服务器设置不得悄悄重置传输选择。
 
-桌面**设置 UI**（云盘目录选择器 + 传输切换）是本次核心落地后的跟进项；
-这里实现的是核心传输与配置字段。
+桌面宿主经 Tauri 命令 `set_sync_transport` 接线传输选择（窄写：传输 +
+可选目录；空目录保留旧值，云盘须非空）。`open_sync_session` 按传输路由到
+server 或云盘会话，云盘设备生命周期（`sync_join` / `sync_leave` /
+`sync_list_devices` / `sync_authorize` / `sync_revoke` /
+`sync_set_device_remark`）对 UI 可见。设置 UI 本身（目录选择器 + 传输
+切换）仍是剩余跟进项。
 
 ## 8. 传输对比
 
@@ -183,11 +187,18 @@ pub sync_transport: SyncTransport,     // Server（默认）| Cloud
 
 ## 9. 开放问题 / 跟进
 
-1. **桌面设置 UI + Tauri 命令**：选择传输、选目录（配置字段已有；命令/
-   UI 未接线）。
-2. **变更 watcher**：引擎是拉取驱动；还没有东西监听目录变更。后续在桌面
-   宿主加 `notify` watcher（core 保持零新依赖），目录变更触发 `run_cycle`
-   ，降级轮询（分片 mtime）。
+1. **桌面设置 UI**（目录选择器 + 传输切换）：宿主 Tauri 命令
+   `set_sync_transport`、server/云盘会话路由、云盘设备生命周期命令均已
+   接线；只剩设置 UI 控件与其 i18n/测试。
+2. **变更 watcher**（已落地）：桌面宿主跑一个监督任务
+   （`src-tauri/src/sync_watcher.rs`），每 ~5s 重评同步配置；当传输为
+   `cloud` 且目录已配时，监听协议文件（`dev-*.jsonl` / `snapshot-*.bin` /
+   `env-*` / `registry.json`）。主源是 `notify`（尽力而为——网络文件系统或
+   监听启动失败时静默降级）；轮询兜底是 30s 协议文件 mtime+size 指纹，仅
+   在变更时触发。变更后跑一轮完整 `sync_cycle_once`（与 `sync_now` 同编
+   排），由 5s 监督节拍去抖，并抑制反馈回路（自身 push 写分片会再触发）
+   ——周期后把基线指纹刷到周期末状态。core 保持零新依赖（`notify` 仅
+   desktop 依赖）。
 3. **分片增长**：无物理压缩（§4）；保险库历史大了之后分片重写 GC 是最终
    解。
 4. **云盘目录可用性**：目录可达且 OS 代理已分发时同步才有效；UI 应把

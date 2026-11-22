@@ -267,6 +267,90 @@ async fn put_group_key_fails_for_unregistered_device() {
     assert!(store.put_group_key(ghost, &[0u8; 80]).await.is_err());
 }
 
+// ---- 设备管理面（宿主 join/list/authorize/revoke/leave 取用）----
+
+#[tokio::test]
+async fn list_remove_and_remark_devices() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = CloudGroupKeyStore::new(dir.path());
+
+    let identity = crate::sync::device::DeviceIdentity::generate("alpha")
+        .unwrap()
+        .with_device_id(Uuid::new_v4());
+    let identity_b = crate::sync::device::DeviceIdentity::generate("beta")
+        .unwrap()
+        .with_device_id(Uuid::new_v4());
+    store.register_device(&identity).await.unwrap();
+    store.register_device(&identity_b).await.unwrap();
+
+    // 列表含公钥（授权目标要取）与本机标记所需的字段
+    let devices = store.list_devices().await.unwrap();
+    assert_eq!(devices.len(), 2);
+    let alpha = devices
+        .iter()
+        .find(|d| d.device_id == identity.device_id.to_string())
+        .unwrap();
+    assert_eq!(alpha.device_name, "alpha");
+    assert_eq!(alpha.public_key, {
+        use base64::Engine as _;
+        base64::engine::general_purpose::STANDARD.encode(identity.key_pair.public_bytes())
+    });
+
+    // 备注写入：trim 规整 + 登记表持久化（重开 store 可读回）
+    let stored = store
+        .set_device_remark(identity.device_id, "  laptop  ")
+        .await
+        .unwrap();
+    assert_eq!(stored, "laptop");
+    let reopened = CloudGroupKeyStore::new(dir.path());
+    assert_eq!(
+        reopened
+            .list_devices()
+            .await
+            .unwrap()
+            .iter()
+            .find(|d| d.device_id == identity.device_id.to_string())
+            .unwrap()
+            .remark,
+        "laptop"
+    );
+    // 不在登记表 → NotFound（fail-closed）
+    assert!(reopened
+        .set_device_remark(Uuid::new_v4(), "x")
+        .await
+        .is_err());
+
+    // 移除设备：登记表剔除 + 信封文件清理 + 幂等（再删 false）
+    let group_bytes = [7u8; 32];
+    let env_b =
+        crate::sync::envelope::seal_group_key(&group_bytes, identity_b.key_pair.public_bytes())
+            .unwrap();
+    store
+        .put_group_key(identity_b.device_id, &env_b)
+        .await
+        .unwrap();
+    assert!(store.remove_device(identity_b.device_id).await.unwrap());
+    assert!(
+        !store.remove_device(identity_b.device_id).await.unwrap(),
+        "再删幂等 false"
+    );
+    let devices = store.list_devices().await.unwrap();
+    assert_eq!(devices.len(), 1, "只剩 alpha");
+    assert!(
+        !dir.path()
+            .join(format!("env-{}.bin", identity_b.device_id))
+            .exists(),
+        "信封文件一并清理"
+    );
+    // group_keys 以登记表为准：被移除设备即使残留孤儿信封也不读
+    assert!(store
+        .group_keys()
+        .await
+        .unwrap()
+        .iter()
+        .all(|k| k.device_id != identity_b.device_id));
+}
+
 // ---- open_cloud：双设备收敛（镜像 HTTP 收敛测试，文件版）----
 
 #[tokio::test]
