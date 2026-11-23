@@ -464,7 +464,10 @@ jobs:
           test -f "$BIN"
           test -s "$BIN"
           if command -v file >/dev/null 2>&1; then
-            file "$BIN" | tee /dev/stderr | grep -qE 'ELF|Mach-O|PE32'
+            # tee 到 /dev/stderr 在 Windows runner 的 Git Bash 里会炸（该路径
+            # 不存在，2026-11-22 nightly relay-windows 实证）——直接打 stdout。
+            file "$BIN" | grep -qE 'ELF|Mach-O|PE32'
+            file "$BIN"
           fi
           mkdir -p out/relay/stage
           cp "$BIN" out/relay/stage/persona-relay
