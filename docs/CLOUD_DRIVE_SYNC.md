@@ -239,6 +239,13 @@ folder picker (`@tauri-apps/plugin-dialog`), backed by these fields.
    dependency-free (`notify` is a desktop-only dependency).
 3. **Shard growth**: no physical compaction (§4); a shard-rewrite GC is the
    eventual fix if a vault's history grows large.
-4. **Cloud folder availability**: sync only works when the folder is reachable
-   and the OS agent has propagated changes; the UI should surface "cloud folder
-   not available" distinctly from "server unreachable".
+4. **Cloud folder availability** (landed): sync only works when the folder is
+   reachable and the OS agent has propagated changes. The host classifies the
+   cycle failure structurally — a transport-layer I/O failure under the cloud
+   transport carries `SYNC_CLOUD_FOLDER_UNAVAILABLE`, under the server
+   transport `SYNC_SERVER_UNREACHABLE` (written into
+   `ApiResponse.error_code`, the channel the sync UI already uses for
+   `CONCURRENT_CONFLICT`) — so the settings screen points the user at the
+   folder / cloud agent versus the server URL and token. Gate failures (locked,
+   not joined, folder not configured) carry no code and keep the generic
+   message.

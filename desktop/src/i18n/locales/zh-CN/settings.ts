@@ -228,6 +228,9 @@ export default {
       syncNow: '立即同步',
       syncDone: '同步完成——拉取 {{pulled}} 条，推送 {{pushed}} 条',
       syncFailed: '同步失败',
+      serverUnreachable: '无法连接同步服务器——请检查网络，或在同步设置里核对服务器地址与令牌。',
+      cloudFolderUnavailable:
+        '云盘目录不可用（不存在或云代理尚未同步）——请检查云盘目录路径，或在同步设置里重新选择一个已存在的目录。',
       statusHead: '组版本号 #{{head}}',
       statusUpToDate: '已最新',
       statusBehind: '落后 {{count}} 条指令',

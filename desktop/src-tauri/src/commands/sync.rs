@@ -1208,6 +1208,15 @@ impl HostSyncSession {
         }
     }
 
+    /// 会话实际走哪条传输。失败原因分类用（[`sync_failure`]）：会话打开
+    /// 失败时取不到会话，故用配置读到的传输；周期内失败用会话自身。
+    fn transport(&self) -> persona_core::SyncTransport {
+        match self {
+            Self::Server(_) => persona_core::SyncTransport::Server,
+            Self::Cloud(_) => persona_core::SyncTransport::Cloud,
+        }
+    }
+
     async fn backfill_existing(
         &self,
         master: &persona_core::crypto::encryption::EncryptionService,
@@ -1266,31 +1275,67 @@ impl HostSyncSession {
     }
 }
 
+/// 同步周期失败的结构化原因（CLOUD_DRIVE_SYNC §9.4）：UI 须把「云盘目录
+/// 不可用」与「服务器不可达」区分展示——两者修法不同（改指一个存在的云盘
+/// 目录 / 查 OS 云代理分发 vs 查服务器 URL 与令牌）。判别是结构性的：同步
+/// 路径里 [`persona_core::PersonaError::Io`] 是唯一传输层 I/O 失败变体
+/// （云盘=目录读写、服务器=HTTP 请求），宿主又已读传输选择——两维定位。
+/// 检查的是该变体的稳定 Display 前缀（`#[error("IO operation failed: …")]`），
+/// 不解析任意文本。
+pub(crate) struct SyncFailure {
+    /// 机器可读错误码（写入 `ApiResponse.error_code`），None=无专用码。
+    pub code: Option<&'static str>,
+    pub message: String,
+}
+
+impl std::fmt::Display for SyncFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+/// 由传输选择 + 错误消息构造 [`SyncFailure`]。`PersonaError::Io` 的稳定
+/// 显示前缀把「传输层 I/O 失败」从密码学/数据库/校验等其他失败中筛出，
+/// 传输选择再决定归类到哪一侧。
+pub(crate) fn sync_failure(transport: persona_core::SyncTransport, message: String) -> SyncFailure {
+    let code = message
+        .contains("IO operation failed")
+        .then_some(match transport {
+            persona_core::SyncTransport::Server => "SYNC_SERVER_UNREACHABLE",
+            persona_core::SyncTransport::Cloud => "SYNC_CLOUD_FOLDER_UNAVAILABLE",
+        });
+    SyncFailure { code, message }
+}
+
 /// 一轮同步周期的宿主编排主体（`sync_now` 命令与云盘 watcher 共用）：
 /// 装配会话（按当前传输）→ 存量灌入 → pull/materialize/push → 把捕获缝
 /// 挂上 service。协议/密码学/编排全在 core `SyncSession`；这里只做宿主
-/// 编排。返回 `Err(用户可读消息)` 不转 ApiResponse——命令体在边界转，
+/// 编排。返回 `Err(SyncFailure)` 不转 ApiResponse——命令体在边界转，
 /// watcher 记录日志。
 pub(crate) async fn sync_cycle_once(
     state: &State<'_, AppState>,
-) -> std::result::Result<SyncNowReport, String> {
-    let session = open_sync_session(state).await?;
+) -> std::result::Result<SyncNowReport, SyncFailure> {
+    let transport = sync_transport_config(state).await.0;
+    let session = open_sync_session(state)
+        .await
+        .map_err(|message| sync_failure(transport, message))?;
+    let transport = session.transport();
     let service_guard = state.service.lock().await;
     let service = service_guard
         .as_ref()
-        .ok_or_else(|| "Service not initialized".to_string())?;
+        .ok_or_else(|| sync_failure(transport, "Service not initialized".to_string()))?;
     let master = service
         .get_master_encryption_service()
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| sync_failure(transport, e.to_string()))?;
 
     let backfilled = session
         .backfill_existing(master)
         .await
-        .map_err(|e| format!("Sync backfill failed: {e}"))?;
+        .map_err(|e| sync_failure(transport, format!("Sync backfill failed: {e}")))?;
     let mut report = session
         .run_cycle(master)
         .await
-        .map_err(|e| format!("Sync cycle failed: {e}"))?;
+        .map_err(|e| sync_failure(transport, format!("Sync cycle failed: {e}")))?;
     report.backfilled = backfilled;
 
     service.attach_sync_capture(Some(session.capture())).await;
@@ -1308,7 +1353,10 @@ pub async fn sync_now(
 ) -> std::result::Result<ApiResponse<SyncNowReport>, String> {
     match sync_cycle_once(&state).await {
         Ok(report) => Ok(ApiResponse::success(report)),
-        Err(message) => Ok(ApiResponse::error(message)),
+        Err(failure) => Ok(match failure.code {
+            Some(code) => ApiResponse::error_with_code(code.to_string(), failure.message),
+            None => ApiResponse::error(failure.message),
+        }),
     }
 }
 
@@ -1806,4 +1854,60 @@ pub async fn sync_group_join_cancel(
     state: State<'_, AppState>,
 ) -> std::result::Result<ApiResponse<bool>, String> {
     sync_group_pairing_cancel(session_id, state).await
+}
+
+#[cfg(test)]
+mod sync_failure_tests {
+    use super::sync_failure;
+
+    /// 传输层 I/O 失败按传输选择归类到对应一侧（CLOUD_DRIVE_SYNC §9.4）
+    #[test]
+    fn transport_io_failure_classifies_by_side() {
+        let server = sync_failure(
+            persona_core::SyncTransport::Server,
+            "Sync cycle failed: IO operation failed: sync status request failed: timed out"
+                .to_string(),
+        );
+        assert_eq!(server.code, Some("SYNC_SERVER_UNREACHABLE"));
+
+        let cloud = sync_failure(
+            persona_core::SyncTransport::Cloud,
+            "Sync session failed: IO operation failed: create cloud drive dir failed: No such file"
+                .to_string(),
+        );
+        assert_eq!(cloud.code, Some("SYNC_CLOUD_FOLDER_UNAVAILABLE"));
+    }
+
+    /// 门禁类失败（锁定/未入组/目录未配置/服务未初始化）不归类：UI 保持
+    /// 通用提示，不误报「服务器不可达」
+    #[test]
+    fn non_transport_failures_have_no_code() {
+        for message in [
+            "Vault is locked: unlock to sync".to_string(),
+            "Sync config not found".to_string(),
+            "Service not initialized".to_string(),
+        ] {
+            for transport in [
+                persona_core::SyncTransport::Server,
+                persona_core::SyncTransport::Cloud,
+            ] {
+                let failure = sync_failure(transport, message.clone());
+                assert_eq!(failure.code, None, "{message}");
+            }
+        }
+    }
+
+    /// 消息原文保留给日志与通用提示（Display 只打印消息）
+    #[test]
+    fn failure_message_survives() {
+        let failure = sync_failure(
+            persona_core::SyncTransport::Cloud,
+            "IO operation failed: read sync registry failed".to_string(),
+        );
+        assert_eq!(
+            failure.to_string(),
+            "IO operation failed: read sync registry failed"
+        );
+        assert_eq!(failure.code, Some("SYNC_CLOUD_FOLDER_UNAVAILABLE"));
+    }
 }

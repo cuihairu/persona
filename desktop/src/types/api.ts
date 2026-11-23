@@ -17,6 +17,10 @@
  * FILL_TARGET_SNAPSHOT_REQUIRED / FILL_TARGET_DISCARDED / FILL_TARGET_CHANGED：
  * 桌面填充确认绑定（P1）——请求缺 snapshot_id / 确认后目标已丢弃（浮窗
  * 收起清槽）/ 确认后目标被重新捕获替换 → 如实提示重新走确认流。
+ * SYNC_SERVER_UNREACHABLE / SYNC_CLOUD_FOLDER_UNAVAILABLE：同步周期的
+ * 传输层 I/O 失败（CLOUD_DRIVE_SYNC §9.4）——服务器侧不可达 / 云盘目录
+ * 不可用（不存在、被删、OS 云代理未分发）。两者修法不同，前端按码分流
+ * 提示，不混成一个「同步失败」。
  */
 export type ApiErrorCode =
   | 'REAUTH_REQUIRED'
@@ -30,7 +34,9 @@ export type ApiErrorCode =
   | 'ITEM_PASSWORD_WRONG'
   | 'FILL_TARGET_SNAPSHOT_REQUIRED'
   | 'FILL_TARGET_DISCARDED'
-  | 'FILL_TARGET_CHANGED';
+  | 'FILL_TARGET_CHANGED'
+  | 'SYNC_SERVER_UNREACHABLE'
+  | 'SYNC_CLOUD_FOLDER_UNAVAILABLE';
 
 export interface ApiResponse<T> {
   success: boolean;

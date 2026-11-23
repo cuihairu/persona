@@ -237,6 +237,10 @@ export default {
       syncNow: 'Sync now',
       syncDone: 'Synced — pulled {{pulled}}, pushed {{pushed}}',
       syncFailed: 'Sync failed',
+      serverUnreachable:
+        "Can't reach the sync server — check your network, or verify the server address and token in sync settings.",
+      cloudFolderUnavailable:
+        'Cloud folder unavailable (missing or not yet synced) — check the cloud folder path, or pick an existing folder in sync settings.',
       statusHead: 'Group version #{{head}}',
       statusUpToDate: 'Up to date',
       statusBehind: 'Behind by {{count}} instructions',

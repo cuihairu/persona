@@ -126,6 +126,12 @@ const SyncDevicesSection: React.FC = () => {
           })
           .catch(() => {});
         if (resp.data.conflicts > 0) setConflictsOpen(true);
+      } else if (resp.error_code === 'SYNC_SERVER_UNREACHABLE') {
+        // CLOUD_DRIVE_SYNC §9.4：服务器侧不可达
+        toast.error(t('settings.syncDevices.serverUnreachable'));
+      } else if (resp.error_code === 'SYNC_CLOUD_FOLDER_UNAVAILABLE') {
+        // CLOUD_DRIVE_SYNC §9.4：云盘目录不可用（与服务器不可达修法不同）
+        toast.error(t('settings.syncDevices.cloudFolderUnavailable'));
       } else {
         toast.error(resp.error || t('settings.syncDevices.syncFailed'));
       }
