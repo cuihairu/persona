@@ -9,7 +9,9 @@ const base = process.env.VITEPRESS_BASE ?? "/persona/";
 // 侧边栏只挂有实内容的页面：占位白页（仅一行标题）已删除，板块有稳定
 // 内容后再挂回——空板块不如不挂。根目录 docs/*.md 工程文档（E2EE 同步
 // 设计、威胁模型、可复现构建等）经 GitHub 链接在 nav「路线图」同款方式
-// 可达，不在此重复。
+// 可达，不在此重复——用户视角的整合篇（user/sync、user/security）挂在
+// 用户手册，文内链回这些设计文档。语言切换用 VitePress 官方 locale
+// 切换器（多 locale 自动出现，不硬编码 nav 链接）。
 const sidebarZh = [
   {
     text: "项目概述",
@@ -52,6 +54,8 @@ const sidebarZh = [
       { text: "快速开始", link: "/zh/user/quick-start" },
       { text: "身份（Identity）", link: "/zh/user/identity" },
       { text: "桌面应用", link: "/zh/user/desktop" },
+      { text: "同步方案", link: "/zh/user/sync" },
+      { text: "安全设计", link: "/zh/user/security" },
       { text: "常见问题", link: "/zh/user/faq" },
       { text: "故障排除", link: "/zh/user/troubleshooting" },
     ],
@@ -129,6 +133,8 @@ const sidebar = [
       { text: "Quick Start", link: "/user/quick-start" },
       { text: "Identity", link: "/user/identity" },
       { text: "Desktop App", link: "/user/desktop" },
+      { text: "How Sync Works", link: "/user/sync" },
+      { text: "Security Design", link: "/user/security" },
       { text: "FAQ", link: "/user/faq" },
       { text: "Troubleshooting", link: "/user/troubleshooting" },
     ],
@@ -210,7 +216,6 @@ export default withMermaid(
             { text: "UI", link: "/previews/ui" },
             { text: "Develop", link: "/development/structure" },
             { text: "API", link: "/api/sync" },
-            { text: "中文", link: "/zh/" },
             {
               text: "Engineering Docs",
               link: "https://github.com/cuihairu/persona/tree/main/docs",
@@ -272,7 +277,6 @@ export default withMermaid(
             { text: "界面", link: "/zh/previews/ui" },
             { text: "开发", link: "/zh/development/structure" },
             { text: "API", link: "/zh/api/sync" },
-            { text: "English", link: "/" },
             {
               text: "工程文档",
               link: "https://github.com/cuihairu/persona/tree/main/docs",
