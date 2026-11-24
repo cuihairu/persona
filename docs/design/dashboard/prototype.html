@@ -1,0 +1,741 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>persona · 私有部署 Dashboard 原型</title>
+<!--
+  persona 私有部署 Dashboard · 交互原型（2026-11-24）
+  · 单文件 vanilla HTML/CSS/JS，不接任何真实 API，全部数据为示意值
+  · 双角色视图：管理员 / 用户（右上角切换）
+  · 深色 token 对齐桌面端（gray-950 底 / gray-900 卡 / gray-800 边 / blue-600 主）
+  · 硬约束在 UI 上可见：E2EE 边界（管理员不可见库内容）、禁用≠删除、
+    重置=发新邀请码；面板只展示元数据/计数/事件，绝无明文凭据
+-->
+<style>
+  :root {
+    --bg: #030712;            /* gray-950 页面底（桌面端 dark token） */
+    --card: #111827;          /* gray-900 卡片面 */
+    --border: #1f2937;        /* gray-800 描边 */
+    --fg: #f9fafb;            /* gray-50 */
+    --muted: #94a3b8;         /* slate-400 次级文字 */
+    --faint: #64748b;         /* slate-500 更弱 */
+    --primary: #2563eb;       /* blue-600 主色 */
+    --primary-hover: #1d4ed8; /* blue-700 */
+    --accent: #3b82f6;        /* blue-500 点缀 */
+    --ok: #22c55e;            /* 状态：正常（chip 必须带图标+文字） */
+    --warn: #f59e0b;          /* 状态：注意 */
+    --bad: #ef4444;           /* 状态：风险 */
+    --radius: 8px;
+    --radius-sm: 6px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg); color: var(--fg);
+    font: 14px/1.55 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
+    min-height: 100vh;
+  }
+  /* ── 顶部原型横幅（常驻，声明示意属性） ─────────────── */
+  .proto-banner {
+    background: #1d1830; color: #c4b5fd;
+    border-bottom: 1px solid #3b2f5e;
+    text-align: center; padding: 5px 16px; font-size: 12px;
+  }
+  .proto-banner b { color: #ddd6fe; }
+  /* ── 顶栏 ──────────────────────────────────────────── */
+  .topbar {
+    display: flex; align-items: center; gap: 16px;
+    padding: 12px 24px; border-bottom: 1px solid var(--border);
+    background: var(--card);
+  }
+  .brand { display: flex; align-items: center; gap: 10px; font-weight: 600; font-size: 15px; }
+  .brand .logo {
+    width: 28px; height: 28px; border-radius: var(--radius-sm);
+    background: linear-gradient(135deg, var(--primary), #7c3aed);
+    display: grid; place-items: center; font-size: 14px;
+  }
+  .brand .sub { color: var(--muted); font-weight: 400; font-size: 12px; }
+  .topbar .spacer { flex: 1; }
+  .seg {
+    display: inline-flex; border: 1px solid var(--border); border-radius: var(--radius-sm);
+    overflow: hidden; background: var(--bg);
+  }
+  .seg button {
+    appearance: none; border: 0; background: transparent; color: var(--muted);
+    padding: 7px 18px; font: inherit; cursor: pointer; font-size: 13px;
+  }
+  .seg button.on { background: var(--primary); color: #fff; font-weight: 600; }
+  .who { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 13px; }
+  .who .avatar {
+    width: 26px; height: 26px; border-radius: 50%; background: var(--border);
+    display: grid; place-items: center; font-size: 12px; color: var(--fg);
+  }
+  /* ── 布局 ──────────────────────────────────────────── */
+  .shell { display: flex; min-height: calc(100vh - 92px); }
+  .sidebar {
+    width: 216px; flex: 0 0 auto; border-right: 1px solid var(--border);
+    padding: 16px 10px; background: #0a0f1e;
+  }
+  .sidebar .nav-title {
+    color: var(--faint); font-size: 11px; text-transform: uppercase;
+    letter-spacing: .08em; padding: 6px 12px;
+  }
+  .sidebar a {
+    display: flex; align-items: center; gap: 10px;
+    color: var(--muted); text-decoration: none; padding: 8px 12px;
+    border-radius: var(--radius-sm); font-size: 13.5px; margin-bottom: 2px;
+  }
+  .sidebar a:hover { background: var(--card); color: var(--fg); }
+  .sidebar a.on { background: var(--primary); color: #fff; font-weight: 600; }
+  .sidebar a .ico { width: 18px; text-align: center; opacity: .9; }
+  .sidebar a .badge {
+    margin-left: auto; background: var(--bad); color: #fff; border-radius: 999px;
+    font-size: 11px; padding: 0 7px; line-height: 18px;
+  }
+  .sidebar a.on .badge { background: rgba(255,255,255,.28); }
+  main { flex: 1; padding: 24px 28px 56px; max-width: 1200px; }
+  .page-head { margin-bottom: 20px; }
+  .page-head h1 { font-size: 20px; font-weight: 650; margin-bottom: 4px; }
+  .page-head p { color: var(--muted); font-size: 13px; }
+  /* ── 卡片 / 统计块 ─────────────────────────────────── */
+  .grid { display: grid; gap: 14px; }
+  .g4 { grid-template-columns: repeat(4, 1fr); }
+  .g3 { grid-template-columns: repeat(3, 1fr); }
+  .g2 { grid-template-columns: repeat(2, 1fr); }
+  @media (max-width: 1080px) { .g4, .g3 { grid-template-columns: repeat(2, 1fr); } }
+  .card {
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 16px 18px;
+  }
+  .card h3 { font-size: 13px; color: var(--muted); font-weight: 550; margin-bottom: 12px; }
+  .stat .v { font-size: 24px; font-weight: 680; letter-spacing: -.01em; }
+  .stat .v small { font-size: 13px; color: var(--muted); font-weight: 400; margin-left: 4px; }
+  .stat .k { color: var(--muted); font-size: 12.5px; margin-bottom: 4px; }
+  .stat .d { color: var(--faint); font-size: 12px; margin-top: 6px; }
+  /* ── 量级条（单色，身份由行标签给出） ──────────────── */
+  .meter { background: var(--border); border-radius: 999px; height: 8px; overflow: hidden; }
+  .meter > i { display: block; height: 100%; background: var(--primary); border-radius: 999px; }
+  .barrow { display: grid; grid-template-columns: 92px 1fr 56px; gap: 10px; align-items: center; margin-bottom: 9px; font-size: 13px; }
+  .barrow .n { color: var(--fg); }
+  .barrow .c { color: var(--muted); text-align: right; font-variant-numeric: tabular-nums; }
+  .minibar { display: flex; align-items: flex-end; gap: 2px; height: 64px; }
+  .minibar > i { flex: 1; background: var(--primary); border-radius: 4px 4px 0 0; min-height: 4px; }
+  .minibar-x { display: flex; gap: 2px; margin-top: 6px; }
+  .minibar-x span { flex: 1; text-align: center; color: var(--faint); font-size: 11px; }
+  /* ── 状态 chip（图标+文字，永不裸色） ─────────────── */
+  .chip {
+    display: inline-flex; align-items: center; gap: 5px;
+    border-radius: 999px; padding: 1px 10px 1px 7px; font-size: 12px; font-weight: 550;
+    border: 1px solid transparent;
+  }
+  .chip.ok   { color: var(--ok);   border-color: #14532d; background: #052e16; }
+  .chip.warn { color: var(--warn); border-color: #78350f; background: #451a03; }
+  .chip.bad  { color: var(--bad);  border-color: #7f1d1d; background: #450a0a; }
+  .chip.dim  { color: var(--muted); border-color: var(--border); background: transparent; }
+  /* ── 表格 ──────────────────────────────────────────── */
+  table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+  th { color: var(--faint); text-align: left; font-weight: 550; font-size: 12px;
+       padding: 8px 10px; border-bottom: 1px solid var(--border); }
+  td { padding: 10px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+  tr:last-child td { border-bottom: 0; }
+  tbody tr:hover { background: rgba(59,130,246,.05); }
+  td .mono { font-family: ui-monospace, 'SF Mono', Menlo, monospace; font-size: 12.5px; }
+  /* ── 按钮 ──────────────────────────────────────────── */
+  .btn {
+    appearance: none; border: 1px solid var(--border); background: var(--border);
+    color: var(--fg); border-radius: var(--radius-sm); padding: 6px 14px;
+    font: inherit; font-size: 13px; cursor: pointer;
+  }
+  .btn:hover { background: #293548; }
+  .btn.primary { background: var(--primary); border-color: var(--primary); color: #fff; font-weight: 600; }
+  .btn.primary:hover { background: var(--primary-hover); }
+  .btn.danger { color: var(--bad); border-color: #7f1d1d; background: transparent; }
+  .btn.danger:hover { background: #450a0a; }
+  .btn.sm { padding: 3px 10px; font-size: 12.5px; }
+  /* ── 开关 ──────────────────────────────────────────── */
+  .switch { position: relative; display: inline-block; width: 38px; height: 22px; flex: 0 0 auto; }
+  .switch input { opacity: 0; width: 0; height: 0; }
+  .switch i {
+    position: absolute; inset: 0; background: var(--border); border-radius: 999px;
+    transition: .15s; cursor: pointer;
+  }
+  .switch i:before {
+    content: ''; position: absolute; width: 16px; height: 16px; border-radius: 50%;
+    background: #fff; top: 3px; left: 3px; transition: .15s;
+  }
+  .switch input:checked + i { background: var(--primary); }
+  .switch input:checked + i:before { transform: translateX(16px); }
+  .setrow { display: flex; align-items: flex-start; gap: 14px; padding: 13px 0; border-bottom: 1px solid var(--border); }
+  .setrow:last-child { border-bottom: 0; }
+  .setrow .t { font-weight: 550; font-size: 13.5px; }
+  .setrow .s { color: var(--muted); font-size: 12.5px; margin-top: 2px; }
+  .setrow .ctl { margin-left: auto; }
+  /* ── 边界说明卡（E2EE 等，需醒目可见） ────────────── */
+  .boundary {
+    display: flex; gap: 12px; align-items: flex-start;
+    background: #052e16; border: 1px solid #14532d; border-radius: var(--radius);
+    padding: 13px 16px; margin-bottom: 18px;
+  }
+  .boundary .ico { font-size: 16px; margin-top: 1px; }
+  .boundary b { color: var(--ok); font-weight: 600; }
+  .boundary p { color: #d1fae5; font-size: 13px; }
+  .boundary p + p { margin-top: 4px; color: var(--muted); }
+  .note { color: var(--faint); font-size: 12px; margin-top: 10px; }
+  .data-foot { color: var(--faint); font-size: 11.5px; text-align: right; margin-top: 14px; }
+  /* ── 待审批卡 ─────────────────────────────────────── */
+  .req { display: flex; align-items: center; gap: 14px; padding: 13px 0; border-bottom: 1px solid var(--border); }
+  .req:last-child { border-bottom: 0; }
+  .req .dev { font-weight: 600; }
+  .req .meta { color: var(--muted); font-size: 12.5px; margin-top: 2px; }
+  .req .acts { margin-left: auto; display: flex; gap: 8px; }
+  .fp { font-family: ui-monospace, Menlo, monospace; font-size: 12px; color: var(--accent); letter-spacing: .04em; }
+  /* ── 健康分 ───────────────────────────────────────── */
+  .score { display: flex; align-items: baseline; gap: 8px; }
+  .score .n { font-size: 40px; font-weight: 700; letter-spacing: -.02em; }
+  .score .o { color: var(--muted); font-size: 15px; }
+  .reco { display: flex; gap: 10px; padding: 9px 0; border-bottom: 1px solid var(--border); font-size: 13px; }
+  .reco:last-child { border-bottom: 0; }
+  .reco .p { color: var(--warn); flex: 0 0 auto; font-weight: 600; font-size: 12px; padding-top: 1px; }
+  /* ── toast ─────────────────────────────────────────── */
+  #toast {
+    position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%) translateY(20px);
+    background: var(--card); border: 1px solid var(--border); color: var(--fg);
+    border-radius: var(--radius-sm); padding: 10px 18px; font-size: 13px;
+    box-shadow: 0 6px 24px rgba(0,0,0,.5); opacity: 0; pointer-events: none;
+    transition: .2s; max-width: 76vw;
+  }
+  #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+  #toast b { color: var(--accent); }
+</style>
+</head>
+<body>
+
+<div class="proto-banner">
+  <b>交互原型 · 全部数据为示意值 · 未接任何真实 API</b> —— 设计评审用，实现派单见 todo 台账
+</div>
+
+<header class="topbar">
+  <div class="brand">
+    <div class="logo">◆</div>
+    <div>persona <span class="sub">私有部署控制台 · v0.1.0-nightly（示意）</span></div>
+  </div>
+  <div class="spacer"></div>
+  <div class="seg" id="roleSeg" title="原型专用：切换管理员/用户视图">
+    <button data-role="admin" class="on">管理员视图</button>
+    <button data-role="user">用户视图</button>
+  </div>
+  <div class="who"><div class="avatar" id="whoAvatar">管</div><span id="whoName">admin（管理员）</span></div>
+</header>
+
+<div class="shell">
+  <aside class="sidebar" id="nav"></aside>
+  <main id="main"></main>
+</div>
+
+<div id="toast"></div>
+
+<script>
+'use strict';
+/* ═══════════ 状态 ═══════════ */
+var state = { role: 'admin', page: 'overview' };
+
+/* ═══════════ 导航定义（role-scoped） ═══════════ */
+var NAV = {
+  admin: [
+    { id: 'overview', ico: '▦', label: '部署概览' },
+    { id: 'users',    ico: '◉', label: '用户列表' },
+    { id: 'approve',  ico: '✓', label: '设备审批', badge: 2 },
+    { id: 'relay',    ico: '⇄', label: '中转状态' },
+    { id: 'audit',    ico: '≡', label: '审计日志' },
+    { id: 'backups',  ico: '⤓', label: '备份管理' },
+    { id: 'settings', ico: '⚙', label: '服务器设置' },
+  ],
+  user: [
+    { id: 'vault',    ico: '▦', label: '凭据概览' },
+    { id: 'mydev',    ico: '▣', label: '我的设备' },
+    { id: 'sync',     ico: '⟳', label: '同步状态' },
+    { id: 'myact',    ico: '≡', label: '活动记录' },
+    { id: 'health',   ico: '♥', label: '安全体检' },
+  ],
+};
+
+/* ═══════════ 小工具 ═══════════ */
+function esc(s) { return String(s).replace(/[&<>"]/g, function (c) {
+  return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
+
+function chip(kind, icon, text) {
+  return '<span class="chip ' + kind + '">' + icon + ' ' + esc(text) + '</span>';
+}
+function meter(pct) {
+  return '<div class="meter"><i style="width:' + pct + '%"></i></div>';
+}
+function barrow(name, pct, count) {
+  return '<div class="barrow"><span class="n">' + esc(name) + '</span>' +
+    '<span>' + meter(pct) + '</span><span class="c">' + esc(count) + '</span></div>';
+}
+function stat(k, v, unit, d) {
+  return '<div class="card stat"><div class="k">' + esc(k) + '</div>' +
+    '<div class="v">' + v + (unit ? '<small>' + esc(unit) + '</small>' : '') + '</div>' +
+    (d ? '<div class="d">' + esc(d) + '</div>' : '') + '</div>';
+}
+function toast(html) {
+  var t = document.getElementById('toast');
+  t.innerHTML = html;
+  t.classList.add('show');
+  clearTimeout(toast._h);
+  toast._h = setTimeout(function () { t.classList.remove('show'); }, 2800);
+}
+/* 未接线的真实动作统一走这里——诚实声明原型边界 */
+function proto(act) {
+  toast('<b>示意交互</b> · 实现阶段接线：' + esc(act));
+}
+function dataFoot() {
+  return '<div class="data-foot">以上数据均为示意值 · 原型未接任何真实 API</div>';
+}
+
+/* ═══════════ 页面渲染（管理员） ═══════════ */
+
+var PAGES = {};
+
+/* ── 管理员 · 部署概览 ── */
+PAGES.admin_overview = function () {
+  var days = [42, 51, 38, 60, 47, 55, 49];
+  var bars = days.map(function (v) {
+    return '<i style="height:' + Math.round(v / 60 * 100) + '%" title="' + v + ' 条指令（示意）"></i>';
+  }).join('');
+  var labels = ['一', '二', '三', '四', '五', '六', '日'].map(function (d) {
+    return '<span>' + d + '</span>';
+  }).join('');
+  return '' +
+    '<div class="page-head"><h1>部署概览</h1><p>实例 persona.example.internal · 单机 docker compose 部署</p></div>' +
+
+    '<div class="boundary"><span class="ico">🔒</span><div>' +
+    '<p><b>端到端加密边界</b>：本控制台只展示部署与账号元数据。所有用户保险库内容均由各用户/组的密钥端到端加密，服务器与管理员不可见任何库内条目、明文凭据或密钥。</p>' +
+    '</div></div>' +
+
+    '<div class="grid g4">' +
+    stat('服务器版本', 'v0.1.0', 'nightly+9c41f2e', 'schema 24 · 迁移全部就位') +
+    stat('持续运行', '14', '天 6 小时', '自 2026-11-10 04:12 起') +
+    stat('存储占用', '1.8', 'GB / 10 GB', 'SQLite + 备份 · 卷使用 18%') +
+    stat('活跃会话', '5', '', '3 用户 · 2 台设备保活') +
+    '</div>' +
+
+    '<div class="grid g2" style="margin-top:14px">' +
+    '<div class="card"><h3>近 7 日同步指令量（示意）</h3>' +
+    '<div class="minibar">' + bars + '</div><div class="minibar-x">' + labels + '</div>' +
+    '<div class="note">单色量级条 · 悬停看数值 · 语义为 oplog 追加条数</div></div>' +
+
+    '<div class="card"><h3>服务健康</h3>' +
+    '<table><tbody>' +
+    '<tr><td>API 服务</td><td style="text-align:right">' + chip('ok', '✓', '正常 · 12ms p50') + '</td></tr>' +
+    '<tr><td>中转 relay</td><td style="text-align:right">' + chip('ok', '✓', '正常 · 4 连接') + '</td></tr>' +
+    '<tr><td>数据库</td><td style="text-align:right">' + chip('ok', '✓', '正常 · WAL 模式') + '</td></tr>' +
+    '<tr><td>定时备份</td><td style="text-align:right">' + chip('ok', '✓', '今日 02:00 成功') + '</td></tr>' +
+    '<tr><td>证书</td><td style="text-align:right">' + chip('warn', '!', '62 天后到期') + '</td></tr>' +
+    '</tbody></table></div>' +
+    '</div>' +
+
+    '<div class="card" style="margin-top:14px"><h3>备份状态</h3>' +
+    '<div class="grid g3">' +
+    stat('最近备份', '今日 02:00', '', '整库密文 · 812 MB · 校验通过') +
+    stat('还原点', '7', '个', '保留策略：7 天滚动') +
+    stat('下次备份', '今晚 02:00', '', '自动 · 可手动触发') +
+    '</div></div>' +
+    dataFoot();
+};
+
+/* ── 管理员 · 用户列表 ── */
+PAGES.admin_users = function () {
+  var users = [
+    { n: 'alice',  s: 'ok',   st: '正常',  dev: 3, q: 34, act: '5 分钟前' },
+    { n: 'bob',    s: 'ok',   st: '正常',  dev: 2, q: 12, act: '2 小时前' },
+    { n: 'carol',  s: 'warn', st: '已禁用', dev: 1, q: 8,  act: '12 天前' },
+    { n: 'dave',   s: 'ok',   st: '正常',  dev: 4, q: 61, act: '昨天' },
+    { n: 'erin',   s: 'dim',  st: '待激活', dev: 0, q: 0,  act: '邀请码未使用' },
+  ];
+  var rows = users.map(function (u) {
+    var toggle = u.st === '已禁用'
+      ? '<button class="btn sm" onclick="proto(\'启用账号 alice 之后可重新登录与同步（示意）\')">启用</button>'
+      : '<button class="btn sm danger" onclick="proto(\'禁用账号（可随时恢复，不是删除）·示意\')">禁用</button>';
+    return '<tr>' +
+      '<td><b>' + esc(u.n) + '</b></td>' +
+      '<td>' + chip(u.s, u.s === 'ok' ? '✓' : u.s === 'warn' ? '⏸' : '◌', u.st) + '</td>' +
+      '<td>' + u.dev + ' 台</td>' +
+      '<td style="min-width:140px"><div style="margin-bottom:4px">' + u.q + '% / 10 GB</div>' + meter(u.q) + '</td>' +
+      '<td>' + esc(u.act) + '</td>' +
+      '<td style="white-space:nowrap">' +
+      toggle + ' ' +
+      '<button class="btn sm" onclick="proto(\'重置登录：作废旧邀请码并签发新邀请码（不影响已加入设备）·示意\')">重置邀请码</button>' +
+      '</td></tr>';
+  }).join('');
+  return '' +
+    '<div class="page-head"><h1>用户列表</h1><p>共 5 个账号（示意）· 注册制：邀请码</p></div>' +
+
+    '<div class="boundary"><span class="ico">🔒</span><div>' +
+    '<p><b>管理员能力边界（端到端加密不可逾越）</b></p>' +
+    '<p>① 管理员只能看到<b>元数据</b>：用户名、设备数、配额占用、活跃时间——库内容、条目数、密码健康等均不可见；' +
+    '② <b>禁用 ≠ 删除</b>：禁用仅阻断登录与同步，账号与库数据完整保留、可随时恢复；' +
+    '③ <b>重置 = 换邀请码</b>：作废旧邀请码并签发新码，供账号本人重新配对，不触碰已加入设备与库数据。</p>' +
+    '</div></div>' +
+
+    '<div class="card"><table>' +
+    '<thead><tr><th>用户</th><th>状态</th><th>设备</th><th>配额占用</th><th>最近活跃</th><th>操作</th></tr></thead>' +
+    '<tbody>' + rows + '</tbody></table>' +
+    '<div class="note">配额占用为服务端密文体积（不含端到端加密前的内容），与库内条目数无关。</div></div>' +
+    dataFoot();
+};
+
+/* ── 管理员 · 设备审批 ── */
+PAGES.admin_approve = function () {
+  return '' +
+    '<div class="page-head"><h1>设备审批</h1><p>新设备首次配对需管理员批准（可在服务器设置中关闭）</p></div>' +
+
+    '<div class="card"><h3>待审批（2 · 示意）</h3>' +
+    '<div class="req"><div><div class="dev">bob 的 iPad</div>' +
+    '<div class="meta">申请人 bob · iPadOS 18 · persona 0.1.0 · 申请于 20 分钟前</div>' +
+    '<div class="meta">设备指纹 <span class="fp">7F2A 91C4 0D6B E815 44A9 3C02</span></div></div>' +
+    '<div class="acts"><button class="btn primary sm" onclick="proto(\'批准设备配对并下发组密钥信封（示意）\')">批准</button>' +
+    '<button class="btn danger sm" onclick="proto(\'拒绝配对申请（示意）\')">拒绝</button></div></div>' +
+    '<div class="req"><div><div class="dev">dave 的 Linux 笔记本</div>' +
+    '<div class="meta">申请人 dave · Fedora 43 · persona 0.1.0 · 申请于 1 小时前</div>' +
+    '<div class="meta">设备指纹 <span class="fp">B04D 77E1 29FC 58A3 D610 9EB4</span></div></div>' +
+    '<div class="acts"><button class="btn primary sm" onclick="proto(\'批准设备配对并下发组密钥信封（示意）\')">批准</button>' +
+    '<button class="btn danger sm" onclick="proto(\'拒绝配对申请（示意）\')">拒绝</button></div></div>' +
+    '</div>' +
+
+    '<div class="card" style="margin-top:14px"><h3>已配对设备（示意）</h3>' +
+    '<table><thead><tr><th>设备</th><th>属主</th><th>平台</th><th>配对时间</th><th>最近同步</th><th>操作</th></tr></thead><tbody>' +
+    '<tr><td>alice 的笔记本</td><td>alice</td><td>macOS 15</td><td>2026-10-02</td><td>5 分钟前</td><td><button class="btn sm danger" onclick="proto(\'吊销设备：移除信封，该设备须重新审批（示意）\')">吊销</button></td></tr>' +
+    '<tr><td>alice 的手机</td><td>alice</td><td>iOS 18</td><td>2026-10-15</td><td>1 小时前</td><td><button class="btn sm danger" onclick="proto(\'吊销设备（示意）\')">吊销</button></td></tr>' +
+    '<tr><td>bob 的台式机</td><td>bob</td><td>Windows 11</td><td>2026-11-01</td><td>2 小时前</td><td><button class="btn sm danger" onclick="proto(\'吊销设备（示意）\')">吊销</button></td></tr>' +
+    '<tr><td>dave 的服务器</td><td>dave</td><td>Debian 13</td><td>2026-09-20</td><td>昨天</td><td><button class="btn sm danger" onclick="proto(\'吊销设备（示意）\')">吊销</button></td></tr>' +
+    '</tbody></table>' +
+    '<div class="note">吊销只移除该设备的密钥信封并阻断同步——设备本地已加密的库副本不受服务器控制，属端到端加密固有边界。</div></div>' +
+    dataFoot();
+};
+
+/* ── 管理员 · 中转状态 ── */
+PAGES.admin_relay = function () {
+  return '' +
+    '<div class="page-head"><h1>中转状态</h1><p>同步指令与组密钥信封经 persona-server 中转 · 中转只见密文</p></div>' +
+
+    '<div class="grid g4">' +
+    stat('当前连接', '4', '', '4 设备 · 3 用户') +
+    stat('今日上行', '312', 'MB', '设备 → 服务器（密文）') +
+    stat('今日下行', '1.1', 'GB', '服务器 → 设备（密文）') +
+    stat('消息积压', '0', '条', '队列健康') +
+    '</div>' +
+
+    '<div class="card" style="margin-top:14px"><h3>在线设备（示意）</h3>' +
+    '<table><thead><tr><th>设备</th><th>属主</th><th>连接建立</th><th>本轮流量</th><th>状态</th></tr></thead><tbody>' +
+    '<tr><td>alice 的笔记本</td><td>alice</td><td>08:32</td><td>↑12 MB ↓38 MB</td><td>' + chip('ok', '✓', '保活') + '</td></tr>' +
+    '<tr><td>alice 的手机</td><td>alice</td><td>09:04</td><td>↑4 MB ↓19 MB</td><td>' + chip('ok', '✓', '保活') + '</td></tr>' +
+    '<tr><td>bob 的台式机</td><td>bob</td><td>07:58</td><td>↑9 MB ↓52 MB</td><td>' + chip('ok', '✓', '保活') + '</td></tr>' +
+    '<tr><td>dave 的服务器</td><td>dave</td><td>10:11</td><td>↑2 MB ↓11 MB</td><td>' + chip('dim', '◌', '长轮询') + '</td></tr>' +
+    '</tbody></table>' +
+    '<div class="note">中转层只见到加密指令流（oplog 分片）与组密钥信封——语义与内容均不可读，见部署概览的加密边界说明。</div></div>' +
+    dataFoot();
+};
+
+/* ── 管理员 · 审计日志 ── */
+PAGES.admin_audit = function () {
+  var logs = [
+    { t: '10:41:02', c: 'auth',   who: 'alice', act: '登录成功',         obj: '笔记本',       r: ['ok', '✓', '成功'] },
+    { t: '10:38:47', c: 'sync',   who: 'alice', act: '同步周期完成',     obj: 'pull 12 · push 3', r: ['ok', '✓', '成功'] },
+    { t: '10:31:15', c: 'device', who: 'bob',   act: '申请设备配对',     obj: 'bob 的 iPad',  r: ['warn', '!', '待审批'] },
+    { t: '10:12:30', c: 'auth',   who: 'carol', act: '登录被拒',         obj: '手机',         r: ['bad', '✕', '账号已禁用'] },
+    { t: '09:58:03', c: 'backup', who: 'system',act: '定时备份完成',     obj: '812 MB · 7/7', r: ['ok', '✓', '成功'] },
+    { t: '09:22:41', c: 'device', who: 'dave',  act: '设备吊销',         obj: '旧平板',       r: ['ok', '✓', '信封已移除'] },
+    { t: '08:47:19', c: 'sync',   who: 'bob',   act: '同步冲突裁决',     obj: 'LWW · 2 条',   r: ['ok', '✓', '已收敛'] },
+    { t: '02:00:00', c: 'backup', who: 'system',act: '定时备份开始',     obj: '每日 02:00',   r: ['dim', '◌', '计划'] },
+  ];
+  var rows = logs.map(function (l, i) {
+    return '<tr data-cat="' + l.c + '"><td class="mono">' + l.t + '</td><td>' + esc(l.who) + '</td>' +
+      '<td>' + esc(l.act) + '</td><td class="mono">' + esc(l.obj) + '</td>' +
+      '<td>' + chip(l.r[0], l.r[1], l.r[2]) + '</td></tr>';
+  }).join('');
+  return '' +
+    '<div class="page-head"><h1>审计日志</h1><p>events 面 · 保留 30 天（示意）· 只记录元数据事件，不含任何库内容</p></div>' +
+    '<div class="card">' +
+    '<div style="display:flex;gap:8px;margin-bottom:12px" id="auditFilter">' +
+    ['all:全部', 'auth:认证', 'sync:同步', 'device:设备', 'backup:备份'].map(function (x) {
+      var p = x.split(':');
+      return '<button class="btn sm' + (p[0] === 'all' ? ' primary' : '') + '" data-f="' + p[0] + '">' + p[1] + '</button>';
+    }).join('') +
+    '</div>' +
+    '<table><thead><tr><th>时间</th><th>主体</th><th>动作</th><th>对象</th><th>结果</th></tr></thead>' +
+    '<tbody id="auditBody">' + rows + '</tbody></table></div>' +
+    dataFoot();
+};
+
+/* ── 管理员 · 备份管理 ── */
+PAGES.admin_backups = function () {
+  var points = [
+    { t: '2026-11-24 02:00', k: '自动', s: '812 MB' },
+    { t: '2026-11-23 02:00', k: '自动', s: '809 MB' },
+    { t: '2026-11-22 18:30', k: '手动', s: '801 MB' },
+    { t: '2026-11-22 02:00', k: '自动', s: '800 MB' },
+    { t: '2026-11-21 02:00', k: '自动', s: '793 MB' },
+  ];
+  var rows = points.map(function (p) {
+    return '<tr><td class="mono">' + p.t + '</td>' +
+      '<td>' + chip(p.k === '手动' ? 'dim' : 'ok', p.k === '手动' ? '◌' : '⟳', p.k) + '</td>' +
+      '<td>' + p.s + '</td>' +
+      '<td style="white-space:nowrap">' +
+      '<button class="btn sm" onclick="proto(\'下载备份文件（整库密文）·示意\')">下载</button> ' +
+      '<button class="btn sm danger" onclick="proto(\'从还原点恢复：停写 → 校验 → 回滚（示意）\')">恢复到此点</button>' +
+      '</td></tr>';
+  }).join('');
+  return '' +
+    '<div class="page-head"><h1>备份管理</h1><p>整库密文快照 · 恢复需对应组密钥，备份文件本身不可读</p></div>' +
+    '<div class="grid g4">' +
+    stat('计划', '每日 02:00', '', 'crontab · 可改') +
+    stat('保留', '7', '个还原点', '超出滚动删除') +
+    stat('最新还原点', '812', 'MB', '今日 02:00 · 校验通过') +
+    stat('备份总体积', '5.6', 'GB', '含在 10 GB 配额内') +
+    '</div>' +
+    '<div class="card" style="margin-top:14px"><h3>还原点（示意）</h3>' +
+    '<div style="margin-bottom:12px"><button class="btn primary" onclick="proto(\'立即执行一次手动备份（示意）\')">立即备份</button></div>' +
+    '<table><thead><tr><th>时间</th><th>类型</th><th>大小</th><th>操作</th></tr></thead><tbody>' + rows + '</tbody></table>' +
+    '<div class="note">备份为整库密文（与端到端加密一致）：下载到本机同样是密文，没有组密钥无法打开——跨机恢复时密钥信封随备份一并携带。</div></div>' +
+    dataFoot();
+};
+
+/* ── 管理员 · 服务器设置 ── */
+PAGES.admin_settings = function () {
+  var codes = [
+    { c: 'PER-7K2M-9XQ4', note: 'erin 入组', used: 0, cap: 1, exp: '7 天后' },
+    { c: 'PER-QW81-RZ5T', note: '备用', used: 0, cap: 3, exp: '30 天后' },
+    { c: 'PER-4MFD-2NV8', note: '初始批次', used: 4, cap: 4, exp: '已用尽' },
+  ];
+  var codeRows = codes.map(function (c) {
+    var st = c.used >= c.cap ? chip('dim', '◌', '已用尽') : chip('ok', '✓', '有效');
+    return '<tr><td class="mono">' + c.c + '</td><td>' + esc(c.note) + '</td>' +
+      '<td>' + c.used + ' / ' + c.cap + '</td><td>' + esc(c.exp) + '</td>' +
+      '<td>' + st + ' <button class="btn sm danger" onclick="proto(\'作废邀请码（示意）\')">作废</button></td></tr>';
+  }).join('');
+  return '' +
+    '<div class="page-head"><h1>服务器设置</h1><p>改动即时生效并写入审计日志（示意界面）</p></div>' +
+    '<div class="grid g2">' +
+    '<div class="card"><h3>注册与准入</h3>' +
+    '<div class="setrow"><div><div class="t">开放注册</div><div class="s">关闭后仅持邀请码可注册</div></div>' +
+    '<div class="ctl"><label class="switch"><input type="checkbox" onchange="toast(\'<b>示意</b> · 开放注册已切到 \'+(this.checked?\'开\':\'关\')+\'（实现阶段落 config）\')"><i></i></label></div></div>' +
+    '<div class="setrow"><div><div class="t">新设备需审批</div><div class="s">已注册用户新增设备配对时需管理员批准</div></div>' +
+    '<div class="ctl"><label class="switch"><input type="checkbox" checked onchange="toast(\'<b>示意</b> · 设备审批开关（示意）\')"><i></i></label></div></div>' +
+    '<div class="setrow"><div><div class="t">会话空闲超时</div><div class="s">无操作 30 分钟后要求重新认证</div></div>' +
+    '<div class="ctl"><button class="btn sm" onclick="proto(\'编辑会话超时（示意）\')">30 分钟</button></div></div>' +
+    '</div>' +
+    '<div class="card"><h3>配额</h3>' +
+    '<div class="setrow"><div><div class="t">每用户存储配额</div><div class="s">密文体积计 · 含备份</div></div>' +
+    '<div class="ctl"><button class="btn sm" onclick="proto(\'编辑配额（示意）\')">10 GB</button></div></div>' +
+    '<div class="setrow"><div><div class="t">每用户设备上限</div><div class="s">超出后新设备申请被拒</div></div>' +
+    '<div class="ctl"><button class="btn sm" onclick="proto(\'编辑设备上限（示意）\')">5 台</button></div></div>' +
+    '<div class="setrow"><div><div class="t">同步指令保留</div><div class="s">快照覆盖后的 oplog 裁剪阈值</div></div>' +
+    '<div class="ctl"><button class="btn sm" onclick="proto(\'编辑保留策略（示意）\')">7 天</button></div></div>' +
+    '</div>' +
+    '</div>' +
+    '<div class="card" style="margin-top:14px"><h3>邀请码</h3>' +
+    '<div style="margin-bottom:12px"><button class="btn primary" onclick="proto(\'生成新邀请码（示意）\')">生成邀请码</button></div>' +
+    '<table><thead><tr><th>邀请码</th><th>备注</th><th>已用</th><th>有效期</th><th>状态 / 操作</th></tr></thead><tbody>' +
+    codeRows + '</tbody></table>' +
+    '<div class="note">邀请码仅用于准入注册/重置配对，不携带任何密钥材料——库密钥始终由端用户设备持有。</div></div>' +
+    dataFoot();
+};
+
+/* ═══════════ 页面渲染（用户） ═══════════ */
+
+/* ── 用户 · 凭据概览（只展示计数，绝无明文） ── */
+PAGES.user_vault = function () {
+  var types = [
+    { n: '登录',   c: 86, p: 60 },
+    { n: 'SSH 密钥', c: 18, p: 13 },
+    { n: '银行卡', c: 6,  p: 4 },
+    { n: '安全笔记', c: 24, p: 17 },
+    { n: '身份',   c: 8,  p: 6 },
+  ];
+  var bars = types.map(function (t) { return barrow(t.n, t.p, t.c + ' 条'); }).join('');
+  return '' +
+    '<div class="page-head"><h1>凭据概览</h1><p>我的保险库 · 全部内容端到端加密，服务器不可见</p></div>' +
+    '<div class="grid g4">' +
+    stat('条目总数', '142', '', '5 类 · 最近添加于昨天') +
+    stat('弱口令', '3', '', '本机体检判定 · 建议更换') +
+    stat('重复口令', '5', '', '跨条目复用 · 建议差异化') +
+    stat('TOTP 覆盖', '68', '%', '97/142 条支持二步验证的已启用') +
+    '</div>' +
+    '<div class="grid g2" style="margin-top:14px">' +
+    '<div class="card"><h3>按类型分布（示意）</h3>' + bars +
+    '<div class="note">单色量级条 · 只有点数，无任何条目内容</div></div>' +
+    '<div class="card"><h3>最近添加（示意）</h3>' +
+    '<table><tbody>' +
+    '<tr><td>GitHub 企业账号</td><td>' + chip('dim', '◌', '登录') + '</td><td style="text-align:right;color:var(--muted)">昨天</td></tr>' +
+    '<tr><td>运维跳板机</td><td>' + chip('dim', '◌', 'SSH') + '</td><td style="text-align:right;color:var(--muted)">3 天前</td></tr>' +
+    '<tr><td>家庭 Wi-Fi</td><td>' + chip('dim', '◌', '安全笔记') + '</td><td style="text-align:right;color:var(--muted)">上周</td></tr>' +
+    '</tbody></table>' +
+    '<div class="note">仅标题元数据示意 · 密文与密码本体永不出库</div></div>' +
+    '</div>' +
+    dataFoot();
+};
+
+/* ── 用户 · 我的设备 ── */
+PAGES.user_mydev = function () {
+  return '' +
+    '<div class="page-head"><h1>我的设备</h1><p>当前授权同步的设备 · 上限 5 台</p></div>' +
+    '<div class="card"><table>' +
+    '<thead><tr><th>设备</th><th>平台</th><th>最近同步</th><th>状态</th><th>操作</th></tr></thead><tbody>' +
+    '<tr><td><b>我的笔记本</b>（当前）</td><td>macOS 15</td><td>5 分钟前</td>' +
+    '<td>' + chip('ok', '✓', '已授权') + '</td><td><span style="color:var(--faint)">—</span></td></tr>' +
+    '<tr><td><b>我的手机</b></td><td>iOS 18</td><td>1 小时前</td>' +
+    '<td>' + chip('ok', '✓', '已授权') + '</td><td><button class="btn sm danger" onclick="proto(\'撤销此设备授权：需重新配对审批（示意）\')">撤销</button></td></tr>' +
+    '<tr><td><b>家里台式机</b></td><td>Windows 11</td><td>3 天前</td>' +
+    '<td>' + chip('warn', '!', '离线 3 天') + '</td><td><button class="btn sm danger" onclick="proto(\'撤销此设备授权（示意）\')">撤销</button></td></tr>' +
+    '</tbody></table>' +
+    '<div class="note">撤销只移除本设备的同步信封；本地已加密副本需在本机自行删除（端到端加密边界）。</div></div>' +
+    dataFoot();
+};
+
+/* ── 用户 · 同步状态 ── */
+PAGES.user_sync = function () {
+  return '' +
+    '<div class="page-head"><h1>同步状态</h1><p>当前走服务器中转 · 同一密钥组内 3 台设备共享密文</p></div>' +
+    '<div class="grid g4">' +
+    stat('同步模式', '服务器中转', '', '可在桌面端切换为云盘目录') +
+    stat('最近同步', '5', '分钟前', 'pull 12 · push 3 · 无冲突') +
+    stat('落后指令', '0', '条', '与组水位一致') +
+    stat('组密钥轮换', '从未', '', '上次轮换：— · 建议泄露事件后轮换') +
+    '</div>' +
+    '<div class="grid g2" style="margin-top:14px">' +
+    '<div class="card"><h3>密钥组成员（示意）</h3>' +
+    '<table><tbody>' +
+    '<tr><td><b>我的笔记本</b></td><td>' + chip('ok', '✓', '已拆封信封') + '</td><td style="text-align:right;color:var(--muted)">本人</td></tr>' +
+    '<tr><td><b>我的手机</b></td><td>' + chip('ok', '✓', '已拆封信封') + '</td><td style="text-align:right;color:var(--muted)">已授权</td></tr>' +
+    '<tr><td><b>家里台式机</b></td><td>' + chip('warn', '!', '待重新同步') + '</td><td style="text-align:right;color:var(--muted)">已授权</td></tr>' +
+    '</tbody></table>' +
+    '<div class="note">组密钥只在各设备本地拆封（X25519 信封），服务器只存密文信封。</div></div>' +
+    '<div class="card"><h3>云盘目录（可选传输）</h3>' +
+    '<div class="setrow"><div><div class="t">未启用</div>' +
+    '<div class="s">不想自建服务器？可在桌面端把传输切到 iCloud/Dropbox 等云盘目录，同一套端到端加密协议。</div></div></div>' +
+    '<div style="margin-top:10px"><button class="btn" onclick="proto(\'打开桌面端 同步设置（示意跳转）\')">在桌面端配置</button></div>' +
+    '</div></div>' +
+    '<div style="margin-top:14px"><button class="btn primary" onclick="proto(\'立即同步：跑一轮完整同步周期（示意）\')">立即同步</button></div>' +
+    dataFoot();
+};
+
+/* ── 用户 · 活动记录（仅本人事件） ── */
+PAGES.user_myact = function () {
+  var acts = [
+    { t: '今天 10:41', a: '解锁保险库', o: '我的笔记本' },
+    { t: '今天 10:39', a: '添加条目',   o: 'GitHub 企业账号（标题元数据）' },
+    { t: '今天 09:12', a: '同步完成',   o: 'pull 12 · push 3' },
+    { t: '昨天 21:30', a: '解锁保险库', o: '我的手机' },
+    { t: '昨天 18:04', a: '密码体检完成', o: '弱 3 · 重复 5（本机计算）' },
+    { t: '11-21',     a: '新设备配对',  o: '我的手机 · 审批通过' },
+  ];
+  var rows = acts.map(function (x) {
+    return '<tr><td class="mono" style="white-space:nowrap">' + esc(x.t) + '</td><td>' + esc(x.a) + '</td>' +
+      '<td class="mono">' + esc(x.o) + '</td></tr>';
+  }).join('');
+  return '' +
+    '<div class="page-head"><h1>活动记录</h1><p>只属于我的事件 · 其他人（含管理员）的库活动不可见</p></div>' +
+    '<div class="card"><table>' +
+    '<thead><tr><th>时间</th><th>动作</th><th>对象</th></tr></thead><tbody>' + rows + '</tbody></table>' +
+    '<div class="note">条目级操作只记录动作类型与标题元数据，绝不记录密码等机密字段。</div></div>' +
+    dataFoot();
+};
+
+/* ── 用户 · 安全体检 ── */
+PAGES.user_health = function () {
+  return '' +
+    '<div class="page-head"><h1>安全体检</h1><p>全部在本机计算 · 只上传统计计数，不上传任何条目内容</p></div>' +
+    '<div class="grid g2">' +
+    '<div class="card"><h3>综合评分</h3>' +
+    '<div class="score"><span class="n">86</span><span class="o">/ 100</span>' +
+    '<span style="margin-left:10px">' + chip('ok', '✓', '良好') + '</span></div>' +
+    '<div style="margin-top:12px">' + meter(86) + '</div>' +
+    '<div class="note">评分 = 密码健康 60% + TOTP 覆盖 25% + 陈旧度 15%（示意权重）</div></div>' +
+    '<div class="card"><h3>密码健康（示意）</h3>' +
+    '<table><tbody>' +
+    '<tr><td>弱口令（长度/熵不足）</td><td style="text-align:right"><b style="color:var(--warn)">3</b> 条</td>' +
+    '<td style="text-align:right">' + chip('warn', '!', '建议更换') + '</td></tr>' +
+    '<tr><td>跨条目重复</td><td style="text-align:right"><b style="color:var(--warn)">5</b> 条</td>' +
+    '<td style="text-align:right">' + chip('warn', '!', '建议差异化') + '</td></tr>' +
+    '<tr><td>陈旧（>180 天未换）</td><td style="text-align:right"><b>12</b> 条</td>' +
+    '<td style="text-align:right">' + chip('dim', '◌', '可选') + '</td></tr>' +
+    '<tr><td>已泄露口令（离线黑名单比对）</td><td style="text-align:right"><b style="color:var(--bad)">0</b> 条</td>' +
+    '<td style="text-align:right">' + chip('ok', '✓', '未命中') + '</td></tr>' +
+    '</tbody></table></div>' +
+    '</div>' +
+    '<div class="grid g2" style="margin-top:14px">' +
+    '<div class="card"><h3>二步验证覆盖（示意）</h3>' +
+    '<div style="margin-bottom:6px">97 / 142 条 · 68%</div>' + meter(68) +
+    '<div class="note">覆盖目标：支持 TOTP 的高价值条目 ≥ 80%</div></div>' +
+    '<div class="card"><h3>改进建议（按优先级）</h3>' +
+    '<div class="reco"><span class="p">高</span><span>更换 3 个弱口令（网银、邮箱、路由器）</span></div>' +
+    '<div class="reco"><span class="p">高</span><span>差异化 5 条重复口令，避免一破多连</span></div>' +
+    '<div class="reco"><span class="p">中</span><span>为 28 条支持的条目补开 TOTP</span></div>' +
+    '<div class="reco"><span class="p">低</span><span>12 条陈旧口令排期轮换</span></div>' +
+    '</div></div>' +
+    dataFoot();
+};
+
+/* ═══════════ 路由与装配 ═══════════ */
+
+function renderNav() {
+  var items = NAV[state.role].map(function (n) {
+    return '<a href="#" data-p="' + n.id + '" class="' + (n.id === state.page ? 'on' : '') + '">' +
+      '<span class="ico">' + n.ico + '</span>' + esc(n.label) +
+      (n.badge ? '<span class="badge">' + n.badge + '</span>' : '') + '</a>';
+  }).join('');
+  document.getElementById('nav').innerHTML =
+    '<div class="nav-title">' + (state.role === 'admin' ? '管理员' : '我的保险库') + '</div>' + items;
+  Array.prototype.forEach.call(document.querySelectorAll('#nav a'), function (a) {
+    a.onclick = function (e) { e.preventDefault(); state.page = a.getAttribute('data-p'); render(); };
+  });
+}
+
+function renderMain() {
+  var fn = PAGES[state.role + '_' + state.page];
+  document.getElementById('main').innerHTML = fn ? fn() : '<p>页面不存在（原型内部错误）</p>';
+  wirePage();
+}
+
+/* 页面内接线：审计过滤 chip */
+function wirePage() {
+  var f = document.getElementById('auditFilter');
+  if (!f) return;
+  Array.prototype.forEach.call(f.querySelectorAll('button'), function (b) {
+    b.onclick = function () {
+      Array.prototype.forEach.call(f.querySelectorAll('button'), function (x) { x.classList.remove('primary'); });
+      b.classList.add('primary');
+      var cat = b.getAttribute('data-f');
+      Array.prototype.forEach.call(document.querySelectorAll('#auditBody tr'), function (tr) {
+        tr.style.display = (cat === 'all' || tr.getAttribute('data-cat') === cat) ? '' : 'none';
+      });
+    };
+  });
+}
+
+function render() {
+  /* 角色切换时落回该角色的第一个有效页 */
+  var ok = NAV[state.role].some(function (n) { return n.id === state.page; });
+  if (!ok) state.page = NAV[state.role][0].id;
+  var seg = document.getElementById('roleSeg');
+  Array.prototype.forEach.call(seg.querySelectorAll('button'), function (b) {
+    b.classList.toggle('on', b.getAttribute('data-role') === state.role);
+  });
+  document.getElementById('whoName').textContent = state.role === 'admin' ? 'admin（管理员）' : 'alice（用户）';
+  document.getElementById('whoAvatar').textContent = state.role === 'admin' ? '管' : 'a';
+  renderNav();
+  renderMain();
+}
+
+document.getElementById('roleSeg').addEventListener('click', function (e) {
+  var b = e.target.closest('button[data-role]');
+  if (!b) return;
+  state.role = b.getAttribute('data-role');
+  render();
+});
+
+render();
+</script>
+</body>
+</html>
