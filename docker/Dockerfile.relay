@@ -1,0 +1,71 @@
+# ---- Stage 1: Build ----
+# 基础镜像按 digest 钉死（与 docker/Dockerfile.server 同款钉法与升级方法，
+# 2026-09-24，可复现性收口）：浮动 tag 的系统层（glibc/链接器/预装工具）
+# 随上游重建漂移。cargo 实际版本不受此影响（rustup 读仓库内
+# rust-toolchain.toml）；digest 钉的是系统层。升级方法（重新查 index digest，
+# docs/REPRODUCIBLE_BUILDS.md「容器钉死」节）：
+#   token=$(curl -s 'https://auth.docker.io/token?service=registry.docker.io&scope=repository:library/rust:pull' | jq -r .token)
+#   curl -sI -H "Authorization: Bearer $token" \
+#     -H "Accept: application/vnd.oci.image.index.v1+json" \
+#     https://registry-1.docker.io/v2/library/rust/manifests/1-bookworm |
+#     grep -i docker-content-digest
+FROM rust:1-bookworm@sha256:93ce27a88655056a51dbdd8f5f2d7ddc071c7b0070fb288a37b5a285fc83971e AS builder
+
+RUN apt-get update && apt-get install -y \
+    pkg-config \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Copy entire workspace
+COPY . .
+
+# Build only persona-relay（薄壳：persona-server 库 + core；不含 server 二进制面）
+RUN cargo build --release -p persona-relay
+
+# ---- Stage 2: Runtime ----
+# digest 钉死同 builder（2026-09-24，升级方法同上头部注释：scope 用
+# repository:library/debian:pull、manifests/bookworm-slim）。与 server runtime
+# 同基础保持仓库习惯；注意钉死后 runtime 层的 apt 包也冻结在镜像时点，
+# 安全补丁随 digest 升级进入。
+FROM debian:bookworm-slim@sha256:3783cc01769c7b2b1b83a5c5ad96c815348e28ed7da68e2e3687004faa906251 AS runtime
+
+# ca-certificates：镜像完整性（万一经 TLS 上游分发）；wget：容器级
+# HEALTHCHECK 探 /health 用。均与 Dockerfile.server runtime 同款。
+RUN apt-get update && apt-get install -y \
+    ca-certificates \
+    wget \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN groupadd -r persona && useradd -r -g persona -d /app -s /sbin/nologin persona
+
+# /data 是建议挂载点（SQLite 落 /data 才随卷持久化，同 server 惯例：
+# fresh 卷属 root，USER persona 写不进会启动即 panic）。构建期建目录并改
+# 属主收口。注意二进制默认 DB 路径是 ./persona-relay.db（relay/src/main.rs:34，
+# 相对 cwd=/app）——要持久化须显式 -e PERSONA_SERVER_DB=/data/persona-relay.db
+# （README-relay.md「Run with Docker」有完整示例）。
+RUN mkdir -p /data /app && chown -R persona:persona /data /app
+
+WORKDIR /app
+
+COPY --from=builder /app/target/release/persona-relay /usr/local/bin/persona-relay
+
+# 随镜像分发许可与文档（server 镜像不拷；relay 镜像按交付要求携带）
+COPY LICENSE /app/LICENSE
+COPY README-relay.md /app/README-relay.md
+
+# relay 路由保留免认证的 /health（server/src/lib.rs:241，经
+# build_relay_router server/src/lib.rs:38-43 装配）→ 容器级 HEALTHCHECK。
+# 端口跟随运行时 env（relay/src/main.rs:76-79，默认 3000）——shell 形式
+# 让 ${PERSONA_SERVER_PORT:-3000} 在容器启动时展开。
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+    CMD wget -q --spider "http://127.0.0.1:${PERSONA_SERVER_PORT:-3000}/health" || exit 1
+
+# 监听面：host 默认 0.0.0.0（relay/src/main.rs:75）、端口默认 3000
+# （relay/src/main.rs:76-79）。容器口映射 -p <宿>:3000。
+EXPOSE 3000
+
+USER persona
+
+ENTRYPOINT ["persona-relay"]
