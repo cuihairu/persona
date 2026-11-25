@@ -1,6 +1,6 @@
 /**
- * autofillUx 测试：TOTP 临期判定/等待时长/通知文案，以及候选选择的
- * 单一命中、默认记忆、歧义标记。
+ * autofillUx tests: TOTP near-expiry detection / wait duration / notice copy, plus candidate
+ * selection — single hit, remembered default, ambiguity flagging.
  */
 import {
     TOTP_STALE_THRESHOLD_SECONDS,

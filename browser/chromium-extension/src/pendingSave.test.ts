@@ -1,6 +1,6 @@
 /**
- * pendingSave 测试：跨导航保存提案的存取契约 —— origin 严格绑定、TTL 过期、
- * read-and-clear 一次性语义、缺字段拒绝。chrome.storage.session 用内存实现。
+ * pendingSave tests: the storage contract for cross-navigation save proposals — strict origin binding, TTL expiry,
+ * one-shot read-and-clear semantics, rejecting missing fields. chrome.storage.session is a memory implementation here.
  */
 import {
     PENDING_SAVE_KEY,
@@ -13,7 +13,7 @@ import {
     type PendingSaveEntry
 } from './pendingSave';
 
-/** chrome.storage.session（MV3 内存区）的最小内存实现 */
+/** Minimal in-memory implementation of chrome.storage.session (the MV3 memory area) */
 function installSessionMock() {
     const session = new Map<string, unknown>();
     (globalThis as any).chrome = {

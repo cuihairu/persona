@@ -58,8 +58,8 @@ export interface StatusPayload {
     connect_port?: number | null;
 }
 
-/** Popup/background 共用的桥状态快照（原 bridge.ts 的 HTTP 探测已删——
- * 该端点从未有服务端实现，扩展只走 native messaging 单通道）。 */
+/** Bridge status snapshot shared by popup/background (the HTTP probe of the former bridge.ts is gone —
+ * that endpoint never had a server implementation, the extension uses the native messaging channel only). */
 export interface BridgeStatus {
     connected: boolean;
     endpoint: string;
@@ -168,27 +168,27 @@ export interface GeneratePasswordResponsePayload {
     password: string;
 }
 
-// ============ Cloud sync bootstrap (bridge protocol v6, M5 批1) ============
+// ============ Cloud sync bootstrap (bridge protocol v6, M5 batch 1) ============
 
 export interface SyncConnectRequest {
     /** Must come from an explicit user action — this hands out vault keys. */
     user_gesture: boolean;
 }
 
-/** `sync_connect_response`：扩展 HTTP 直连数据面的三件套 + 设备标识。
- * 敏感材料只存 chrome.storage.session（内存区），不落盘。 */
+/** `sync_connect_response`: the three connection parameters the extension needs for its HTTP-direct
+ * data plane, plus the device identity. Sensitive material goes only into chrome.storage.session (memory area), never to disk. */
 export interface SyncConnectPayload {
     server_url: string;
     token: string;
     device_id: string;
     device_name: string;
-    /** group key 十六进制（与桌面 sync_group_store 同编码）。 */
+    /** Group key as hex (same encoding as the desktop sync_group_store). */
     group_key_hex: string;
 }
 
 /**
- * 从本地桥取云端同步参数（配对会话 + HMAC + user_gesture 三重门禁）。
- * 成功后扩展自己直连 server 的 /api/v1/sync/*（出 native messaging 桥）。
+ * Fetch the cloud sync parameters from the local bridge (gated three ways: paired session + HMAC + user_gesture).
+ * On success the extension connects directly to the server's /api/v1/sync/* (leaving the native messaging bridge).
  */
 export async function syncConnect(
     host = defaultNativeHost()
@@ -200,7 +200,7 @@ export async function syncConnect(
     );
 }
 
-// ============ Account domain (bridge protocol v7, M5 批2) ============
+// ============ Account domain (bridge protocol v7, M5 batch 2) ============
 
 export interface AccountLoginRequest {
     account_id: string;
@@ -209,8 +209,8 @@ export interface AccountLoginRequest {
     user_gesture: boolean;
 }
 
-/** `account_login_response`：SRP 编排产物。令牌本体直写宿主 keyring，
- * 不经桥协议下发——扩展只见有效期与会话指纹。 */
+/** `account_login_response`: the SRP orchestration result. The token itself is written straight to the host
+ * keyring and never travels over the bridge protocol — the extension only sees the expiry and session fingerprint. */
 export interface AccountLoginPayload {
     expires_in_secs: number;
     session_key_fingerprint: string;
@@ -226,8 +226,8 @@ export interface AccountLogoutPayload {
 }
 
 /**
- * SRP 登录账号域（challenge/verify 两跳与 M2 核验全在宿主 Rust 侧）。
- * 必须由显式用户点击触发——口令换会话令牌，属敏感操作。
+ * SRP account login (both challenge/verify hops and the M2 verification run entirely in host Rust code).
+ * Must be triggered by an explicit user click — trading a password for a session token is a sensitive operation.
  */
 export async function accountLogin(
     request: Omit<AccountLoginRequest, 'user_gesture'>,
@@ -240,16 +240,16 @@ export async function accountLogin(
     );
 }
 
-/** 查询本机账号会话在场与否 + 服务器配置状态（轻量，未登录也安全）。 */
+/** Query whether a local account session exists + server configuration status (lightweight, safe while logged out). */
 export async function accountStatus(
     host = defaultNativeHost()
 ): Promise<NativeBridgeResponse<AccountStatusPayload>> {
     return sendAuthedNativeMessage<AccountStatusPayload>('account_status', {}, host);
 }
 
-// ============ Cloud sync write path (bridge protocol v7, M5 批3) ============
+// ============ Cloud sync write path (bridge protocol v7, M5 batch 3) ============
 
-/** `sync_push_now_response`：与 core SyncNowReport 同字段的计数汇总。 */
+/** `sync_push_now_response`: counter summary mirroring core's SyncNowReport fields. */
 export interface SyncPushNowPayload {
     pulled: number;
     materialized: number;
@@ -260,8 +260,8 @@ export interface SyncPushNowPayload {
 }
 
 /**
- * 立即同步（写路径）：宿主跑 backfill+pull/materialize/push 周期，把主库
- * （含经 save_credential 落库的扩展侧写入）推上云。须显式用户触发。
+ * Sync now (write path): the host runs the backfill+pull/materialize/push cycle and pushes the
+ * primary vault (including extension-side writes persisted via save_credential) to the cloud. Requires an explicit user trigger.
  */
 export async function syncPushNow(
     host = defaultNativeHost()
@@ -274,8 +274,8 @@ export async function syncPushNow(
 }
 
 /**
- * 冲突裁决（M5 批4）：采纳并发双版本之一（adopt_op_id = 落选副本的 op id，
- * 采纳后其余版本淘汰出视图）。须显式用户触发。
+ * Conflict resolution (M5 batch 4): adopt one of the two concurrent versions (adopt_op_id = op id of the
+ * losing copy; the remaining versions drop out of the view once adopted). Requires an explicit user trigger.
  */
 export async function syncResolveConflict(
     itemId: string,
@@ -289,7 +289,7 @@ export async function syncResolveConflict(
     );
 }
 
-/** 登出：宿主侧吊销服务器会话（best-effort）+ 清 keyring 令牌。 */
+/** Logout: revoke the server session host-side (best-effort) + clear the keyring token. */
 export async function accountLogout(
     accountId: string,
     host = defaultNativeHost()
@@ -303,17 +303,17 @@ export async function accountLogout(
 
 const DEFAULT_NATIVE_HOST = 'com.persona.native';
 
-// ---- 传输层平台适配（chromium 与 Safari 同份，M5 批5a）----
-// chromium：NMH stdio 桥（com.persona.native，每请求新进程）。
-// Safari：browser.runtime.sendNativeMessage 把同一份 JSON 报文交给宿主 app
-// 的 SafariWebExtensionHandler（宿主进程代为拉起 `persona bridge`）——
-// 报文格式与桥协议完全同构，只有 host 名（app bundle id）与全局对象
-// （browser 优先于 chrome）分叉，协议层零改动。
+// ---- transport layer platform adaptation (same file for chromium and Safari, M5 batch 5a) ----
+// chromium: NMH stdio bridge (com.persona.native, a fresh process per request).
+// Safari: browser.runtime.sendNativeMessage hands the same JSON message to the host app's
+// SafariWebExtensionHandler (the host process launches `persona bridge` on its behalf) —
+// the message format is fully isomorphic with the bridge protocol; only the host name
+// (app bundle id) and the global object (browser over chrome) diverge, the protocol layer is unchanged.
 
 let nativeHostOverride: string | null = null;
 
-/** Safari 宿主 bundle id 与 chromium NMH 名不同；扩展入口按平台注入，
- * 传 null 恢复 chromium 默认。 */
+/** The Safari host bundle id differs from the chromium NMH name; the extension entry point injects it per platform,
+ * passing null restores the chromium default. */
 export function setNativeHost(host: string | null): void {
     nativeHostOverride = host;
 }
@@ -333,7 +333,7 @@ interface NativeMessagingRuntime {
     };
 }
 
-/** browser.*（Safari/标准 WebExtension）优先，chrome.*（chromium）兜底。 */
+/** Prefer browser.* (Safari / standard WebExtension), fall back to chrome.* (chromium). */
 function extensionRuntime(): NativeMessagingRuntime {
     const g = globalThis as any;
     const candidate = g.browser?.runtime?.sendNativeMessage ? g.browser : g.chrome;
@@ -357,16 +357,16 @@ interface PairingState {
     lastPairingExpiresAtMs?: number;
 }
 
-/** 全局 WebExtension 命名空间：browser（Safari/标准）优先，chrome（chromium）兜底。 */
+/** Global WebExtension namespace: browser (Safari / standard) first, chrome (chromium) as fallback. */
 function extensionGlobal(): { runtime: any; storage?: any } {
     const g = globalThis as any;
     return g.browser ?? g.chrome;
 }
 
 /**
- * 配对状态（含长期 HMAC pairing key）只允许进 `chrome.storage.session`
- * （内存区，浏览器退出即清）。绝不落 `storage.local`（未加密持久盘区）；
- * 若会话区不可用（旧环境），宁可要求重新配对也不落盘。
+ * Pairing state (including the long-lived HMAC pairing key) may only go into `chrome.storage.session`
+ * (memory area, wiped when the browser exits). Never persist to `storage.local` (unencrypted disk area);
+ * if the session area is unavailable (older environments), prefer demanding a re-pair over touching disk.
  */
 function sessionArea(): any {
     return extensionGlobal().storage?.session;
@@ -388,7 +388,7 @@ function storageSet<T>(key: string, value: T): Promise<void> {
     });
 }
 
-/** 旧版把配对状态写进了持久盘区；迁移时读取一次以搬入内存区。 */
+/** Older versions wrote pairing state to the persistent area; read once during migration to move it into the memory area. */
 function storageLocalGet<T>(key: string): Promise<T | undefined> {
     return new Promise((resolve) => {
         const local = extensionGlobal().storage?.local;
@@ -397,7 +397,7 @@ function storageLocalGet<T>(key: string): Promise<T | undefined> {
     });
 }
 
-/** 迁移完成后清除持久盘区残留（把已落盘的 pairing key 从磁盘抹掉）。 */
+/** Scrub the persistent area after migration (erase the pairing key that already landed on disk). */
 function storageLocalRemove(key: string): Promise<void> {
     return new Promise((resolve) => {
         const local = extensionGlobal().storage?.local;

@@ -42,7 +42,7 @@ export function isFillableInput(input: HTMLInputElement): boolean {
     return true;
 }
 
-/** 唯一命中/有默认则返回；多候选无默认返回 ambiguous，调用方弹选择器。 */
+/** Returns on a unique hit or a remembered default; with multiple candidates and no default, returns ambiguous so the caller pops a picker. */
 export function selectSuggestionWithDefault(
     mode: 'password' | 'totp',
     minStrength: number
@@ -246,7 +246,7 @@ export async function maybeAutoFillTotp(_trigger: 'focus', focusedInput?: HTMLIn
 
     const { picked, ambiguous } = selectSuggestionWithDefault('totp', state.currentSettings.minMatchStrengthTotp);
     if (!picked) {
-        // 多候选且无默认记忆：不再静默失败，就地弹出选择下拉
+        // multiple candidates and no remembered default: no more silent failure, pop the picker dropdown in place
         if (ambiguous && focusedInput && !hasValue(focusedInput)) {
             state.lastTotpAutofillAttemptAt = now;
             showSuggestionsDropdown(focusedInput, 'totp');

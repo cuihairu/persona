@@ -1,7 +1,7 @@
 /**
- * loginSteps 测试：多步登录决策（纯函数）。锁定三条安全边界——载入时只填
- * 「自报身份」的字段（autocomplete / login-user-account 命名）、已有值不覆盖、
- * 候选不可唯一解析时不动手。
+ * loginSteps tests: multi-step login decisions (pure functions). Pins down three safety boundaries — on load only fill
+ * "self-reported identity" fields (autocomplete / login-user-account naming), never overwrite an existing value,
+ * and stay hands-off when a candidate cannot be resolved unambiguously.
  */
 import { planLoginStep, type LoginStepInput } from './loginSteps';
 

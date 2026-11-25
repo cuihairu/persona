@@ -1,7 +1,7 @@
 /**
- * nativeBridge 测试：sendNativeMessage 错误路径、配对状态机（hello/pairing/finalize/会话刷新）、
- * 以及 HMAC-SHA256 签名 —— 用 node:crypto 的 createHmac 独立复算签名串，
- * 验证 canonical JSON 的键排序（与 cli bridge.rs 的 Rust 实现对齐）。
+ * nativeBridge tests: sendNativeMessage error paths, the pairing state machine (hello/pairing/finalize/session refresh),
+ * and HMAC-SHA256 signing — recomputing the signature input independently with node:crypto's createHmac,
+ * verifying the canonical JSON key ordering (aligned with the Rust implementation in cli bridge.rs).
  */
 import { createHmac, webcrypto } from 'node:crypto';
 import { TextEncoder as NodeTextEncoder } from 'node:util';
@@ -30,9 +30,9 @@ interface NativeCall {
     message: Record<string, any>;
 }
 
-/** chrome.runtime（native messaging）+ chrome.storage.local/session 的最小内存实现 */
+/** Minimal in-memory implementation of chrome.runtime (native messaging) + chrome.storage.local/session */
 function installChromeBridgeMock() {
-    // 配对材料只进 session（内存区）；local 用独立 Map 以便断言不落盘。
+    // Pairing material goes only into session (memory area); local gets a separate Map so assertions can prove nothing lands on disk.
     const sessionData = new Map<string, unknown>();
     const localData = new Map<string, unknown>();
     const calls: NativeCall[] = [];
@@ -114,7 +114,7 @@ function installChromeBridgeMock() {
                 sessionExpiresAtMs: expiresAtMs
             });
         },
-        /** 注入仅存在于持久盘区的旧版配对状态（模拟迁移前版本）。 */
+        /** Seed a legacy pairing state that exists only in the persistent area (simulating a pre-migration version). */
         seedLocalPairing: async () => {
             localData.set(PAIRING_STORAGE_KEY, {
                 clientInstanceId: 'cid-1',
@@ -123,7 +123,7 @@ function installChromeBridgeMock() {
                 sessionExpiresAtMs: Date.now() + 3_600_000
             });
         },
-        /** 断言配对材料从不写入持久盘区。 */
+        /** Asserts that pairing material is never written to the persistent area. */
         localPairingStored: () => localData.get(PAIRING_STORAGE_KEY),
         stored: (key: string) => sessionData.get(key),
         teardown: () => {
@@ -135,7 +135,7 @@ function installChromeBridgeMock() {
 let mock: ReturnType<typeof installChromeBridgeMock>;
 
 beforeAll(() => {
-    // jsdom 的 crypto 没有 subtle，换 Node 的 webcrypto（含 randomUUID）；TextEncoder 同理补齐
+    // jsdom's crypto has no subtle, swap in Node's webcrypto (randomUUID included); TextEncoder gets the same treatment
     Object.defineProperty(globalThis, 'crypto', {
         value: webcrypto,
         configurable: true
@@ -157,7 +157,7 @@ afterEach(() => {
     mock.teardown();
 });
 
-/** 用独立实现复算签名：签名串 kind\nrequest_id\npayload\nsession_id\nts_ms\nnonce */
+/** Recompute the signature with an independent implementation: signature input is kind\nrequest_id\npayload\nsession_id\nts_ms\nnonce */
 function expectedSignature(kind: string, requestId: string, payloadJson: string, sessionId: string, tsMs: number, nonce: string): string {
     const signingInput = [kind, requestId, payloadJson, sessionId, String(tsMs), nonce].join('\n');
     return createHmac('sha256', Buffer.from(PAIRING_KEY, 'utf8'))
@@ -224,7 +224,7 @@ describe('pairing handshake', () => {
         expect(call.message.payload.extension_version).toBe('0.1.0');
         const state = await getPairingState();
         expect(call.message.payload.client_instance_id).toBe(state.clientInstanceId);
-        // 响应无 session_id → 不得落盘
+        // no session_id in the response -> nothing may be persisted
         expect(state.sessionId).toBeUndefined();
     });
 
@@ -294,7 +294,7 @@ describe('authed requests', () => {
         const response = await getSuggestions('https://example.com');
 
         expect(response.ok).toBe(true);
-        expect(mock.calls).toHaveLength(1); // 会话有效 → 不触发 hello
+        expect(mock.calls).toHaveLength(1); // valid session -> hello not triggered
         const call = authedCall('get_suggestions');
         expect(call.message.payload).toEqual({ origin: 'https://example.com', form_type: 'login' });
 
@@ -304,7 +304,7 @@ describe('authed requests', () => {
             expectedSignature(
                 'get_suggestions',
                 call.message.request_id,
-                // canonical：键已按字典序排序（form_type < origin）
+                // canonical: keys already sorted lexicographically (form_type < origin)
                 JSON.stringify({ form_type: 'login', origin: 'https://example.com' }),
                 'sess-7',
                 auth.ts_ms,
@@ -324,7 +324,7 @@ describe('authed requests', () => {
         });
 
         const call = authedCall('passkey_create');
-        // 手写 canonical 串：顶层 c<o<r<u，request_json 内 a<z，a 内 b<y
+        // hand-written canonical string: top level c<o<r<u, within request_json a<z, within a b<y
         const canonical =
             '{"client_data_json_b64":"x","origin":"https://example.com","request_json":{"a":{"b":3,"y":2},"z":1},"user_gesture":true}';
         const auth = call.message.auth;
@@ -404,8 +404,8 @@ describe('account domain (protocol v7)', () => {
 });
 
 describe('transport parity（chromium 与 Safari 同份，M5 批5a）', () => {
-    /** 与 chrome mock 同构的最小 browser.* 实现（Safari 形态：报文交给
-     * SafariWebExtensionHandler，而非 NMH stdio 进程）。 */
+    /** Minimal browser.* implementation isomorphic to the chrome mock (the Safari shape: the message goes to
+     * SafariWebExtensionHandler, not an NMH stdio process). */
     function installBrowserBridgeMock() {
         const data = new Map<string, unknown>();
         const calls: NativeCall[] = [];
@@ -489,7 +489,7 @@ describe('pairing storage safety (JS-2)', () => {
         const state = await getPairingState();
         expect(state.pairingKeyB64).toBe(PAIRING_KEY_B64);
         expect(state.sessionId).toBe('sess-safe');
-        // 配对材料必须在内存 session 区，持久盘区不得有残留。
+        // Pairing material must live in the memory session area; the persistent area must hold no residue.
         expect(mock.localPairingStored()).toBeUndefined();
     });
 
@@ -500,7 +500,7 @@ describe('pairing storage safety (JS-2)', () => {
 
         expect(state.pairingKeyB64).toBe(PAIRING_KEY_B64);
         expect(state.sessionId).toBe('sess-legacy');
-        // 迁移后磁盘残留被清除。
+        // On-disk residue is scrubbed after migration.
         expect(mock.localPairingStored()).toBeUndefined();
     });
 });

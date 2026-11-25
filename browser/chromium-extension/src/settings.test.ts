@@ -1,6 +1,6 @@
 /**
- * settings 测试：normalize 的布尔字符串收敛 / 数值 clamp / 垃圾输入兜底默认，
- * 以及 chrome.storage.local + onChanged 的读写与订阅语义。
+ * settings tests: normalize's boolean-string coercion / numeric clamping / garbage-input fallback to defaults,
+ * plus the read, write, and subscription semantics of chrome.storage.local + onChanged.
  */
 import {
     AUTOFILL_SETTINGS_KEY,
@@ -14,7 +14,7 @@ import {
 type ChangeRecord = Record<string, { newValue?: unknown }>;
 type ChangeListener = (changes: ChangeRecord, areaName: string) => void;
 
-/** chrome.storage.local + onChanged 的最小内存实现 */
+/** Minimal in-memory implementation of chrome.storage.local + onChanged */
 function installChromeStorageMock() {
     const data = new Map<string, unknown>();
     const listeners = new Set<ChangeListener>();
@@ -58,7 +58,7 @@ function installChromeStorageMock() {
 
     return {
         seed: (key: string, value: unknown) => data.set(key, value),
-        /** 手动触发 onChanged 监听器（可指定任意 area，用于过滤断言） */
+        /** Manually fire the onChanged listeners (any area may be named, for filtering assertions) */
         fire: (changes: ChangeRecord, areaName: string) => {
             listeners.forEach((listener) => listener(changes, areaName));
         },
@@ -171,7 +171,7 @@ describe('onAutofillSettingsChanged', () => {
 
         expect(seen).toHaveLength(1);
         expect(seen[0].minMatchStrengthLogin).toBe(42);
-        expect(seen[0].autoFillLoginOnFocus).toBe(true); // 缺省字段回填默认值
+        expect(seen[0].autoFillLoginOnFocus).toBe(true); // omitted fields are backfilled with defaults
 
         unsubscribe();
         mock.fire({ [AUTOFILL_SETTINGS_KEY]: { newValue: {} } }, 'local');

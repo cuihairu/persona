@@ -208,8 +208,8 @@ async function handleBridgePing(endpoint?: string): Promise<BridgeStatus> {
 }
 
 async function pingAnyBridge(endpoint?: string): Promise<BridgeStatus> {
-    // 只走 native messaging 单通道（HTTP 探测端点从未有服务端实现，已删）；
-    // endpoint 参数保留以兼容 popup 传值，非 native 值一律回落默认 host
+    // the native messaging channel is the only one (the HTTP probe endpoint never had a server implementation and was removed);
+    // the endpoint parameter is kept for compatibility with the value the popup passes — any non-native value falls back to the default host
     const normalized = endpoint?.trim();
     if (normalized && normalized !== 'native' && !normalized.startsWith('native:')) {
         return pingNative(undefined);
@@ -311,7 +311,7 @@ async function getFormsSnapshot(): Promise<
     | undefined
 > {
     return new Promise((resolve) => {
-        // @types/chrome 收窄 storage.get 回调索引类型后需显式断言（存取同形，契约在本函数签名）
+        // explicit assertion needed after @types/chrome narrowed the storage.get callback index type (get/set share the same shape, the contract lives in this function's signature)
         chrome.storage.local.get(FORMS_KEY, (value) =>
             resolve(value?.[FORMS_KEY] as { host: string; forms: unknown[]; capturedAt: number; assessment?: DomainAssessment } | undefined),
         );

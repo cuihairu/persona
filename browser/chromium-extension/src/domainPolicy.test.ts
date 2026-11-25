@@ -1,5 +1,5 @@
 /**
- * domainPolicy 纯函数测试：启发式逐条触发、policy 覆盖优先、upsert 去重、remove 大小写不敏感。
+ * domainPolicy pure-function tests: each heuristic fires individually, policy overrides win, upsert deduplicates, remove is case-insensitive.
  */
 import {
     evaluateDomain,
@@ -32,7 +32,7 @@ describe('evaluateDomain heuristics', () => {
     });
 
     it('flags non-ASCII hosts', () => {
-        // "а" 是西里尔字母，与拉丁 "a" 肉眼无法区分 —— 同源欺骗的经典手法
+        // "а" here is a Cyrillic letter, visually indistinguishable from the Latin "a" — a classic same-origin spoofing trick
         const assessment = evaluateDomain('pаypal.com');
         expect(assessment.risk).toBe('suspicious');
         expect(assessment.reasons).toContain('Non-ASCII characters present');
@@ -65,7 +65,7 @@ describe('evaluateDomain heuristics', () => {
     });
 
     it('accumulates multiple heuristics into reasons', () => {
-        // xn-- 前缀 + 双连字符 + 混合字母数字 + 可疑 TLD，一次全中
+        // xn-- prefix + double hyphen + mixed alphanumeric + risky TLD, all hit at once
         const assessment = evaluateDomain('xn--a--b1.zip');
         expect(assessment.risk).toBe('suspicious');
         expect(assessment.reasons.length).toBeGreaterThanOrEqual(3);
@@ -89,7 +89,7 @@ describe('evaluateDomain policy override', () => {
     });
 
     it('policy lookup is case-insensitive for the queried host', () => {
-        // 存储侧的 policy 恒经 upsertPolicy 小写化；查询侧大小写随意
+        // stored policies are always lowercased by upsertPolicy; the query side may use any case
         const policies = [policyOf('foo.zip', 'trusted')];
         expect(evaluateDomain('foo.zip', policies).risk).toBe('trusted');
         expect(evaluateDomain('FOO.ZIP', policies).risk).toBe('trusted');

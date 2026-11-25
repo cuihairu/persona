@@ -1,6 +1,6 @@
 /**
- * passkeyOrigin 纯函数测试：origin 绑定校验（伪造 origin 丢弃、非法输入拒绝、
- * 规范化后相等、端口差异视为不同源）。
+ * passkeyOrigin pure-function tests: origin binding checks (fabricated origins dropped, malformed input rejected,
+ * equal after normalization, port differences treated as a different origin).
  */
 import { isTrustedPasskeyOrigin } from './passkeyOrigin';
 

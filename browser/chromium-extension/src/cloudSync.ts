@@ -1,26 +1,27 @@
 /**
- * 云端同步数据面（M5 批1，桥协议 v6）——扩展经 `sync_connect` 从本地桥取
- * (server_url, token, device_id, group key) 后，**HTTP 直连** server 的
- * `/api/v1/sync/oplog` 拉取并解密云端保险库：数据面出 native messaging 桥。
+ * Cloud sync data plane (M5 batch 1, bridge protocol v6) — after the extension gets
+ * (server_url, token, device_id, group key) from the local bridge via `sync_connect`,
+ * it connects **directly over HTTP** to the server's
+ * `/api/v1/sync/oplog` to pull and decrypt the cloud vault: the data plane bypasses the native messaging bridge.
  *
- * 密码学口径与 core 对齐（零知识不变式）：
- * - 两级 AES-256-GCM（`EncryptionService` 同格式）：`nonce(12B) ‖ ct‖tag`；
- *   group key 拆 wrapped_item_key，item key 拆 payload.ciphertext。
- * - payload 明文 = bincode(SyncItemSnapshot)（bincode 1.3 默认配置：
- *   little-endian 定宽整数、u64 长度前缀、枚举 u32 变体索引、Option u8 tag）。
- *   本模块解码到元数据段（name/username/url/type）为止——完整解析与
- *   Rust 侧锚定测试双向校验（fixture 见 __fixtures__/sync_item_fixture.json）。
- * - LWW 全序（DR-4）：lamport 降序平手 device_id 字典序；真冲突 =
- *   同 item、lamport 相等、device_id 不同（保双版本待裁决）。
+ * Crypto conventions match core (zero-knowledge invariant):
+ * - Two-level AES-256-GCM (same format as `EncryptionService`): `nonce(12B) ‖ ct‖tag`;
+ *   group key unwraps wrapped_item_key, item key unwraps payload.ciphertext.
+ * - Payload plaintext = bincode(SyncItemSnapshot) (bincode 1.3 default config:
+ *   little-endian fixed-width integers, u64 length prefixes, enum u32 variant index, Option u8 tag).
+ *   This module only decodes the metadata segment (name/username/url/type) — full parsing is
+ *   cross-checked against the Rust-side anchored tests (fixture at __fixtures__/sync_item_fixture.json).
+ * - LWW total order (DR-4): descending lamport, ties broken by device_id lexicographic order; a true conflict =
+ *   same item, equal lamport, different device_id (both versions kept pending resolution).
  *
- * 材料存放纪律：token 与 group key 只进 `chrome.storage.session`（内存区）；
- * 拉到的密文 op 缓存进 `chrome.storage.local`（离线兜底的本钱，本就公开
- * 于服务器，多一份副本不加深泄露面）。
+ * Material storage discipline: token and group key go only into `chrome.storage.session` (memory area);
+ * pulled ciphertext ops are cached in `chrome.storage.local` (the offline-fallback stake, already public
+ * to the server, so one more copy does not widen the exposure surface).
  */
 
 import { syncConnect, type SyncConnectPayload } from './nativeBridge.js';
 
-// ---- wire 类型（与 core/src/sync/remote.rs 的 WireOp/WirePayload 对齐）----
+// ---- wire types (aligned with WireOp/WirePayload in core/src/sync/remote.rs) ----
 
 export interface WirePayload {
     ciphertext: string;
@@ -34,7 +35,7 @@ export interface WireOp {
     op: 'put' | 'delete';
     lamport: number;
     device_id: string;
-    /** 服务器原样转发的 rfc3339，仅展示。 */
+    /** rfc3339 string forwarded verbatim by the server, display only. */
     timestamp?: string | null;
     payload?: WirePayload | null;
 }
@@ -44,7 +45,7 @@ export interface PullResponse {
     next_cursor?: string | null;
 }
 
-/** 桥 sync_connect 发放的连接参数（session-only）。 */
+/** Connection parameters issued by the bridge's sync_connect (session-only). */
 export interface CloudConn {
     serverUrl: string;
     token: string;
@@ -53,7 +54,7 @@ export interface CloudConn {
     groupKeyHex: string;
 }
 
-/** SyncItemSnapshot 元数据段（扩展展示所需；password 等敏感字段不在此层）。 */
+/** SyncItemSnapshot metadata segment (what the extension displays; sensitive fields such as password live elsewhere). */
 export interface SnapshotMeta {
     identity_id: string;
     name: string;
@@ -68,9 +69,9 @@ export interface SnapshotMeta {
 export interface CloudItemView {
     item_id: string;
     kind: string;
-    /** LWW 胜者（put 或 tombstone）。 */
+    /** LWW winner (put or tombstone). */
     primary: WireOp;
-    /** 真冲突副本（同 lamport 并发双版本，待裁决）。 */
+    /** Genuine conflict copies (concurrent versions at the same lamport, awaiting resolution). */
     conflicts: WireOp[];
 }
 
@@ -86,7 +87,7 @@ const OPLOG_MAX_PAGES = 40;
 export const CLOUD_SESSION_KEY = 'persona_cloud_conn_v1';
 export const CLOUD_CACHE_KEY = 'persona_cloud_ops_v1';
 
-// ---- base64 / hex 工具 ----
+// ---- base64 / hex utilities ----
 
 export function hexToBytes(hex: string): Uint8Array {
     if (hex.length % 2 !== 0 || !/^[0-9a-fA-F]*$/.test(hex)) {
@@ -99,7 +100,7 @@ export function hexToBytes(hex: string): Uint8Array {
     return out;
 }
 
-/** standard base64（core 的 B64 = general purpose STANDARD，非 url-safe）。 */
+/** standard base64 (core's B64 = general purpose STANDARD, not url-safe). */
 export function b64ToBytes(b64: string): Uint8Array {
     const binary = atob(b64);
     const bytes = new Uint8Array(binary.length);
@@ -107,11 +108,11 @@ export function b64ToBytes(b64: string): Uint8Array {
     return bytes;
 }
 
-// ---- AES-256-GCM 两级拆封 ----
+// ---- AES-256-GCM two-level unwrapping ----
 
 async function aesGcmDecrypt(keyBytes: Uint8Array, data: Uint8Array): Promise<Uint8Array> {
     if (data.length < 12 + 16) {
-        // nonce(12) + tag(16) 都缺就谈不上解密
+        // if both nonce(12) and tag(16) are missing there is nothing to decrypt
         throw new Error('ciphertext_too_short');
     }
     const key = await crypto.subtle.importKey(
@@ -129,12 +130,12 @@ async function aesGcmDecrypt(keyBytes: Uint8Array, data: Uint8Array): Promise<Ui
         );
         return new Uint8Array(plain);
     } catch {
-        // key 不对 / 篡改 —— 与 core 同口径 fail-closed，不区分成因
+        // wrong key / tampering — fail-closed, same rule as core, cause not distinguished
         throw new Error('decryption_failed');
     }
 }
 
-/** group key 拆 wrapped_item_key（`wrap_item_key_with_group` 的逆）。 */
+/** Unwrap wrapped_item_key with the group key (inverse of `wrap_item_key_with_group`). */
 export async function unwrapItemKey(
     wrappedItemKeyB64: string,
     groupKeyHex: string
@@ -144,7 +145,7 @@ export async function unwrapItemKey(
     return itemKey;
 }
 
-/** 拆 payload：group key → item key → bincode 快照明文。 */
+/** Open a payload: group key -> item key -> bincode snapshot plaintext. */
 export async function openPayload(
     payload: WirePayload,
     groupKeyHex: string
@@ -153,7 +154,7 @@ export async function openPayload(
     return aesGcmDecrypt(itemKey, b64ToBytes(payload.ciphertext));
 }
 
-// ---- bincode 解码（SyncItemSnapshot 元数据段）----
+// ---- bincode decoding (SyncItemSnapshot metadata segment) ----
 
 class BincodeReader {
     private buf: Uint8Array;
@@ -183,7 +184,7 @@ class BincodeReader {
         return v;
     }
 
-    /** u64 长度前缀；JS 安全整数范围内（长度字段超 2^53 直接拒）。 */
+    /** u64 length prefix; kept within JS safe integer range (length fields over 2^53 are rejected outright). */
     u64Length(): number {
         if (this.offset + 8 > this.buf.length) throw new Error('bincode_eof');
         const lo = this.view.getUint32(this.offset, true);
@@ -227,7 +228,7 @@ class BincodeReader {
         return out;
     }
 
-    /** Uuid 在非 human-readable 序列化下走 serialize_bytes → bincode 还带 u64 长度前缀。 */
+    /** Uuid goes through serialize_bytes under non-human-readable serialization, so bincode still carries a u64 length prefix. */
     uuidString(): string {
         const len = this.u64Length();
         if (len !== 16) throw new Error('bincode_bad_uuid_length');
@@ -237,7 +238,7 @@ class BincodeReader {
     }
 }
 
-/** 与 core/src/models/credential.rs CredentialType 变体序一致（索引不可变）。 */
+/** Matches the variant order of CredentialType in core/src/models/credential.rs (indices are immutable). */
 const CREDENTIAL_TYPE_NAMES = [
     'Password',
     'CryptoWallet',
@@ -257,10 +258,10 @@ const CREDENTIAL_TYPE_NAMES = [
 const SECURITY_LEVEL_NAMES = ['Critical', 'High', 'Medium', 'Low'];
 
 /**
- * 解码 `bincode(SyncItemSnapshot)` 到元数据段为止（解到 `data` 枚举标签
- * 后停止——完整 CredentialData 解析留在写路径批次，这里只做只读展示）。
- * 任何字段越界/非法值一律抛错，调用方按条目级容错跳过（与 core 的
- * 「条目级损坏跳过」口径一致）。
+ * Decode `bincode(SyncItemSnapshot)` up to the metadata segment (stopping right after the
+ * `data` enum tag — full CredentialData parsing belongs to the write-path batch, this is read-only display).
+ * Any out-of-range or invalid field throws; callers skip at item level for fault tolerance (same
+ * "skip corrupt item" rule as core).
  */
 export function decodeSyncItemSnapshot(bytes: Uint8Array): SnapshotMeta {
     const r = new BincodeReader(bytes);
@@ -270,7 +271,7 @@ export function decodeSyncItemSnapshot(bytes: Uint8Array): SnapshotMeta {
     const typeIdx = r.u32();
     let credential_type = CREDENTIAL_TYPE_NAMES[typeIdx];
     if (credential_type === undefined) throw new Error('bincode_bad_credential_type');
-    // Rust Display 对 Custom 输出裸内部字符串（不带 Custom(...) 包裹）
+    // Rust Display prints Custom as the bare inner string (no Custom(...) wrapper)
     if (credential_type === 'Custom') credential_type = r.string();
 
     const levelIdx = r.u32();
@@ -284,7 +285,7 @@ export function decodeSyncItemSnapshot(bytes: Uint8Array): SnapshotMeta {
     r.stringMap();
     const is_favorite = r.bool();
     const is_active = r.bool();
-    r.u32(); // CredentialData 变体标签（读出即校验，payload 不在本层解析）
+    r.u32(); // CredentialData variant tag (read to validate; payload is not parsed at this layer)
 
     return {
         identity_id,
@@ -298,15 +299,15 @@ export function decodeSyncItemSnapshot(bytes: Uint8Array): SnapshotMeta {
     };
 }
 
-// ---- LWW 视图合并（core oplog::compare_ops 同序）----
+// ---- LWW view merging (same ordering as core oplog::compare_ops) ----
 
 function compareOpsAsc(a: WireOp, b: WireOp): number {
     if (a.lamport !== b.lamport) return a.lamport - b.lamport;
     return a.device_id < b.device_id ? -1 : a.device_id > b.device_id ? 1 : 0;
 }
 
-/** 按 LWW 全序收拢：primary = lamport 最大（平手 device_id 最大）；
- * 真冲突副本 = 与 primary 同 lamport、device_id 不同的并发版本。 */
+/** Collapse by LWW total order: primary = highest lamport (ties: highest device_id);
+ * genuine conflict copies = concurrent versions sharing primary's lamport with a different device_id. */
 export function buildItemViews(ops: WireOp[]): CloudItemView[] {
     const byItem = new Map<string, WireOp[]>();
     for (const op of ops) {
@@ -330,7 +331,7 @@ export function buildItemViews(ops: WireOp[]): CloudItemView[] {
     return views;
 }
 
-// ---- 连接参数：桥引导 + session-only 存取 ----
+// ---- connection parameters: bridge bootstrap + session-only storage ----
 
 export function connFromSyncConnect(payload: SyncConnectPayload): CloudConn {
     if (!payload.server_url || !payload.token || !payload.group_key_hex) {
@@ -345,7 +346,7 @@ export function connFromSyncConnect(payload: SyncConnectPayload): CloudConn {
     };
 }
 
-/** 走桥取参数（popup 显式点击触发 = user_gesture）。 */
+/** Fetch parameters over the bridge (triggered by an explicit popup click = user_gesture). */
 export async function connectViaBridge(): Promise<CloudConn> {
     const resp = await syncConnect();
     if (!resp.ok || !resp.payload) {
@@ -363,7 +364,7 @@ export async function loadCloudConn(): Promise<CloudConn | undefined> {
     return got[CLOUD_SESSION_KEY] as CloudConn | undefined;
 }
 
-// ---- HTTP 直连拉取（分页翻 cursor）----
+// ---- direct HTTP pull (paged cursor flipping) ----
 
 export async function pullCloudOps(
     conn: CloudConn,
@@ -389,12 +390,12 @@ export async function pullCloudOps(
                 const body = (await resp.json()) as { error?: { message?: string } };
                 detail = body?.error?.message ? `: ${body.error.message}` : '';
             } catch {
-                // 非 JSON 错误体：只报状态码
+                // non-JSON error body: report the status code only
             }
             throw new Error(`oplog_pull_failed (HTTP ${resp.status})${detail}`);
         }
-        // 成功路径也要防非 JSON 响应体：untrusted 输入，解析失败须转成
-        // 明确错误（对齐 :389 错误体纪律），而非裸 SyntaxError 上抛。
+        // guard the success path against non-JSON bodies too: untrusted input, a parse failure
+        // must become an explicit error (same discipline as the error body at :389), not a bare SyntaxError.
         let body: PullResponse;
         try {
             body = (await resp.json()) as PullResponse;
@@ -410,7 +411,7 @@ export async function pullCloudOps(
     return { ops, next_cursor: cursor, fetched_pages: pages };
 }
 
-// ---- 密文缓存（chrome.storage.local，离线兜底本钱）----
+// ---- ciphertext cache (chrome.storage.local, the offline-fallback stake) ----
 
 export interface CloudCache {
     server_url: string;
@@ -429,8 +430,9 @@ export async function loadCloudCache(): Promise<CloudCache | undefined> {
 }
 
 /**
- * 离线兜底判据（M5 批4a）：缓存存在、指向同一台 server、且真的有 op。
- * 换了服务器（server_url 不匹配）的旧缓存不能拿来渲染——group key 可能对不上。
+ * Offline-fallback eligibility (M5 batch 4a): a cache exists, points at the same server,
+ * and actually contains ops. Stale caches from a different server (server_url mismatch) must
+ * not be used for rendering — the group key may not line up.
  */
 export function isUsableCache(
     cache: CloudCache | undefined,
@@ -441,22 +443,22 @@ export function isUsableCache(
     );
 }
 
-// ---- 展示层：拉取 + 逐条解密（条目级容错）----
+// ---- display layer: pull + per-item decryption (item-level fault tolerance) ----
 
 export interface CloudListItem {
     item_id: string;
     kind: string;
-    /** tombstone = 已删除（不展示内容）。 */
+    /** tombstone = deleted (no content displayed). */
     deleted: boolean;
     lamport: number;
     device_id: string;
     conflict_count: number;
     meta: SnapshotMeta | null;
-    /** payload 解密/解码失败（条目级容错，如实展示而非吞掉）。 */
+    /** payload decryption/decoding failed (item-level fault tolerance: reported honestly rather than swallowed). */
     decrypt_error?: string;
 }
 
-/** 把 LWW 视图解成展示列表：put 解密元数据，delete 如实标墓碑。 */
+/** Resolve LWW views into a display list: decrypt metadata for puts, mark tombstones for deletes. */
 export async function decryptItemViews(
     views: CloudItemView[],
     groupKeyHex: string
@@ -489,9 +491,9 @@ export async function decryptItemViews(
     return items;
 }
 
-// ---- 冲突裁决展示（M5 批4b）----
+// ---- conflict resolution display (M5 batch 4b) ----
 
-/** 冲突副本的展示视图：解出名字供「保留哪个版本」决策，解不出如实标注。 */
+/** Display view for conflict copies: decrypt the name to back the "keep which version" decision, else report the failure honestly. */
 export interface ConflictCopyView {
     op_id: string;
     device_id: string;
@@ -502,8 +504,8 @@ export interface ConflictCopyView {
 }
 
 /**
- * 解密一个条目的并发冲突副本（`sync_resolve_conflict` 的 adopt_op_id 就从
- * 这里的 op_id 里选）。与 decryptItemViews 同条目级容错口径。
+ * Decrypt an item's concurrent conflict copies (`sync_resolve_conflict` picks its
+ * adopt_op_id from the op_id values here). Same item-level fault tolerance as decryptItemViews.
  */
 export async function conflictCopyViews(
     view: CloudItemView,

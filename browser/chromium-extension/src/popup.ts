@@ -302,7 +302,7 @@ if (genGenerateButton) {
     });
 }
 
-// ============ Cloud vault (bridge protocol v6, M5 批1) ============
+// ============ Cloud vault (bridge protocol v6, M5 batch 1) ============
 
 const cloudStatusEl = document.getElementById('cloudStatus');
 const cloudConnectButton = document.getElementById('cloudConnect') as HTMLButtonElement | null;
@@ -326,8 +326,8 @@ function setCloudConnected(conn: CloudConn | undefined) {
     );
 }
 
-/** 渲染云端条目列表。items[i] 与 views[i] 一一对应（decryptItemViews 保序）。
- * 有并发冲突副本的条目就地展开各版本，逐副本给「保留此版本」裁决按钮。 */
+/** Render the cloud item list. items[i] and views[i] correspond one to one (decryptItemViews is order-preserving).
+ * Items with concurrent conflict copies expand in place to show each version, with a "Keep this version" resolve button per copy. */
 async function renderCloudItems(items: CloudListItem[], views: CloudItemView[], conn: CloudConn) {
     if (!cloudItemsEl) return;
     cloudItemsEl.textContent = '';
@@ -431,8 +431,8 @@ async function pullAndRender(conn: CloudConn) {
         if (conflicts > 0) parts.push(`${conflicts} in conflict (pending adjudication)`);
         setCloudStatus(parts.join(' • '));
     } catch (error) {
-        // 断网兜底（M5 批4a）：本机密文缓存（chrome.storage.local）仍在——
-        // 重解密渲染，状态行如实标注缓存时刻，不冒充在线数据
+        // Offline fallback (M5 batch 4a): the local ciphertext cache (chrome.storage.local) is still there —
+        // re-decrypt and render, label the cache time honestly in the status line, never pose as live data
         const cache = await loadCloudCache().catch(() => undefined);
         if (isUsableCache(cache, conn) && cache) {
             const views = buildItemViews(cache.ops);
@@ -454,12 +454,12 @@ cloudConnectButton?.addEventListener('click', async () => {
     setCloudStatus('Connecting via local bridge…');
     try {
         const conn = await connectViaBridge();
-        // best-effort 申请该 sync server 的 host 权限（用户点击上下文内）；
-        // 拒绝也不拦——服务器若发 CORS，fetch 依然可用
+        // best-effort: request host permission for the sync server (while inside the user-click context);
+        // a refusal does not block us — if the server sends CORS, fetch still works
         try {
             await chrome.permissions.request({ origins: [`${new URL(conn.serverUrl).origin}/*`] });
         } catch {
-            // 权限 API 不可用/被拒：继续，拉取阶段如实报错
+            // permissions API unavailable or denied: carry on, the pull phase reports errors honestly
         }
         await saveCloudConn(conn);
         setCloudConnected(conn);
@@ -499,7 +499,7 @@ cloudPushButton?.addEventListener('click', async () => {
         if (r.conflicts > 0) parts.push(`${r.conflicts} conflicts pending adjudication`);
         if (r.pending_identity > 0) parts.push(`${r.pending_identity} pending identity`);
         setCloudStatus(`Synced • ${parts.join(' • ')}`);
-        // 推送改变了远端 oplog——顺手拉一次刷新列表
+        // the push changed the remote oplog — pull once more to refresh the list
         const conn = await loadCloudConn();
         if (conn) await pullAndRender(conn);
     } finally {
@@ -518,7 +518,7 @@ async function initCloudVault() {
     }
 }
 
-// ============ Account (bridge protocol v7, M5 批2) ============
+// ============ Account (bridge protocol v7, M5 batch 2) ============
 
 const accountStatusEl = document.getElementById('accountStatus');
 const accountIdInput = document.getElementById('accountId') as HTMLInputElement | null;

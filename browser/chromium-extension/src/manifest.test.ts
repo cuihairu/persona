@@ -1,13 +1,14 @@
 /**
- * manifest 契约测试：MV3 装配的三条硬约定。
+ * manifest contract tests: three hard rules of the MV3 wiring.
  *
- * 1. webauthnHook（MAIN world）只在顶层 frame 注入：给每个第三方 iframe 都包
- *    一层 navigator.credentials 侵入性太大，而且跨源 iframe 的 passkey 会退回
- *    浏览器原生流程（设计决定，见 README）。这条断言防止有人顺手改 all_frames。
- * 2. content.js 覆盖所有 frame（含 about:blank/srcdoc），批 B 的 iframe 登录
- *    自动填充依赖它。
- * 3. content.js 必须留在 ISOLATED world（不写 world 字段即默认）——MAIN world
- *    里能碰到页面脚本的任何东西。
+ * 1. webauthnHook (MAIN world) is injected in the top frame only: wrapping every
+ *    third-party iframe with a navigator.credentials shim is far too invasive, and passkeys
+ *    in cross-origin iframes fall back to the browser's native flow anyway (a design decision, see README).
+ *    This assertion stops someone casually flipping all_frames.
+ * 2. content.js covers every frame (including about:blank/srcdoc) — the batch B iframe login
+ *    autofill depends on it.
+ * 3. content.js must stay in the ISOLATED world (omitting the world field is the default) — the
+ *    MAIN world can reach anything the page script can.
  */
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';

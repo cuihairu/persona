@@ -1,11 +1,11 @@
 /**
- * formScanner 测试（jsdom）：字段分类（password/email/totp 启发式/username/email 提示词、
- * 信用卡四角色）、表单评分与过滤、virtual form 聚合、隐藏/禁用输入剔除、observeForms 生命周期。
+ * formScanner tests (jsdom): field classification (password/email/totp heuristics/username/email hints,
+ * the four credit-card roles), form scoring and filtering, virtual form aggregation, hidden/disabled input exclusion, observeForms lifecycle.
  */
 import { scanForms, observeForms, type DetectedForm } from './formScanner';
 
 beforeAll(() => {
-    // jsdom 若未内建 CSS.escape（selectorFor 依赖），提供最小实现
+    // provide a minimal CSS.escape implementation if jsdom lacks it (selectorFor depends on it)
     const globalCss = (globalThis as any).CSS;
     if (typeof globalCss === 'undefined' || typeof globalCss.escape !== 'function') {
         (globalThis as any).CSS = {
@@ -167,7 +167,7 @@ describe('scanForms: virtual forms (no <form> element)', () => {
         document.body.innerHTML = `
             <form><input name="pw" type="password"><input name="username" type="text"></form>
         `;
-        // 真实 form 扫描出 1 个；form 内输入不进入 virtual 聚合
+        // the real form scans as 1; inputs inside a form do not enter virtual aggregation
         expect(scanForms()).toHaveLength(1);
     });
 });
@@ -279,7 +279,7 @@ describe('observeForms', () => {
         const seen: DetectedForm[][] = [];
         const stop = observeForms((forms) => seen.push(forms));
 
-        expect(seen).toHaveLength(1); // 初始同步 emit（当前为空表单）
+        expect(seen).toHaveLength(1); // initial synchronous emit (currently an empty form list)
         expect(seen[0]).toHaveLength(0);
 
         document.body.innerHTML = '<form><input name="pw" type="password"></form>';

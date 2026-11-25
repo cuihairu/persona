@@ -69,8 +69,8 @@ export async function requestTotp(itemId: string, targetInput?: HTMLInputElement
     try {
         let response = await sendTotpRequest(itemId, userGesture);
 
-        // 临期码（剩余 ≤3s）可能在用户提交前过期：等过周期边界再取一次新码。
-        // 重取仍属同一次用户动作，userGesture 照传（桥侧手势闸门语义不变）。
+        // A near-expiry code (≤3s left) may lapse before the user submits: wait past the period boundary, then fetch a fresh code.
+        // The refetch still counts as the same user action, so userGesture is passed through (the bridge-side gesture gate keeps its meaning).
         if (
             response?.success &&
             response.data?.code &&
@@ -322,7 +322,7 @@ export function fillCard(card: CardFillData) {
     }
 }
 
-/** 登录填充成功后同页若有 OTP 框则链式填 2FA（合并登录+OTP 表单场景）。 */
+/** After a successful login fill, chain-fill 2FA if an OTP box is present on the same page (combined login+OTP form scenario). */
 export async function maybeChainFillTotp() {
     if (!state.currentSettings.autoFillTotpAfterLogin) return;
     const input = findTotpInput();

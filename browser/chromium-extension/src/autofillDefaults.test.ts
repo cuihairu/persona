@@ -1,6 +1,6 @@
 /**
- * autofillDefaults 测试：origin 归一化、空/垃圾条目过滤、按 origin 合并写与双空清除、
- * onChanged 订阅过滤。
+ * autofillDefaults tests: origin normalization, filtering of empty/garbage entries, per-origin merge writes and double-empty clears,
+ * onChanged subscription filtering.
  */
 import {
     AUTOFILL_DEFAULTS_KEY,
@@ -14,7 +14,7 @@ import {
 type ChangeRecord = Record<string, { newValue?: unknown }>;
 type ChangeListener = (changes: ChangeRecord, areaName: string) => void;
 
-/** chrome.storage.local + onChanged 的最小内存实现（同 settings.test.ts） */
+/** Minimal in-memory implementation of chrome.storage.local + onChanged (same as settings.test.ts) */
 function installChromeStorageMock() {
     const data = new Map<string, unknown>();
     const listeners = new Set<ChangeListener>();
@@ -85,7 +85,7 @@ describe('getAutofillDefaults normalization', () => {
             totpItemId: 't1',
             updatedAt: 123
         });
-        // updatedAt 缺失时回填当前时间戳；origin 归一化去掉了 path 与大小写
+        // missing updatedAt is backfilled with the current timestamp; origin normalization dropped path and casing
         expect(typeof defaults['https://d.com']!.updatedAt).toBe('number');
         expect(defaults['https://d.com']).toEqual({
             passwordItemId: undefined,
@@ -149,7 +149,7 @@ describe('setAutofillDefaultsForOrigin', () => {
     });
 
     it('keeps an entry that only carries savePromptDisabled and clears it back to empty', async () => {
-        // 保存条的「此站永不」：没有 item id 也必须保留条目
+        // the save bar's "never on this site": the entry must survive even without an item id
         const entry = await setAutofillDefaultsForOrigin('https://a.com', {
             savePromptDisabled: true
         });
@@ -161,7 +161,7 @@ describe('setAutofillDefaultsForOrigin', () => {
             updatedAt: expect.any(Number)
         });
 
-        // 关掉之后（patch 回 false）三字段全空 → 条目清除
+        // after switching off (patch back to false) all three fields are empty -> the entry is cleared
         const cleared = await setAutofillDefaultsForOrigin('https://a.com', {
             savePromptDisabled: false
         });
