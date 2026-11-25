@@ -62,9 +62,10 @@ jobs:
       - name: Upload coverage (rust) to Codecov
         uses: codecov/codecov-action@v7.1.1
         with:
-          # token 必须显式传：tokenless 上传对默认分支被 codecov 拒绝
-          # （"Token required because branch is protected"，2026-10-03 实锤，
-          # 徽章因此长期 unknown）。secrets.CODECOV_TOKEN 早已配置但从未接线。
+          # The token must be passed explicitly: tokenless uploads are rejected by
+          # codecov for the default branch ("Token required because branch is
+          # protected", confirmed 2026-10-03, and the badge stayed unknown for a
+          # long time). secrets.CODECOV_TOKEN was configured long ago but never wired up.
           token: ${{ secrets.CODECOV_TOKEN }}
           files: coverage/rust-lcov.info
           flags: rust
@@ -89,11 +90,13 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
       - name: build
         run: cargo build --workspace --all-features
-      # 归因探针：直接跑 persona --version。此前 ci 集成测试（18 个全是
-      # assert_cmd 起子进程）在 windows runner 上零输出挂死到 120 分钟
-      # job 超时（run 36263457552：单测 358/359 全过后集成二进制零完成）。
-      # 这个探针把「二进制启动即挂」与「个别测试挂」区分开：30 秒不退
-      # 即失败并指认二进制层面，不再烧整个 job。
+      # Attribution probe: run persona --version directly. Previously the CI
+      # integration tests (18 of them, all spawning subprocesses via assert_cmd)
+      # hung with zero output on the windows runner until the 120-minute job
+      # timeout (run 36263457552: 358/359 unit tests passed, then the integration
+      # binary never finished). This probe distinguishes "the binary hangs on
+      # startup" from "an individual test hangs": no exit within 30s fails and
+      # blames the binary layer instead of burning the whole job.
       - name: probe persona binary starts
         shell: pwsh
         run: |
@@ -107,16 +110,17 @@ jobs:
             Write-Host "::error::PROBE: persona --version hung for 30s - binary-level startup hang, not a per-test issue"
             exit 1
           }
-      # cargo test 的测试二进制一旦有测试挂死，整个二进制（连同日志与后
-      # 续 crate）一起陪葬。nextest 每个测试独立进程 + 慢测试强杀
-      # （.config/nextest.toml：60s 标记、240s 终止），挂死测试会带名字
-      # 报出来，其余测试照常完成。
+      # With cargo test, one hung test takes the whole test binary down with it
+      # (along with its logs and every later crate). nextest runs each test in its
+      # own process and force-kills slow ones (.config/nextest.toml: 60s marked
+      # slow, 240s terminated), so hung tests are reported by name while the rest
+      # still finish.
       - uses: taiki-e/install-action@v2.90.5
         with:
           tool: cargo-nextest
       - name: test (nextest, per-test timeout)
         run: cargo nextest run --workspace --all-features --profile ci
-      # nextest 不跑 doctest，单独补齐与 cargo test 等价的覆盖面
+      # nextest does not run doctests; run them separately to match cargo test's coverage
       - name: test doc
         run: cargo test --workspace --all-features --doc --no-fail-fast
       - name: clippy
@@ -156,9 +160,10 @@ jobs:
       - name: Run cargo-deny
         run: cargo deny check
       - name: Run cargo-audit
-        # cargo-audit 内置的 gix clone 在 runner 上持续失败（failed to prepare
-        # clone），改用系统 git 预克隆 advisory-db 后离线审计。注意不能放
-        # $CARGO_HOME 下——cargo-deny 已经占用了 advisory-db 目录
+        # cargo-audit's built-in gix clone keeps failing on the runner ("failed to
+        # prepare clone"), so pre-clone advisory-db with system git and audit
+        # offline. It must not go under $CARGO_HOME — cargo-deny already uses that
+        # advisory-db directory
         run: |
           git clone --depth 1 https://github.com/RustSec/advisory-db.git "$RUNNER_TEMP/advisory-db"
           cargo audit --db "$RUNNER_TEMP/advisory-db" --no-fetch
@@ -197,7 +202,8 @@ jobs:
             desktop/src-tauri/target
           key: ${{ runner.os }}-cargo-desktop-${{ hashFiles('desktop/src-tauri/Cargo.lock') }}
       - name: Desktop Rust fmt
-        # --all: src-tauri 是独立 workspace，缺省只查该包自身，漏掉 fill-test 成员
+        # --all: src-tauri is a standalone workspace and by default only formats
+        # its own package, which misses the fill-test member
         run: cargo fmt --all --manifest-path desktop/src-tauri/Cargo.toml -- --check
       - name: Desktop Rust clippy
         run: cargo clippy --manifest-path desktop/src-tauri/Cargo.toml --all-targets -- -D warnings
@@ -212,14 +218,15 @@ jobs:
       - name: Upload coverage (desktop) to Codecov
         uses: codecov/codecov-action@v7.1.1
         with:
-          # 同上：默认分支上传必须带 token，否则徽章 unknown
+          # Same as above: default-branch uploads need the token or the badge shows unknown
           token: ${{ secrets.CODECOV_TOKEN }}
           files: desktop/coverage/lcov.info
           flags: desktop
           fail_ci_if_error: false
       - name: Security Audit
-        # pnpm 10 的 audit 不支持 --filter（旧写法报 Unknown option: 'recursive'），
-        # audit 本身就是按 workspace 全量 lockfile 跑，直接在根上审计
+        # pnpm 10's audit does not support --filter (the old spelling reports
+        # Unknown option: 'recursive'), and the audit already runs against the
+        # workspace-wide lockfile anyway, so audit at the root
         run: pnpm audit --audit-level=moderate
 
   web:
@@ -241,8 +248,9 @@ jobs:
         run: pnpm install --frozen-lockfile
       - name: Build Chromium extension
         run: pnpm --filter persona-chromium-extension run build
-      # 扩展的 jest 套件（表单扫描/域名策略/保存提案/原生桥签名…）此前只在本地
-      # 跑，CI 不设门禁——写路径这类改动必须先过它再进主干。
+      # The extension's jest suite (form scanning / domain policy / save
+      # proposals / native bridge signatures...) previously ran only locally with
+      # no CI gate — changes on the write path must clear it before landing on main.
       - name: Test Chromium extension
         run: pnpm --filter persona-chromium-extension run test
       - name: Build website

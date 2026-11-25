@@ -14,18 +14,18 @@
 -->
     <style>
       :root {
-        --bg: #030712; /* gray-950 页面底（桌面端 dark token） */
-        --card: #111827; /* gray-900 卡片面 */
-        --border: #1f2937; /* gray-800 描边 */
+        --bg: #030712; /* gray-950 page background (desktop dark token) */
+        --card: #111827; /* gray-900 card surface */
+        --border: #1f2937; /* gray-800 border */
         --fg: #f9fafb; /* gray-50 */
-        --muted: #94a3b8; /* slate-400 次级文字 */
-        --faint: #64748b; /* slate-500 更弱 */
-        --primary: #2563eb; /* blue-600 主色 */
+        --muted: #94a3b8; /* slate-400 secondary text */
+        --faint: #64748b; /* slate-500 even fainter */
+        --primary: #2563eb; /* blue-600 primary color */
         --primary-hover: #1d4ed8; /* blue-700 */
-        --accent: #3b82f6; /* blue-500 点缀 */
-        --ok: #22c55e; /* 状态：正常（chip 必须带图标+文字） */
-        --warn: #f59e0b; /* 状态：注意 */
-        --bad: #ef4444; /* 状态：风险 */
+        --accent: #3b82f6; /* blue-500 accent */
+        --ok: #22c55e; /* state: healthy (a chip must carry icon + text) */
+        --warn: #f59e0b; /* state: attention */
+        --bad: #ef4444; /* state: at risk */
         --radius: 8px;
         --radius-sm: 6px;
       }
@@ -45,7 +45,7 @@
           sans-serif;
         min-height: 100vh;
       }
-      /* ── 顶部原型横幅（常驻，声明示意属性） ─────────────── */
+      /* ── Top prototype banner (always visible, states that it is illustrative) ── */
       .proto-banner {
         background: #1d1830;
         color: #c4b5fd;
@@ -57,7 +57,7 @@
       .proto-banner b {
         color: #ddd6fe;
       }
-      /* ── 顶栏 ──────────────────────────────────────────── */
+      /* ── Top bar ─────────────────────────────────────────────── */
       .topbar {
         display: flex;
         align-items: center;
@@ -129,7 +129,7 @@
         font-size: 12px;
         color: var(--fg);
       }
-      /* ── 布局 ──────────────────────────────────────────── */
+      /* ── Layout ─────────────────────────────────────────────── */
       .shell {
         display: flex;
         min-height: calc(100vh - 92px);
@@ -202,7 +202,7 @@
         color: var(--muted);
         font-size: 13px;
       }
-      /* ── 卡片 / 统计块 ─────────────────────────────────── */
+      /* ── Card / stat block ─────────────────────────────────── */
       .grid {
         display: grid;
         gap: 14px;
@@ -255,7 +255,7 @@
         font-size: 12px;
         margin-top: 6px;
       }
-      /* ── 量级条（单色，身份由行标签给出） ──────────────── */
+      /* ── Magnitude bar (single color, identity given by the row label) ──── */
       .meter {
         background: var(--border);
         border-radius: 999px;
@@ -307,7 +307,7 @@
         color: var(--faint);
         font-size: 11px;
       }
-      /* ── 状态 chip（图标+文字，永不裸色） ─────────────── */
+      /* ── Status chip (icon + text, never a bare color) ─────── */
       .chip {
         display: inline-flex;
         align-items: center;
@@ -338,7 +338,7 @@
         border-color: var(--border);
         background: transparent;
       }
-      /* ── 表格 ──────────────────────────────────────────── */
+      /* ── Table ─────────────────────────────────────────────── */
       table {
         width: 100%;
         border-collapse: collapse;
@@ -367,7 +367,7 @@
         font-family: ui-monospace, "SF Mono", Menlo, monospace;
         font-size: 12.5px;
       }
-      /* ── 按钮 ──────────────────────────────────────────── */
+      /* ── Button ─────────────────────────────────────────────── */
       .btn {
         appearance: none;
         border: 1px solid var(--border);
@@ -403,7 +403,7 @@
         padding: 3px 10px;
         font-size: 12.5px;
       }
-      /* ── 开关 ──────────────────────────────────────────── */
+      /* ── Switch ─────────────────────────────────────────────── */
       .switch {
         position: relative;
         display: inline-block;
@@ -463,7 +463,7 @@
       .setrow .ctl {
         margin-left: auto;
       }
-      /* ── 边界说明卡（E2EE 等，需醒目可见） ────────────── */
+      /* ── Boundary note card (E2EE etc., must be prominent) ── */
       .boundary {
         display: flex;
         gap: 12px;
@@ -501,7 +501,7 @@
         text-align: right;
         margin-top: 14px;
       }
-      /* ── 待审批卡 ─────────────────────────────────────── */
+      /* ── Pending approval card ─────────────────────────────── */
       .req {
         display: flex;
         align-items: center;
@@ -531,7 +531,7 @@
         color: var(--accent);
         letter-spacing: 0.04em;
       }
-      /* ── 健康分 ───────────────────────────────────────── */
+      /* ── Health score ───────────────────────────────────── */
       .score {
         display: flex;
         align-items: baseline;
@@ -624,10 +624,10 @@
 
     <script>
       "use strict";
-      /* ═══════════ 状态 ═══════════ */
+      /* ═══════════ State ═══════════ */
       var state = { role: "admin", page: "overview" };
 
-      /* ═══════════ 导航定义（role-scoped） ═══════════ */
+      /* ═══════════ Navigation definitions (role-scoped) ═══════════ */
       var NAV = {
         admin: [
           { id: "overview", ico: "▦", label: "部署概览" },
@@ -647,7 +647,7 @@
         ],
       };
 
-      /* ═══════════ 小工具 ═══════════ */
+      /* ═══════════ Utilities ═══════════ */
       function esc(s) {
         return String(s).replace(/[&<>"]/g, function (c) {
           return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c];
@@ -702,7 +702,7 @@
           t.classList.remove("show");
         }, 2800);
       }
-      /* 未接线的真实动作统一走这里——诚实声明原型边界 */
+      /* Unwired real actions all go through here — an honest statement of the prototype's boundary */
       function proto(act) {
         toast("<b>示意交互</b> · 实现阶段接线：" + esc(act));
       }
@@ -710,11 +710,11 @@
         return '<div class="data-foot">以上数据均为示意值 · 原型未接任何真实 API</div>';
       }
 
-      /* ═══════════ 页面渲染（管理员） ═══════════ */
+      /* ═══════════ Page rendering (admin) ═══════════ */
 
       var PAGES = {};
 
-      /* ── 管理员 · 部署概览 ── */
+      /* ── Admin · Deployment overview ── */
       PAGES.admin_overview = function () {
         var days = [42, 51, 38, 60, 47, 55, 49];
         var bars = days
@@ -787,7 +787,7 @@
         );
       };
 
-      /* ── 管理员 · 用户列表 ── */
+      /* ── Admin · User list ── */
       PAGES.admin_users = function () {
         var users = [
           { n: "alice", s: "ok", st: "正常", dev: 3, q: 34, act: "5 分钟前" },
@@ -859,7 +859,7 @@
         );
       };
 
-      /* ── 管理员 · 设备审批 ── */
+      /* ── Admin · Device approval ── */
       PAGES.admin_approve = function () {
         return (
           "" +
@@ -888,7 +888,7 @@
         );
       };
 
-      /* ── 管理员 · 中转状态 ── */
+      /* ── Admin · Relay status ── */
       PAGES.admin_relay = function () {
         return (
           "" +
@@ -919,7 +919,7 @@
         );
       };
 
-      /* ── 管理员 · 审计日志 ── */
+      /* ── Admin · Audit log ── */
       PAGES.admin_audit = function () {
         var logs = [
           {
@@ -1036,7 +1036,7 @@
         );
       };
 
-      /* ── 管理员 · 备份管理 ── */
+      /* ── Admin · Backup management ── */
       PAGES.admin_backups = function () {
         var points = [
           { t: "2026-11-24 02:00", k: "自动", s: "812 MB" },
@@ -1087,7 +1087,7 @@
         );
       };
 
-      /* ── 管理员 · 服务器设置 ── */
+      /* ── Admin · Server settings ── */
       PAGES.admin_settings = function () {
         var codes = [
           {
@@ -1162,9 +1162,9 @@
         );
       };
 
-      /* ═══════════ 页面渲染（用户） ═══════════ */
+      /* ═══════════ Page rendering (user) ═══════════ */
 
-      /* ── 用户 · 凭据概览（只展示计数，绝无明文） ── */
+      /* ── User · Credential overview (counts only, never plaintext) ── */
       PAGES.user_vault = function () {
         var types = [
           { n: "登录", c: 86, p: 60 },
@@ -1209,7 +1209,7 @@
         );
       };
 
-      /* ── 用户 · 我的设备 ── */
+      /* ── User · My devices ── */
       PAGES.user_mydev = function () {
         return (
           "" +
@@ -1234,7 +1234,7 @@
         );
       };
 
-      /* ── 用户 · 同步状态 ── */
+      /* ── User · Sync status ── */
       PAGES.user_sync = function () {
         return (
           "" +
@@ -1269,7 +1269,7 @@
         );
       };
 
-      /* ── 用户 · 活动记录（仅本人事件） ── */
+      /* ── User · Activity log (own events only) ── */
       PAGES.user_myact = function () {
         var acts = [
           { t: "今天 10:41", a: "解锁保险库", o: "我的笔记本" },
@@ -1313,7 +1313,7 @@
         );
       };
 
-      /* ── 用户 · 安全体检 ── */
+      /* ── User · Security checkup ── */
       PAGES.user_health = function () {
         return (
           "" +
@@ -1363,7 +1363,7 @@
         );
       };
 
-      /* ═══════════ 路由与装配 ═══════════ */
+      /* ═══════════ Routing and assembly ═══════════ */
 
       function renderNav() {
         var items = NAV[state.role]
@@ -1408,7 +1408,7 @@
         wirePage();
       }
 
-      /* 页面内接线：审计过滤 chip */
+      /* In-page wiring: the audit filter chips */
       function wirePage() {
         var f = document.getElementById("auditFilter");
         if (!f) return;
@@ -1439,7 +1439,7 @@
       }
 
       function render() {
-        /* 角色切换时落回该角色的第一个有效页 */
+        /* On role switch, fall back to that role's first valid page */
         var ok = NAV[state.role].some(function (n) {
           return n.id === state.page;
         });

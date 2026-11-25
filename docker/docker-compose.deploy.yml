@@ -8,22 +8,26 @@ services:
     environment:
       PERSONA_SERVER_HOST: "0.0.0.0"
       PERSONA_SERVER_PORT: "3000"
-      # 未设置时拒绝启动（fail-closed 的部署侧对应：服务器不会以 API 禁用
-      # 状态悄悄上线；token 本体只在运行环境注入，不落 compose 文件）
+      # Refuses to start when unset (the deploy-side counterpart of fail-closed:
+      # the server never quietly comes online with the API disabled; the token
+      # itself is injected only into the runtime environment, never into compose files)
       PERSONA_SERVER_TOKEN: "${PERSONA_SERVER_TOKEN:?PERSONA_SERVER_TOKEN is required}"
-      # 多设备令牌（可选，叠加在 legacy 单令牌之上）："laptop:tok1,phone:tok2"。
-      # 设备名用于备份版本归属（客户端不可自报）；非法格式启动即错
+      # Per-device tokens (optional, layered on top of the legacy single token):
+      # "laptop:tok1,phone:tok2". Device names are used for backup version
+      # attribution (clients may not self-report); an invalid format fails startup
       PERSONA_SERVER_TOKENS: "${PERSONA_SERVER_TOKENS:-}"
-      # 事件库落命名卷，容器重启后审计事件保留
+      # Event store on a named volume so audit events survive container restarts
       PERSONA_SERVER_DB: /data/persona-server.db
-      # 加密备份落同一命名卷（服务器只见 PERSENC1 密文，不可解）
+      # Encrypted backups on the same named volume (the server only sees PERSENC1 ciphertext, which it cannot decrypt)
       PERSONA_SERVER_BACKUP_DIR: /data/backups
-      # 保留版本数上限（0=不限，超出删最旧；全局跨设备）
+      # Cap on retained versions (0 = unlimited, the oldest are deleted when exceeded; global across devices)
       PERSONA_SERVER_BACKUP_MAX_VERSIONS: "${PERSONA_SERVER_BACKUP_MAX_VERSIONS:-0}"
-      # oplog 保留天数（0=不清理，默认）。开窗 = 放弃向「离线超过窗口」
-      # 设备补发历史的责任：窗口须 ≥ 最慢设备的离线周期
+      # oplog retention in days (0 = never prune, the default). Opening a window
+      # means giving up the duty to replay history to devices that were offline
+      # longer than the window: the window must be >= the slowest device's
+      # offline cycle
       PERSONA_SERVER_OPS_RETENTION_DAYS: "${PERSONA_SERVER_OPS_RETENTION_DAYS:-0}"
-      # 审计事件副本保留天数（0=不清理，默认）。按 SIEM 摘取周期定
+      # Retention in days for the audit event replica (0 = never prune, the default); match the SIEM's pull cycle
       PERSONA_SERVER_EVENTS_RETENTION_DAYS: "${PERSONA_SERVER_EVENTS_RETENTION_DAYS:-0}"
     volumes:
       - persona-server-data:/data

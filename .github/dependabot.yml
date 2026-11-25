@@ -1,12 +1,14 @@
-# Dependabot version updates：只开定期升级 PR 轨道。
-# 安全告警（alerts）是仓库设置侧的独立轨道，不受本文件影响，保持默认。
+# Dependabot version updates: only the scheduled upgrade PR track is enabled here.
+# Security alerts live on a separate track in the repo settings, are unaffected by
+# this file, and keep their defaults.
 #
-# PR 标题前缀 build/ci 均取自 conventional-commits.yml 允许的 types 列表
-# （dependabot 默认的 "Bump xxx" 标题过不了 semantic-pull-request gate）。
+# The build/ci PR title prefixes are both taken from the types list allowed by
+# conventional-commits.yml (dependabot's default "Bump xxx" titles fail the
+# semantic-pull-request gate).
 version: 2
 updates:
-  # pnpm workspace（desktop / browser/chromium-extension / website，
-  # 根 pnpm-lock.yaml 统一解析）
+  # pnpm workspace (desktop / browser/chromium-extension / website,
+  # resolved uniformly by the root pnpm-lock.yaml)
   - package-ecosystem: "npm"
     directory: "/"
     schedule:
@@ -18,7 +20,7 @@ updates:
     commit-message:
       prefix: "build"
 
-  # docs 站：独立 npm 安装（--ignore-workspace，见 docs.yml 的双锁文件禁令）
+  # docs site: standalone npm install (--ignore-workspace; see the dual-lockfile ban in docs.yml)
   - package-ecosystem: "npm"
     directory: "/docs"
     schedule:
@@ -29,16 +31,18 @@ updates:
         dependency-type: "development"
     commit-message:
       prefix: "build"
-    # mermaid 不走 dependabot：vitepress-plugin-mermaid@2.0.17 的 peer 只到
-    # mermaid 11，dependabot 的 major 升级 PR（#132/#159）合入即让 docs 的
-    # npm ci 以 ERESOLVE 红。升级改为等插件放开 peer 后人工评估（见 todo.md）。
-    # 2026-11-17 复核：插件 latest 仍 2.0.17 / peer 仍 `10 || 11`，未放开。
+    # mermaid is excluded from dependabot: vitepress-plugin-mermaid@2.0.17 only
+    # allows mermaid 11 as a peer, so dependabot's major bump PRs (#132/#159)
+    # turned the docs npm ci red with ERESOLVE as soon as they merged. Upgrades
+    # are now reviewed by hand once the plugin loosens its peer range (see todo.md).
+    # Re-checked 2026-11-17: the plugin's latest is still 2.0.17 with peer `10 || 11`,
+    # i.e. still not loosened.
     ignore:
       - dependency-name: "mermaid"
         update-types:
           - "version-update:semver-major"
 
-  # Rust workspace（core / server / cli / mobile/rust / agents / connect-server）
+  # Rust workspace (core / server / cli / mobile/rust / agents / connect-server)
   - package-ecosystem: "cargo"
     directory: "/"
     schedule:
@@ -49,14 +53,16 @@ updates:
         dependency-type: "development"
     commit-message:
       prefix: "build"
-    # bincode 不走 dependabot：3.0.0 起上游停维护并发布「墓碑」版本，
-    # lib 无条件 compile_error!(https://xkcd.com/2347/) 拒绝编译，且 3.x
-    # API 不兼容我们的调用点。它的升级已三次把 main 打红（#46/#59/#88），
-    # 钉在 1.3；要迁 3.x 得等上游出可用版本 + 全量改 API，届时再放开。
+    # bincode is excluded from dependabot: since 3.0.0 upstream has stopped maintaining
+    # it and publishes a "tombstone" release whose lib unconditionally emits
+    # compile_error!(https://xkcd.com/2347/), and the 3.x API is incompatible with
+    # our call sites. Its bumps have turned main red three times (#46/#59/#88), so it
+    # is pinned at 1.3; moving to 3.x needs a usable upstream release plus a full API
+    # migration, after which this ignore can be lifted.
     ignore:
       - dependency-name: "bincode"
 
-  # GitHub Actions（无开发/生产依赖之分，不分组）
+  # GitHub Actions (no dev/prod distinction, so no groups)
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
@@ -64,9 +70,11 @@ updates:
     open-pull-requests-limit: 10
     commit-message:
       prefix: "ci"
-    # dtolnay/rust-toolchain 不走 dependabot：它的版本 tag 由上游随发布流
-    # 晚于 semver 数字出现，dependabot 会拿不存在的版本号开 PR（幻影版本，
-    # 已三次：#32/#45 秒挂未遂、#62 被合入致 main 全红）。工具链升级改为
-    # 人工定期整体对齐（真实最新 stable 钉 @1.99.0，六处 workflow 引用）。
+    # dtolnay/rust-toolchain is excluded from dependabot: its version tags appear
+    # upstream only after the release flow, trailing the semver number, so
+    # dependabot opens PRs against version numbers that do not exist (phantom
+    # versions, three times already: #32/#45 died instantly, #62 was merged and
+    # turned all of main red). Toolchain upgrades are now aligned by hand on a
+    # schedule (real latest stable pinned at @1.99.0, six workflow references).
     ignore:
       - dependency-name: "dtolnay/rust-toolchain"

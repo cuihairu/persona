@@ -36,25 +36,33 @@ ignore = [
     # signing); upstream has published no patched release (Solution: none), so
     # there is nothing to upgrade to. Revisit when RustCrypto/RSA ships a fix.
     "RUSTSEC-2023-0071",
-    # zbus 5.19.0 经 keyring -> zbus-secret-service-keyring-store 引入；
-    # zbus_names 只有维护状态告警且 advisory 明确无安全升级路径。待
-    # keyring 或其 secret-service 后端迁移到 zbus 6 后删除此 ignore。
+    # zbus 5.19.0 pulled in via keyring -> zbus-secret-service-keyring-store;
+    # zbus_names only carries a maintenance-status advisory, and the advisory
+    # states there is no security upgrade path. Remove this ignore once
+    # keyring or its secret-service backend migrates to zbus 6.
     "RUSTSEC-2026-0371",
-    # zvariant 5.15.0 同属上述 zbus 5.19.0 依赖链；此项是维护状态告警，
-    # 上游已将实现并入 zbus 6，当前依赖尚未迁移。升级 keyring 后复查并删除。
+    # zvariant 5.15.0 belongs to the same zbus 5.19.0 dependency chain above;
+    # this one is a maintenance-status advisory, upstream has folded the
+    # implementation into zbus 6, and the current dependency has not migrated
+    # yet. Re-check and remove after keyring is upgraded.
     "RUSTSEC-2026-0370",
-    # zvariant_derive 5.15.0 随 zvariant 5.15.0 被引入；advisory 无安全补丁，
-    # 宏已并入 zbus 6。待 keyring 后端升级到 zbus 6 时一并移除并复查。
+    # zvariant_derive 5.15.0 comes in together with zvariant 5.15.0; the
+    # advisory has no security patch, and the macros are folded into zbus 6.
+    # Remove and re-check together when the keyring backend moves to zbus 6.
     "RUSTSEC-2026-0372",
-    # 捆绑 SQLite CVE-2026-119375（本地 WAL 页大小混淆可读未初始化内存）：
-    # 补丁版 libsqlite3-sys 0.39（SQLite 3.54）随 rusqlite 0.41 发布，但
-    # sqlx-sqlite 最新 0.9.0 仍钉 libsqlite3-sys <0.38，依赖树暂无升级路径。
-    # persona 只打开自建 vault 库（不读不可信第三方 db+wal），暴露面低。
-    # 待 sqlx-sqlite 发布接入 libsqlite3-sys >=0.39 的版本后升级并删除此 ignore。
+    # Bundled SQLite CVE-2026-119375 (a local WAL page-size confusion can read
+    # uninitialized memory): the patched libsqlite3-sys 0.39 (SQLite 3.54)
+    # shipped with rusqlite 0.41, but the latest sqlx-sqlite 0.9.0 still pins
+    # libsqlite3-sys <0.38, so there is no upgrade path in the dependency tree.
+    # persona only opens its own self-built vault database (it never reads
+    # untrusted third-party db+wal files), so exposure is low.
+    # Upgrade and remove this ignore once sqlx-sqlite ships a version using
+    # libsqlite3-sys >=0.39.
     "RUSTSEC-2026-0459",
-    # chrono 0.4 全版本被标记 unmaintained（建议迁移 jiff/time），无安全补丁、
-    # 无升级路径；advisory 无漏洞内容，仅维护状态。待主仓与 src-tauri 一并
-    # 迁移时间库后删除此 ignore。
+    # Every chrono 0.4 version is marked unmaintained (migrating to jiff/time is
+    # advised); there is no security patch and no upgrade path. The advisory
+    # carries no vulnerability content, only maintenance status. Remove this
+    # ignore once the main repo and src-tauri migrate their time libraries.
     "RUSTSEC-2026-0543",
 ]
 

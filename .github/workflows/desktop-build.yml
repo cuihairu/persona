@@ -1,40 +1,47 @@
 # Desktop multi-platform packaging: Linux (deb/rpm/AppImage), Windows
 # (NSIS), macOS (dmg).
 #
-# Windows 只发 NSIS 一种安装器（2026-09-25 起）：同时发 MSI 会造成
-# nsis(per-user)/msi(per-machine) 混装与卸载残留（msiexec 升级只认
-# UpgradeCode，不会清 NSIS 安装）。NSIS 安装器对旧 msi 安装有迁移
-# 卸载逻辑，反之没有。详见 docs/WINDOWS_INSTALLER.md。
+# Windows ships only the NSIS installer (since 2026-09-25): shipping MSI as
+# well leads to mixed nsis(per-user)/msi(per-machine) installs and uninstall
+# leftovers (msiexec upgrades only honor UpgradeCode and never clean the NSIS
+# install). The NSIS installer has migration/uninstall logic for old msi
+# installs, but not the other way around. See docs/WINDOWS_INSTALLER.md.
 #
 # Three entry points:
 #   - push tag v*        → official GitHub Release with generated notes
 #   - schedule (daily)   → rolling `nightly` prerelease (assets overwritten)
 #   - workflow_dispatch  → build only; tick `upload` to publish to nightly
 #
-# Staleness gate（2026-09-29）：schedule 触发时先比对 main HEAD 的提交时间，
-# 超过 48h 没有新提交就整条流水线 skip（gate 绿、build/android/release 全
-# skipped，不烧 CI 时长）；tag/手动触发永不跳过。
+# Staleness gate (2026-09-29): on schedule triggers, compare the commit time of
+# main HEAD first; if there has been no new commit for over 48h, skip the entire
+# pipeline (the gate is green and build/android/release are all skipped, saving
+# CI minutes). Tag and manual triggers are never skipped.
 #
-# Android（2026-09-30）：persona-mobile aarch64 cdylib 交叉编译 →
-# Flutter 壳（mobile/）jniLibs → **arm64 APK** 进 artifact
-# （android-apk-arm64）；so 本体另存 android-jni-arm64 供链接验证。
-# 上架口径（2026-10-01 起）：**nightly 每日构建带 APK**（下载 pattern
-# 含 android-apk-arm64，改名为 Persona_<ver>_arm64.apk）；tag 正式版
-# 暂不发 APK——移动端还是最小闭环，等稳定后随正式发版放开。
+# Android (2026-09-30): cross-compile the persona-mobile aarch64 cdylib →
+# the Flutter shell (mobile/) jniLibs → **arm64 APK** goes into an artifact
+# (android-apk-arm64); the .so itself is saved separately as android-jni-arm64
+# for link verification. Distribution policy (since 2026-10-01): **the nightly
+# daily build ships the APK** (the download pattern includes android-apk-arm64,
+# renamed to Persona_<ver>_arm64.apk); official tag releases do not ship the APK
+# yet — mobile is still a minimal closed loop, opening up with a real release
+# once it stabilizes.
 #
-# Browser extension（2026-11-14）：Chromium MV3 包（manifest.json 在
-# zip 根）进 artifact（extension-chromium）；nightly 双命名资产
-# persona-nightly-extension-chrome.zip / persona-nightly-extension-edge.zip
-# ——Chrome/Edge 同包双名；另有 persona-nightly-extension.crx（CRX3，
-# Chromium 直接拖装，固定密钥钉扩展 ID）。Safari 需 Xcode 转换 + 签名
-# 账号，**不在 nightly**（todo 另立）。tag 正式版暂不发扩展，口径与
-# APK 一致。
+# Browser extension (2026-11-14): a Chromium MV3 package (manifest.json at the
+# zip root) goes into an artifact (extension-chromium); nightly gets the
+# dual-named assets persona-nightly-extension-chrome.zip /
+# persona-nightly-extension-edge.zip — the same package under two names for
+# Chrome/Edge; plus persona-nightly-extension.crx (CRX3, drag-installable in
+# Chromium, with a pinned key fixing the extension ID). Safari needs an Xcode
+# conversion + a signing account, so it is **not in nightly** (tracked
+# separately in todo). Official tag releases do not ship the extension yet,
+# same policy as the APK.
 #
-# OpenWrt（2026-11-14）：persona-server musl 静态编译（x86_64 + aarch64）
-# → packaging/openwrt/build-ipk.sh 出三件套 ipk（persona 主包 arch 相关、
-# luci-app/app-meta arch=all）。nightly 资产 persona-nightly-openwrt-*.ipk；
-# aarch64 无真机，做结构检查（ELF 机器 + 静态链接 + ipk 成员）。tag 正式版
-# 暂不发，口径与 APK/扩展一致。
+# OpenWrt (2026-11-14): persona-server built as a musl static binary (x86_64 +
+# aarch64) → packaging/openwrt/build-ipk.sh produces the three-package ipk set
+# (the persona main package is arch-specific, luci-app/app-meta are arch=all).
+# Nightly assets are persona-nightly-openwrt-*.ipk; aarch64 has no real device,
+# so structural checks stand in (ELF machine + static linking + ipk members).
+# Official tag releases do not ship it yet, same policy as the APK/extension.
 #
 # Binaries are unsigned (SmartScreen/Gatekeeper will warn on install);
 # architecture-pinned per runner: linux/windows x64, macos arm64.
@@ -72,8 +79,9 @@ jobs:
         id: gate
         shell: bash
         run: |
-          # 只有 schedule 做新鲜度判断：tag 是正式发版、dispatch 是人手动
-          # 点的，都不允许被 staleness 拦下。
+          # Only schedule runs get the freshness check: a tag is an official
+          # release and a dispatch is a human pressing a button — neither may be
+          # blocked by staleness.
           if [[ "${GITHUB_EVENT_NAME}" != "schedule" ]]; then
             echo "event ${GITHUB_EVENT_NAME}: always build"
             echo "should_build=true" >> "$GITHUB_OUTPUT"
@@ -109,7 +117,8 @@ jobs:
             os: macos-latest
             bundles: dmg
     runs-on: ${{ matrix.os }}
-    # spike 探针在无硬件的 VM 上按设计会"如实失败"，但绝不允许它挂死 job
+    # spike probes are designed to "fail honestly" on hardware-less VMs, but
+    # they must never be allowed to hang the job
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v7.0.1
@@ -144,9 +153,10 @@ jobs:
         shell: bash
         run: pnpm install --frozen-lockfile --filter persona-desktop...
 
-      # 更新检测渠道元信息（desktop/src/utils/updateCheck.ts 经 vite define 读入）：
-      # 每日构建 = nightly，比对 desktop-build workflow 最近成功 run；release 渠道
-      # 由未来的发版流水线注入 VITE_UPDATE_CHANNEL=release
+      # Update-check channel metadata (read into desktop/src/utils/updateCheck.ts
+      # via vite define): daily build = nightly, compared against the latest
+      # successful run of the desktop-build workflow; a future release pipeline will
+      # inject VITE_UPDATE_CHANNEL=release for the release channel
       - name: Record build metadata (update-check channel)
         shell: bash
         run: |
@@ -175,28 +185,33 @@ jobs:
             desktop/src-tauri/target/release/bundle/**/*.dmg
           if-no-files-found: error
 
-      # 生物识别硬件包裹 spike（docs/biometric-unlock-design.md §5.2/§6.1）。
-      # runner 是 VM：macos 无 Secure Enclave / Touch ID，windows 通常无已
-      # 注册的 Hello——探针会如实失败并把 OSStatus/HRESULT 打进日志，这份
-      # 真实输出就是本步骤的产出（人工回填设计文档）；非门禁，探针 ok 位
-      # 不影响 job 结论。--nocapture 让 SPIKE 行进日志。
+      # Biometric hardware wrapper spike (docs/biometric-unlock-design.md
+      # §5.2/§6.1). The runner is a VM: macos has no Secure Enclave / Touch ID,
+      # windows usually has no enrolled Hello — the probes fail honestly and dump
+      # the OSStatus/HRESULT into the log; that real output is this step's
+      # deliverable (to be back-filled into the design doc by hand). Not a gate:
+      # the probes' ok bits do not affect the job verdict. --nocapture lets the
+      # SPIKE lines reach the log.
       - name: Biometric spike probes (VM — record real capability, not a gate)
         if: runner.os != 'Linux'
         working-directory: desktop/src-tauri
         shell: bash
-        # 非门禁：探针 ok 位、乃至 runner 环境根本跑不起测试二进制（Windows
-        # runner 实测 0xc0000139 STATUS_ENTRYPOINT_NOT_FOUND——Tauri 测试
-        # 二进制的原生 loader 依赖，见设计文档 §6.3），都不该挡打包。
+        # Not a gate: the probes' ok bits — or the runner environment simply not
+        # being able to run the test binary (observed 0xc0000139
+        # STATUS_ENTRYPOINT_NOT_FOUND on a Windows runner — a native loader
+        # dependency of Tauri test binaries, see design doc §6.3) — must not
+        # block packaging.
         continue-on-error: true
         run: cargo test --lib spike_probes_print_report -- --ignored --nocapture
 
-  # persona-mobile 的 Android 交叉编译（aarch64 cdylib）+ 原生 Kotlin APK。
-  # 链：cargo ndk 出 libpersona_mobile.so（mobile-ffi profile，panic 防线
-  # 需 unwind）→ 拷入 Kotlin 工程 jniLibs → gradle assembleRelease
-  # （arm64-v8a 单 ABI）。产物只进 artifact——铁律：
-  # 每日构建不发 release（release job 的 download pattern 只认
-  # desktop-*，天然隔离）；libpersona_mobile.so 另存 android-jni-arm64
-  # artifact 供链接验证/壳外集成。
+  # persona-mobile Android cross-compilation (aarch64 cdylib) + native Kotlin APK.
+  # Chain: cargo ndk produces libpersona_mobile.so (mobile-ffi profile, which
+  # needs unwind for the panic defense) → copied into the Kotlin project's jniLibs
+  # → gradle assembleRelease (arm64-v8a, single ABI). Artifacts only — hard rule:
+  # the daily build never publishes a release (the release job's download pattern
+  # matches desktop-* only, which isolates it naturally); libpersona_mobile.so is
+  # also saved as the android-jni-arm64 artifact for link verification /
+  # out-of-shell integration.
   android:
     name: android (aarch64 APK)
     needs: gate
@@ -228,8 +243,9 @@ jobs:
         shell: bash
         env:
           ANDROID_NDK_HOME: ${{ steps.ndk.outputs.ndk-path }}
-        # mobile-ffi（release + unwind）：panic 在 FFI 边界被 catch_unwind
-        # 收编为错误结果——release 的 panic=abort 会让防线失效（进程直接死）
+        # mobile-ffi (release + unwind): a panic is converted into an error result
+        # by catch_unwind at the FFI boundary — release's panic=abort would defeat
+        # that defense (the process would just die)
         run: cargo ndk -t arm64-v8a build -p persona-mobile --profile mobile-ffi
 
       - name: Upload android jniLib artifact
@@ -249,8 +265,9 @@ jobs:
       - name: Build Android APK (arm64-v8a, native Kotlin)
         working-directory: mobile/android
         shell: bash
-        # 纯 Kotlin 工程直出单 ABI 包：abiFilters 已限定 arm64-v8a，非 arm64
-        # 设备不会装到缺 so 的包——运行时 UnsatisfiedLinkError 不可能出现
+        # The pure Kotlin project emits a single-ABI package directly: abiFilters
+        # is already limited to arm64-v8a, so non-arm64 devices never install the
+        # so-less package — a runtime UnsatisfiedLinkError is impossible
         run: ./gradlew --no-daemon :app:assembleRelease
 
       - name: Upload android APK artifact
@@ -260,10 +277,11 @@ jobs:
           path: mobile/android/app/build/outputs/apk/release/app-release.apk
           if-no-files-found: error
 
-  # 浏览器扩展 nightly 打包（Chromium MV3）：tsc 出 dist/ → zip（
-  # manifest.json 必须在压缩包根，Load unpacked 直读）。产物只进
-  # artifact——与 APK 同一铁律：release job 的 download pattern 只在
-  # 非 tag run 认 extension-chromium，tag 正式版天然隔离。
+  # Browser extension nightly packaging (Chromium MV3): tsc produces dist/ →
+  # zip (manifest.json must sit at the archive root, which Load unpacked reads
+  # directly). Artifacts only — the same hard rule as the APK: the release
+  # job's download pattern matches extension-chromium only on non-tag runs, so
+  # official tag releases are naturally isolated.
   extension:
     name: browser extension (chromium zip)
     needs: gate
@@ -293,8 +311,9 @@ jobs:
 
       - name: Zip package (manifest.json at archive root)
         shell: bash
-        # 结构自检先于打包：manifest 缺位或入口文件缺失时直接红，不让
-        # 一个装不出来的 zip 进 nightly。
+        # Structural self-check before packaging: fail outright when manifest.json
+        # or an entry file is missing, so a zip that cannot be installed never
+        # reaches nightly.
         run: |
           cd browser/chromium-extension
           test -f manifest.json
@@ -310,11 +329,13 @@ jobs:
           path: persona-extension.zip
           if-no-files-found: error
 
-  # OpenWrt IPK 打包：persona-server musl 静态编译。aarch64 腿走原生
-  # ARM runner（ubuntu-24.04-arm，meshlet 先例）——不依赖外网交叉工具
-  # 链（musl.cc 在 GH runner 上不可达，实测红过一次）；每腿各自
-  # apt musl-tools。三件套 ipk（persona/luci-app/app-meta）由
-  # build-ipk.sh 出；脚本门禁（shellcheck + sh -n + luac5.1）内联腿前。
+  # OpenWrt IPK packaging: persona-server built statically with musl. The
+  # aarch64 leg uses a native ARM runner (ubuntu-24.04-arm, per the meshlet
+  # precedent) — no dependence on an external cross toolchain (musl.cc is
+  # unreachable from GH runners, this has turned red once in practice); each leg
+  # installs musl-tools via apt itself. The three-package ipk set
+  # (persona/luci-app/app-meta) comes from build-ipk.sh; the script gates
+  # (shellcheck + sh -n + luac5.1) run inline before the leg.
   openwrt:
     name: openwrt ipk (${{ matrix.arch }} musl)
     needs: gate
@@ -375,9 +396,11 @@ jobs:
           OUT=out/openwrt
           packaging/openwrt/build-ipk.sh \
             "target/${{ matrix.arch }}-unknown-linux-musl/release" "$OUT"
-          # aarch64 无真机：结构检查代替（ELF 机器 + 静态链接 + ipk 成员
-          # + data.tar.gz 目录条目——opkg 不为纯文件成员建父目录）。
-          # x86_64 musl 是 static-pie，aarch64 musl 是 plain static——都收。
+          # No real aarch64 device: structural checks stand in (ELF machine +
+          # static linking + ipk members + directory entries inside data.tar.gz
+          # — opkg does not create parent directories for plain file members).
+          # x86_64 musl is static-pie and aarch64 musl is plain static — both
+          # are accepted.
           file "target/${{ matrix.arch }}-unknown-linux-musl/release/persona-server" \
             | tee /dev/stderr | grep -qE 'static-pie linked|statically linked'
           version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
@@ -390,9 +413,10 @@ jobs:
           tar -xzOf /tmp/ipk-verify/data.tar.gz usr/bin/persona-server | file -
           find "$OUT" -type f -printf '%s %p\n' | sort -n
 
-      # arch=all 两包（luci-app / app-meta）随 x86_64 腿上传一份即可——
-      # aarch64 腿也构建了它们（自检用），但 artifact 只带主包，避免
-      # release 下载合并出同名资产。
+      # The two arch=all packages (luci-app / app-meta) only need to be uploaded
+      # once, with the x86_64 leg — the aarch64 leg builds them too (for its own
+      # self-check), but the artifact carries only the main package, so the
+      # release download does not merge duplicate-named assets.
       - name: Upload arch ipk artifact
         uses: actions/upload-artifact@v7.0.2
         with:
@@ -410,11 +434,12 @@ jobs:
             out/openwrt/app-meta-persona_*_all.ipk
           if-no-files-found: error
 
-  # persona-relay（2026-11-23）：中转节点薄壳二进制（同 persona-server
-  # 路由/迁移，只挂 sync+pairing 面）——仿 Syncthing strelaysrv 的独立
-  # 产物。四 triple 各出 persona-relay-<triple>.tar.gz（二进制+LICENSE+
-  # README-relay）；nightly 改名 persona-nightly-relay-*。tag 正式版暂不
-  # 发，口径与 APK/扩展/OpenWrt 一致。
+  # persona-relay (2026-11-23): a thin relay-node binary (same persona-server
+  # routing/migration, exposing only the sync+pairing surface) — an independent
+  # artifact in the manner of Syncthing's strelaysrv. Each of the four triples
+  # yields persona-relay-<triple>.tar.gz (binary + LICENSE + README-relay);
+  # nightly renames it to persona-nightly-relay-*. Official tag releases do not
+  # ship it yet, matching the APK / extension / OpenWrt policy.
   relay:
     name: relay binary (${{ matrix.name }})
     needs: gate
@@ -455,17 +480,19 @@ jobs:
 
       - name: Package relay tarball + structural check
         shell: bash
-        # 打包二进制+LICENSE+README-relay；结构自检只在 runner 带有 file
-        # 工具时执行（Linux/macOS ELF|Mach-O；Windows runner 无 file，
-        # 以存在性+非空兜底，PE 结构由 MSVC 工具链产出本身保证）。
+        # Package the binary + LICENSE + README-relay; the structural self-check
+        # only runs when the runner has the `file` tool (Linux/macOS give
+        # ELF|Mach-O; Windows runners lack it, so presence + non-empty is the
+        # fallback, and the MSVC toolchain's own output guarantees the PE shape).
         run: |
           set -euo pipefail
           BIN="target/${{ matrix.triple }}/release/persona-relay"
           test -f "$BIN"
           test -s "$BIN"
           if command -v file >/dev/null 2>&1; then
-            # tee 到 /dev/stderr 在 Windows runner 的 Git Bash 里会炸（该路径
-            # 不存在，2026-11-22 nightly relay-windows 实证）——直接打 stdout。
+            # Teeing to /dev/stderr blows up in Git Bash on a Windows runner
+            # (that path does not exist, proven by the 2026-11-22 nightly
+            # relay-windows run) — print to stdout directly.
             file "$BIN" | grep -qE 'ELF|Mach-O|PE32'
             file "$BIN"
           fi
@@ -495,9 +522,10 @@ jobs:
     steps:
       - uses: actions/checkout@v7.0.1
 
-      # nightly/dispatch 带 APK + 扩展 zip + OpenWrt ipk + relay 中转
-      # 二进制；tag 正式版只发桌面包（见文件头口径）。needs 已含全部
-      # build job，artifact 必然已就绪。
+      # nightly/dispatch ship the APK + extension zip + OpenWrt ipks + the relay
+      # binaries; official tag releases ship desktop bundles only (see the file
+      # header for the policy). needs already lists every build job, so the
+      # artifacts are guaranteed to be present.
       - uses: actions/download-artifact@v8.0.2
         with:
           pattern: ${{ startsWith(github.ref, 'refs/tags/v') && 'desktop-*' || '{desktop-*,android-apk-arm64,extension-chromium,openwrt-ipk-*,relay-*}' }}
@@ -520,8 +548,9 @@ jobs:
       - name: Rename extension zip (Chrome/Edge dual-name, same package)
         if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
         shell: bash
-        # Chromium 内核同包双名：Chrome 与 Edge 各自的发布页习惯自己的
-        # 文件名，内容逐字节一致（SHA256 相同）。
+        # The same Chromium package under two names: Chrome's and Edge's store
+        # pages each expect their own filename, and the contents are
+        # byte-for-byte identical (same SHA256).
         run: |
           if [ -f dist/persona-extension.zip ]; then
             cp dist/persona-extension.zip dist/persona-nightly-extension-chrome.zip
@@ -536,10 +565,12 @@ jobs:
       - name: Build extension CRX3 (drag-install package)
         if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
         shell: bash
-        # CRX3 = Chromium 可直接拖装的封装（zip 需要开发者模式 load
-        # unpacked）。固定密钥 packaging/extension/persona-crx.pem 钉住
-        # 扩展 ID：换 key = 换 ID = 老版本升级后设置全丢，绝不能每次
-        # 构建重新生成。工具：crx3 npm 包（协议头 Cr24 v3 已本地验证）。
+        # CRX3 = the wrapper Chromium can install by drag-and-drop (a zip needs
+        # developer-mode load-unpacked). The fixed key
+        # packaging/extension/persona-crx.pem pins the extension ID: changing
+        # the key = changing the ID = losing all settings after upgrading an
+        # older version, so it must never be regenerated per build. Tool: the
+        # crx3 npm package (protocol header Cr24 v3, verified locally).
         run: |
           test -f dist/persona-nightly-extension-chrome.zip
           rm -rf /tmp/persona-crx-src && mkdir -p /tmp/persona-crx-src
@@ -549,7 +580,7 @@ jobs:
             --keyPath packaging/extension/persona-crx.pem \
             --crxPath dist/persona-nightly-extension.crx \
             /tmp/persona-crx-src
-          # 结构门禁：CRX3 头（Cr24 v3）+ 尺寸非零
+          # Structural gate: CRX3 header (Cr24 v3) + non-zero size
           head -c4 dist/persona-nightly-extension.crx | grep -q "Cr24"
           [ "$(stat -c%s dist/persona-nightly-extension.crx)" -gt 100 ]
           echo "crx3 package OK"
@@ -557,8 +588,9 @@ jobs:
       - name: Rename OpenWrt ipks (nightly naming)
         if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
         shell: bash
-        # 主包按架构出 persona-nightly-openwrt-<arch>.ipk；LuCI 界面与
-        # iStore 元数据包是 arch=all，两个架构共用同一份。
+        # The main package comes out per architecture as
+        # persona-nightly-openwrt-<arch>.ipk; the LuCI UI and iStore metadata
+        # packages are arch=all, shared by both architectures.
         run: |
           ok=1
           for pair in \
@@ -586,7 +618,8 @@ jobs:
       - name: Rename relay tarballs (nightly naming)
         if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
         shell: bash
-        # 中转节点每 triple 一包，nightly 命名 persona-nightly-relay-<os>.tar.gz。
+        # One package per relay triple; nightly naming is
+        # persona-nightly-relay-<os>.tar.gz.
         run: |
           ok=1
           for pair in \
@@ -610,8 +643,10 @@ jobs:
       - name: Generate SHA256SUMS + asset manifest (nightly only)
         if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
         shell: bash
-        # 临时文件落在 dist 外：shell 会先创建重定向目标再跑 find，写在
-        # dist 里会被自己的遍历收录（自校验必 FAILED）。落位用 mv。
+        # Temp files go outside dist: the shell creates the redirection target
+        # before running find, so a file written inside dist would be picked up
+        # by its own walk (the self-check would always be FAILED). Place it with
+        # mv.
         run: |
           cd dist
           find . -type f -printf '%P\0' | sort -z \

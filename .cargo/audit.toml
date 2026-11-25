@@ -20,10 +20,12 @@
 ignore = [
     "RUSTSEC-2023-0071", # rsa 0.9.10, 0.10.0-rc.18: no fix available
     "RUSTSEC-2026-0387", # crypto-bigint 0.5.5: present in the lock graph (alloy -> k256 0.13 chain); runtime enablement unverified
-    # 捆绑 SQLite CVE-2026-119375（本地 WAL 页大小混淆可读未初始化内存）：
-    # 补丁版 libsqlite3-sys 0.39（SQLite 3.54）随 rusqlite 0.41 发布，但
-    # sqlx-sqlite 最新仍钉 libsqlite3-sys <0.38，依赖树暂无升级路径。
-    # persona 只打开自建 vault 库（不读不可信第三方 db+wal），暴露面低。
-    # 与 deny.toml 同因（21ca54b 只改了 deny.toml，cargo-audit 读本文件）。
+    # Bundled SQLite CVE-2026-119375 (a local WAL page-size confusion can read uninitialized memory):
+    # the patched libsqlite3-sys 0.39 (SQLite 3.54) shipped with rusqlite 0.41, but
+    # the latest sqlx-sqlite still pins libsqlite3-sys <0.38, so there is no upgrade
+    # path in the dependency tree yet.
+    # persona only opens its own self-built vault database (it never reads untrusted
+    # third-party db+wal files), so exposure is low.
+    # Same reason as deny.toml (21ca54b touched only deny.toml, while cargo-audit reads this file).
     "RUSTSEC-2026-0459",
 ]

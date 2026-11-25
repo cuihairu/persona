@@ -19,17 +19,20 @@ repository = "https://github.com/cuihairu/persona"
 description = "Master your digital identity. Switch freely with one click."
 
 [workspace.dependencies]
-# 加密相关
+# Crypto-related
 ring = "0.17"
 argon2 = "0.6"
 aes-gcm = "0.11"
-# SRP-6a（RFC 5054）：设备认证（E2EE 同步轨道阶段 1）。RustCrypto/PAKEs
-# 维护节奏慢（0.7 停在 rc）——正确性由 RFC 5054 附录 B 向量测试锁定
-# （core/src/auth/srp.rs），调用方经封装隔离可整体换实现（设计稿 DR-2）
+# SRP-6a (RFC 5054): device authentication (phase 1 of the E2EE sync track).
+# RustCrypto/PAKEs move slowly (0.7 stuck at rc) — correctness is locked by
+# the RFC 5054 Appendix B vector tests (core/src/auth/srp.rs), and callers are
+# isolated through a wrapper so the implementation can be swapped wholesale
+# (design doc DR-2)
 ed25519-dalek = { version = "3.0", features = ["pkcs8", "zeroize"] }
-# E2EE 同步 device envelope（E2EE_SYNC_DESIGN DR-1）：X25519 ephemeral DH
-# + HKDF-SHA256 展开（key‖nonce）+ AES-256-GCM；组合层约 30 行自写，
-# round-trip/篡改/跨设备失败测试覆盖（core/src/sync/envelope.rs）
+# E2EE sync device envelope (E2EE_SYNC_DESIGN DR-1): X25519 ephemeral DH +
+# HKDF-SHA256 expansion (key‖nonce) + AES-256-GCM; the composition layer is
+# about 30 hand-written lines, covered by round-trip/tamper/cross-device
+# failure tests (core/src/sync/envelope.rs)
 x25519-dalek = { version = "3.0", features = ["static_secrets"] }
 hkdf = "0.13"
 rand = { version = "0.10", features = ["sys_rng", "thread_rng"] }
@@ -40,7 +43,7 @@ num-bigint = "0.5"
 flate2 = "1.0"
 zip = { version = "9", default-features = false, features = ["deflate"] }
 
-# 密码学 - BIP/加密货币相关
+# Crypto - BIP/cryptocurrency related
 bip39 = "3.0"
 bip32 = { version = "0.6", features = ["alloc"] }
 k256 = { version = "0.14", features = ["ecdsa", "sha256"] }
@@ -53,90 +56,100 @@ data-encoding = "2.5"
 zxcvbn = "3"
 hmac = "0.13"
 pbkdf2 = "0.13"
-# Web3 Secret Storage v3 keystore（钱包 JSON 互导入）：scrypt/pbkdf2 派生 +
-# AES-128-CTR + keccak MAC（web3 标准即 keccak 非 sha3-256，sha3 crate 提供）
+# Web3 Secret Storage v3 keystore (wallet JSON interop): scrypt/pbkdf2 derivation
+# + AES-128-CTR + keccak MAC (the web3 standard uses keccak, not sha3-256;
+# the sha3 crate provides it)
 scrypt = "0.12"
 aes = "0.9"
 ctr = "0.10"
 bs58 = { version = "0.5", features = ["check"] }
-# 链协议标准库：交易序列化/签名哈希/地址解析交给审计过的实现
+# Chain-protocol standard crates: transaction serialization / signature hashing /
+# address parsing are delegated to audited implementations
 bitcoin = "0.32"
 alloy-consensus = "2.4"
 alloy-eips = "2.4"
 alloy-primitives = "1.7"
 bech32 = "0.12"
-# WebAuthn/passkey：P-256 与 COSE/CBOR 用审计过的实现
+# WebAuthn/passkey: P-256 and COSE/CBOR use audited implementations
 p256 = { version = "0.14", features = ["ecdsa"] }
 coset = "0.4"
 base64 = "0.23"
 webauthn-rs = "0.6"
-# SSH 密钥：OpenSSH 私钥容器（openssh-key-v1/aes*-ctr/cbc/bcrypt-pbkdf）解析与
-# 序列化、公钥行/指纹格式化，交给审计过的 ssh-key；p256 feature 供 ECDSA
-# P-256 的生成/转换（ecdsa feature 只给类型）；rsa 供 agent 的 rsa-sha2-* 签名
+# SSH keys: parsing/serialization of the OpenSSH private key container
+# (openssh-key-v1/aes*-ctr/cbc/bcrypt-pbkdf) and public-key line/fingerprint
+# formatting are delegated to the audited ssh-key; the p256 feature supports
+# ECDSA P-256 generation/conversion (the ecdsa feature only provides types);
+# rsa supports the agent's rsa-sha2-* signatures
 ssh-key = { version = "0.7.0-rc.11", features = ["ed25519", "rsa", "ecdsa", "p256", "encryption", "rand_core"] }
 rsa = { version = "0.9", features = ["sha2"] }
-# PEM 家族私钥导入（PKCS#8/PKCS#1/SEC1，见 core/src/crypto/ssh_import_pem.rs）：
-# 字段级解码交给 pkcs1/pkcs8（RustCrypto 同系），pkcs8 的 encryption feature
-# 供加密 PKCS#8（PBES2）解锁；ed25519-dalek 的 pkcs8 feature 供 PKCS#8→SigningKey
+# PEM-family private key import (PKCS#8/PKCS#1/SEC1, see core/src/crypto/ssh_import_pem.rs):
+# field-level decoding is delegated to pkcs1/pkcs8 (same RustCrypto family);
+# pkcs8's encryption feature unlocks encrypted PKCS#8 (PBES2); ed25519-dalek's
+# pkcs8 feature provides the PKCS#8 → SigningKey conversion
 pkcs1 = { version = "0.7", features = ["std", "pem"] }
 pkcs8 = { version = "0.11", features = ["std", "pem", "encryption"] }
 rand_core = "0.10"
 
-# 数据库
-# 0.9 删了 runtime+TLS 组合 feature，拆开写；sqlite 不走 TLS，ring Provider
-# 与仓库既有 ring 对齐（reqwest 0.13 的 rustls 默认 provider 是 aws-lc）
+# Database
+# 0.9 dropped the combined runtime+TLS feature, so they are spelled out
+# separately; sqlite does not use TLS, and the ring Provider aligns with the
+# repo's existing ring (reqwest 0.13's rustls defaults to the aws-lc provider)
 sqlx = { version = "0.9", features = ["sqlite", "runtime-tokio", "tls-rustls-ring"] }
 
-# 序列化
+# Serialization
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-# bincode 钉在 1.3：3.0.0 起上游标记停维护并发布「墓碑」版本，lib 无条件
-# compile_error!(https://xkcd.com/2347/) 拒绝编译，且 3.x API 不兼容我们的
-# 调用点。dependabot 的 bincode 升级已三次把 main 打红（#46/#59/#88），已在
-# dependabot.yml ignore。要迁 3.x 得等上游出可用版本 + 全量改 API。
+# bincode is pinned at 1.3: since 3.0.0 upstream has marked it unmaintained and
+# published a "tombstone" release whose lib unconditionally emits
+# compile_error!(https://xkcd.com/2347/), and the 3.x API is incompatible with
+# our call sites. dependabot's bincode bumps have turned main red three times
+# (#46/#59/#88) and are already ignored in dependabot.yml. Moving to 3.x needs a
+# usable upstream release plus a full API migration.
 bincode = "1.3"
 
-# 异步运行时
+# Async runtime
 tokio = { version = "1.0", features = ["full"] }
 futures = "0.3"
-# 备份下载流式响应（ReaderStream：AsyncRead → Stream）
+# Streaming response for backup downloads (ReaderStream: AsyncRead → Stream)
 tokio-util = { version = "0.7", features = ["io"] }
 
-# HTTP 客户端（Watchtower 泄露检查 HIBP k-anonymity；rustls 避免 openssl 依赖）
-# 0.13 起 query/form 拆成可选 feature；sync/oplog 的 GET 拼参用 query
+# HTTP client (Watchtower breach checks against HIBP k-anonymity; rustls avoids
+# an openssl dependency)
+# Since 0.13, query/form are split into optional features; sync/oplog GETs that
+# build query strings use query
 reqwest = { version = "0.13", default-features = false, features = ["rustls", "query"] }
 
-# Web框架 (服务器端)
+# Web framework (server side)
 tower = "0.5"
 axum = "0.8"
 tower-http = { version = "0.7", features = ["cors", "trace", "decompression-gzip"] }
 
-# 日志
+# Logging
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 regex = "1.10"
 
-# 错误处理
+# Error handling
 anyhow = "1.0"
 thiserror = "2.0"
 
-# 时间处理
+# Time handling
 chrono = { version = "0.4", features = ["serde"] }
 
 # UUID
 uuid = { version = "1.6", features = ["v4", "serde"] }
 
-# 配置管理
+# Configuration management
 config = "0.15"
 
-# 测试
+# Testing
 mockall = "0.15"
 proptest = "1.5"
 
-# 其他依赖
+# Other dependencies
 async-trait = "0.1"
-# 通用格式导入（FEATURE_GAP_ANALYSIS #20）：CSV 解析（Bitwarden/Chrome/
-# Firefox/1Password/KeePass 导出列形 sniffing）
+# Generic format import (FEATURE_GAP_ANALYSIS #20): CSV parsing (export column
+# shape sniffing for Bitwarden/Chrome/Firefox/1Password/KeePass)
 csv = "1.3"
 dirs = "7.0"
 hex = "0.4"
@@ -153,11 +166,12 @@ panic = "abort"
 opt-level = 0
 debug = true
 
-# 移动端 FFI 产物专用（Android/iOS/鸿蒙共用的 panic 防线前提）：
-# release 的 panic="abort" 会让 panic 在 unwind 前就杀进程，
-# mobile/rust 生命周期入口的 catch_unwind 防线（panic → 错误结果而非
-# 崩溃）只有 unwind 构建才会触发。desktop-build.yml 的 android job 用
-# `--profile mobile-ffi` 出 so（产物在 target/<target>/mobile-ffi/ 下）。
+# Dedicated to the mobile FFI artifact (the precondition for the panic defense
+# shared by Android/iOS/HarmonyOS): release's panic="abort" would kill the
+# process before unwinding, so the catch_unwind defense at the mobile/rust
+# lifecycle entry points (panic → an error result instead of a crash) only
+# triggers under an unwind build. The android job in desktop-build.yml builds
+# the .so with `--profile mobile-ffi` (output under target/<target>/mobile-ffi/).
 [profile.mobile-ffi]
 inherits = "release"
 panic = "unwind"

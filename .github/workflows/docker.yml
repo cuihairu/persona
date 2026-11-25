@@ -100,13 +100,16 @@ jobs:
             echo "Skipping GHCR visibility update for ${PKG} (HTTP $code)"
           fi
 
-  # ---- persona-relay（RELAY-DOCKER-1124）：独立镜像、独立 tag ----
-  # 多架构 amd64 + arm64，与四平台二进制 release 面呼应。两腿在各自**原生**
-  # runner 上 buildx 构建并推 -amd64/-arm64 后缀 tag，merge-relay-manifest 把
-  # 两腿合成多架构 manifest。刻意不用 qemu 交叉编译：amd64 runner 上交叉编
-  # arm64 的 Rust release（本工作区 release 体积）需 50-150 min，首次推送即有
-  # 超时风险；公共仓的 ubuntu-24.04-arm 原生 runner 使两腿耗时与 build-server
-  # 同量级（relay 只编 persona-relay 一个二进制，比 server 还小）。
+  # ---- persona-relay (RELAY-DOCKER-1124): separate image, separate tags ----
+  # Multi-arch amd64 + arm64, mirroring the four-platform binary release surface.
+  # Each leg is built by buildx on its own **native** runner and pushed as a
+  # -amd64/-arm64 suffixed tag; merge-relay-manifest then combines the two legs
+  # into a multi-arch manifest. QEMU cross-compilation is deliberately avoided:
+  # cross-building the arm64 Rust release (workspace release size) on an amd64
+  # runner takes 50-150 min, which risks a timeout on the very first push; the
+  # public repo's native ubuntu-24.04-arm runner keeps both legs in the same
+  # ballpark as build-server (relay builds only the persona-relay binary, smaller
+  # than the server).
   build-relay:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
@@ -146,9 +149,10 @@ jobs:
         uses: docker/metadata-action@v6.2.0
         with:
           images: ghcr.io/${{ github.repository_owner }}/persona-relay
-          # tag 策略：v* → semver（与 persona-server 同构）；main 分支推送或
-          # workflow_dispatch → 滚动 nightly（与 nightly release 节奏对齐）；
-          # PR → pr-N（不推送）。每腿推带架构后缀的 tag，由 merge job 合成。
+          # Tag policy: v* → semver (same shape as persona-server); pushes to
+          # main or workflow_dispatch → rolling nightly (aligned with the nightly
+          # release cadence); PRs → pr-N (not pushed). Each leg pushes a tag with
+          # an arch suffix, merged by the merge job.
           tags: |
             type=semver,pattern={{version}}-${{ matrix.suffix }}
             type=semver,pattern={{major}}.{{minor}}-${{ matrix.suffix }}
@@ -166,8 +170,9 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
 
-  # 两腿架构 tag 合成多架构 manifest：v* → 1.2.3 + 1.2；main → nightly。
-  # 无 checkout（imagetools 只操作 registry，不读仓库）。
+  # Combine the two legs' arch tags into a multi-arch manifest:
+  # v* → 1.2.3 + 1.2; main → nightly.
+  # No checkout (imagetools only talks to the registry, it never reads the repo).
   merge-relay-manifest:
     needs: build-relay
     if: github.event_name != 'pull_request'
@@ -204,8 +209,10 @@ jobs:
               ;;
           esac
           for t in "${tags[@]}"; do
-            # 两段式版本 tag（v1.0）等形态下 metadata 的 semver 规则可能不产出
-            # 对应架构 tag——守卫缺源，避免 imagetools 缺镜像硬失败打红。
+            # Under tag shapes like the two-part semver form (v1.0), metadata's
+            # semver rules may not produce the matching arch tags — guard against
+            # a missing source so imagetools does not hard-fail on a missing image
+            # and turn the run red.
             for a in amd64 arm64; do
               if ! docker buildx imagetools inspect "${img}:${t}-${a}" >/dev/null 2>&1; then
                 echo "Skipping ${img}:${t} (missing ${img}:${t}-${a})"
