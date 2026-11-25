@@ -1,7 +1,7 @@
 import { defineConfig } from 'umi';
 
 export default defineConfig({
-  // antd 6 产物在多 chunk 间出现 esbuild helper 同名冲突，开启 IIFE 包裹消解
+  // antd 6 output hits same-named esbuild helper collisions across multiple chunks; enable IIFE wrapping to resolve them
   esbuildMinifyIIFE: true,
   title: 'Persona - Your Digital Identity Guardian',
   metas: [

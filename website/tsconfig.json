@@ -9,8 +9,8 @@
     "esModuleInterop": true,
     "skipLibCheck": true,
     "declaration": false,
-    /* TS 7 移除了 baseUrl；相对 './' 写法两代都合法（5.x 允许相对 paths，
-       7.x 按 tsconfig 相对根解析） */
+    /* TS 7 removed baseUrl; the relative './' form is valid in both versions
+       (5.x allows relative paths, 7.x resolves them against the tsconfig root) */
     "paths": {
       "@/*": ["./src/*"]
     }

@@ -68,7 +68,7 @@ const BasicLayout: React.FC = () => {
           </div>
           <div className={styles.footerSection}>
             <h4>关于</h4>
-            {/* 无对应路由且暂无正式文案：不制造 404，标注「即将上线」 */}
+            {/* No matching route and no official copy yet: don't create a 404, mark as "coming soon" */}
             <span className={styles.comingSoon}>安全性（即将上线）</span>
             <span className={styles.comingSoon}>隐私政策（即将上线）</span>
             <span className={styles.comingSoon}>使用条款（即将上线）</span>
