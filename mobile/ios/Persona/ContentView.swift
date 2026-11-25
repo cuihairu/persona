@@ -1,8 +1,10 @@
 import SwiftUI
 
-/// 原生骨架首屏：验证 staticlib 桥连通（版本号）+ init/unlock/lock 生命周期。
-/// 业务 UI（凭证库、TOTP、钱包）在此基座上逐功能落地；高敏复验、
-/// 内容遮罩等安全层按桌面同口径在功能接入时一并实现。
+/// Native skeleton first screen: verifies staticlib bridge connectivity (version number)
+/// plus the init/unlock/lock lifecycle. The business UI (credential vault, TOTP, wallet)
+/// lands feature by feature on this base; security layers such as high-sensitivity
+/// re-authentication and content masking are implemented on feature integration, to the
+/// same standard as the desktop.
 struct ContentView: View {
     @State private var status = "正在加载 persona 桥…"
     @State private var masterPassword = ""

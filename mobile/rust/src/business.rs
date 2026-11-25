@@ -1,14 +1,18 @@
-//! 业务 FFI：身份 / 凭据 / TOTP CRUD。
+//! Business FFI: identity / credential / TOTP CRUD.
 //!
-//! 与生命周期 FFI（lib.rs）互补：data-returning 入口统一 JSON-in/JSON-out
-//! ——入参是 UTF-8 JSON 字符串指针，出参是单个 JSON 字符串指针
-//! （`{"ok":true,"data":…}` / `{"ok":false,"error":"…"}`），由调用方用
-//! `persona_free_string` 归还。ABI 只依赖字符指针，Dart 侧一次
-//! `jsonDecode` 即得结果，错误不经异常跨边界。
+//! Complements the lifecycle FFI (lib.rs): data-returning entries uniformly
+//! use JSON-in/JSON-out — the input is a UTF-8 JSON string pointer, the
+//! output is a single JSON string pointer
+//! (`{"ok":true,"data":…}` / `{"ok":false,"error":"…"}`), which the caller
+//! frees with `persona_free_string`. The ABI depends only on character
+//! pointers, so one `jsonDecode` on the Dart side yields the result, and
+//! errors never cross the boundary as exceptions.
 //!
-//! 锁定语义继承 core：全部入口经 `ensure_unlocked`；解密读（凭据数据/
-//! TOTP）经 `ensure_sensitive_operation_allowed`（mobile 无因子流程，
-//! REAUTH 语义等同普通解锁校验）。锁定态/未初始化态统一走错误包络。
+//! Lock semantics are inherited from core: all entries go through
+//! `ensure_unlocked`; decrypting reads (credential data / TOTP) go through
+//! `ensure_sensitive_operation_allowed` (mobile has no factor workflow, so
+//! REAUTH semantics are the same as a plain unlock check). Locked /
+//! uninitialized states uniformly return the error envelope.
 
 use std::ffi::CString;
 use std::os::raw::c_char;
@@ -22,12 +26,13 @@ use uuid::Uuid;
 use crate::{runtime, state};
 
 // ---------------------------------------------------------------------------
-// JSON 包络助手
+// JSON envelope helpers
 // ---------------------------------------------------------------------------
 
 fn to_c_char(value: &serde_json::Value) -> *mut c_char {
-    // serde_json 序列化不会产生裸 NUL（转义为 \u0000），CString::new 恒成功；
-    // 空指针臂仅为类型完备性保留
+    // serde_json serialization never emits a bare NUL (it is escaped as
+    // \u0000), so CString::new always succeeds; the null-pointer arm exists
+    // only for type completeness
     match CString::new(value.to_string()) {
         Ok(s) => s.into_raw(),
         Err(_) => std::ptr::null_mut(),
@@ -42,27 +47,29 @@ fn err_envelope(message: &str) -> *mut c_char {
     to_c_char(&json!({ "ok": false, "error": message }))
 }
 
-/// 借用并解析 JSON 入参。
+/// Borrows and parses the JSON input payload.
 ///
 /// # Safety
-/// `payload` 必须是有效的 null 结尾 UTF-8 JSON 字符串指针（或 null——返回 Err 而非 UB）。
+/// `payload` must be a valid null-terminated UTF-8 JSON string pointer (or
+/// null — returns Err rather than UB).
 unsafe fn parse_payload<T: serde::de::DeserializeOwned>(
     payload: *const c_char,
 ) -> Result<T, String> {
-    // ptr_to_str 拦截 null/非 UTF-8（返回 Err 而非 UB）
+    // ptr_to_str rejects null/non-UTF-8 (returns Err rather than UB)
     let raw = crate::ptr_to_str(payload)?;
     serde_json::from_str(raw).map_err(|e| format!("Invalid JSON payload: {}", e))
 }
 
 /// # Safety
-/// `ptr` 必须是有效的 null 结尾 UTF-8 字符串指针（或 null）。
+/// `ptr` must be a valid null-terminated UTF-8 string pointer (or null).
 unsafe fn parse_uuid(ptr: *const c_char) -> Result<Uuid, String> {
     let raw = crate::ptr_to_str(ptr)?;
     Uuid::parse_str(raw).map_err(|_| "Invalid UUID format".to_string())
 }
 
-/// 解锁态 service 守卫（None = 未初始化）。Guard 持有跨 await 的槽位锁，
-/// 业务调用天然串行（与 desktop AppState 同型）。
+/// Guard over the unlocked service (None = uninitialized). The guard holds
+/// the slot lock across awaits, so business calls are naturally serialized
+/// (same shape as the desktop AppState).
 async fn service_guard() -> Result<tokio::sync::MutexGuard<'static, Option<PersonaService>>, String>
 {
     let guard = state::service_slot().lock().await;
@@ -73,13 +80,13 @@ async fn service_guard() -> Result<tokio::sync::MutexGuard<'static, Option<Perso
 }
 
 // ---------------------------------------------------------------------------
-// 身份
+// Identity
 // ---------------------------------------------------------------------------
 
 #[derive(serde::Deserialize)]
 struct CreateIdentityPayload {
     name: String,
-    /// 预设枚举名（Personal/Work/Social/Financial/Gaming）或任意自定义名（落 Custom）
+    /// A preset enum name (Personal/Work/Social/Financial/Gaming) or any custom name (falls back to Custom)
     identity_type: String,
     #[serde(default)]
     description: Option<String>,
@@ -89,10 +96,10 @@ struct CreateIdentityPayload {
     phone: Option<String>,
 }
 
-/// 创建身份。identity_type 未匹配预设枚举时落 Custom（与 core FromStr 一致）。
+/// Creates an identity. When identity_type does not match a preset enum, it falls back to Custom (consistent with core's FromStr).
 ///
 /// # Safety
-/// `payload` 必须是有效的 null 结尾 UTF-8 JSON 字符串指针。
+/// `payload` must be a valid null-terminated UTF-8 JSON string pointer.
 #[no_mangle]
 pub unsafe extern "C" fn persona_identity_create(payload: *const c_char) -> *mut c_char {
     let parsed = unsafe { parse_payload::<CreateIdentityPayload>(payload) };
@@ -121,7 +128,7 @@ pub unsafe extern "C" fn persona_identity_create(payload: *const c_char) -> *mut
     })
 }
 
-/// 列出全部身份。
+/// Lists all identities.
 #[no_mangle]
 pub extern "C" fn persona_identity_list() -> *mut c_char {
     runtime::block_on(async {
@@ -141,10 +148,10 @@ pub extern "C" fn persona_identity_list() -> *mut c_char {
     })
 }
 
-/// 按 UUID 取单个身份（不存在时 data 为 null）。
+/// Fetches a single identity by UUID (data is null when absent).
 ///
 /// # Safety
-/// `id` 必须是有效的 null 结尾 UTF-8 UUID 字符串指针。
+/// `id` must be a valid null-terminated UTF-8 UUID string pointer.
 #[no_mangle]
 pub unsafe extern "C" fn persona_identity_get(id: *const c_char) -> *mut c_char {
     let id = match unsafe { parse_uuid(id) } {
@@ -168,11 +175,13 @@ pub unsafe extern "C" fn persona_identity_get(id: *const c_char) -> *mut c_char 
     })
 }
 
-/// 更新身份：入参是完整 Identity JSON（含 id；建议经 persona_identity_get
-/// 取回后改字段回传）。updated_at 由本入口盖为当前时间。
+/// Updates an identity: the input is a full Identity JSON (including id;
+/// the recommended flow is to fetch via persona_identity_get, modify
+/// fields, and send it back). updated_at is stamped to the current time by
+/// this entry.
 ///
 /// # Safety
-/// `payload` 必须是有效的 null 结尾 UTF-8 JSON 字符串指针。
+/// `payload` must be a valid null-terminated UTF-8 JSON string pointer.
 #[no_mangle]
 pub unsafe extern "C" fn persona_identity_update(payload: *const c_char) -> *mut c_char {
     let parsed = unsafe { parse_payload::<Identity>(payload) };
@@ -198,10 +207,10 @@ pub unsafe extern "C" fn persona_identity_update(payload: *const c_char) -> *mut
     })
 }
 
-/// 删除身份（data 为是否删除的布尔）。
+/// Deletes an identity (data is a boolean indicating whether it was deleted).
 ///
 /// # Safety
-/// `id` 必须是有效的 null 结尾 UTF-8 UUID 字符串指针。
+/// `id` must be a valid null-terminated UTF-8 UUID string pointer.
 #[no_mangle]
 pub unsafe extern "C" fn persona_identity_delete(id: *const c_char) -> *mut c_char {
     let id = match unsafe { parse_uuid(id) } {
@@ -226,7 +235,7 @@ pub unsafe extern "C" fn persona_identity_delete(id: *const c_char) -> *mut c_ch
 }
 
 // ---------------------------------------------------------------------------
-// 凭据
+// Credentials
 // ---------------------------------------------------------------------------
 
 #[derive(serde::Deserialize)]
@@ -235,14 +244,15 @@ struct CreateCredentialPayload {
     name: String,
     credential_type: CredentialType,
     security_level: SecurityLevel,
-    /// 外部标签枚举：{"Password": {...}} / {"TwoFactor": {...}} / …
+    /// Externally tagged enum: {"Password": {...}} / {"TwoFactor": {...}} / …
     credential_data: CredentialData,
 }
 
-/// 创建凭据（明文负载在此封 encryption envelope，密钥不出 Rust 侧）。
+/// Creates a credential (the plaintext payload is wrapped in the encryption
+/// envelope here; the key never leaves the Rust side).
 ///
 /// # Safety
-/// `payload` 必须是有效的 null 结尾 UTF-8 JSON 字符串指针。
+/// `payload` must be a valid null-terminated UTF-8 JSON string pointer.
 #[no_mangle]
 pub unsafe extern "C" fn persona_credential_create(payload: *const c_char) -> *mut c_char {
     let parsed = unsafe { parse_payload::<CreateCredentialPayload>(payload) };
@@ -272,10 +282,10 @@ pub unsafe extern "C" fn persona_credential_create(payload: *const c_char) -> *m
     })
 }
 
-/// 列出某身份的全部凭据（仅元数据，不含解密负载）。
+/// Lists all credentials for an identity (metadata only, no decrypted payload).
 ///
 /// # Safety
-/// `identity_id` 必须是有效的 null 结尾 UTF-8 UUID 字符串指针。
+/// `identity_id` must be a valid null-terminated UTF-8 UUID string pointer.
 #[no_mangle]
 pub unsafe extern "C" fn persona_credential_list(identity_id: *const c_char) -> *mut c_char {
     let id = match unsafe { parse_uuid(identity_id) } {
@@ -299,11 +309,12 @@ pub unsafe extern "C" fn persona_credential_list(identity_id: *const c_char) -> 
     })
 }
 
-/// 解密并返回凭据负载（外部标签 JSON；敏感操作，走 REAUTH 门禁）。
-/// 不存在时错误包络 "Credential not found"。
+/// Decrypts and returns the credential payload (externally tagged JSON;
+/// sensitive operation, gated by REAUTH). On absence, returns the error
+/// envelope "Credential not found".
 ///
 /// # Safety
-/// `credential_id` 必须是有效的 null 结尾 UTF-8 UUID 字符串指针。
+/// `credential_id` must be a valid null-terminated UTF-8 UUID string pointer.
 #[no_mangle]
 pub unsafe extern "C" fn persona_credential_data(credential_id: *const c_char) -> *mut c_char {
     let id = match unsafe { parse_uuid(credential_id) } {
@@ -327,10 +338,10 @@ pub unsafe extern "C" fn persona_credential_data(credential_id: *const c_char) -
     })
 }
 
-/// 删除凭据（data 为是否删除的布尔）。
+/// Deletes a credential (data is a boolean indicating whether it was deleted).
 ///
 /// # Safety
-/// `credential_id` 必须是有效的 null 结尾 UTF-8 UUID 字符串指针。
+/// `credential_id` must be a valid null-terminated UTF-8 UUID string pointer.
 #[no_mangle]
 pub unsafe extern "C" fn persona_credential_delete(credential_id: *const c_char) -> *mut c_char {
     let id = match unsafe { parse_uuid(credential_id) } {
@@ -354,13 +365,14 @@ pub unsafe extern "C" fn persona_credential_delete(credential_id: *const c_char)
     })
 }
 
-/// 全文搜索凭据（名称/用户名/URL 等元数据；不解密负载）。
+/// Full-text search over credentials (name/username/URL and similar
+/// metadata; does not decrypt payloads).
 ///
 /// # Safety
-/// `query` 必须是有效的 null 结尾 UTF-8 字符串指针。
+/// `query` must be a valid null-terminated UTF-8 string pointer.
 #[no_mangle]
 pub unsafe extern "C" fn persona_credential_search(query: *const c_char) -> *mut c_char {
-    // ptr_to_str 拦截 null/非 UTF-8（返回 Err 而非 UB）
+    // ptr_to_str rejects null/non-UTF-8 (returns Err rather than UB)
     let query = match crate::ptr_to_str(query) {
         Ok(v) => v.to_string(),
         Err(e) => return err_envelope(&e),
@@ -397,10 +409,11 @@ struct TotpCodeResponse {
     account_name: String,
 }
 
-/// 为 TwoFactor 凭据生成当前 TOTP 码（协议逻辑在 core；不回传密钥）。
+/// Generates the current TOTP code for a TwoFactor credential (protocol
+/// logic lives in core; the secret is never returned).
 ///
 /// # Safety
-/// `credential_id` 必须是有效的 null 结尾 UTF-8 UUID 字符串指针。
+/// `credential_id` must be a valid null-terminated UTF-8 UUID string pointer.
 #[no_mangle]
 pub unsafe extern "C" fn persona_totp_code(credential_id: *const c_char) -> *mut c_char {
     let id = match unsafe { parse_uuid(credential_id) } {
@@ -432,8 +445,9 @@ pub unsafe extern "C" fn persona_totp_code(credential_id: *const c_char) -> *mut
                     Err(e) => err_envelope(&format!("Failed to generate TOTP code: {}", e)),
                 }
             }
-            // 游戏令牌经 core 统一调度器（Steam Guard 离线可算；绑定型
-            // provider 在此报错而不是生成错误码）
+            // Game tokens go through the core unified dispatcher (Steam Guard
+            // can be computed offline; bound providers error here instead of
+            // generating a bogus code)
             Some(CredentialData::GameToken(gt)) => {
                 match persona_core::crypto::game_token::generate_game_token_code_now(&gt) {
                     Ok(generated) => ok_envelope(&TotpCodeResponse {
@@ -460,7 +474,7 @@ mod tests {
     use crate::state::{cstr, reset_state, temp_db_path, test_lock};
     use std::ffi::CStr;
 
-    /// 就绪的解锁态 service（临时库 + 建户）。
+    /// A ready unlocked service (temporary database + account creation).
     fn init_unlocked(tag: &str) -> String {
         let db_path = temp_db_path(tag);
         let db = cstr(&db_path);
@@ -473,7 +487,7 @@ mod tests {
 
     fn take_json(ptr: *mut c_char) -> serde_json::Value {
         assert!(!ptr.is_null(), "envelope pointer must not be null");
-        // SAFETY: 指针来自本库的 into_raw，读出后立即归还
+        // SAFETY: the pointer comes from this library's into_raw and is freed immediately after reading
         let text = unsafe { CStr::from_ptr(ptr) }.to_str().unwrap().to_string();
         unsafe { crate::persona_free_string(ptr) };
         serde_json::from_str(&text).expect("envelope is valid JSON")
@@ -506,7 +520,7 @@ mod tests {
         reset_state();
 
         let id = cstr("00000000-0000-0000-0000-000000000001");
-        // 合法负载（入参解析通过）→ 才轮到 service 未初始化检查
+        // Valid payload (input parsing passes) → only then is the uninitialized service check reached
         let payload = cstr(r#"{"name":"x","identity_type":"Personal"}"#);
         assert_eq!(
             expect_err(call_list_identities()),
@@ -529,7 +543,7 @@ mod tests {
             "Service not initialized"
         );
 
-        // 坏 UUID / 坏 JSON 在未初始化检查之前先被拦截（入参解析先行）
+        // Bad UUID / bad JSON are rejected before the uninitialized check (input parsing runs first)
         let bad_uuid = cstr("not-a-uuid");
         assert_eq!(
             expect_err(unsafe { persona_identity_get(bad_uuid.as_ptr()) }),
@@ -542,7 +556,7 @@ mod tests {
             "unexpected: {}",
             message
         );
-        // null 指针防线：ptr_to_str 的 null 分支
+        // Null-pointer defense: ptr_to_str's null branch
         assert_eq!(
             expect_err(unsafe { persona_identity_create(std::ptr::null()) }),
             "null argument"
@@ -555,7 +569,7 @@ mod tests {
         reset_state();
         init_unlocked("biz-identity");
 
-        // create：预设类型 + 可选元数据
+        // create: preset type + optional metadata
         let created = expect_ok(unsafe {
             persona_identity_create(
                 cstr(
@@ -569,17 +583,17 @@ mod tests {
         assert_eq!(created["data"]["identity_type"], json!("Work"));
         assert_eq!(created["data"]["email"], json!("ops@persona.dev"));
 
-        // create：未匹配的 identity_type 落 Custom
+        // create: unmatched identity_type falls back to Custom
         let custom = expect_ok(unsafe {
             persona_identity_create(cstr(r#"{"name":"Alias","identity_type":"Stage"}"#).as_ptr())
         });
         assert_eq!(custom["data"]["identity_type"], json!({"Custom":"Stage"}));
 
-        // list：新库只有这两条
+        // list: the fresh database holds exactly these two
         let list = expect_ok(call_list_identities());
         assert_eq!(list["data"].as_array().unwrap().len(), 2);
 
-        // get：合法 UUID 命中；非法 UUID 报格式错误
+        // get: a valid UUID hits; an invalid UUID reports a format error
         let got = expect_ok(unsafe { persona_identity_get(cstr(&identity_id).as_ptr()) });
         assert_eq!(got["data"]["name"], json!("Work Phone"));
         let bad_uuid = cstr("zzz");
@@ -588,7 +602,7 @@ mod tests {
             "Invalid UUID format"
         );
 
-        // update：get 回传对象改字段后整体提交
+        // update: submit the whole object from get with modified fields
         let mut updated = got["data"].clone();
         updated["name"] = json!("Work Phone Renamed");
         let updated_json = cstr(&updated.to_string());
@@ -597,7 +611,7 @@ mod tests {
         let reread = expect_ok(unsafe { persona_identity_get(cstr(&identity_id).as_ptr()) });
         assert_eq!(reread["data"]["name"], json!("Work Phone Renamed"));
 
-        // delete：真删（true）+ 复删（false）
+        // delete: real delete (true) + repeat delete (false)
         let deleted = expect_ok(unsafe { persona_identity_delete(cstr(&identity_id).as_ptr()) });
         assert_eq!(deleted["data"], json!(true));
         let deleted_again =
@@ -618,7 +632,7 @@ mod tests {
         });
         let identity_id = identity["data"]["id"].as_str().unwrap().to_string();
 
-        // create：密码凭据（明文进 envelope 加密，密钥不出 Rust 侧）
+        // create: password credential (plaintext goes into the encrypted envelope, the key never leaves the Rust side)
         let payload = format!(
             r#"{{"identity_id":"{}","name":"GitHub","credential_type":"Password",
                 "security_level":"High",
@@ -630,8 +644,9 @@ mod tests {
         let credential_id = created["data"]["id"].as_str().unwrap().to_string();
         assert_eq!(created["data"]["name"], json!("GitHub"));
 
-        // list：元数据可见；密文字段在列（Credential 序列化含 encrypted_data），
-        // 但绝不能泄露明文
+        // list: metadata is visible; the ciphertext field is present in the
+        // listing (Credential serialization includes encrypted_data), but the
+        // plaintext must never leak
         let list = expect_ok(unsafe { persona_credential_list(cstr(&identity_id).as_ptr()) });
         assert_eq!(list["data"].as_array().unwrap().len(), 1);
         let list_text = list.to_string();
@@ -641,22 +656,22 @@ mod tests {
             list_text
         );
 
-        // data：解密回读与写入一致（加密往返证明）
+        // data: decrypted read-back matches what was written (proof of the encryption round trip)
         let data = expect_ok(unsafe { persona_credential_data(cstr(&credential_id).as_ptr()) });
         assert_eq!(data["data"]["Password"]["password"], json!("hunter2"));
         assert_eq!(data["data"]["Password"]["email"], json!("me@persona.dev"));
 
-        // search：按名称元数据命中
+        // search: hits by name metadata
         let hits = expect_ok(unsafe { persona_credential_search(cstr("Git").as_ptr()) });
         assert_eq!(hits["data"].as_array().unwrap().len(), 1);
 
-        // 非 TwoFactor 凭据取 TOTP → 类型错误包络
+        // TOTP on a non-TwoFactor credential → type error envelope
         assert_eq!(
             expect_err(unsafe { persona_totp_code(cstr(&credential_id).as_ptr()) }),
             "Credential is not a TwoFactor entry"
         );
 
-        // delete 后再读 → "Credential not found"
+        // read after delete → "Credential not found"
         let deleted =
             expect_ok(unsafe { persona_credential_delete(cstr(&credential_id).as_ptr()) });
         assert_eq!(deleted["data"], json!(true));
@@ -722,7 +737,7 @@ mod tests {
         });
         let identity_id = identity["data"]["id"].as_str().unwrap().to_string();
 
-        // Steam Guard 令牌：base64 shared_secret，provider=steam_guard
+        // Steam Guard token: base64 shared_secret, provider=steam_guard
         let payload = format!(
             r#"{{"identity_id":"{}","name":"Steam Guard","credential_type":"TwoFactor",
                 "security_level":"High",
@@ -752,7 +767,8 @@ mod tests {
         assert_eq!(code["issuer"], json!("Steam"));
         assert_eq!(code["account_name"], json!("player_one"));
 
-        // 未知 provider（绑定型，如未来的腾讯安全中心）→ 报错而不是伪造码
+        // Unknown provider (bound type, e.g. a future Tencent security
+        // center) → error rather than a fabricated code
         let bound_payload = format!(
             r#"{{"identity_id":"{}","name":"Bound token","credential_type":"TwoFactor",
                 "security_level":"High",
@@ -787,7 +803,7 @@ mod tests {
             message
         );
 
-        // 解锁恢复后可继续
+        // Works again after unlock is restored
         assert!(unsafe { crate::persona_service_unlock(cstr("master-pin").as_ptr()) }.success);
         expect_ok(call_list_identities());
 

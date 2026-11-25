@@ -1,11 +1,14 @@
 /**
- * persona 桥（鸿蒙侧）：接口语义与 Android JNI / iOS C ABI 层对齐——
- * 出参统一 {"success":bool,"error":string|null} JSON 包络。
+ * persona bridge (HarmonyOS side): the interface semantics line up with the
+ * Android JNI / iOS C ABI layers — out parameters are uniformly the
+ * {"success":bool,"error":string|null} JSON envelope.
  *
- * 接线状态：**napi 包装层待接**。标准路径是 Rust 侧 mobile/rust 增加
- * napi 导出（napi-rs 的 ohos 后端）编出 libpersona_mobile_napi.so，
- * 本文件换为 loadLibrary 后的真实调用；当前 stub 按同签名返回
- * 桥未接入错误，保证 UI 骨架可独立验收（功能优先于测试，不提交半截）。
+ * Wiring status: **the napi wrapper layer is still to be wired**. The standard
+ * path is to add napi exports on the Rust side in mobile/rust (the ohos backend
+ * of napi-rs) to build libpersona_mobile_napi.so, then swap this file for real
+ * calls after loadLibrary; the current stub returns a bridge-not-wired error
+ * under the same signatures, so the UI skeleton can be verified independently
+ * (features take priority over tests — never commit something half-finished).
  */
 export interface BridgeResult {
   success: boolean;

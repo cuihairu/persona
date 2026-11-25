@@ -1,24 +1,31 @@
-//! Android JNI 导出层：把同 crate 的 C ABI 桥以平台标准 JNI 符号暴露给
-//! Kotlin（`com.persona.mobile.PersonaBridge`，`System.loadLibrary`）。
+//! Android JNI export layer: exposes this crate's C ABI bridge to Kotlin as
+//! platform-standard JNI symbols (`com.persona.mobile.PersonaBridge`,
+//! `System.loadLibrary`).
 //!
-//! 出参一律打平为 JSON 字符串 `{"success":bool,"error":string|null}`，
-//! Kotlin 侧用 org.json 解析——不在 JNI 边界传递 C 结构体，免除调用方
-//! `persona_free_result` 的跨语言归还负担；`error_message` 在本层消费后
-//! 即归还（`CString::from_raw`），不泄漏。
+//! Out parameters are always flattened into a JSON string
+//! `{"success":bool,"error":string|null}` that Kotlin parses with org.json — no
+//! C structs cross the JNI boundary, so the caller is spared the
+//! `persona_free_result` cross-language deallocation burden; `error_message`
+//! is returned (via `CString::from_raw`) as soon as it is consumed here, with no
+//! leak.
 //!
-//! 符号命名对应：`Java_com_persona_mobile_PersonaBridge_<method>`。
+//! Symbol naming: `Java_com_persona_mobile_PersonaBridge_<method>`.
 //!
-//! 导出签名铁律（2026-10-11 实机走查实锤，String 出参曾恒为 null——NPE 崩溃
-//! aa771f4 只治了症状）：`EnvUnowned` 是 `#[repr(transparent)]` 裸指针包装，
-//! 导出函数必须**按值**收 `EnvUnowned`（写 `&mut EnvUnowned` 会变成双重间接，
-//! 一切经 env 的出参都废）；内部 helper 收 `&mut Env` 引用则没问题。
+//! Export signature rule (confirmed on device on 2026-10-11, when String out
+//! parameters were always null — aa771f4 only patched the NPE symptom):
+//! `EnvUnowned` is a `#[repr(transparent)]` raw-pointer wrapper, so exported
+//! functions must take `EnvUnowned` **by value** (writing `&mut EnvUnowned`
+//! introduces double indirection and breaks every out parameter that flows
+//! through env); internal helpers may take a `&mut Env` reference instead.
 //!
-//! jni 0.22 把旧 `JNIEnv` 拆成 `Env`（环境句柄）与 `EnvUnowned`（裸指针，旧
-//! 名沦为 deprecated 别名）：`new_string`/`try_to_string` 只挂在 `Env` 上。
-//! 导出函数体必须经 `EnvUnowned::with_env` 换到 `&mut Env`——不创建新 JNI
-//! 栈帧，闭包由 `catch_unwind` 包住不会 unwind 进 JVM。`run_in_env` 收掉这层
-//! 样板，且闭包内错误不会丢（映射为可解析的降级 JSON，而不是把 null 递给
-//! Kotlin）。
+//! jni 0.22 splits the old `JNIEnv` into `Env` (the environment handle) and
+//! `EnvUnowned` (the raw pointer; the old name is now a deprecated alias):
+//! `new_string`/`try_to_string` live only on `Env`. Exported function bodies
+//! must switch to `&mut Env` via `EnvUnowned::with_env` — no new JNI stack
+//! frame is created, and the closure is wrapped by `catch_unwind` so it cannot
+//! unwind into the JVM. `run_in_env` absorbs this boilerplate, and errors inside
+//! the closure are not lost (they map to a parseable degraded JSON instead of
+//! handing null to Kotlin).
 use std::ffi::{CStr, CString};
 
 use jni::objects::{JClass, JString};
@@ -27,13 +34,16 @@ use jni::{Env, EnvUnowned};
 
 use super::PersonaResult;
 
-/// new_string 失败（JVM 已损坏）时的降级出参：宁可给一条可解析的
-/// 失败 JSON，也不返回 null（Kotlin 侧 parseResult 对 null 只能当未知
-/// 错误，2026-10-03 走查实锤的崩溃路径之一）。
+/// Degraded out parameter used when new_string fails (JVM already corrupted):
+/// prefer returning a parseable failure JSON over null (Kotlin's parseResult
+/// can only treat null as an unknown error — one of the crash paths confirmed
+/// during the 2026-10-03 walkthrough).
 const JNI_DEGRADED_JSON: &str = "{\"success\":false,\"error\":\"jni bridge degraded\"}";
 
-/// 在 JNI 栈帧内取到 `&mut Env` 执行闭包（见模块文档的 jni 0.22 说明）。
-/// 闭包本身不返回错误——字符串降级路径在闭包内完成，这里只做搬运。
+/// Obtain `&mut Env` inside the JNI stack frame and run the closure (see the
+/// jni 0.22 note in the module docs). The closure itself returns no error —
+/// the string degradation path is completed inside the closure; this only
+/// transports the value.
 fn run_in_env(env: &mut EnvUnowned, f: impl FnOnce(&mut Env) -> jstring) -> jstring {
     match env
         .with_env(|e: &mut Env| -> Result<jstring, jni::errors::Error> {
@@ -47,13 +57,14 @@ fn run_in_env(env: &mut EnvUnowned, f: impl FnOnce(&mut Env) -> jstring) -> jstr
     }
 }
 
-/// 把 PersonaResult 转成 JSON jstring；error_message 消费后归还。
+/// Convert a PersonaResult into a JSON jstring; error_message is returned after being consumed.
 fn result_to_json(env: &mut Env, result: PersonaResult) -> jstring {
     let error = if result.error_message.is_null() {
         None
     } else {
-        // SAFETY: error_message 由 PersonaResult::error 经 CString::into_raw
-        // 分配，契约保证此处取走字符串后立刻归还所有权。
+        // SAFETY: error_message was allocated by PersonaResult::error via
+        // CString::into_raw; the contract guarantees ownership is returned
+        // here immediately after the string is taken.
         let owned = unsafe {
             let s = CStr::from_ptr(result.error_message)
                 .to_string_lossy()
@@ -71,15 +82,17 @@ fn result_to_json(env: &mut Env, result: PersonaResult) -> jstring {
         ),
         None => format!("{{\"success\":{},\"error\":null}}", result.success),
     };
-    // JVM 字符串只能含有效 UTF-8，new_string 失败即宿主已损坏——退化为
-    // 固定失败 JSON（再失败才 null，两层都挂说明 JVM 无从谈返回值）
+    // JVM strings may only contain valid UTF-8, so a new_string failure means
+    // the host is already corrupted — degrade to the fixed failure JSON
+    // (null only if that also fails: both layers down means the JVM can offer
+    // no return value at all)
     env.new_string(&json)
         .or_else(|_| env.new_string(JNI_DEGRADED_JSON))
         .map(|s| s.into_raw())
         .unwrap_or(std::ptr::null_mut())
 }
 
-/// 入参 jstring → CString（拷出 owned），失败时返回 None 并记错误消息。
+/// Inbound jstring → CString (copies out an owned value); returns None with an error message on failure.
 fn jstring_to_cstring(env: &mut Env, input: &JString) -> Result<CString, String> {
     let owned = input
         .try_to_string(env)
@@ -87,7 +100,7 @@ fn jstring_to_cstring(env: &mut Env, input: &JString) -> Result<CString, String>
     CString::new(owned).map_err(|_| "argument contains interior NUL".to_string())
 }
 
-/// 入参非法时的统一 JSON 错误出参。
+/// Unified JSON error out parameter for invalid arguments.
 fn arg_error(env: &mut Env, message: &str) -> jstring {
     let result = PersonaResult::error(message);
     result_to_json(env, result)
@@ -106,7 +119,7 @@ pub extern "system" fn Java_com_persona_mobile_PersonaBridge_personaVersion(
     mut env: EnvUnowned,
     _class: JClass,
 ) -> jstring {
-    // SAFETY: persona_version 返回本库分配的 CString 指针，取值后立即归还。
+    // SAFETY: persona_version returns a CString pointer allocated by this library; ownership is returned immediately after the value is read.
     let version = unsafe {
         let ptr = super::persona_version();
         let owned = CStr::from_ptr(ptr).to_string_lossy().into_owned();
@@ -136,7 +149,7 @@ pub extern "system" fn Java_com_persona_mobile_PersonaBridge_personaServiceInit(
             (Ok(a), Ok(b)) => (a, b),
             (Err(e), _) | (_, Err(e)) => return arg_error(env, &e),
         };
-        // SAFETY: 两个 CString 保活到调用结束，指针在 persona_service_init 内有效。
+        // SAFETY: both CStrings live to the end of the call; the pointers are valid inside persona_service_init.
         let result =
             unsafe { super::persona_service_init(db_path.as_ptr(), master_password.as_ptr()) };
         result_to_json(env, result)
@@ -154,7 +167,7 @@ pub extern "system" fn Java_com_persona_mobile_PersonaBridge_personaServiceUnloc
             Ok(s) => s,
             Err(e) => return arg_error(env, &e),
         };
-        // SAFETY: CString 保活到调用结束，指针在 persona_service_unlock 内有效。
+        // SAFETY: the CString lives to the end of the call; the pointer is valid inside persona_service_unlock.
         let result = unsafe { super::persona_service_unlock(master_password.as_ptr()) };
         result_to_json(env, result)
     })
@@ -189,18 +202,19 @@ pub extern "system" fn Java_com_persona_mobile_PersonaBridge_personaShutdown(
 }
 
 // ---------------------------------------------------------------------------
-// 业务 FFI 转发（business 层 JSON 包络 {"ok":bool,"error"?,"data"?}，与上面
-// 生命周期层的 {"success":bool,"error"} 键名不同，Kotlin 侧分别解析）
+// Business FFI forwarding (the business layer's JSON envelope {"ok":bool,"error"?,"data"?}
+// uses different key names from the lifecycle layer's {"success":bool,"error"} above;
+// Kotlin parses them separately)
 // ---------------------------------------------------------------------------
 
-/// business C ABI 出参（owned CString JSON）→ jstring；取值后归还所有权。
-/// null（两层全挂）降级为可解析失败包络，不把 null 递给 Kotlin。
+/// business C ABI out parameter (owned CString JSON) → jstring; ownership is returned after the value is read.
+/// null (both layers down) degrades to a parseable failure envelope — never hand null to Kotlin.
 fn business_json_to_jstring(env: &mut Env, json: *mut std::os::raw::c_char) -> jstring {
     const BUSINESS_DEGRADED: &str = "{\"ok\":false,\"error\":\"jni bridge degraded\"}";
     let owned = if json.is_null() {
         BUSINESS_DEGRADED.to_string()
     } else {
-        // SAFETY: 指针由 business 层 CString::into_raw 分配，取值后立刻归还。
+        // SAFETY: the pointer was allocated by the business layer via CString::into_raw; ownership is returned immediately after the value is read.
         unsafe {
             let s = CStr::from_ptr(json).to_string_lossy().into_owned();
             let _ = CString::from_raw(json);
@@ -223,7 +237,7 @@ pub extern "system" fn Java_com_persona_mobile_PersonaBridge_personaCredentialSe
         let query = match jstring_to_cstring(env, &query) {
             Ok(s) => s,
             Err(e) => {
-                // 入参非法也走 business 包络语义，Kotlin 只需解析一种业务格式
+                // Invalid input also follows the business envelope semantics so Kotlin only needs to parse one business format
                 let degraded = format!(
                     "{{\"ok\":false,\"error\":{}}}",
                     serde_json::to_string(&e).unwrap_or_else(|_| "\"error\"".to_string())
@@ -234,7 +248,7 @@ pub extern "system" fn Java_com_persona_mobile_PersonaBridge_personaCredentialSe
                     .unwrap_or(std::ptr::null_mut());
             }
         };
-        // SAFETY: CString 保活到调用结束，指针在 persona_credential_search 内有效。
+        // SAFETY: the CString lives to the end of the call; the pointer is valid inside persona_credential_search.
         let json = unsafe { super::business::persona_credential_search(query.as_ptr()) };
         business_json_to_jstring(env, json)
     })

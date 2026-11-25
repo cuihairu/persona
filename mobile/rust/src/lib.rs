@@ -1,24 +1,29 @@
-//! Persona mobile bindings。
+//! Persona mobile bindings.
 //!
-//! 手写 extern "C" FFI：把 core 的 [`PersonaService`] 与审计事件上报器
-//! （[`Emitter`] + [`ServerEventSink`]）接进移动宿主。宿主接线语义对齐
-//! desktop/CLI：config 一半即 fail-closed（url+token 都非空才启用）、
-//! 先写本地审计库后尽力上报、shutdown 尽力最终 flush。
+//! Hand-written extern "C" FFI: wires the core [`PersonaService`] and the audit
+//! event reporter ([`Emitter`] + [`ServerEventSink`]) into the mobile host.
+//! Host wiring semantics match desktop/CLI: a half-configured config is
+//! fail-closed (enabled only when both url and token are non-empty), write to
+//! the local audit DB first then best-effort report, and shutdown does a
+//! best-effort final flush.
 //!
-//! 内存约定：字符串经 `CString::into_raw` 传出，由调用方用
-//! `persona_free_string`/`persona_free_result` 归还；所有服务状态留在
-//! Rust 侧全局槽位（`state.rs`），指针参数仅限入参且本函数内借用。
+//! Memory contract: strings are passed out via `CString::into_raw` and returned
+//! by the caller with `persona_free_string`/`persona_free_result`; all service
+//! state lives in global slots on the Rust side (`state.rs`), and pointer
+//! arguments are input-only, borrowed for the duration of this function.
 //!
-//! panic 防线：生命周期入口统一经 [`guard_result`]/[`guard_bool`] 包裹
-//! （panic → 错误结果而非穿透 C 边界；构建须 unwind，见其文档）。
+//! Panic line of defense: lifecycle entry points are uniformly wrapped in
+//! [`guard_result`]/[`guard_bool`] (panic → error result instead of crossing
+//! the C boundary; the build must use unwind, see their docs).
 
 mod business;
 mod runtime;
 mod state;
 
-// Android 宿主的 JNI 导出层：Kotlin（com.persona.mobile.PersonaBridge）经
-// System.loadLibrary("persona_mobile") 走平台标准 JNI 调用，内部转发同文件
-// 的 C ABI——与 iOS（staticlib + C ABI）/鸿蒙（NAPI）共用一套桥语义。
+// JNI export layer for the Android host: Kotlin (com.persona.mobile.PersonaBridge)
+// goes through the platform-standard JNI via System.loadLibrary("persona_mobile"),
+// forwarding internally to the C ABI in this same file — sharing one set of
+// bridge semantics with iOS (staticlib + C ABI) and HarmonyOS (NAPI).
 #[cfg(target_os = "android")]
 mod jni_android;
 
@@ -40,8 +45,8 @@ pub extern "C" fn persona_init() -> i32 {
 /// Get version string
 #[no_mangle]
 pub extern "C" fn persona_version() -> *mut c_char {
-    // CARGO_PKG_VERSION 是编译期字面量、不含内部 NUL——unwrap 的不变量
-    // 编译期成立（版本语义化字符串）
+    // CARGO_PKG_VERSION is a compile-time literal containing no interior NUL,
+    // so the unwrap's invariant holds at compile time (semver version string)
     CString::new(env!("CARGO_PKG_VERSION"))
         .expect("CARGO_PKG_VERSION contains no NUL")
         .into_raw()
@@ -98,43 +103,50 @@ pub unsafe extern "C" fn persona_free_result(result: PersonaResult) {
     }
 }
 
-/// 借用调用方传入的 C 字符串（null / 非 UTF-8 统一报错）。
+/// Borrows a C string passed in by the caller (null / non-UTF-8 both error out).
 ///
 /// # Safety
-/// `ptr` 必须指向有效的 null 结尾字符串（或为 null——返回 Err 而非 UB）。
+/// `ptr` must point to a valid null-terminated string (or be null — returns
+/// Err rather than UB).
 fn ptr_to_str<'a>(ptr: *const c_char) -> Result<&'a str, String> {
     if ptr.is_null() {
         return Err("null argument".to_string());
     }
-    // SAFETY: 调用方契约保证指针有效（或 null 已在上方拦截）
+    // SAFETY: the caller contract guarantees the pointer is valid (or null,
+    // already intercepted above)
     let cstr = unsafe { CStr::from_ptr(ptr) };
     cstr.to_str()
         .map_err(|_| "invalid UTF-8 in argument".to_string())
 }
 
-/// FFI panic 防线（2026-10-03 Android 走查实锤修复）：catch_unwind 把
-/// panic 转为携带错误消息的失败 [`PersonaResult`]，而不是穿透
-/// extern "C" 边界（UB / 宿主进程崩溃 / JNI 层拿到不可解析的返回）。
+/// FFI panic line of defense (confirmed fix from the 2026-10-03 Android
+/// walkthrough): catch_unwind converts a panic into a failed [`PersonaResult`]
+/// carrying an error message, instead of crossing the extern "C" boundary
+/// (UB / host process abort / the JNI layer receiving an unparseable return).
 ///
-/// **构建前提**：panic 只在 unwind 构建中可捕获——根 `[profile.release]`
-/// 的 `panic = "abort"` 会让 panic 在 unwind 前就终止进程，本防线不触发。
-/// 移动端 FFI 产物（Android/iOS/鸿蒙共用）走根 Cargo.toml 的
-/// `[profile.mobile-ffi]`（inherits release + unwind），CI android job 以
-/// `--profile mobile-ffi` 出 so。
+/// **Build prerequisite**: panics can only be caught in unwind builds — the
+/// root `[profile.release]` `panic = "abort"` would terminate the process
+/// before unwinding, bypassing this defense. The mobile FFI artifacts (shared
+/// by Android/iOS/HarmonyOS) use the root Cargo.toml's
+/// `[profile.mobile-ffi]` (inherits release + unwind); the CI android job
+/// builds the .so with `--profile mobile-ffi`.
 ///
-/// AssertUnwindSafe 是有意的：闭包借用的裸指针/全局槽位在 panic 逃逸
-/// 路径上一律不再触碰（只产出错误消息），污染状态不存在。
+/// AssertUnwindSafe is intentional: raw pointers / global slots borrowed by
+/// the closure are never touched again on the panic-escape path (only an
+/// error message is produced), so no poisoned state exists.
 fn guard_result<F: FnOnce() -> PersonaResult>(f: F) -> PersonaResult {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(f))
         .unwrap_or_else(|payload| PersonaResult::error(&panic_message(&payload)))
 }
 
-/// bool 返回值的同一防线：panic → false（is_unlocked 语义上"未解锁"）。
+/// Same defense for bool returns: panic → false (is_unlocked semantically
+/// means "not unlocked").
 fn guard_bool(f: impl FnOnce() -> bool) -> bool {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).unwrap_or(false)
 }
 
-/// panic payload → 错误消息（&str/String 两种常规形态；其他类型不猜内容）。
+/// panic payload → error message (&str/String are the two common shapes; no
+/// guessing at contents for other types).
 fn panic_message(payload: &Box<dyn std::any::Any + Send>) -> String {
     if let Some(s) = payload.downcast_ref::<&str>() {
         format!("internal panic: {s}")
@@ -145,10 +157,11 @@ fn panic_message(payload: &Box<dyn std::any::Any + Send>) -> String {
     }
 }
 
-/// AuthResult → 错误消息统一映射（init/unlock 两处共用，文案对齐
-/// desktop `init_service`）。Success 之外全部视为失败；FactorRequired
-/// 在当前认证路径不产生（mobile 无因子流程），与 desktop 一样落入
-/// "Authentication failed" 兜底。
+/// AuthResult → unified error message mapping (shared by init/unlock, wording
+/// matches the desktop `init_service`). Everything other than Success is
+/// treated as failure; FactorRequired never occurs on the current auth path
+/// (mobile has no factor flow) and, like desktop, falls into the
+/// "Authentication failed" fallback.
 fn auth_failure_message(result: AuthResult) -> Result<(), String> {
     match result {
         AuthResult::Success => Ok(()),
@@ -162,15 +175,17 @@ fn auth_failure_message(result: AuthResult) -> Result<(), String> {
 }
 
 // ---------------------------------------------------------------------------
-// PersonaService 生命周期宿主接线
+// PersonaService lifecycle host wiring
 // ---------------------------------------------------------------------------
 
-/// 初始化（或重复初始化）Persona service：打开 vault 文件 → 迁移 →
-/// 建户（首次）或认证（既有用户，语义对齐 desktop `init_service`）。
-/// 成功即解锁态。若 `persona_configure_sync` 已先行配置，此处把既有
-/// emitter 注入 service。
+/// Initializes (or re-initializes) the Persona service: open the vault file →
+/// migrate → create the account (first time) or authenticate (existing user,
+/// semantics matching the desktop `init_service`). Success means unlocked. If
+/// `persona_configure_sync` was configured first, the existing emitter is
+/// injected into the service here.
 /// # Safety
-/// `db_path`/`master_password` 必须是有效的 null 结尾 UTF-8 字符串指针。
+/// `db_path`/`master_password` must be valid null-terminated UTF-8 string
+/// pointers.
 #[no_mangle]
 pub unsafe extern "C" fn persona_service_init(
     db_path: *const c_char,
@@ -224,7 +239,8 @@ async fn init_service_inner(db_path: &str, master_password: &str) -> Result<(), 
         auth_failure_message(auth_result)?;
     }
 
-    // 先 configure 后 init 的顺序：把 emitter 槽位既有值注入 service
+    // Configure-then-init ordering: inject the existing emitter slot value
+    // into the service
     let emitter = state::emitter_slot().lock().await.clone();
     if emitter.is_some() {
         service.set_event_emitter(emitter);
@@ -233,9 +249,10 @@ async fn init_service_inner(db_path: &str, master_password: &str) -> Result<(), 
     Ok(())
 }
 
-/// 用主密码解锁既有会话（`authenticate_user`；未初始化时拒绝）。
+/// Unlocks the existing session with the master password (`authenticate_user`;
+/// rejected when uninitialized).
 /// # Safety
-/// `master_password` 必须是有效的 null 结尾 UTF-8 字符串指针。
+/// `master_password` must be a valid null-terminated UTF-8 string pointer.
 #[no_mangle]
 pub unsafe extern "C" fn persona_service_unlock(master_password: *const c_char) -> PersonaResult {
     guard_result(|| {
@@ -262,7 +279,8 @@ pub unsafe extern "C" fn persona_service_unlock(master_password: *const c_char) 
     })
 }
 
-/// 立即落锁（清内存主密钥；语义对齐 desktop 托盘 Lock）。
+/// Locks immediately (clears the in-memory master key; semantics match the
+/// desktop tray Lock).
 #[no_mangle]
 pub extern "C" fn persona_service_lock() -> PersonaResult {
     guard_result(|| {
@@ -279,7 +297,8 @@ pub extern "C" fn persona_service_lock() -> PersonaResult {
     })
 }
 
-/// 当前会话是否处于解锁态（service 未初始化视为锁定；panic 同样视为锁定）。
+/// Whether the current session is unlocked (an uninitialized service counts as
+/// locked; a panic counts as locked too).
 #[no_mangle]
 pub extern "C" fn persona_service_is_unlocked() -> bool {
     guard_bool(|| {
@@ -294,21 +313,26 @@ pub extern "C" fn persona_service_is_unlocked() -> bool {
 }
 
 // ---------------------------------------------------------------------------
-// 审计事件上报接线
+// Audit event reporting wiring
 // ---------------------------------------------------------------------------
 
-/// 配置/关闭审计事件上报（mobile 宿主的 `attach_sync_emitter` 对应物）。
+/// Configures/disables audit event reporting (the mobile host counterpart of
+/// `attach_sync_emitter`).
 ///
-/// url 与 token 都非空（trim 后）→ 构造 `ServerEventSink` + `Emitter`
-/// 并启用；任一空白 → 摘除既有上报器（fail-closed，对齐 CLI
-/// "都非空才启用"语义）。URL 不做格式预校验（与 desktop attach 一致，
-/// 格式错误在发送期暴露并按退避重试）；构造失败（如 TLS 初始化）报错。
+/// Both url and token non-empty (after trim) → build a `ServerEventSink` +
+/// `Emitter` and enable; either blank → detach the existing reporter
+/// (fail-closed, matching the CLI "only enable when both are non-empty"
+/// semantics). The URL is not format-prevalidated (consistent with the
+/// desktop attach: format errors surface at send time and retry with
+/// backoff); construction failure (e.g. TLS init) returns an error.
 ///
-/// 先于 `persona_service_init` 调用时仅存槽位，init 时注入；
-/// service 已初始化时立即同步注入。换新停旧（旧 emitter 锁外 stop）。
+/// When called before `persona_service_init` it only stores the slot and
+/// injects at init time; when the service is already initialized it injects
+/// synchronously. Replacing the new one stops the old (old emitter stopped
+/// outside the lock).
 ///
 /// # Safety
-/// `server_url`/`token` 必须是有效的 null 结尾 UTF-8 字符串指针。
+/// `server_url`/`token` must be valid null-terminated UTF-8 string pointers.
 #[no_mangle]
 pub unsafe extern "C" fn persona_configure_sync(
     server_url: *const c_char,
@@ -340,8 +364,9 @@ pub unsafe extern "C" fn persona_configure_sync(
                 None
             };
 
-            // 锁顺序固定 emitter → service（与 desktop attach_sync_emitter 一致）；
-            // 旧 emitter 在槽位替换后、锁外 stop（flush 可能走网络）
+            // Lock ordering fixed as emitter → service (matching the desktop
+            // attach_sync_emitter); the old emitter is stopped after the slot
+            // swap, outside the lock (flush may go over the network)
             let old = {
                 let mut slot = state::emitter_slot().lock().await;
                 let old = slot.take();
@@ -361,8 +386,10 @@ pub unsafe extern "C" fn persona_configure_sync(
     })
 }
 
-/// 关闭宿主：service 落锁清内存主密钥、上报器尽力最终 flush、
-/// 双槽位清空（对齐 CLI main 尾部的 stop 语义）。之后可重新 init。
+/// Shuts down the host: locks the service to clear the in-memory master key,
+/// does a best-effort final flush of the reporter, and clears both slots
+/// (matching the stop semantics at the tail of the CLI main). Can be
+/// re-initialized afterwards.
 #[no_mangle]
 pub extern "C" fn persona_shutdown() -> PersonaResult {
     guard_result(|| {
@@ -389,14 +416,15 @@ mod tests {
     use crate::state::{cstr, reset_state, temp_db_path, test_lock};
     use std::ffi::CStr;
 
-    /// 断言 result 成功。`PersonaResult::success()` 的 error_message
-    /// 恒为 null，无需提取逻辑（失败路径统一走 assert_err 断言消息）。
+    /// Asserts the result succeeded. `PersonaResult::success()`'s error_message
+    /// is always null, so no extraction logic is needed (failure paths all go
+    /// through assert_err to check the message).
     fn assert_ok(result: PersonaResult, context: &str) {
         assert!(result.success, "{} failed", context);
         unsafe { persona_free_result(result) };
     }
 
-    /// 断言 result 失败并返回错误消息。
+    /// Asserts the result failed and returns the error message.
     fn assert_err(result: PersonaResult) -> String {
         assert!(!result.success, "expected error, got success");
         let msg = unsafe {
@@ -414,10 +442,12 @@ mod tests {
         assert_eq!(persona_init(), 0);
     }
 
-    // ---- FFI panic 防线（Android 走查实锤：init 失败路径曾以崩溃而非
-    // 错误串返回宿主） ----
+    // ---- FFI panic line of defense (confirmed by the Android walkthrough:
+    // the init failure path used to return a crash instead of an error string
+    // to the host) ----
 
-    /// panic 在测试里会打 hook 输出：静音窗口内跑捕获，跑完还原。
+    /// Panics print hook output in tests: run the capture inside a silencing
+    /// window and restore afterwards.
     fn with_silent_panic_hook(f: impl FnOnce()) {
         let prev = std::panic::take_hook();
         std::panic::set_hook(Box::new(|_| {}));
@@ -509,22 +539,24 @@ mod tests {
             persona_free_result(err);
         }
 
-        // 含内部 NUL 的消息：CString::new 失败 → error_message 退化为
-        // null（调用方只见到失败标志，不泄露半截消息）
+        // Message containing an interior NUL: CString::new fails →
+        // error_message degrades to null (the caller only sees the failure
+        // flag, no half message leaks out)
         let nul = PersonaResult::error("interior\0NUL");
         assert!(!nul.success);
         assert!(nul.error_message.is_null());
     }
 
-    /// 宿主接线全链路：未初始化门禁 → init 建户 → 锁/解锁 →
-    /// configure_sync 启停 → shutdown 复位 → 重复 init（认证分支）。
-    /// 全局槽位串行，单测试函数内顺序覆盖（见 test_lock 注释）。
+    /// Full host-wiring path: uninitialized gating → init creates account →
+    /// lock/unlock → configure_sync enable/disable → shutdown reset → repeat
+    /// init (authenticate branch). Global slots are serialized, covered in
+    /// order within a single test function (see the test_lock docs).
     #[test]
     fn service_lifecycle_unlock_sync_and_shutdown() {
         let _guard = test_lock();
         reset_state();
 
-        // 未初始化：unlock/lock/configure_sync 的 service 侧拒绝
+        // Uninitialized: the service side of unlock/lock/configure_sync refuses
         let pw = cstr("master-pin");
         assert_eq!(
             assert_err(unsafe { persona_service_unlock(pw.as_ptr()) }),
@@ -533,7 +565,7 @@ mod tests {
         assert!(!persona_service_lock().success);
         assert!(!persona_service_is_unlocked());
 
-        // null 指针安全拒绝（UB 防线）
+        // Null pointers safely refused (UB defense line)
         assert_eq!(
             assert_err(unsafe { persona_service_init(std::ptr::null(), pw.as_ptr()) }),
             "null argument"
@@ -543,7 +575,7 @@ mod tests {
             "null argument"
         );
 
-        // init：首次建户即解锁
+        // init: first-time account creation leaves it unlocked
         let db_path = temp_db_path("lifecycle");
         let db = cstr(&db_path);
         assert_ok(
@@ -552,7 +584,8 @@ mod tests {
         );
         assert!(persona_service_is_unlocked());
 
-        // lock → unlock（错误密码拒绝且不改变状态）→ 解锁恢复
+        // lock → unlock (wrong password is refused without changing state) →
+        // unlock restores
         assert_ok(persona_service_lock(), "lock");
         assert!(!persona_service_is_unlocked());
         let wrong = cstr("wrong-pin");
@@ -564,7 +597,8 @@ mod tests {
         assert_ok(unsafe { persona_service_unlock(pw.as_ptr()) }, "unlock");
         assert!(persona_service_is_unlocked());
 
-        // configure_sync：启用 → 审计动作入队 → 空白摘除 → 不再入队
+        // configure_sync: enable → audit action queues → blank detaches → no
+        // longer queues
         let url = cstr("http://127.0.0.1:1");
         let token = cstr("tok-1");
         assert_ok(
@@ -572,8 +606,9 @@ mod tests {
             "configure sync on",
         );
         assert_ok(persona_service_lock(), "lock for audit");
-        // unlock 是审计动作（login），emitter 已注入则入队（FFI 调用须在
-        // block_on 外——内部会 block_on 同一全局 runtime，嵌套即 panic）
+        // unlock is an audit action (login), queued if the emitter has been
+        // injected (the FFI call must be made outside block_on — its internals
+        // block_on the same global runtime, and nesting panics)
         assert_ok(
             unsafe { persona_service_unlock(pw.as_ptr()) },
             "unlock for audit",
@@ -611,7 +646,7 @@ mod tests {
             "no emitter after blank reconfigure"
         );
 
-        // shutdown 复位 → 重复 init 走 authenticate 分支
+        // shutdown reset → repeat init takes the authenticate branch
         assert_ok(persona_shutdown(), "shutdown");
         assert!(!persona_service_is_unlocked());
         assert_ok(
@@ -627,7 +662,7 @@ mod tests {
         assert_ok(persona_shutdown(), "final shutdown");
     }
 
-    /// 先 configure 后 init 的注入顺序（槽位解耦）。
+    /// The configure-then-init injection ordering (slot decoupling).
     #[test]
     fn configure_sync_before_init_injects_on_init() {
         let _guard = test_lock();
@@ -647,7 +682,8 @@ mod tests {
             unsafe { persona_service_init(db.as_ptr(), pw.as_ptr()) },
             "init after configure",
         );
-        // lock 本身不写审计（只清密钥），unlock（login）才产生审计事件
+        // lock itself writes no audit (only clears the key); unlock (login) is
+        // what produces an audit event
         assert_ok(persona_service_lock(), "lock");
         assert_ok(unsafe { persona_service_unlock(pw.as_ptr()) }, "unlock");
         let queued = runtime::block_on(async {
@@ -664,9 +700,10 @@ mod tests {
         assert_ok(persona_shutdown(), "cleanup shutdown");
     }
 
-    /// 与 desktop `attach_sync_emitter` 一致：不做 URL 格式预校验
-    /// （`ServerEventSink::new` 恒可构造，格式错误在发送期暴露并退避），
-    /// 非法 URL 的重配置同样替换槽位、不 panic。
+    /// Matching the desktop `attach_sync_emitter`: no URL format prevalidation
+    /// (`ServerEventSink::new` is always constructible; format errors surface
+    /// at send time with backoff), and reconfiguring with an invalid URL also
+    /// just replaces the slot without panicking.
     #[test]
     fn configure_sync_accepts_malformed_url_like_desktop() {
         let _guard = test_lock();
@@ -696,8 +733,9 @@ mod tests {
         assert_ok(persona_shutdown(), "cleanup shutdown");
     }
 
-    /// 外部连接直接改 user_auth 表的 password_change_required 位
-    ///（service 池 idle，无未决事务，写锁可用）。
+    /// Directly flips the user_auth table's password_change_required bit from
+    /// an external connection (the service pool is idle, no pending
+    /// transactions, so the write lock is available).
     fn set_password_change_required(db_path: &str, value: bool) {
         runtime::block_on(async {
             let db = persona_core::storage::Database::from_file(db_path)
@@ -711,23 +749,24 @@ mod tests {
         });
     }
 
-    /// 认证错误路径全集：非 UTF-8 参数、PasswordChangeRequired（unlock
-    /// 与 init 双入口）、AccountLocked（5 次失败触发，双入口）、
-    /// authenticate 内部 Err（外部连接删表）。顺序敏感——lockout 持久化
-    /// 300s，锁死后的 DB 不再复用。
+    /// The full set of auth error paths: non-UTF-8 argument,
+    /// PasswordChangeRequired (both unlock and init entries), AccountLocked
+    /// (triggered by 5 failures, both entries), and an authenticate internal
+    /// Err (external connection drops the table). Order-sensitive — the
+    /// lockout persists for 300s, and a locked DB is not reused.
     #[test]
     fn auth_error_paths_unlock_and_init() {
         let _guard = test_lock();
         reset_state();
 
-        // 非 UTF-8 参数 → ptr_to_str 的 UTF-8 分支（unlock 入口）
+        // Non-UTF-8 argument → ptr_to_str's UTF-8 branch (unlock entry)
         let bad = c"\xff\xfe";
         assert_eq!(
             assert_err(unsafe { persona_service_unlock(bad.as_ptr()) }),
             "invalid UTF-8 in argument"
         );
 
-        // 建户（解锁态）
+        // Create the account (unlocked state)
         let db_path = temp_db_path("auth-errors");
         let db = cstr(&db_path);
         let pw = cstr("master-pin");
@@ -736,14 +775,15 @@ mod tests {
             "init",
         );
 
-        // PasswordChangeRequired：DB 置位后 authenticate_password 在校验
-        // 密码之前短路——unlock 入口
+        // PasswordChangeRequired: with the DB bit set, authenticate_password
+        // short-circuits before validating the password — unlock entry
         set_password_change_required(&db_path, true);
         assert_eq!(
             assert_err(unsafe { persona_service_unlock(pw.as_ptr()) }),
             "Password change required"
         );
-        // 重复 init 走 authenticate 分支——init 入口同一映射
+        // Repeat init takes the authenticate branch — same mapping at the init
+        // entry
         assert_ok(persona_shutdown(), "shutdown");
         assert_eq!(
             assert_err(unsafe { persona_service_init(db.as_ptr(), pw.as_ptr()) }),
@@ -751,13 +791,14 @@ mod tests {
         );
         set_password_change_required(&db_path, false);
 
-        // 上一步 init 短路失败不入槽位——重新 init 恢复会话
+        // The previous init short-circuit failure was not stored in the slot —
+        // re-init restores the session
         assert_ok(
             unsafe { persona_service_init(db.as_ptr(), pw.as_ptr()) },
             "re-init after PCR cleared",
         );
 
-        // AccountLocked：5 次失败触发锁定（unlock 入口）
+        // AccountLocked: 5 failures trigger the lock (unlock entry)
         let wrong = cstr("wrong-pin");
         for attempt in 0..5 {
             assert_eq!(
@@ -771,7 +812,7 @@ mod tests {
             assert_err(unsafe { persona_service_unlock(wrong.as_ptr()) }),
             "Account is locked due to too many failed attempts"
         );
-        // 锁定持久化在 user_auth 行——init 入口同样拒绝
+        // The lock persists in the user_auth row — the init entry refuses too
         assert_ok(persona_shutdown(), "shutdown");
         assert_eq!(
             assert_err(unsafe { persona_service_init(db.as_ptr(), pw.as_ptr()) }),
@@ -779,8 +820,9 @@ mod tests {
         );
         assert_ok(persona_shutdown(), "abandon locked db");
 
-        // authenticate 内部 Err（unlock 的 Err 分支）：外部连接删表，
-        // get_first 查询报错 → "Authentication error: …"
+        // authenticate internal Err (unlock's Err branch): an external
+        // connection drops the table, the get_first query errors →
+        // "Authentication error: …"
         let db2_path = temp_db_path("auth-err-drop");
         let db2 = cstr(&db2_path);
         assert_ok(
@@ -797,8 +839,9 @@ mod tests {
         assert_ok(persona_shutdown(), "cleanup db2");
     }
 
-    /// 外部连接执行破坏性 SQL（PRAGMA foreign_keys 是 per-connection 的：
-    /// 子表引用 user_auth，关外键与语句必须同一连接）。
+    /// Executes destructive SQL from an external connection (PRAGMA
+    /// foreign_keys is per-connection: the child table references user_auth,
+    /// so disabling foreign keys and the statement must share one connection).
     fn exec_external(db_path: &str, sql: &str) {
         runtime::block_on(async {
             let db = persona_core::storage::Database::from_file(db_path)
@@ -816,16 +859,19 @@ mod tests {
         });
     }
 
-    /// init 的内部错误分支：坏路径（connection）、迁移记录破坏（migration）、
-    /// user_auth 表破坏的三种形态（query users / initialize user /
-    /// authentication error——has_any 只查表存在，get_first/INSERT 逐列）。
+    /// init's internal error branches: a bad path (connection), corrupted
+    /// migration records (migration), and three forms of a corrupted
+    /// user_auth table (query users / initialize user / authentication error —
+    /// has_any only checks table existence, while get_first/INSERT go column
+    /// by column).
     #[test]
     fn init_error_paths() {
         let _guard = test_lock();
         reset_state();
         let pw = cstr("master-pin");
 
-        // connection failed：父目录不存在，mode=rwc 也建不出文件
+        // connection failed: the parent directory does not exist, so even
+        // mode=rwc cannot create the file
         let missing_dir = cstr("/nonexistent-persona-test-dir/nope.db");
         let msg = assert_err(unsafe { persona_service_init(missing_dir.as_ptr(), pw.as_ptr()) });
         assert!(
@@ -834,8 +880,8 @@ mod tests {
             msg
         );
 
-        // migration failed：清空 _sqlx_migrations → 已应用迁移重放撞
-        // 已存在表
+        // migration failed: clearing _sqlx_migrations → replaying an already
+        // applied migration collides with existing tables
         let mig_path = temp_db_path("mig");
         let mig = cstr(&mig_path);
         assert_ok(
@@ -851,7 +897,8 @@ mod tests {
             msg
         );
 
-        // query users 失败：user_auth 表整体消失 → has_any 报错
+        // query users fails: the user_auth table is gone entirely → has_any
+        // errors
         let no_table_path = temp_db_path("no-table");
         let no_table = cstr(&no_table_path);
         assert_ok(
@@ -867,8 +914,9 @@ mod tests {
             msg
         );
 
-        // initialize user 失败：表存在但缺列——空表使 has_any=0（走
-        // initialize_user），INSERT 指定列名 → no such column
+        // initialize user fails: the table exists but lacks columns — an empty
+        // table gives has_any=0 (taking initialize_user), and the INSERT
+        // names columns → no such column
         let thin_path = temp_db_path("thin-table");
         let thin = cstr(&thin_path);
         assert_ok(
@@ -885,8 +933,9 @@ mod tests {
             msg
         );
 
-        // authentication error：表有行但缺列——has_any=1（走 authenticate），
-        // get_first 逐列取值 → 缺失列错误
+        // authentication error: the table has rows but lacks columns —
+        // has_any=1 (taking authenticate), and get_first reads values column
+        // by column → missing column error
         let garbled_path = temp_db_path("garbled-table");
         let garbled = cstr(&garbled_path);
         assert_ok(

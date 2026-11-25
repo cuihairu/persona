@@ -1,8 +1,9 @@
 import { PersonaBridge } from '../persona/PersonaBridge';
 
 /**
- * 原生骨架首屏：桥连通状态 + init/unlock/lock 生命周期骨架屏，
- * 语义对齐 Android / iOS。业务 UI（凭证库、TOTP、钱包）逐功能落地。
+ * Native skeleton first screen: bridge connectivity status + an init/unlock/lock
+ * lifecycle skeleton, semantically aligned with Android / iOS. The business UI
+ * (credential vault, TOTP, wallet) lands feature by feature.
  */
 @Entry
 @Component

@@ -1,9 +1,9 @@
 import Foundation
 import PersonaFFI
 
-/// persona-mobile staticlib 的 Swift 封装：C ABI → Swift 友好类型。
-/// 出参统一 Result<Void, String>；PersonaResult.error_message 消费后
-/// 立即经 persona_free_result 归还，避免泄漏。
+/// Swift wrapper over the persona-mobile staticlib: C ABI -> Swift-friendly types.
+/// Out parameters are uniformly Result<Void, String>; PersonaResult.error_message
+/// is returned via persona_free_result immediately after being consumed, to avoid leaks.
 enum PersonaBridge {
 
     static var version: String {
@@ -39,7 +39,7 @@ enum PersonaBridge {
         settle(persona_shutdown())
     }
 
-    /// 把 C 结构结果转成 Swift Result 并归还 error_message 所有权
+    /// Convert the C struct result into a Swift Result and return ownership of error_message
     private static func settle(_ r: PersonaResult) -> Result<Void, String> {
         if r.success { return .success(()) }
         let message = r.error_message.map { String(cString: $0) } ?? "Unknown error"

@@ -1,5 +1,5 @@
-# XcodeGen 工程声明：`xcodegen gen` 生成 Persona.xcodeproj。
-# 链接 cargo 出的 staticlib（aarch64-apple-ios），Rust 源在 mobile/rust。
+# XcodeGen project declaration: `xcodegen gen` generates Persona.xcodeproj.
+# Links the staticlib built by cargo (aarch64-apple-ios); Rust sources live in mobile/rust.
 name: Persona
 options:
   bundleIdPrefix: com.persona

@@ -1,33 +1,36 @@
 package com.persona.mobile
 
 /**
- * libpersona_mobile.so 的 JNI 桥：native 符号在 Rust 侧
- * `mobile/rust/src/jni_android.rs`（Java_com_persona_mobile_PersonaBridge_*），
- * 语义与 iOS / 鸿蒙共用同一套 C ABI 桥。
+ * JNI bridge for libpersona_mobile.so: the native symbols live on the Rust
+ * side in `mobile/rust/src/jni_android.rs`
+ * (Java_com_persona_mobile_PersonaBridge_*), sharing the same C ABI bridge
+ * semantics as iOS / HarmonyOS.
  *
- * 出参约定：除 [personaInit]/[personaServiceIsUnlocked] 外均为 JSON 字符串
- * `{"success":bool,"error":string|null}`，用 org.json 解析。
+ * Out parameter convention: everything except [personaInit]/[personaServiceIsUnlocked]
+ * is a JSON string `{"success":bool,"error":string|null}`, parsed with org.json.
  *
- * null 安全（2026-10-03 走查实锤修复）：JNI 层任何失败（含 Rust panic 被
- * catch_unwind 收编前的极端路径、JVM 损坏的降级层）都可能以 null 返回，
- * Kotlin 侧一律声明为可空、[parseResult] 先判 null——null 不是可解析的
- * 结果，当作失败处理而不是让 NullPointerException 崩掉首屏。
+ * Null safety (fix confirmed during the 2026-10-03 walkthrough): any failure at
+ * the JNI layer (including the extreme path before catch_unwind absorbs a Rust
+ * panic, and the degraded layer for a corrupted JVM) may return null, so the
+ * Kotlin side declares everything nullable and [parseResult] checks for null
+ * first — null is not a parseable result, so treat it as failure rather than
+ * letting a NullPointerException blow up the first screen.
  */
 object PersonaBridge {
     init {
         System.loadLibrary("persona_mobile")
     }
 
-    /** 0 = 成功 */
+    /** 0 = success */
     external fun personaInit(): Int
 
-    /** 运行时未起/JVM 异常时可能为 null（展示层兜底"未知"） */
+    /** May be null when the runtime has not started / a JVM exception occurred (the display layer falls back to "unknown") */
     external fun personaVersion(): String?
 
-    /** 打开 vault → 迁移 → 首次建户或认证（成功即解锁态） */
+    /** Open vault -> migrate -> create the account or authenticate on first run (success means unlocked) */
     external fun personaServiceInit(dbPath: String, masterPassword: String): String?
 
-    /** 用主密码解锁既有会话 */
+    /** Unlock an existing session with the master password */
     external fun personaServiceUnlock(masterPassword: String): String?
 
     external fun personaServiceLock(): String?
@@ -36,13 +39,14 @@ object PersonaBridge {
 
     external fun personaShutdown(): String?
 
-    // ---- 业务 FFI（business 层，出参包络 {"ok":bool,"error"?,"data"?}——
-    // 与上面生命周期层的 success 键名不同，用 parseBusiness 分别解析）----
+    // ---- Business FFI (the business layer, out envelope {"ok":bool,"error"?,"data"?} —
+    // a different key name from the lifecycle layer's success above, so parse it with
+    // parseBusiness) ----
 
-    /** 全文搜索凭据（元数据，不解密负载；空串 = 全部）。可能为 null（JVM 双层全挂） */
+    /** Full-text credential search (metadata only, payloads are not decrypted; empty string = all). May be null (both JVM layers down) */
     external fun personaCredentialSearch(query: String): String?
 
-    /** 业务包络轻量解包：返回 (ok, error, 整个响应对象)；null / 非 JSON 一律落失败臂 */
+    /** Lightweight unwrap of the business envelope: returns (ok, error, the whole response object); null / non-JSON always lands in the failure arm */
     fun parseBusiness(json: String?): Triple<Boolean, String?, org.json.JSONObject?> {
         if (json == null) return Triple(false, "Native bridge returned null", null)
         return runCatching {
@@ -51,7 +55,7 @@ object PersonaBridge {
         }.getOrElse { Triple(false, "Unexpected native response", null) }
     }
 
-    /** JSON 出参的轻量解包：null / 非 JSON / 非对象一律落失败臂，不抛异常 */
+    /** Lightweight unwrap of a JSON out parameter: null / non-JSON / non-object always land in the failure arm, with no exception thrown */
     fun parseResult(json: String?): Pair<Boolean, String?> {
         if (json == null) return false to "Native bridge returned null"
         return runCatching {

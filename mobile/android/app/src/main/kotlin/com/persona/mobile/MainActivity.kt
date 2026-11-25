@@ -11,10 +11,12 @@ import com.google.android.material.tabs.TabLayout
 import org.json.JSONObject
 
 /**
- * 原生首屏：验证 JNI 桥连通（版本号）+ 走通 init/unlock/lock 生命周期。
- * 解锁后进入三 tab 业务区（数据 = 凭据列表 / 工具 = 刷新·锁定 / 设置 =
- * 桥与保险库信息），凭据列表经业务 FFI（`persona_credential_search`，
- * 包络 `{"ok":bool,"error"?,"data":[]}`）取数，只展示元数据、不解密。
+ * Native first screen: verifies JNI bridge connectivity (version number) and
+ * exercises the init/unlock/lock lifecycle. After unlocking it enters the
+ * three-tab business area (Data = credential list / Tools = refresh + lock /
+ * Settings = bridge and vault info); the credential list is fetched through the
+ * business FFI (`persona_credential_search`, envelope `{"ok":bool,"error"?,"data":[]}`)
+ * and only metadata is displayed, with no decryption.
  */
 class MainActivity : AppCompatActivity() {
 
@@ -56,7 +58,7 @@ class MainActivity : AppCompatActivity() {
 
         status.text = runCatching {
             PersonaBridge.personaInit()
-            // runtime 未起时版本可能为 null——展示层兜底"未知"，不当崩溃
+            // The version may be null when the runtime has not started — the display layer falls back to "unknown" rather than crashing
             "桥已连通 · persona ${PersonaBridge.personaVersion() ?: "未知"}"
         }.getOrElse { "桥加载失败：${it.message}" }
 
@@ -96,8 +98,9 @@ class MainActivity : AppCompatActivity() {
             return
         }
         val dbPath = getDatabasePath("persona.db").absolutePath
-        // 首装时 databases/ 父目录不存在，SQLite mode=rwc 只建文件不建目录——
-        // 先建目录再交给 native（2026-10-11 出图走查实锤）
+        // On first install the databases/ parent directory does not exist, and SQLite
+        // mode=rwc creates the file but not the directory — create the directory first,
+        // then hand it to the native layer (confirmed during the 2026-10-11 build walkthrough)
         getDatabasePath("persona.db").parentFile?.mkdirs()
         val json = if (initial) {
             PersonaBridge.personaServiceInit(dbPath, master)
@@ -155,7 +158,7 @@ class MainActivity : AppCompatActivity() {
             val item = items.optJSONObject(i) ?: continue
             val row = layoutInflater.inflate(R.layout.credential_row, credentialList, false)
             row.findViewById<TextView>(R.id.row_name).text = item.optString("name")
-            // org.json 对 JSON null 的 optString 会返回字面 "null"，按空处理
+            // org.json's optString returns the literal "null" for JSON null, so treat it as empty
             val meta = listOf(
                 item.optString("username", "").takeIf { it.isNotBlank() && it != "null" },
                 item.optString("credential_type", "").takeIf { it.isNotBlank() && it != "null" },

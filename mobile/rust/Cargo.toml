@@ -12,10 +12,10 @@ crate-type = ["cdylib", "staticlib"]
 [dependencies]
 persona-core = { path = "../../core" }
 
-# 异步运行时（FFI 边界 block_on 桥 + sqlx 池/Emitter 后台任务挂载）
+# Async runtime (block_on bridge at the FFI boundary + sqlx pool / Emitter background task hosting)
 tokio.workspace = true
 
-# 业务 FFI 的 JSON 包络（入参/出参均为 JSON 字符串）
+# JSON envelope for the business FFI (inbound/outbound are both JSON strings)
 serde.workspace = true
 serde_json.workspace = true
 uuid.workspace = true
@@ -23,8 +23,9 @@ uuid.workspace = true
 # FFI
 libc = "0.2"
 
-# Android 宿主的 JNI 导出层（jni_android.rs；仅 Android 目标编译，
-# Kotlin 侧经 System.loadLibrary + external fun 消费，JSON 包络同 C ABI）
+# JNI export layer for the Android host (jni_android.rs; compiled for the
+# Android target only, consumed by Kotlin via System.loadLibrary + external
+# fun, with the same JSON envelope as the C ABI)
 [target.'cfg(target_os = "android")'.dependencies]
 jni = "0.22"
 
