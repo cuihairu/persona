@@ -2,7 +2,7 @@
 
 Persona Server 的端到端加密同步轨道：服务器**只中继密文**——密文操作
 日志（oplog）、设备信封与组密钥信封，永远不持有解密能力。协议全貌见
-[E2EE_SYNC_DESIGN](../../reference/E2EE_SYNC_DESIGN)。
+[E2EE_SYNC_DESIGN](../reference/E2EE_SYNC_DESIGN.zh)。
 
 全部端点需 Bearer 令牌（认证 API 换取）。
 
@@ -41,11 +41,11 @@ Persona Server 的端到端加密同步轨道：服务器**只中继密文**—�
   不可压，兼免解压炸弹面）。
 - 附件不参与同步（本地存储；走备份通道是 v2 议题）。
 - 保留策略：oplog/events 按 env 窗口滚动清理（默认不清理），窗口须
-  ≥ 最慢设备离线周期——见 [STORAGE_AND_SYNC.md](../../reference/STORAGE_AND_SYNC) 部署节。
+  ≥ 最慢设备离线周期——见 [STORAGE_AND_SYNC.md](../reference/STORAGE_AND_SYNC.zh) 部署节。
 
 ## 运维面
 
 免认证端点：`GET /`（服务信息）、`GET /health`、`GET /metrics`
 （Prometheus：同步/事件/清理计数器）。审计事件接入与查询（`/api/v1/events`）、
 加密备份保管（`/api/v1/backups`）走独立 Bearer 令牌轨道，见
-[STORAGE_AND_SYNC.md](../../reference/STORAGE_AND_SYNC) 端点表。
+[STORAGE_AND_SYNC.md](../reference/STORAGE_AND_SYNC.zh) 端点表。

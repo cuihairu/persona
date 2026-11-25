@@ -16,7 +16,7 @@ core 数据模型里，材料落在三张表里（全部通过 `identity_id` 归
 | `passkeys`       | WebAuthn 通行密钥（RP 绑定、attestation 留存）                                                                                                                             |
 
 安全属性（详见 安全设计 与
-[Key Hierarchy](../../reference/KEY_HIERARCHY)）：
+[Key Hierarchy](../reference/KEY_HIERARCHY.zh)）：
 
 - 每条凭据用**独立 item key** 加密（AES-GCM），master key 只包裹 item key——
   单项泄露不影响其它材料；
@@ -38,7 +38,7 @@ core 数据模型里，材料落在三张表里（全部通过 `identity_id` 归
 - 浏览器扩展**不拥有密码**——它只请求 `request_fill` / `save_credential`
   这类动作，由本地 core 裁决；
 - SSH 私钥**永不导出**——外部程序请求的是签名结果，不是密钥本身
-  （默认不得导出私钥，见 [SSH Agent Features](../../reference/SSH_AGENT_FEATURES)）。
+  （默认不得导出私钥，见 [SSH Agent Features](../reference/SSH_AGENT_FEATURES.zh)）。
 
 ## 规划
 

@@ -67,7 +67,7 @@ SSH Agent 共享同一个"当前身份"——在任何一处切换，其它端�
 
 | 误解                                | 事实                                                                                                                                          |
 | ----------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| 切换身份 = 换一个加密空间           | 否。每条凭据用独立的 item key 加密，再由主密码派生的 master key 包装（见 [Key Hierarchy](../../reference/KEY_HIERARCHY)）。身份不参与密钥派生 |
+| 切换身份 = 换一个加密空间           | 否。每条凭据用独立的 item key 加密，再由主密码派生的 master key 包装（见 [Key Hierarchy](../reference/KEY_HIERARCHY.zh)）。身份不参与密钥派生 |
 | 切换身份需要重新解锁 / 换主密码     | 否。解锁状态由主密码决定，切换身份不解锁也不重新解密                                                                                          |
 | 身份带 SSH / GPG 私钥               | 否。`ssh_key` / `gpg_key` 只是备注文本。私钥是独立的凭据条目（`CredentialType::SshKey`），由 SSH Agent 按需提供                               |
 | SSH Agent 会只提供当前身份的 key    | 否。`persona ssh` 的 `--identity` 参数在代码里标注为 "reserved for future use"，目前不过滤                                                    |
@@ -144,4 +144,4 @@ item key 下，留着也解不开）。
 - [快速开始](./quick-start) — 建库、创建第一个身份
 - [桌面应用](./desktop) — 切换器与统计页
 - [核心功能](../overview/features) — 身份隔离视图
-- [Key Hierarchy](../../reference/KEY_HIERARCHY) — 加密到底在哪一层
+- [Key Hierarchy](../reference/KEY_HIERARCHY.zh) — 加密到底在哪一层
