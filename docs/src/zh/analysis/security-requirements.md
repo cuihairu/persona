@@ -2,7 +2,7 @@
 
 > **历史快照（早期通用分析，已被取代）**：本文为项目早期撰写的
 > 通用安全需求分析，其威胁面与安全边界已由
-> [THREAT_MODEL.md](../../reference/THREAT_MODEL)
+> [THREAT_MODEL.md](../reference/THREAT_MODEL.zh)
 > （当前主线威胁模型）与 `docs/review/` 下各次安全审查取代，
 > 仅作历史留档，不作为当前安全语义依据。
 

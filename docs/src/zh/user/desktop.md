@@ -74,14 +74,14 @@
   （known_hosts 校验、确认、速率限制命中时主动拒绝并留审计）。
 - **Connect 自动化**（设置内）：本机 HTTP API 供脚本读取凭据，
   口令保护 + 明文一次性展示，见
-  [CONNECT_AUTOMATION_DESIGN.md](../../reference/CONNECT_AUTOMATION_DESIGN)。
+  [CONNECT_AUTOMATION_DESIGN.md](../reference/CONNECT_AUTOMATION_DESIGN.zh)。
 
 ## 其他面板
 
 - **健康扫描（Watchtower）**：弱 / 重用 / 过期凭据的本地元数据报告；
   可选泄露检查（HIBP k-匿名，仅 5 字符哈希前缀出机）。
 - **Passkeys**：本机 passkey 提供者面板与请求审批。
-- **钱包**：加密资产面板（已落地，M5 毕业轨道；密钥层级与定案见 [WALLET_DESIGN](../../reference/WALLET_DESIGN)）。
+- **钱包**：加密资产面板（已落地，M5 毕业轨道；密钥层级与定案见 [WALLET_DESIGN](../reference/WALLET_DESIGN.zh)）。
 
 安全语义与威胁边界统一见安全特性与
-[THREAT_MODEL](../../reference/THREAT_MODEL)。
+[THREAT_MODEL](../reference/THREAT_MODEL.zh)。

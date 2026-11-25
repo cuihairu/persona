@@ -103,7 +103,7 @@ persona 对自己的依赖链做持续检查，细节与操作手册见
   未列入即拒绝。
 - **锁文件**：Cargo.lock 与 pnpm-lock.yaml 提交入库（docs 子站独立 npm），
   构建可复现；镜像基础层按 digest 钉死（
-  [可复现构建](../../reference/REPRODUCIBLE_BUILDS)）。
+  [可复现构建](../reference/REPRODUCIBLE_BUILDS.zh)）。
 - **复审节奏**：RustSec 与 npm audit 每月复查；KDF 参数、备份加密、威胁
   模型每季度复审；deny.toml 豁免必须在 PR 说明理由。
 
