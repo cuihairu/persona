@@ -2,7 +2,7 @@
 
 Persona 的功能面围绕一个原则：**敏感数据只在你的设备上解密**。以下是当前
 已实现的能力清单（不宣称未实现的功能；规划中的见
-[路线图](../../reference/ROADMAP)）。
+[路线图](../reference/ROADMAP.zh)）。
 
 ## 凭据与身份库
 
@@ -36,7 +36,7 @@ Persona 的功能面围绕一个原则：**敏感数据只在你的设备上解�
 - **旅行模式**：长离线场景下主动剥离本机密钥材料。
 - **审计日志**：关键操作与签名事件（含摘要）本地留痕。
 - **可复现构建**：deb 产物同机逐字节可复现，构建容器钉死
-  （见 [REPRODUCIBLE_BUILDS.md](../../reference/REPRODUCIBLE_BUILDS)）。
+  （见 [REPRODUCIBLE_BUILDS.md](../reference/REPRODUCIBLE_BUILDS.zh)）。
 
 ## 同步与备份（全部可选）
 
@@ -50,4 +50,4 @@ Persona 的功能面围绕一个原则：**敏感数据只在你的设备上解�
   保管。
 
 边界与威胁模型详见
-[THREAT_MODEL.md](../../reference/THREAT_MODEL)。
+[THREAT_MODEL.md](../reference/THREAT_MODEL.zh)。

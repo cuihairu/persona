@@ -48,7 +48,7 @@
 **扩展连不上桌面端**
 桌面应用必须在运行（Native Messaging 桥接）；检查扩展与桌面的配对
 是否建立（重新配对即可重建）。协议细节见
-[BRIDGE_PROTOCOL.md](../../reference/BRIDGE_PROTOCOL)。
+[BRIDGE_PROTOCOL.md](../reference/BRIDGE_PROTOCOL.zh)。
 
 **SSH Agent 拒绝签名**
 先看是不是策略在拦：known_hosts 校验、per-key/per-host 确认、速率
@@ -60,5 +60,5 @@
 未在真机验证，不宣称支持；CLI 理论上可编译但无测试背书。桌面 deb
 仅 Linux。
 
-更多背景：[STORAGE_AND_SYNC.md 的故障后果速查](../../reference/STORAGE_AND_SYNC)、
-[THREAT_MODEL](../../reference/THREAT_MODEL)。
+更多背景：[STORAGE_AND_SYNC.md 的故障后果速查](../reference/STORAGE_AND_SYNC.zh)、
+[THREAT_MODEL](../reference/THREAT_MODEL.zh)。
