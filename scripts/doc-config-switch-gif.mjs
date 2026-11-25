@@ -1,16 +1,19 @@
-// 配置开关效果动态图流水线（todo.md DOC-GIF）。
+// Config-switch effect animation pipeline (todo.md DOC-GIF).
 //
-// 对清单内每个设置开关产出 off→on 对比图 + GIF，截图同时断言开关的
-// UI 效果（侧栏节点出现/ favicon 图出现），兼作配置效果回归测试——
-// 开关失效（切了没反应/效果丢失）时本脚本断言失败、非零退出。
+// For every settings switch in the list, produce an off→on comparison image + GIF;
+// the screenshots also assert the switch's UI effect (sidebar node appears /
+// favicon image appears), doubling as a config-effect regression test — if a
+// switch stops working (toggled with no response / effect lost), this script's
+// assertion fails and it exits non-zero.
 //
-// 用法（先在 desktop/ 构建最新 dist）：
+// Usage (build the latest dist in desktop/ first):
 //   cd desktop && npm run build && cd ..
 //   node scripts/doc-config-switch-gif.mjs [distDir] [outDir]
-// 默认 distDir=desktop/dist，outDir=docs/branding/ui/config-switches。
-// 依赖 playwright（按 scripts/ → cwd → ~/.cache/persona-ui-shots 顺序解析）
-// 与 ffmpeg（GIF 合成）。产物同时复制到 docs/src/public/ui/config-switches/
-// 作为站点副本（与 docs/branding/ui ↔ docs/src/public/ui 的既有约定一致）。
+// Defaults: distDir=desktop/dist, outDir=docs/branding/ui/config-switches.
+// Depends on playwright (resolved in order scripts/ → cwd → ~/.cache/persona-ui-shots)
+// and ffmpeg (GIF composition). The artifacts are also copied to
+// docs/src/public/ui/config-switches/ as the site copy (matching the existing
+// docs/branding/ui ↔ docs/src/public/ui convention).
 
 import { createRequire } from 'node:module';
 import { execFileSync } from 'node:child_process';
@@ -24,14 +27,14 @@ const outDir = path.resolve(process.argv[3] ?? 'docs/branding/ui/config-switches
 const siteDir = path.resolve('docs/src/public/ui/config-switches');
 const PORT = 41881;
 
-// playwright 解析：仓库内未装，按常见位置兜底（本机截图管线装在缓存目录）
+// playwright resolution: not installed in the repo, fall back to common locations (the local screenshot pipeline installs it in the cache directory)
 let chromium;
 for (const base of [path.resolve('scripts'), process.cwd(), path.join(os.homedir(), '.cache/persona-ui-shots')]) {
   try {
     chromium = createRequire(path.join(base, 'noop.js'))('playwright').chromium;
     break;
   } catch {
-    /* 试下一个位置 */
+    /* try the next location */
   }
 }
 if (!chromium) {
@@ -39,9 +42,11 @@ if (!chromium) {
   process.exit(1);
 }
 
-// ---- 开关清单（与 desktop/src/components/SettingsModal.tsx FEATURE_ROWS 对齐，
-// 顺序一致；nodes 是断言锚点，effect 是截图的效果区域，anchor 是 off/on
-// 两态都在场、紧邻效果行的滚动锚（保证出现/消失的行落在截图视野内）----
+// ---- Switch list (aligned with, and in the same order as, the FEATURE_ROWS in
+// desktop/src/components/SettingsModal.tsx; nodes are assertion anchors, effect
+// is the screenshot's effect region, and anchor is a scroll anchor that sits
+// adjacent to the effect row and is present in both off/on states (keeping the
+// rows that appear/disappear inside the screenshot viewport) ----
 const SWITCHES = [
   { key: 'ssh_agent', slug: 'ssh-agent', title: 'SSH Agent', effect: 'sidebar-nav', anchor: 'nav-category-api_keys', nodes: ['nav-sshAgent', 'nav-category-ssh_keys'] },
   { key: 'wallet', slug: 'wallet', title: 'Wallet', effect: 'sidebar-nav', anchor: 'nav-watchtower', nodes: ['nav-wallets'] },
@@ -63,11 +68,12 @@ const credentials = [
   cred('笔记本 SSH 密钥', 'SshKey', { is_favorite: true }),
   cred('游戏账号', 'GameAccount', { url: 'https://store.example.com' }),
 ];
-// 16x16 单色占位 icon（favicon 效果演示只需"出现图片"，内容无关）
+// 16x16 monochrome placeholder icon (the favicon effect demo only needs "an image appears"; content is irrelevant)
 const FAVICON_B64 = 'iVBORw0KGgoAAAANSUhEUgAAABAAAAAQAQMAAAAlPW0iAAAAIGNIUk0AAHomAACAhAAA+gAAAIDoAAB1MAAA6mAAADqYAAAXcJy6UTwAAAAGUExURRajSv///7N4I0QAAAABYktHRAH/Ai3eAAAAB3RJTUUH6gsCDRwseqXJMwAAACV0RVh0ZGF0ZTpjcmVhdGUAMjAyNi0xMS0wMlQxMzoyODo0NCswMDowMFAz/GsAAAAldEVYdGRhdGU6bW9kaWZ5ADIwMjYtMTEtMDJUMTM6Mjg6NDQrMDA6MDAhbkTXAAAAKHRFWHRkYXRlOnRpbWVzdGFtcAAyMDI2LTExLTAyVDEzOjI4OjQ0KzAwOjAwdntlCAAAAAxJREFUCNdjYCANAAAAMAABx6qFjgAAAABJRU5ErkJggg==';
 
-// 静态服务 dist + __TAURI_INTERNALS__ shim（fixture 与既有截图管线同构；
-// features 从全关起步，set_feature_flags 真改 mock 状态并回传全量设置）
+// Serve dist statically + __TAURI_INTERNALS__ shim (the fixture mirrors the
+// existing screenshot pipeline; features start all off, and set_feature_flags
+// really mutates the mock state and returns the full settings)
 const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.png': 'image/png', '.svg': 'image/svg+xml', '.ico': 'image/x-icon', '.woff2': 'font/woff2' };
 const server = http.createServer((req, res) => {
   const urlPath = decodeURIComponent((req.url ?? '/').split('?')[0]);
@@ -78,7 +84,7 @@ const server = http.createServer((req, res) => {
 });
 await new Promise((r) => server.listen(PORT, r));
 
-// off/on 单帧截图 + 断言 + GIF/对比图合成
+// off/on single-frame screenshots + assertions + GIF/comparison image composition
 async function main() {
   fs.mkdirSync(outDir, { recursive: true });
   const browser = await chromium.launch({ channel: 'chromium' });
@@ -143,10 +149,10 @@ async function main() {
     await page.keyboard.press('Escape');
     await page.waitForTimeout(500);
   };
-  // 效果区域截图：先滚动到锚（出现/消失的行落在视野内），再截效果区域
+  // Effect-region screenshot: scroll to the anchor first (so appearing/disappearing rows land in view), then capture the effect region
   const captureEffect = async (sw, dir, name) => {
     if (sw.anchor) {
-      // 居中锚点：效果行（锚点的相邻行）上下都有余量，不会贴边裁掉
+      // Center the anchor: the effect row (adjacent to the anchor) has slack above and below, so it is not clipped at the edge
       await page.locator(`[data-testid="${sw.anchor}"]`).evaluate((el) => el.scrollIntoView({ block: 'center' }));
       await page.waitForTimeout(250);
     }
@@ -154,7 +160,7 @@ async function main() {
   };
 
   for (const sw of SWITCHES) {
-    // 每个开关从全关基线开始：整页重载，mock 状态随之复位
+    // Each switch starts from an all-off baseline: a full page reload, which also resets the mock state
     await openApp();
 
     const faviconOff = sw.effect === 'credential-list' ? await page.locator('[data-testid="favicon-img"]').count() : null;
@@ -165,7 +171,7 @@ async function main() {
 
     await openSettings();
     await page.click(`[data-testid="feature-toggle-${sw.key}"]`);
-    await page.waitForTimeout(600); // set_feature_flags 往返 + optimistic 回填
+    await page.waitForTimeout(600); // set_feature_flags round-trip + optimistic backfill
     const checked = await page.locator(`[data-testid="feature-toggle-${sw.key}"]`).getAttribute('aria-checked');
     await closeSettings();
     await page.waitForTimeout(600);
@@ -173,7 +179,7 @@ async function main() {
     await page.screenshot({ path: path.join(outDir, `${sw.slug}-on.png`) });
     await captureEffect(sw, os.tmpdir(), `docgif-${sw.slug}-on.png`);
 
-    // 回归断言：off 时效果缺席、on 时出现（开关失效即在此失败）
+    // Regression assertion: the effect is absent when off and present when on (a broken switch fails right here)
     const assertOff = [];
     if (sw.nodes) {
       sw.nodes.forEach((n, i) => assertOff.push([`${n} hidden when off`, navOff[i] === 0, navOff[i]]));
@@ -193,11 +199,11 @@ async function main() {
       console.log(`  ${pass ? 'ok' : 'FAIL'}  ${sw.slug}: ${name}${pass ? '' : ` (got ${got})`}`);
     }
 
-    // GIF：off 停 1.2s → 0.4s 淡入 on → on 停 1.2s，循环
+    // GIF: hold off for 1.2s → 0.4s fade into on → hold on for 1.2s, then loop
     const offPng = path.join(os.tmpdir(), `docgif-${sw.slug}-off.png`);
     const onPng = path.join(os.tmpdir(), `docgif-${sw.slug}-on.png`);
     execFileSync('ffmpeg', ['-y', '-loglevel', 'error', '-loop', '1', '-t', '1.6', '-i', offPng, '-loop', '1', '-t', '1.6', '-i', onPng, '-filter_complex', '[0:v]fps=12,format=rgba,setpts=PTS-STARTPTS[a];[1:v]fps=12,format=rgba,setpts=PTS-STARTPTS[b];[a][b]xfade=transition=fade:duration=0.4:offset=1.2,split[x][y];[x]palettegen=max_colors=128[p];[y][p]paletteuse=dither=bayer:bayer_scale=3', path.join(outDir, `${sw.slug}.gif`)]);
-    // off/on 对比图：效果区域左右拼接
+    // off/on comparison image: the effect region tiled side by side
     execFileSync('convert', [offPng, onPng, '+append', '-bordercolor', '#e5e7eb', '-border', '1', path.join(outDir, `${sw.slug}-off-on.png`)]);
     console.log(`done ${sw.slug}`);
   }
@@ -209,7 +215,7 @@ async function main() {
     for (const f of failures) console.error(`  - ${f}`);
     process.exitCode = 1;
   } else {
-    // 站点副本（与 docs/branding/ui ↔ docs/src/public/ui 约定一致）
+    // Site copy (consistent with the docs/branding/ui ↔ docs/src/public/ui convention)
     fs.rmSync(siteDir, { recursive: true, force: true });
     fs.cpSync(outDir, siteDir, { recursive: true });
     console.log(`\nall switches verified; assets in ${outDir} (+ site copy in ${siteDir})`);

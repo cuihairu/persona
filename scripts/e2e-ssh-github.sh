@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
-# SSH agent 真机 E2E 引导：github.com 实连验收（TODO「Full E2E test」条目）。
-# 需要用户配合的点只有两处：① 把打印出的公钥贴到 GitHub；② TTY 确认签名。
-# 用法: PERSONA_E2E_IDENTITY=<身份名> scripts/e2e-ssh-github.sh
-# 步骤与预期输出对照 todo.md 同条目；负向用例（拒绝确认/限速/审计行）见
-# TODO 手册 ④，不在本脚本内自动化。
+# SSH agent real-host E2E harness: live acceptance test against github.com
+# (the TODO "Full E2E test" item). Only two points need user cooperation:
+# (1) paste the printed public key into GitHub; (2) confirm the signature in the TTY.
+# Usage: PERSONA_E2E_IDENTITY=<identity name> scripts/e2e-ssh-github.sh
+# Steps and expected output mirror the same todo.md entry; negative cases
+# (decline confirmation / rate limiting / audit lines) are covered by TODO
+# manual section 4 and are not automated in this script.
 set -euo pipefail
 
 IDENTITY=${PERSONA_E2E_IDENTITY:-default}
@@ -18,8 +20,8 @@ echo "── 0. 前置：解锁 vault（列出全部 SSH 密钥）"
 persona ssh list-all || fail "list-all 失败：vault 未初始化或主密码不对"
 echo "✓ vault 可用（身份：$IDENTITY）"
 
-# list-all/agent-status 的输出可能带 ANSI 色码（colored 受 CLICOLOR_FORCE
-# 等环境影响），解析前统一剥离
+# list-all/agent-status output may carry ANSI color codes (colored is affected
+# by CLICOLOR_FORCE and similar env vars), so strip them before parsing
 plain() { sed 's/\x1b\[[0-9;]*m//g'; }
 
 echo "── 1. 密钥：已有 $KEY_NAME 则复用，否则生成"
@@ -41,8 +43,9 @@ read -r -p "添加完成后按回车继续…"
 
 echo "── 3. 装载 agent"
 persona ssh add-to-agent --identity "$IDENTITY"
-# agent-status 没有 "running" 字样：运行中打 Socket:/PID:/Agent keys，
-# 未运行打 "not running"——以「有 Socket 且无 not running」为运行判据
+# agent-status has no literal "running" marker: when running it prints
+# Socket:/PID:/Agent keys, when stopped it prints "not running" — so the
+# running criterion is "has a Socket line and no not running"
 status_out=$(persona ssh agent-status | plain)
 echo "$status_out"
 echo "$status_out" | grep -q "not running" && fail "agent 未运行"

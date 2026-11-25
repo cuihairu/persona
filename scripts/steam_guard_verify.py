@@ -1,25 +1,27 @@
 #!/usr/bin/env python3
-"""Steam Guard 独立参照实现 —— 仅验收用，不引入运行时依赖。
+"""Standalone Steam Guard reference implementation — for acceptance only, no runtime dependency.
 
-背景：Valve 未发布 Steam Guard 算法的官方测试向量。本脚本是与
-`core/src/crypto/steam.rs` **互相独立**的第三份实现（纯 Python stdlib：
-hmac/hashlib/struct/base64），语义对齐 ValvePython/steam 的 guard.py
-（generate_twofactor_code_for_time）。两侧在同一 (shared_secret, counter)
-上出码必须逐字符一致 —— core/src/crypto/steam.rs 的
-`code_matches_independent_python_reference_vectors` 测试把本脚本的输出
-作为钉死向量，任何一侧漂移都会红灯。
+Background: Valve never published official test vectors for the Steam Guard
+algorithm. This script is a third implementation **mutually independent** from
+`core/src/crypto/steam.rs` (pure Python stdlib: hmac/hashlib/struct/base64),
+semantically aligned with ValvePython/steam's guard.py
+(generate_twofactor_code_for_time). Both sides must produce character-identical
+codes for the same (shared_secret, counter) — the
+`code_matches_independent_python_reference_vectors` test in core/src/crypto/steam.rs
+pins this script's output as the reference vectors, so any drift on either side
+lights up red.
 
-用法：
+Usage:
     python3 scripts/steam_guard_verify.py --secret <base64> --time <unix-seconds>
     python3 scripts/steam_guard_verify.py --secret <base64> --counter <u64>
-    python3 scripts/steam_guard_verify.py --vectors   # 打印钉死向量（JSON）
+    python3 scripts/steam_guard_verify.py --vectors   # print the pinned vectors (JSON)
 
-算法（30s 窗、HMAC-SHA1、Steam 26 字符表）：
+Algorithm (30s window, HMAC-SHA1, Steam's 26-character alphabet):
     counter = unix_time // 30
     hmac = HMAC-SHA1(shared_secret, counter_be_u64)
     start = hmac[19] & 0x0f
     full  = int.from_bytes(hmac[start:start+4], "big") & 0x7fffffff
-    code  = "".join(ALPHABET[full % 26], 5 次，每次 full //= 26)
+    code  = "".join(ALPHABET[full % 26], 5 times, dividing full //= 26 each time)
 """
 
 import argparse
@@ -30,7 +32,7 @@ import json
 import struct
 import sys
 
-# 与 core/src/crypto/steam.rs 的 STEAM_CHARS 常量一致（26 字符）
+# Matches the STEAM_CHARS constant in core/src/crypto/steam.rs (26 characters)
 ALPHABET = "23456789BCDFGHJKMNPQRTVWXY"
 PERIOD = 30
 DIGITS = 5
@@ -52,7 +54,7 @@ def steam_guard_from_counter(secret: bytes, counter: int) -> str:
 
 
 def decode_secret(secret_b64: str) -> bytes:
-    """标准 base64，容忍空白与 padding 缺省（对齐 decode_steam_secret）。"""
+    """Standard base64, tolerant of whitespace and omitted padding (aligned with decode_steam_secret)."""
     normalized = "".join(secret_b64.split())
     if not normalized:
         raise ValueError("empty shared_secret")
@@ -64,13 +66,14 @@ def steam_guard_from_time(secret_b64: str, unix_time: int) -> str:
     return steam_guard_from_counter(decode_secret(secret_b64), unix_time // PERIOD)
 
 
-# 钉死向量样本：两组不同长度/填充形态的密钥 × 若干计数器（含 u64 边界）。
-# 这些字面量同时出现在本脚本与 steam.rs 的向量测试中 —— 修改任一侧必须
-# 用另一侧重跑核对。
+# Pinned-vector samples: two keys of different lengths/padding forms × several
+# counters (including the u64 boundary). These literals appear both here and in
+# steam.rs's vector tests — a change on either side must be re-verified by
+# re-running the other.
 VECTOR_SECRETS = {
-    # base64(b"0123456789abcdefghij")，20 字节、带 1 个 '=' 填充
+    # base64(b"0123456789abcdefghij"), 20 bytes with 1 '=' padding
     "MDAxMjM0NTY3ODlhYmNkZWZnaGo=": [0, 1, 42, 12345, 2**64 - 1],
-    # base64(b"persona-vector-b")，16 字节、带 '==' 填充
+    # base64(b"persona-vector-b"), 16 bytes with '==' padding
     "cGVyc29uYS12ZWN0b3ItYg==": [0, 1, 42, 12345],
 }
 

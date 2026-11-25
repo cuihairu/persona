@@ -1,21 +1,24 @@
 #!/usr/bin/env bash
-# 账号侧红线实机勾稽（M4 口径）：起真实 persona-server 进程，走 HTTP wire
-# 断言账号域边界。与 lib 测试互补：这里验证的是进程/路由/中间件装配，
-# 不是 SRP 数学（那在 core/src/accounts/login.rs 的真算 mock 里）。
+# Account-side redline live cross-check (M4 scope): start a real persona-server
+# process and assert the account-domain boundary over the HTTP wire. Complements
+# the lib tests: what is verified here is the process/routing/middleware
+# assembly, not the SRP math (that lives in the real-arithmetic mock in
+# core/src/accounts/login.rs).
 #
-# 断言清单（红线口径：服务端对凭证/会话/设备默认拒绝，放行必须持证）：
-#   1. /health 存活
-#   2. register 公开（注册入口不设 Bearer——否则无法开账号）
-#   3. srp/register 无 Bearer → 401（写凭证 fail-closed）
-#   4. srp/register 持静态令牌 → 2xx（bootstrap 链路）
-#   5. recovery-codes 无 Bearer → 401；持证 → 出码
-#   6. 恢复码一次性：验证成功一次后复用 → success=false
-#   7. srp/challenge 公开且返回真实 server_public
-#   8. srp/verify 伪证明 → 401
-#   9. sessions 证据语义：零证据 → 422；双证据 → 422
-#  10. devices/sessions 全家族无 Bearer → 401
+# Assertion list (redline scope: the server denies credentials/sessions/devices
+# by default, and allowing anything through requires a proven credential):
+#   1. /health is alive
+#   2. register is public (no Bearer on the registration entry point — otherwise no account could be created)
+#   3. srp/register without Bearer → 401 (credential writes are fail-closed)
+#   4. srp/register with a static token → 2xx (the bootstrap path)
+#   5. recovery-codes without Bearer → 401; with a credential → codes are issued
+#   6. Recovery codes are single-use: reusing after one successful verification → success=false
+#   7. srp/challenge is public and returns a real server_public
+#   8. srp/verify with a bogus proof → 401
+#   9. sessions evidence semantics: zero evidence → 422; two kinds of evidence → 422
+#  10. The whole devices/sessions family without Bearer → 401
 #
-# 用法：scripts/verify-account-redline.sh   （自建二进制，tmp 隔离，跑完自清理）
+# Usage: scripts/verify-account-redline.sh   (builds its own binary, tmp-isolated, self-cleans when done)
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -35,17 +38,18 @@ trap cleanup EXIT
 fail() { echo "✗ $1" >&2; exit 1; }
 pass() { echo "✓ $1"; }
 
-# ---- 0. 构建 server（debug，增量） ----
+# ---- 0. Build the server (debug, incremental) ----
 echo "== build persona-server =="
 cargo build --manifest-path "$REPO/server/Cargo.toml" --quiet
 BIN="$REPO/target/debug/persona-server"
 [ -x "$BIN" ] || fail "server 二进制不存在: $BIN"
 
-# b64 随机 salt/verifier（仅走 wire 装配；verify 步用伪证明，不依赖其可验证性）
+# b64 random salt/verifier (only exercised through the wire assembly; the verify
+# step uses a bogus proof, so their verifiability does not matter)
 SALT="$(head -c 32 /dev/urandom | base64 -w0)"
 VERIFIER="$(head -c 256 /dev/urandom | base64 -w0)"
 
-# ---- 1. 起服务 ----
+# ---- 1. Start the server ----
 echo "== start server on :$PORT =="
 PERSONA_SERVER_DB="$DB" \
 PERSONA_SERVER_TOKENS="verify:$TOKEN" \
@@ -62,7 +66,7 @@ done
 curl -fsS "$BASE/health" >/dev/null || fail "server 未就绪（见 $TMP/server.log）"
 pass "1. /health 存活"
 
-# ---- 2. 注册公开 ----
+# ---- 2. Register is public ----
 code="$(curl -sS -o "$TMP/reg.json" -w '%{http_code}' -X POST "$BASE/api/v1/accounts/register" \
   -H 'content-type: application/json' -d '{"username":"verify@example.com"}')"
 [ "$code" = "201" ] || [ "$code" = "200" ] || fail "register 期望 2xx，得 $code: $(cat "$TMP/reg.json")"
@@ -78,17 +82,17 @@ api() { # api <method> <path> [bearer] [json-body]
   curl "${args[@]}"
 }
 
-# ---- 3. 写凭证 fail-closed ----
+# ---- 3. Credential writes are fail-closed ----
 code="$(api POST "$ACCT/srp/register" "" "{\"salt\":\"$SALT\",\"verifier\":\"$VERIFIER\"}")"
 [ "$code" = "401" ] || fail "srp/register 无 Bearer 期望 401，得 $code: $(cat "$TMP/last.json")"
 pass "3. srp/register 无 Bearer → 401（写凭证 fail-closed）"
 
-# ---- 4. 持静态令牌写凭证 ----
+# ---- 4. Credential writes with a static token ----
 code="$(api POST "$ACCT/srp/register" "$TOKEN" "{\"device_name\":\"verify-rig\",\"salt\":\"$SALT\",\"verifier\":\"$VERIFIER\"}")"
 case "$code" in 2*) ;; *) fail "srp/register 持证期望 2xx，得 $code: $(cat "$TMP/last.json")";; esac
 pass "4. srp/register 持静态令牌 → $code"
 
-# ---- 5. 恢复码 gate + 出码 ----
+# ---- 5. Recovery-code gate + code issuance ----
 code="$(api POST "$ACCT/recovery-codes" "" '{}')"
 [ "$code" = "401" ] || fail "recovery-codes 无 Bearer 期望 401，得 $code"
 code="$(api POST "$ACCT/recovery-codes" "$TOKEN" '{}')"
@@ -97,7 +101,7 @@ RC="$(python3 -c 'import json,sys;d=json.load(open(sys.argv[1]));print(d["codes"
 [ -n "$RC" ] || fail "恢复码响应缺 codes"
 pass "5. recovery-codes 无 Bearer → 401；持证出码"
 
-# ---- 6. 恢复码一次性 ----
+# ---- 6. Recovery codes are single-use ----
 code="$(api POST "$ACCT/recovery-codes/verify" "" "{\"code\":\"$RC\"}")"
 [ "$code" = "200" ] || fail "恢复码首验期望 200，得 $code: $(cat "$TMP/last.json")"
 python3 -c 'import json,sys;assert json.load(open(sys.argv[1]))["success"] is True' "$TMP/last.json" \
@@ -107,20 +111,20 @@ python3 -c 'import json,sys;assert json.load(open(sys.argv[1]))["success"] is Fa
   || fail "复用未作废（success 应为 false）"
 pass "6. 恢复码一次性：复用 → success=false"
 
-# ---- 7. challenge 公开 + 真 B ----
+# ---- 7. Challenge is public + real B ----
 code="$(api POST "$ACCT/srp/challenge" "" "{\"device_name\":\"verify-rig\",\"client_public\":\"$(head -c 256 /dev/urandom | base64 -w0)\"}")"
 case "$code" in 2*) ;; *) fail "challenge 期望 2xx，得 $code: $(cat "$TMP/last.json")";; esac
 python3 -c 'import json,sys;d=json.load(open(sys.argv[1]));assert len(d["server_public"])>100' "$TMP/last.json" \
   || fail "challenge 未返回 server_public"
 pass "7. srp/challenge 公开，返回真实 server_public"
 
-# ---- 8. 伪证明拒绝 ----
+# ---- 8. Bogus proof rejected ----
 code="$(api POST "$ACCT/srp/verify" "" \
   "{\"session_id\":\"$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["session_id"])' "$TMP/last.json")\",\"client_proof\":\"$(head -c 64 /dev/urandom | base64 -w0)\"}")"
 [ "$code" = "401" ] || fail "伪 M1 期望 401，得 $code: $(cat "$TMP/last.json")"
 pass "8. srp/verify 伪证明 → 401"
 
-# ---- 9. sessions 证据语义 ----
+# ---- 9. sessions evidence semantics ----
 code="$(api POST "$ACCT/sessions" "$TOKEN" '{}')"
 [ "$code" = "422" ] || fail "sessions 零证据期望 422，得 $code: $(cat "$TMP/last.json")"
 code="$(api POST "$ACCT/sessions" "$TOKEN" \
@@ -128,7 +132,7 @@ code="$(api POST "$ACCT/sessions" "$TOKEN" \
 [ "$code" = "422" ] || fail "sessions 双证据期望 422，得 $code: $(cat "$TMP/last.json")"
 pass "9. sessions 零/双证据均 → 422（恰好一种证据）"
 
-# ---- 10. 家族 gate ----
+# ---- 10. Family gate ----
 for spec in "GET $ACCT/devices|" "POST $ACCT/devices|{}" "DELETE $ACCT/devices/dev-x|" "DELETE $ACCT/sessions/tok|"; do
   m="${spec%% *}"; rest="${spec#* }"; p="${rest%%|*}"; d="${rest#*|}"
   code="$(api "$m" "$p" "" "$d")"

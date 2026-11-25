@@ -1,14 +1,16 @@
 #!/usr/bin/env bash
-# deb 产物规范化：把 tauri bundler 产物里的构建时间痕迹归零，使同一输入
-# 两次构建产出逐字节相同的 deb（Reproducible builds 基线，见
-# docs/REPRODUCIBLE_BUILDS.md）。处理三层：
-#   1. ar 成员头 —— `ar -rD` 显式确定性模式（时间戳/uid/gid 归零）
-#   2. control/data 的 tar —— 条目按名排序、mtime 统一为 SOURCE_DATE_EPOCH、
-#      属主统一 root
-#   3. gzip 头 —— `gzip -n` 不写 mtime/原始文件名
-# 用法：scripts/normalize-deb.sh <in.deb> <out.deb>
-#   SOURCE_DATE_EPOCH 缺省 0；权限位经 tar -p 原样保留（/usr/bin 的可执行位
-# 不能丢），仅归一化时间与属主。
+# deb artifact normalization: zero out the build-time traces in the tauri
+# bundler's output so that the same input produces a byte-for-byte identical
+# deb across two builds (Reproducible builds baseline; see
+# docs/REPRODUCIBLE_BUILDS.md). Three layers are handled:
+#   1. ar member headers — `ar -rD` explicit deterministic mode (timestamps/uid/gid zeroed)
+#   2. control/data tar — entries sorted by name, mtime normalized to
+#      SOURCE_DATE_EPOCH, ownership normalized to root
+#   3. gzip headers — `gzip -n` omits the mtime/original filename
+# Usage: scripts/normalize-deb.sh <in.deb> <out.deb>
+#   SOURCE_DATE_EPOCH defaults to 0; permission bits are preserved as-is via
+#   tar -p (the /usr/bin executable bit must not be lost); only times and
+#   ownership are normalized.
 set -euo pipefail
 
 if [ $# -ne 2 ]; then
@@ -28,17 +30,19 @@ ar x "$(realpath "$in")"
 for member in control data; do
   rm -rf "$member"
   mkdir "$member"
-  # -p：非 root 也恢复权限位（默认 --no-same-permissions 会把 755 降成
-  # 644，打出来的包 /usr/bin/persona 不可执行）
+  # -p: restore permission bits even when not root (the default
+  # --no-same-permissions downgrades 755 to 644, leaving /usr/bin/persona in the
+  # built package non-executable)
   tar -xpzf "$member.tar.gz" -C "$member"
   tar --sort=name --mtime="@$epoch" --owner=root:0 --group=root:0 \
       --numeric-owner -C "$member" -cf - . | gzip -n -9 > "$member.tar.gz.new"
   mv "$member.tar.gz.new" "$member.tar.gz"
 done
 
-# 输出路径可能恰在 in.deb 同目录：先落到临时名再替换
-# （不能用 mktemp 预建空文件——GNU ar 的 r 操作会先校验既有文件是否
-# 合法归档，空文件直接报 file format not recognized）
+# The output path may sit in the same directory as in.deb: write to a temp name
+# and then replace (do not pre-create an empty file with mktemp — GNU ar's r
+# operation validates that an existing file is a legal archive, and an empty
+# file fails immediately with file format not recognized)
 tmpout="$out.tmp$$"
 ar -rD "$tmpout" debian-binary control.tar.gz data.tar.gz
 mv "$tmpout" "$out"
