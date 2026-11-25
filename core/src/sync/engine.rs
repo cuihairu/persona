@@ -281,22 +281,23 @@ impl<R: SyncRemote> SyncEngine<R> {
     /// Library-level snapshot install primitive (first step of S2 bootstrap):
     /// fetch the server snapshot → hand the whole package ciphertext to the
     /// callback (the assembly layer holds the keys: unwrap with the group key
-    /// + idempotently insert the view-sufficient set into the local oplog by
-    /// op_id) → only after the callback succeeds advance the pull cursor to
-    /// the coverage position and record `last_snapshot_seq`, so later pulls
-    /// take only increments. A callback failure or a missing server snapshot
-    /// never moves the cursor, leaving the full-replay path as it was —
-    /// fail-closed: the cursor moving first while install fails means the
-    /// covered range is already compacted yet never installed locally, an
-    /// unrecoverable data hole.
+    /// and idempotently insert the view-sufficient set into the local oplog
+    /// by op_id). Only after the callback succeeds does the pull cursor
+    /// advance to the coverage position and record `last_snapshot_seq`, so
+    /// later pulls take only increments. A callback failure or a missing
+    /// server snapshot never moves the cursor, leaving the full-replay path
+    /// as it was (fail-closed: the cursor moving first while install fails
+    /// means the covered range is already compacted yet never installed
+    /// locally, an unrecoverable data hole).
+    ///
     /// While travel is active the whole step is skipped (installing writes
-    /// remote data into the oplog/primary database, the same direction as
-    /// pull, and must not happen during travel; after leaving travel the next
-    /// bootstrap installs as usual — the cursor was untouched). Returns
-    /// `Some(coverage position seq)`; `None` when there is no snapshot or
-    /// travel skipped it (both behave the same: they fall back to the
-    /// full-replay path, and the cursor decides whether to try again next
-    /// time).
+    /// remote data into the oplog and primary database, the same direction
+    /// as pull, and must not happen during travel; after leaving travel the
+    /// next bootstrap installs as usual, as the cursor was untouched).
+    /// Returns `Some(coverage position seq)`; `None` when there is no
+    /// snapshot or travel skipped it (both behave the same: they fall back
+    /// to the full-replay path, and the cursor decides whether to try again
+    /// next time).
     pub async fn install_library_snapshot<F>(&self, install: F) -> Result<Option<i64>>
     where
         F: AsyncFnOnce(i64, Vec<u8>) -> Result<()>,

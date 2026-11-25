@@ -210,9 +210,9 @@ impl SyncPasskeySnapshot {
 ///   deleted items on devices installing into a non-empty library.
 /// - **LWW total order preserved**: op_id/lamport/device_id are moved
 ///   verbatim, so the `item_view` of a snapshot-installing device matches
-///   that of old devices not using snapshots, item by item — "snapshot start
-///   + increments after the point == full replay" by view equality (the
-///   criterion of the convergence-equivalence test anchor).
+///   that of old devices not using snapshots, item by item. "snapshot start,
+///   then increments after the point, equals full replay" holds by view
+///   equality (the criterion of the convergence-equivalence test anchor).
 ///
 /// The zero-knowledge invariant matches single-item snapshots: item
 /// names/domains/usernames/passwords exist only inside item key ciphertext,

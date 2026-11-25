@@ -12,8 +12,9 @@
 //! normalize into a forge identity), `host` (`PERSONA_HOST` override /
 //! gethostname). Mapping tables: `~/.persona/context.toml` (global) +
 //! `$repo/.persona/context.toml` (repo-local, higher on the chain);
-//! override chain (highest priority on top): `PERSONA_CONTEXT_OVERRIDE`
-//! > repo-local mappings > global mappings > active identity. Privacy:
+//! override chain (highest priority on top): `PERSONA_CONTEXT_OVERRIDE`,
+//! then repo-local mappings, then global mappings, then the active identity.
+//! Privacy:
 //! signals are computed entirely locally and never sent out; the audit
 //! log records only user confirmation (reusing the switch audit), never
 //! the signals themselves.
