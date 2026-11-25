@@ -1,6 +1,6 @@
 # Cross-device Sync Mode (Default Sync Method)
 
-> [English](sync-group-mode.md) | [中文](sync-group-mode.zh.md)
+> [English](sync-group-mode.md) | [中文](https://github.com/cuihairu/persona/blob/main/docs/sync-group-mode.zh.md)
 
 > Status: implemented (S1–S5 all landed; decided by the user on 2026-10-04, batches closed 2026-10-04 through 10-10; reconciliation in the table at the end). Positioning: persona's default sync mode — account-free, end-to-end, self-hostable; account mode becomes an **explicitly enabled** option. It is the same mode as unidict `server_plan.md` §6 "personal dictionary sync" (same protocol idea, independent implementations).
 

@@ -1,4 +1,4 @@
-> [English](ONEPASSWORD_FEATURES.md) | **中文**
+> [English](https://github.com/cuihairu/persona/blob/main/docs/ONEPASSWORD_FEATURES.md) | **中文**
 
 # 1Password 功能清单（参考）
 

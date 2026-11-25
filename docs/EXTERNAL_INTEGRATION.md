@@ -1,6 +1,6 @@
 # External project integration with Persona (External Integration)
 
-> [English](EXTERNAL_INTEGRATION.md) | [中文](EXTERNAL_INTEGRATION.zh.md)
+> [English](EXTERNAL_INTEGRATION.md) | [中文](https://github.com/cuihairu/persona/blob/main/docs/EXTERNAL_INTEGRATION.zh.md)
 
 > **Status: current state (verified live on 2026-10-12)**. Every JSON snippet
 > and output in this document comes from a real smoke run (isolated workspace +

@@ -1,4 +1,4 @@
-> [English](KEY_HIERARCHY.md) | **中文**
+> [English](https://github.com/cuihairu/persona/blob/main/docs/KEY_HIERARCHY.md) | **中文**
 
 # 密钥层级
 

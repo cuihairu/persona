@@ -1,4 +1,4 @@
-> [English](REPRODUCIBLE_BUILDS.md) | **中文**
+> [English](https://github.com/cuihairu/persona/blob/main/docs/REPRODUCIBLE_BUILDS.md) | **中文**
 
 # 可复现构建（Reproducible Builds）
 

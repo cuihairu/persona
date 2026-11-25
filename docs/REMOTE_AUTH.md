@@ -1,6 +1,6 @@
 # Remote Authentication (SRP-like Abstraction)
 
-> [English](REMOTE_AUTH.md) | [中文](REMOTE_AUTH.zh.md)
+> [English](REMOTE_AUTH.md) | [中文](https://github.com/cuihairu/persona/blob/main/docs/REMOTE_AUTH.zh.md)
 
 Persona prepares for a future client-server sync model by exposing a protocol-agnostic abstraction that mirrors the Secure Remote Password (SRP) workflow. The goal is to avoid sending master passwords to the server while still deriving a mutually authenticated session key.
 

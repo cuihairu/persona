@@ -118,7 +118,7 @@ losing either loses the backup (no custody, no reset).
 ## Supply chain security
 
 persona continuously checks its own dependency chain — tools and runbooks in
-the [Supply Chain Security Guide](https://github.com/cuihairu/persona/blob/main/docs/SUPPLY_CHAIN_SECURITY.md):
+the [Supply Chain Security Guide](../reference/SUPPLY_CHAIN_SECURITY):
 
 - **CI gates**: `cargo deny check` (RustSec advisories + license allowlist +
   banned dependencies + source checks) and `cargo audit` run on every push /
@@ -128,7 +128,7 @@ the [Supply Chain Security Guide](https://github.com/cuihairu/persona/blob/main/
 - **Lockfiles**: Cargo.lock and pnpm-lock.yaml are committed (the docs
   sub-site installs standalone with npm); builds are reproducible, and image
   base layers are digest-pinned
-  ([Reproducible Builds](https://github.com/cuihairu/persona/blob/main/docs/REPRODUCIBLE_BUILDS.md)).
+  ([Reproducible Builds](../reference/REPRODUCIBLE_BUILDS)).
 - **Review cadence**: RustSec and npm audit re-checked monthly; KDF
   parameters, backup encryption, and the threat model re-reviewed quarterly;
   every deny.toml exemption must state its reason in the PR.
@@ -153,14 +153,14 @@ exists).
 
 ## Deep dives
 
-- [Threat Model and Periodic Security Reviews](https://github.com/cuihairu/persona/blob/main/docs/THREAT_MODEL.md)
+- [Threat Model and Periodic Security Reviews](../reference/THREAT_MODEL)
   — assets, boundaries, the full STRIDE table, per-endpoint threat
   registrations
-- [Supply Chain Security Guide](https://github.com/cuihairu/persona/blob/main/docs/SUPPLY_CHAIN_SECURITY.md)
+- [Supply Chain Security Guide](../reference/SUPPLY_CHAIN_SECURITY)
   — toolchain, license policy, vulnerability handling process
-- [Key Hierarchy](https://github.com/cuihairu/persona/blob/main/docs/KEY_HIERARCHY.md)
+- [Key Hierarchy](../reference/KEY_HIERARCHY)
   — key derivation and wrapping layers
-- [E2EE Sync Design](https://github.com/cuihairu/persona/blob/main/docs/E2EE_SYNC_DESIGN.md)
+- [E2EE Sync Design](../reference/E2EE_SYNC_DESIGN)
   — keys and threat registrations on the sync path
 
 ## Related pages

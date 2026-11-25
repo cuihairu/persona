@@ -1,6 +1,6 @@
 # Connect Local Automation Endpoint — Design Draft (Stage 0)
 
-> [English](CONNECT_AUTOMATION_DESIGN.md) | [中文](CONNECT_AUTOMATION_DESIGN.zh.md)
+> [English](CONNECT_AUTOMATION_DESIGN.md) | [中文](https://github.com/cuihairu/persona/blob/main/docs/CONNECT_AUTOMATION_DESIGN.zh.md)
 
 > Status: **Design draft; stages 1–4 are all landed (2026-09)**. This is the kickoff document for the TODO item
 > "Connect-like local-first secrets automation endpoint" (ROADMAP Milestone 6), modeling the shape of
@@ -12,7 +12,7 @@
 >
 > Related docs: [`ROADMAP.md`](./ROADMAP.md) Milestone 6, [`E2EE_SYNC_DESIGN.md`](./E2EE_SYNC_DESIGN.md)
 > (its sister draft on the same track — this endpoint does **not** depend on the sync track and can land on its own),
-> [`THREAT_MODEL.md`](./THREAT_MODEL.md), [`BOUNDARY.md`](../BOUNDARY.md)
+> [`THREAT_MODEL.md`](./THREAT_MODEL.md), [`BOUNDARY.md`](https://github.com/cuihairu/persona/blob/main/BOUNDARY.md)
 > (automation-friendly access is inside the boundary). **Guide for external projects:
 > [`EXTERNAL_INTEGRATION.md`](./EXTERNAL_INTEGRATION.md)** (three-step onboarding,
 > measured response samples, token expiry/revocation semantics, permission boundaries, error code table; added 2026-10-12).

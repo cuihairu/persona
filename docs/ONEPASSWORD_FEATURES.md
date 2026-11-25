@@ -1,6 +1,6 @@
 # 1Password Feature Inventory (Reference)
 
-> [English](ONEPASSWORD_FEATURES.md) | [中文](ONEPASSWORD_FEATURES.zh.md)
+> [English](ONEPASSWORD_FEATURES.md) | [中文](https://github.com/cuihairu/persona/blob/main/docs/ONEPASSWORD_FEATURES.zh.md)
 
 This list captures the major features of 1Password grouped by domain, to guide Persona's roadmap and parity/gap analysis.
 

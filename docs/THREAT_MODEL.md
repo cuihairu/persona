@@ -1,6 +1,6 @@
 # Persona Threat Model and Periodic Security Review
 
-> [English](THREAT_MODEL.md) | [中文](THREAT_MODEL.zh.md)
+> [English](THREAT_MODEL.md) | [中文](https://github.com/cuihairu/persona/blob/main/docs/THREAT_MODEL.zh.md)
 
 This document defines the security boundary, principal threats, landed controls, and review mechanism for Persona's current mainline product. Scope follows the root `BOUNDARY.md`: Persona is a local-first, zero-knowledge identity-material manager, primarily protecting passwords, API keys, TOTP, SSH keys, browser fill data, and related metadata for the same user across different identity contexts.
 

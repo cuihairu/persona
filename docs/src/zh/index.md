@@ -49,4 +49,4 @@ features:
 - 技术架构 看分层结构与端到端加密同步的设计。
 - 安全设计 密钥层级、威胁模型与安全边界。
 - 项目结构 配置本地开发与浏览 monorepo 布局。
-- [工程文档](https://github.com/cuihairu/persona/tree/main/docs) E2EE 同步设计、威胁模型、可复现构建等深度文档。
+- [工程文档](../reference/) E2EE 同步设计、威胁模型、可复现构建等深度文档。

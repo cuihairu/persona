@@ -1,6 +1,6 @@
 # Persona Passkeys (WebAuthn) Design
 
-> [English](PASSKEYS_DESIGN.md) | [中文](PASSKEYS_DESIGN.zh.md)
+> [English](PASSKEYS_DESIGN.md) | [中文](https://github.com/cuihairu/persona/blob/main/docs/PASSKEYS_DESIGN.zh.md)
 
 Status: Design draft (pending review) · Date: 2026-09-13 · Roadmap: Milestone 4 "1Password Parity"
 

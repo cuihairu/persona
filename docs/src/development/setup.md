@@ -71,12 +71,12 @@ cargo clippy --all-targets -- -D warnings   # run again inside desktop/src-tauri
 
 - **Reproducible deb**: `scripts/build-repro.sh` (or add `--docker` to build
   inside the standard container). Details in
-  [REPRODUCIBLE_BUILDS.md](https://github.com/cuihairu/persona/blob/main/docs/REPRODUCIBLE_BUILDS.md).
+  [REPRODUCIBLE_BUILDS.md](../reference/REPRODUCIBLE_BUILDS).
 - **Server image**: `docker build -f docker/Dockerfile.server .`
 
 ## Next Steps
 
 - Project Structure — the monorepo layout and
   crate responsibilities
-- [Engineering docs](https://github.com/cuihairu/persona/tree/main/docs) — the
+- [Engineering docs](../reference/) — the
   full set of design documents

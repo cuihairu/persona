@@ -1,8 +1,8 @@
-> [English](EXTERNAL_INTEGRATION.md) | **中文**
+> [English](https://github.com/cuihairu/persona/blob/main/docs/EXTERNAL_INTEGRATION.md) | **中文**
 
 # 外部项目接入 Persona（External Integration）
 
-> **状态：当前现状（2026-10-12 实测）**。本文每一处 JSON / 输出均来自真实冒烟运行（隔离 workspace + `persona connect serve` + curl），非手写示意。设计背景见 [`CONNECT_AUTOMATION_DESIGN.md`](./CONNECT_AUTOMATION_DESIGN.md)，简版速查见 [`STORAGE_AND_SYNC.md`](./STORAGE_AND_SYNC.md#local-automation-connect-api)。
+> **状态：当前现状（2026-10-12 实测）**。本文每一处 JSON / 输出均来自真实冒烟运行（隔离 workspace + `persona connect serve` + curl），非手写示意。设计背景见 [`CONNECT_AUTOMATION_DESIGN.md`](https://github.com/cuihairu/persona/blob/main/docs/CONNECT_AUTOMATION_DESIGN.md)，简版速查见 [`STORAGE_AND_SYNC.md`](https://github.com/cuihairu/persona/blob/main/docs/STORAGE_AND_SYNC.md#local-automation-connect-api)。
 
 外部项目（CI 脚本、deploy 工具、其他本地服务）读取 Persona 保险库的**正式接口形态二选一**：
 
@@ -74,7 +74,7 @@ persona connect serve --unix-socket /run/user/1000/p.sock   # 显式 socket 路�
 
 保险库需处于解锁态——前台终端用 `--passphrase-env <VAR>` 指定读哪个环境变量
 （须已设且非空），桌面版在设置里开关。非交互解锁的完整说明见
-[`NON_INTERACTIVE_MODE.md`](./NON_INTERACTIVE_MODE.md)。
+[`NON_INTERACTIVE_MODE.md`](https://github.com/cuihairu/persona/blob/main/docs/NON_INTERACTIVE_MODE.md)。
 
 解锁会话会在空闲 `security.auto_lock_timeout` 秒后**自动上锁**（工作区
 `config.toml`，默认 `300`；**`0` = 永不**）。锁定期间数据面返回 `503`（见
@@ -283,9 +283,9 @@ curl -s -X POST -H "Authorization: Bearer $TOKEN" $B/items/<id>/totp
 
 ## 边界之外的形态
 
-- **`persona secrets`（CLI 直读）**：同机 shell/CI 不想起 HTTP 时用。引用语法 `IDENTITY/ITEM/FIELD`，四个子命令（run / resolve / k8s / terraform-external）见 [`STORAGE_AND_SYNC.md`](./STORAGE_AND_SYNC.md#secrets-automation-direct-cli-read)。
-- **远程 persona-server**：跨机器读取是 **E2EE 同步客户端**领域（[`E2EE_SYNC_DESIGN.md`](./E2EE_SYNC_DESIGN.md) / [`REMOTE_AUTH.md`](./REMOTE_AUTH.md)），不是普通 REST——Connect API 的 token/端点模型**不适用**于远程，勿混用。
-- **浏览器扩展**：走 Native Messaging Host 桥（[`BRIDGE_PROTOCOL.md`](./BRIDGE_PROTOCOL.md)），**不经** Connect API。
+- **`persona secrets`（CLI 直读）**：同机 shell/CI 不想起 HTTP 时用。引用语法 `IDENTITY/ITEM/FIELD`，四个子命令（run / resolve / k8s / terraform-external）见 [`STORAGE_AND_SYNC.md`](https://github.com/cuihairu/persona/blob/main/docs/STORAGE_AND_SYNC.md#secrets-automation-direct-cli-read)。
+- **远程 persona-server**：跨机器读取是 **E2EE 同步客户端**领域（[`E2EE_SYNC_DESIGN.md`](https://github.com/cuihairu/persona/blob/main/docs/E2EE_SYNC_DESIGN.md) / [`REMOTE_AUTH.md`](https://github.com/cuihairu/persona/blob/main/docs/REMOTE_AUTH.md)），不是普通 REST——Connect API 的 token/端点模型**不适用**于远程，勿混用。
+- **浏览器扩展**：走 Native Messaging Host 桥（[`BRIDGE_PROTOCOL.md`](https://github.com/cuihairu/persona/blob/main/docs/BRIDGE_PROTOCOL.md)），**不经** Connect API。
 
 ## 开放问题（诚实版）
 

@@ -1,4 +1,4 @@
-> [English](BIOMETRIC_HOOKS.md) | **中文**
+> [English](https://github.com/cuihairu/persona/blob/main/docs/BIOMETRIC_HOOKS.md) | **中文**
 
 # 生物识别解锁 Hooks
 

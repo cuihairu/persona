@@ -24,7 +24,7 @@ SQLite**——对元数据也保密的场景请用 Travel Mode 或整盘加密�
 **不能。** 同步中继只见密文操作日志、设备信封与时间戳；凭据内容
 （URL、用户名、密码、TOTP）全部在客户端加解密。服务器操作者能做的
 只有 DoS（拒绝转发），做不到窃取——详细边界见
-[THREAT_MODEL](https://github.com/cuihairu/persona/blob/main/docs/THREAT_MODEL.md)。
+[THREAT_MODEL](../../reference/THREAT_MODEL)。
 
 ## 支持哪些平台？
 

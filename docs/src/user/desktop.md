@@ -101,7 +101,7 @@ Boundaries (recorded honestly):
   refusal with an audit trail when rate limits are hit).
 - **Connect automation** (in Settings): a local HTTP API for scripts to read
   credentials, passphrase-protected + shown in cleartext exactly once, see
-  [CONNECT_AUTOMATION_DESIGN.md](https://github.com/cuihairu/persona/blob/main/docs/CONNECT_AUTOMATION_DESIGN.md).
+  [CONNECT_AUTOMATION_DESIGN.md](../reference/CONNECT_AUTOMATION_DESIGN).
 
 ## Other Panels
 
@@ -110,8 +110,8 @@ Boundaries (recorded honestly):
   5-character hash prefix leaves the machine).
 - **Passkeys**: local passkey provider panel and request approval.
 - **Wallets**: crypto-asset panel (shipped, M5 graduation track; key hierarchy
-  and decisions in [WALLET_DESIGN](https://github.com/cuihairu/persona/blob/main/docs/WALLET_DESIGN.md)).
+  and decisions in [WALLET_DESIGN](../reference/WALLET_DESIGN)).
 
 For unified security semantics and threat boundaries, see
 Security Features and
-[THREAT_MODEL](https://github.com/cuihairu/persona/blob/main/docs/THREAT_MODEL.md).
+[THREAT_MODEL](../reference/THREAT_MODEL).

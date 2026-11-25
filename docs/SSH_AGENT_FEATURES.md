@@ -1,6 +1,6 @@
 # Persona SSH Agent - Feature Reference
 
-> [English](SSH_AGENT_FEATURES.md) | [中文](SSH_AGENT_FEATURES.zh.md)
+> [English](SSH_AGENT_FEATURES.md) | [中文](https://github.com/cuihairu/persona/blob/main/docs/SSH_AGENT_FEATURES.zh.md)
 
 ## Overview
 
@@ -621,7 +621,7 @@ cargo check -p persona-ssh-agent
 - [SSH Agent Protocol](https://datatracker.ietf.org/doc/html/draft-miller-ssh-agent-14)
 - [OpenSSH Agent Source](https://github.com/openssh/openssh-portable/blob/master/authfd.c)
 - [ed25519-dalek Documentation](https://docs.rs/ed25519-dalek/)
-- [Persona Project README](../README.md)
+- [Persona Project README](https://github.com/cuihairu/persona/blob/main/README.md)
 
 ## Changelog
 

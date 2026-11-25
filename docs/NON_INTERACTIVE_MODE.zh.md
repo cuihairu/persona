@@ -1,4 +1,4 @@
-> [English](NON_INTERACTIVE_MODE.md) | **中文**
+> [English](https://github.com/cuihairu/persona/blob/main/docs/NON_INTERACTIVE_MODE.md) | **中文**
 
 # CLI 非交互模式指南
 
@@ -446,9 +446,9 @@ persona add --name "Test" --email "test@example.com" --yes
 
 ## 相关文档
 
-- [威胁模型](./THREAT_MODEL.md)
-- [自托管服务器](./SELF_HOST_SERVER.md)
-- [README](../README.md) – CLI 用法示例（每个命令的非交互标志）
+- [威胁模型](https://github.com/cuihairu/persona/blob/main/docs/THREAT_MODEL.md)
+- [自托管服务器](https://github.com/cuihairu/persona/blob/main/docs/SELF_HOST_SERVER.md)
+- [README](https://github.com/cuihairu/persona/blob/main/README.md) – CLI 用法示例（每个命令的非交互标志）
 
 ---
 

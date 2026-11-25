@@ -1,6 +1,6 @@
 # 安全设计
 
-本文描述 Persona 当前实现应遵循的安全设计约束。更完整的资产、信任边界和 STRIDE 分析见 [威胁模型与周期性安全审查](https://github.com/cuihairu/persona/blob/main/docs/THREAT_MODEL.md)。
+本文描述 Persona 当前实现应遵循的安全设计约束。更完整的资产、信任边界和 STRIDE 分析见 [威胁模型与周期性安全审查](../../reference/THREAT_MODEL)。
 
 ## 分层安全边界
 

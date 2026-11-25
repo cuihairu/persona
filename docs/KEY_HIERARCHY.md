@@ -1,6 +1,6 @@
 # Key Hierarchy
 
-> [English](KEY_HIERARCHY.md) | [中文](KEY_HIERARCHY.zh.md)
+> [English](KEY_HIERARCHY.md) | [中文](https://github.com/cuihairu/persona/blob/main/docs/KEY_HIERARCHY.zh.md)
 
 Persona encrypts each stored item with its own random key and wraps that item key with the master key derived from the user's password. This minimizes blast radius: a compromised item key cannot decrypt any other secret.
 

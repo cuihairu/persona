@@ -60,7 +60,7 @@ but the device's local vault is not lost.
 The desktop app must be running (Native Messaging bridge); check that the
 extension-desktop pairing exists (re-pairing rebuilds it). For protocol details,
 see
-[BRIDGE_PROTOCOL.md](https://github.com/cuihairu/persona/blob/main/docs/BRIDGE_PROTOCOL.md).
+[BRIDGE_PROTOCOL.md](../reference/BRIDGE_PROTOCOL).
 
 **The SSH Agent refuses to sign**
 First check whether a policy is blocking it: known_hosts verification,
@@ -75,5 +75,5 @@ Not verified on real hardware and support is not claimed; the CLI presumably
 compiles but has no test backing. The desktop deb is Linux-only.
 
 For more background:
-[STORAGE_AND_SYNC.md failure-consequences quick reference](https://github.com/cuihairu/persona/blob/main/docs/STORAGE_AND_SYNC.md),
-[THREAT_MODEL](https://github.com/cuihairu/persona/blob/main/docs/THREAT_MODEL.md).
+[STORAGE_AND_SYNC.md failure-consequences quick reference](../reference/STORAGE_AND_SYNC),
+[THREAT_MODEL](../reference/THREAT_MODEL).

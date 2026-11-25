@@ -1,6 +1,6 @@
 # Uninstall and Data Retention (Uninstall Keeps Data; Reinstall Picks Up Where You Left Off)
 
-> [English](UNINSTALL.md) | [中文](UNINSTALL.zh.md)
+> [English](UNINSTALL.md) | [中文](https://github.com/cuihairu/persona/blob/main/docs/UNINSTALL.zh.md)
 
 Status: verified and closed 2026-09-28. The promise in one sentence: **uninstalling or
 upgrading on any platform never deletes vault data; after reinstalling, unlock with the

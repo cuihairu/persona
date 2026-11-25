@@ -1,6 +1,6 @@
 # Supply Chain Security Check Guide
 
-> [English](SUPPLY_CHAIN_SECURITY.md) | [中文](SUPPLY_CHAIN_SECURITY.zh.md)
+> [English](SUPPLY_CHAIN_SECURITY.md) | [中文](https://github.com/cuihairu/persona/blob/main/docs/SUPPLY_CHAIN_SECURITY.zh.md)
 
 This project runs supply chain security checks to ensure the security, license compliance, and source trustworthiness of all dependencies.
 

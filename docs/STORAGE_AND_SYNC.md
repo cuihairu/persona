@@ -1,6 +1,6 @@
 # Storage and Sync Modes (User Guide)
 
-> [English](STORAGE_AND_SYNC.md) | [中文](STORAGE_AND_SYNC.zh.md)
+> [English](STORAGE_AND_SYNC.md) | [中文](https://github.com/cuihairu/persona/blob/main/docs/STORAGE_AND_SYNC.zh.md)
 
 Persona is **local-first**: your vault is always a single encrypted SQLite file on
 one device, and every network capability is an **optional add-on**. This guide

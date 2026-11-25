@@ -1,6 +1,6 @@
 # Passkey Gate Audit (Batch E Verification)
 
-> [English](PASSKEY_GATE_AUDIT.md) | [中文](PASSKEY_GATE_AUDIT.zh.md)
+> [English](PASSKEY_GATE_AUDIT.md) | [中文](https://github.com/cuihairu/persona/blob/main/docs/PASSKEY_GATE_AUDIT.zh.md)
 
 Audit date: 2026-10-04. Scope: the passkey/WebAuthn capabilities of the browser-extension
 track (TODO batch E: "Passkey gap verification + end-to-end tests"), checked against the

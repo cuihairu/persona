@@ -64,4 +64,4 @@ Once the rule layer lands, the configurable items in the "landed" table above be
 the rule engine's **built-in default set**, and the rule engine itself stays inside
 core, on the side that cannot bypass hard gates.
 For the implementation cadence, see the
-[roadmap](https://github.com/cuihairu/persona/blob/main/docs/ROADMAP.md).
+[roadmap](../reference/ROADMAP).

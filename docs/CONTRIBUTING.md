@@ -1,6 +1,6 @@
 # Contributing Guide
 
-> [English](CONTRIBUTING.md) | [中文](CONTRIBUTING.zh.md)
+> [English](CONTRIBUTING.md) | [中文](https://github.com/cuihairu/persona/blob/main/docs/CONTRIBUTING.zh.md)
 
 Thanks for helping improve Persona! This guide captures the conventions we expect contributors to follow so reviews stay fast and predictable.
 

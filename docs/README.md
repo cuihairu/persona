@@ -1,14 +1,14 @@
 # Persona Docs
 
-> [English](README.md) | [中文](README.zh.md)
+> [English](README.md) | [中文](https://github.com/cuihairu/persona/blob/main/docs/README.zh.md)
 
 **Master your digital identity. Switch freely with one click.**
 
-This directory is the entry point for Persona's design and security documentation. Milestones: [ROADMAP](./ROADMAP.md). Daily tasks: [TODO](../todo.md) at the repo root.
+This directory is the entry point for Persona's design and security documentation. Milestones: [ROADMAP](./ROADMAP.md). Daily tasks: [TODO](https://github.com/cuihairu/persona/blob/main/todo.md) at the repo root.
 
 ## Product & Boundaries
 
-- [BOUNDARY](../BOUNDARY.md) – Product boundaries: definitions of Principal / Identity / identity material, and where the wallet sits (deferred: reach 1Password-grade password features first, then the wallet)
+- [BOUNDARY](https://github.com/cuihairu/persona/blob/main/BOUNDARY.md) – Product boundaries: definitions of Principal / Identity / identity material, and where the wallet sits (deferred: reach 1Password-grade password features first, then the wallet)
 - [ROADMAP](./ROADMAP.md) – Milestones and priority policy
 - [MONOREPO](./MONOREPO.md) – Monorepo layout and toolchain
 
@@ -56,4 +56,4 @@ This directory is the entry point for Persona's design and security documentatio
 
 ---
 
-_The early scenario-analysis docs (scenarios-analysis / security-requirements) are no longer maintained separately; their content has been merged into [BOUNDARY](../BOUNDARY.md) and [THREAT_MODEL](./THREAT_MODEL.md)._
+_The early scenario-analysis docs (scenarios-analysis / security-requirements) are no longer maintained separately; their content has been merged into [BOUNDARY](https://github.com/cuihairu/persona/blob/main/BOUNDARY.md) and [THREAT_MODEL](./THREAT_MODEL.md)._

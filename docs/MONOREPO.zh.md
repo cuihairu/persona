@@ -1,4 +1,4 @@
-> [English](MONOREPO.md) | **中文**
+> [English](https://github.com/cuihairu/persona/blob/main/docs/MONOREPO.md) | **中文**
 
 # Persona 单体仓库
 

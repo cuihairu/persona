@@ -159,7 +159,7 @@ rows only; attachments ride the backup channel).
 | `ghcr.io/cuihairu/persona-relay`  | Sync + pairing-mailbox thin shell: the minimal surface when you only want a relay |
 
 - Self-hosting persona-server (compose / cargo / Docker): see
-  [SELF_HOST_SERVER.md](https://github.com/cuihairu/persona/blob/main/docs/SELF_HOST_SERVER.md).
+  [SELF_HOST_SERVER.md](../reference/SELF_HOST_SERVER).
 - Running persona-relay (env vars, health check, ports): see
   [README-relay.md](https://github.com/cuihairu/persona/blob/main/README-relay.md).
 
@@ -168,15 +168,15 @@ cloud transport, just pick a folder) — one protocol, switch any time.
 
 ## Deep dives
 
-- [E2EE Sync Design](https://github.com/cuihairu/persona/blob/main/docs/E2EE_SYNC_DESIGN.md)
+- [E2EE Sync Design](../reference/E2EE_SYNC_DESIGN)
   — full design: key hierarchy, SRP auth, snapshot protocol, threat
   registrations
-- [Cross-device sync (the default)](https://github.com/cuihairu/persona/blob/main/docs/sync-group-mode.md)
+- [Cross-device sync (the default)](../reference/sync-group-mode)
   — pairing protocol and implementation ledger
-- [Cloud-drive sync transport](https://github.com/cuihairu/persona/blob/main/docs/CLOUD_DRIVE_SYNC.md)
+- [Cloud-drive sync transport](../reference/CLOUD_DRIVE_SYNC)
   — folder layout and cursor design of the cloud transport
 - [Sync API](../api/sync) — the `/api/v1/sync/*` endpoint reference
-- [SELF_HOST_SERVER.md](https://github.com/cuihairu/persona/blob/main/docs/SELF_HOST_SERVER.md) /
+- [SELF_HOST_SERVER.md](../reference/SELF_HOST_SERVER) /
   [README-relay.md](https://github.com/cuihairu/persona/blob/main/README-relay.md)
   — runbooks for the two self-hostable images
 

@@ -55,7 +55,7 @@ Identity: OpenSource
   （同一 core `suggest()`；映射损坏时静默降级为普通建议）。
 
 完整设计见
-[CONTEXT_AWARE_DESIGN](https://github.com/cuihairu/persona/blob/main/docs/CONTEXT_AWARE_DESIGN.md)
+[CONTEXT_AWARE_DESIGN](../../reference/CONTEXT_AWARE_DESIGN)
 （阶段 1–4 已实现）。
 在此之前，机制只有一个硬规则：**上下文只会影响建议与默认值，永远不会绕过
 策略放行一个动作**。

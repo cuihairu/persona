@@ -1,4 +1,4 @@
-> [English](sync-group-mode.md) | **中文**
+> [English](https://github.com/cuihairu/persona/blob/main/docs/sync-group-mode.md) | **中文**
 
 # 跨设备同步(默认同步方式)
 

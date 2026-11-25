@@ -1,6 +1,6 @@
 # Biometric Unlock Design (unlocking the vault via OS features)
 
-> [English](biometric-unlock-design.md) | [中文](biometric-unlock-design.zh.md)
+> [English](biometric-unlock-design.md) | [中文](https://github.com/cuihairu/persona/blob/main/docs/biometric-unlock-design.zh.md)
 
 Status: design finalized 2026-09-26 + architecture landed; the hardware-bound
 routes for both macOS (§5.2) and Windows (§6.3) are **implemented, pending an

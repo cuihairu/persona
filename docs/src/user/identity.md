@@ -78,14 +78,14 @@ has no permission or security meaning; red or yellow, it changes nothing.
 
 ## What an Identity Does **Not** Do (Common Misconceptions)
 
-| Misconception                                                    | Fact                                                                                                                                                                                                                                                                   |
-| ---------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Switching identity = switching encryption space                  | No. Each credential is encrypted with its own item key, which is then wrapped by the master key derived from the master password (see [Key Hierarchy](https://github.com/cuihairu/persona/blob/main/docs/KEY_HIERARCHY.md)). Identities play no part in key derivation |
-| Switching identity requires re-unlocking / a new master password | No. Unlock state is determined by the master password; switching identity neither unlocks nor re-encrypts                                                                                                                                                              |
-| An identity carries SSH / GPG private keys                       | No. `ssh_key` / `gpg_key` are just note text. Private keys are separate credential entries (`CredentialType::SshKey`), provided on demand by the SSH Agent                                                                                                             |
-| The SSH Agent only offers the current identity's keys            | No. The `--identity` parameter of `persona ssh` is annotated in the code as "reserved for future use" and currently does not filter                                                                                                                                    |
-| `identities.is_active` is the current identity                   | No. The field exists but no query filters on it. The current identity is `workspaces.active_identity_id`                                                                                                                                                               |
-| An identity has a remote account / login session                 | No. An identity is purely local data. Remote capabilities (sync, server side) are configured separately via `persona connect` and are unrelated to identities                                                                                                          |
+| Misconception                                                    | Fact                                                                                                                                                                                                                          |
+| ---------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Switching identity = switching encryption space                  | No. Each credential is encrypted with its own item key, which is then wrapped by the master key derived from the master password (see [Key Hierarchy](../reference/KEY_HIERARCHY)). Identities play no part in key derivation |
+| Switching identity requires re-unlocking / a new master password | No. Unlock state is determined by the master password; switching identity neither unlocks nor re-encrypts                                                                                                                     |
+| An identity carries SSH / GPG private keys                       | No. `ssh_key` / `gpg_key` are just note text. Private keys are separate credential entries (`CredentialType::SshKey`), provided on demand by the SSH Agent                                                                    |
+| The SSH Agent only offers the current identity's keys            | No. The `--identity` parameter of `persona ssh` is annotated in the code as "reserved for future use" and currently does not filter                                                                                           |
+| `identities.is_active` is the current identity                   | No. The field exists but no query filters on it. The current identity is `workspaces.active_identity_id`                                                                                                                      |
+| An identity has a remote account / login session                 | No. An identity is purely local data. Remote capabilities (sync, server side) are configured separately via `persona connect` and are unrelated to identities                                                                 |
 
 ## Why There Is No Default Identity on First Launch
 
@@ -169,4 +169,4 @@ credential contents are unrecoverable — run `persona export` before deleting.
 - [Quick Start](./quick-start) — create a vault, create your first identity
 - [Desktop App](./desktop) — the switcher and the stats page
 - [Core Features](../overview/features) — identity-scoped views
-- [Key Hierarchy](https://github.com/cuihairu/persona/blob/main/docs/KEY_HIERARCHY.md) — which layer the encryption actually lives in
+- [Key Hierarchy](../reference/KEY_HIERARCHY) — which layer the encryption actually lives in

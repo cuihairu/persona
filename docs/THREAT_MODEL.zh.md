@@ -1,4 +1,4 @@
-> [English](THREAT_MODEL.md) | **中文**
+> [English](https://github.com/cuihairu/persona/blob/main/docs/THREAT_MODEL.md) | **中文**
 
 # Persona 威胁模型与周期性安全审查
 
@@ -354,7 +354,7 @@ BTC（BIP-143 P2WPKH）/ ETH（EIP-155/1559）/ Solana 派生与签名已落地�
 私钥/xprv）是**最高级资产**：丢失不可逆（无私钥即永久失款）、无争议/回滚
 机制。**实验轨道声明：本节不享受主线安全承诺，不能用于生产级资金安全**——
 与「非目标」第 4 条、「当前接受的限制」最后一条同口径；毕业（毕业条件与
-硬件钱包等开放问题）见 [WALLET_DESIGN.md](WALLET_DESIGN.md)。
+硬件钱包等开放问题）见 [WALLET_DESIGN.md](https://github.com/cuihairu/persona/blob/main/docs/WALLET_DESIGN.md)。
 
 **密钥层级与口令隔离**（详见 WALLET_DESIGN.md §2/§3）：助记词与 xprv **双
 包装**（Argon2id + AES-256-GCM，同一钱包口令、各自独立 salt/nonce，都能独

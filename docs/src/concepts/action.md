@@ -34,7 +34,7 @@ authentication):
 | Password generation | `generate_password` | authenticated session; pure generation, nothing stored                                      |
 
 For protocol details, see
-[BRIDGE_PROTOCOL](https://github.com/cuihairu/persona/blob/main/docs/BRIDGE_PROTOCOL.md).
+[BRIDGE_PROTOCOL](../reference/BRIDGE_PROTOCOL).
 
 Local actions (entry points wired directly to core):
 

@@ -6,6 +6,6 @@
 > (user/concepts/development) and by
 > [BOUNDARY.md](https://github.com/cuihairu/persona/blob/main/BOUNDARY.md)
 > and
-> [THREAT_MODEL.md](https://github.com/cuihairu/persona/blob/main/docs/THREAT_MODEL.md)
+> [THREAT_MODEL.md](../reference/THREAT_MODEL)
 > — this page is kept for the record only. The full Chinese original lives at
 > 场景分析.

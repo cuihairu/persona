@@ -1,16 +1,16 @@
-> [English](E2EE_SYNC_DESIGN.md) | **中文**
+> [English](https://github.com/cuihairu/persona/blob/main/docs/E2EE_SYNC_DESIGN.md) | **中文**
 
 # E2EE 同步设计稿（阶段 0）
 
 > 状态：**设计稿，阶段 1–4 均已落地（2026-09，逐阶段状态见 §11 表）**。本文是
 > TODO「第 3 步」（Connect endpoint + E2EE sync + SRP 设备认证）的开工文档：把四个
 > 必须先拍板的设计决策定下来，并给出实施阶段映射与威胁模型登记骨架。当前活跃的
-> 后续批次是跨设备同步（[`sync-group-mode.md`](./sync-group-mode.md)）——S2 把现有
+> 后续批次是跨设备同步（[`sync-group-mode.md`](https://github.com/cuihairu/persona/blob/main/docs/sync-group-mode.md)）——S2 把现有
 > 快照+LWW oplog 管线向指令流（op_id 幂等+位点续传）收敛。
 >
-> 相关文档：[`ROADMAP.md`](./ROADMAP.md) Milestone 6、[`REMOTE_AUTH.md`](./REMOTE_AUTH.md)
-> （既有 SRP 抽象与 mock）、[`STORAGE_AND_SYNC.md`](./STORAGE_AND_SYNC.md)（用户视角
-> 的现状）、[`THREAT_MODEL.md`](./THREAT_MODEL.md)（「备份保管端点」与「Travel Mode」
+> 相关文档：[`ROADMAP.md`](https://github.com/cuihairu/persona/blob/main/docs/ROADMAP.md) Milestone 6、[`REMOTE_AUTH.md`](https://github.com/cuihairu/persona/blob/main/docs/REMOTE_AUTH.md)
+> （既有 SRP 抽象与 mock）、[`STORAGE_AND_SYNC.md`](https://github.com/cuihairu/persona/blob/main/docs/STORAGE_AND_SYNC.md)（用户视角
+> 的现状）、[`THREAT_MODEL.md`](https://github.com/cuihairu/persona/blob/main/docs/THREAT_MODEL.md)（「备份保管端点」与「Travel Mode」
 > 的诚实边界先例）。
 
 ## 1. 目标与非目标

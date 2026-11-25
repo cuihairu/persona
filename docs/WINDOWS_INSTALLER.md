@@ -1,6 +1,6 @@
 # Windows installer and upgrade flow (NSIS)
 
-> [English](WINDOWS_INSTALLER.md) | [中文](WINDOWS_INSTALLER.zh.md)
+> [English](WINDOWS_INSTALLER.md) | [中文](https://github.com/cuihairu/persona/blob/main/docs/WINDOWS_INSTALLER.zh.md)
 
 Status: landed 2026-09-25. Configuration lives in `desktop/src-tauri/tauri.conf.json`
 (`bundle.windows.nsis`), the custom template in `desktop/src-tauri/nsis/installer.nsi`,

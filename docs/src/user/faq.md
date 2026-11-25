@@ -30,7 +30,7 @@ Server when you need them.
 envelopes, and timestamps; credential content (URL, username, password, TOTP) is
 all encrypted and decrypted on the client. A server operator can only DoS
 (refuse to forward) — theft is impossible. For the detailed boundaries, see
-[THREAT_MODEL](https://github.com/cuihairu/persona/blob/main/docs/THREAT_MODEL.md).
+[THREAT_MODEL](../reference/THREAT_MODEL).
 
 ## Which platforms are supported?
 

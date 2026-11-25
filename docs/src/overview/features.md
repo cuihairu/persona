@@ -3,7 +3,7 @@
 Persona's feature surface revolves around one principle: **sensitive data is decrypted only
 on your devices**. Below is the list of currently implemented capabilities — we make no
 claims about unimplemented features; planned work lives in the
-[roadmap](https://github.com/cuihairu/persona/blob/main/docs/ROADMAP.md).
+[roadmap](../reference/ROADMAP).
 
 ## Credentials and Identity Vaults
 
@@ -45,7 +45,7 @@ claims about unimplemented features; planned work lives in the
   locally.
 - **Reproducible builds**: deb artifacts are byte-for-byte reproducible on the same
   machine, with the build container pinned (see
-  [REPRODUCIBLE_BUILDS.md](https://github.com/cuihairu/persona/blob/main/docs/REPRODUCIBLE_BUILDS.md)).
+  [REPRODUCIBLE_BUILDS.md](../reference/REPRODUCIBLE_BUILDS)).
 
 ## Sync and Backup (All Optional)
 
@@ -64,4 +64,4 @@ claims about unimplemented features; planned work lives in the
   password); self-hosted users can keep full-vault snapshots off-site.
 
 For boundaries and the threat model, see
-[THREAT_MODEL.md](https://github.com/cuihairu/persona/blob/main/docs/THREAT_MODEL.md).
+[THREAT_MODEL.md](../reference/THREAT_MODEL).

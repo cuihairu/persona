@@ -1,4 +1,4 @@
-> [English](SELF_HOST_SERVER.md) | **中文**
+> [English](https://github.com/cuihairu/persona/blob/main/docs/SELF_HOST_SERVER.md) | **中文**
 
 # 自托管 persona-server（一键起）
 

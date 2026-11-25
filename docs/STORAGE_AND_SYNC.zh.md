@@ -1,4 +1,4 @@
-> [English](STORAGE_AND_SYNC.md) | **中文**
+> [English](https://github.com/cuihairu/persona/blob/main/docs/STORAGE_AND_SYNC.md) | **中文**
 
 # 存储与同步模式（用户指南）
 
@@ -6,8 +6,8 @@ Persona 是**本地优先**的：你的密码库永远是一台设备上的一�
 联网能力全部是**可选附件**。本文说明数据实际放在哪、有哪些同步/备份选项、
 各自的配置方法与安全边界。
 
-> 工程视角的架构设计见 [`CLIENT_COMMUNICATION_ARCHITECTURE.md`](./CLIENT_COMMUNICATION_ARCHITECTURE.md)
-> （愿景设计稿）与 [`THREAT_MODEL.md`](./THREAT_MODEL.md)（威胁与不宣称事项）。
+> 工程视角的架构设计见 [`CLIENT_COMMUNICATION_ARCHITECTURE.md`](https://github.com/cuihairu/persona/blob/main/docs/CLIENT_COMMUNICATION_ARCHITECTURE.md)
+> （愿景设计稿）与 [`THREAT_MODEL.md`](https://github.com/cuihairu/persona/blob/main/docs/THREAT_MODEL.md)（威胁与不宣称事项）。
 
 ## 总览：存储与同步模式
 
@@ -36,7 +36,7 @@ Persona 是**本地优先**的：你的密码库永远是一台设备上的一�
 | `config.toml`                            | CLI 配置                                | **明文，不含密钥**                                                           |
 
 密钥层级：每条凭据一个随机 item key（AES-256-GCM 加密载荷），item key 由
-主密码派生的 master key 包裹——见 [`KEY_HIERARCHY.md`](./KEY_HIERARCHY.md)。
+主密码派生的 master key 包裹——见 [`KEY_HIERARCHY.md`](https://github.com/cuihairu/persona/blob/main/docs/KEY_HIERARCHY.md)。
 主密码不在任何文件里（验证用 Argon2 哈希）；启用指纹解锁后主密码托管进
 OS 钥匙串（service 名 `persona-biometric`，详见 THREAT_MODEL「Biometric
 Unlock」一节的固有暴露说明）。
@@ -312,7 +312,7 @@ server 传输的差异（无物理压缩、每分片水位游标）。桌面接�
   手动）、网盘冷备（密文成品手动拷贝）。
 - 把一台设备的库恢复成另一台的备份 = **整库替换**（含现有数据被
   `.bak` 换下），不是合并；要增量保持一致请用凭据同步。
-- [`Travel Mode`](./THREAT_MODEL.md#travel-mode-travelpersenc-sidecar-2026-09)
+- [`Travel Mode`](https://github.com/cuihairu/persona/blob/main/docs/THREAT_MODEL.md#travel-mode-travelpersenc-sidecar-2026-09)
   （`persona travel …` / 桌面设置通用页 → 安全区）用于暂时把若干身份**整包移出**
   一台设备（加密 sidecar 随身带走），回来时口令恢复——多设备场景下
   控制单台设备数据暴露面的工具。Travel 激活期间凭据同步整体暂停
@@ -326,11 +326,11 @@ server 传输的差异（无物理压缩、每分片水位游标）。桌面接�
 离开本机。第二传输 `--unix-socket` 改服务 Unix domain socket（文件 `0600`
 
 - accept 层属主 uid 核对，不开 TCP 端口——精确语义见
-  [`EXTERNAL_INTEGRATION.md`](./EXTERNAL_INTEGRATION.md) 第 2 步；unix 平台
-  可用，Windows 报错并给出 TCP 替代指引）。详见 [`CONNECT_AUTOMATION_DESIGN.md`](./CONNECT_AUTOMATION_DESIGN.md)、
-  [THREAT_MODEL](./THREAT_MODEL.md#connect-local-automation-endpoint-127001-http-2026-09-secrets-automation)。
+  [`EXTERNAL_INTEGRATION.md`](https://github.com/cuihairu/persona/blob/main/docs/EXTERNAL_INTEGRATION.md) 第 2 步；unix 平台
+  可用，Windows 报错并给出 TCP 替代指引）。详见 [`CONNECT_AUTOMATION_DESIGN.md`](https://github.com/cuihairu/persona/blob/main/docs/CONNECT_AUTOMATION_DESIGN.md)、
+  [THREAT_MODEL](https://github.com/cuihairu/persona/blob/main/docs/THREAT_MODEL.md#connect-local-automation-endpoint-127001-http-2026-09-secrets-automation)。
   **外部项目接入指南（三步 + 实测响应样例 + 令牌到期/吊销语义 + 权限边界）
-  见 [`EXTERNAL_INTEGRATION.md`](./EXTERNAL_INTEGRATION.md)。**
+  见 [`EXTERNAL_INTEGRATION.md`](https://github.com/cuihairu/persona/blob/main/docs/EXTERNAL_INTEGRATION.md)。**
 
 **两步用起来：**
 
@@ -420,7 +420,7 @@ data "external" "persona" {
 
 - **只读**；与 Connect 共用解锁链（无已解锁会话时提示主密码）。CI 里配
   `PERSONA_WORKSPACE_PATH` + `PERSONA_MASTER_PASSWORD` 即全程非交互（见
-  [NON_INTERACTIVE_MODE](./NON_INTERACTIVE_MODE.md)）。
+  [NON_INTERACTIVE_MODE](https://github.com/cuihairu/persona/blob/main/docs/NON_INTERACTIVE_MODE.md)）。
 - 明文经 stdout / 环境变量交付——`resolve` 的重定向落盘、CI 日志回显
   属使用方责任；`run` 的注入只存在于子进程环境。
 - 银行卡类型没有 `secret` 别名（卡号/CVV 无单一"主秘密"），按具体字段

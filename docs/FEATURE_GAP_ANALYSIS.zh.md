@@ -1,4 +1,4 @@
-> [English](FEATURE_GAP_ANALYSIS.md) | **中文**
+> [English](https://github.com/cuihairu/persona/blob/main/docs/FEATURE_GAP_ANALYSIS.md) | **中文**
 
 # 功能差距分析（Persona vs 1Password）
 

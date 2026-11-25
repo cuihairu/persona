@@ -1,0 +1,1 @@
+../../E2EE_SYNC_DESIGN.md

@@ -1,4 +1,4 @@
-> [English](LOCAL_SERVICE.md) | **中文**
+> [English](https://github.com/cuihairu/persona/blob/main/docs/LOCAL_SERVICE.md) | **中文**
 
 # Persona 客户端通信与存储模式
 
@@ -106,8 +106,8 @@
 
 ## 参考
 
-- [`todo.md`](../todo.md) – 本文档及相关实现的跟踪任务。
-- [`docs/MONOREPO.md`](./MONOREPO.md) – 该服务将落位的整体仓库布局（可能在
+- [`todo.md`](https://github.com/cuihairu/persona/blob/main/todo.md) – 本文档及相关实现的跟踪任务。
+- [`docs/MONOREPO.md`](https://github.com/cuihairu/persona/blob/main/docs/MONOREPO.md) – 该服务将落位的整体仓库布局（可能在
   `core` + 一个新的 `service` crate 下）。
-- [`docs/REMOTE_AUTH.md`](./REMOTE_AUTH.md) – 架在该通信模型之上的远程认证
+- [`docs/REMOTE_AUTH.md`](https://github.com/cuihairu/persona/blob/main/docs/REMOTE_AUTH.md) – 架在该通信模型之上的远程认证
   流的补充细节。

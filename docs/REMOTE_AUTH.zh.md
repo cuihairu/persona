@@ -1,4 +1,4 @@
-> [English](REMOTE_AUTH.md) | **中文**
+> [English](https://github.com/cuihairu/persona/blob/main/docs/REMOTE_AUTH.md) | **中文**
 
 # 远程认证（SRP 风格抽象）
 

@@ -1,4 +1,4 @@
-> [English](CLIENT_COMMUNICATION_ARCHITECTURE.md) | **中文**
+> [English](https://github.com/cuihairu/persona/blob/main/docs/CLIENT_COMMUNICATION_ARCHITECTURE.md) | **中文**
 
 # 客户端通信架构
 
@@ -15,8 +15,8 @@
 > - **Connect 自动化**：`connect-server` 内嵌桌面宿主进程，绑定 `127.0.0.1`；
 > - **可选服务器**：persona-server（axum HTTP + 手写 Prometheus 文本指标）。
 >
-> 现状说明见 [`LOCAL_SERVICE.md`](./LOCAL_SERVICE.md) 与
-> [`STORAGE_AND_SYNC.md`](./STORAGE_AND_SYNC.md)。本文其余内容按设计稿阅读，
+> 现状说明见 [`LOCAL_SERVICE.md`](https://github.com/cuihairu/persona/blob/main/docs/LOCAL_SERVICE.md) 与
+> [`STORAGE_AND_SYNC.md`](https://github.com/cuihairu/persona/blob/main/docs/STORAGE_AND_SYNC.md)。本文其余内容按设计稿阅读，
 > 供未来实现对照。
 
 Persona 数字身份管理系统的**目标架构**是统一的客户端通信设计：设想所有客户端（CLI、桌面应用、浏览器扩展、SSH Agent）通过一套标准化的 IPC 协议与本地服务进行通信。该设计当前**未实现**（现状见上方 Status 块与 `LOCAL_SERVICE.md`）；下文以设计态措辞描述目标形态。

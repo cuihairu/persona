@@ -1,6 +1,6 @@
 # Persona Client Communication & Storage Modes
 
-> [English](LOCAL_SERVICE.md) | [中文](LOCAL_SERVICE.zh.md)
+> [English](LOCAL_SERVICE.md) | [中文](https://github.com/cuihairu/persona/blob/main/docs/LOCAL_SERVICE.zh.md)
 
 > **Status: target architecture (design), not the current state.** Today there is
 > no local service daemon and no IPC layer: the CLI links the core library and
@@ -89,6 +89,6 @@ This document explains how Persona’s clients (CLI, desktop/Tauri app, browser 
 
 ## References
 
-- [`todo.md`](../todo.md) – tracking tasks for this document and related implementation.
+- [`todo.md`](https://github.com/cuihairu/persona/blob/main/todo.md) – tracking tasks for this document and related implementation.
 - [`docs/MONOREPO.md`](./MONOREPO.md) – overall repo layout where this service will live (likely under `core` + a new `service` crate).
 - [`docs/REMOTE_AUTH.md`](./REMOTE_AUTH.md) – complementary details for remote authentication flows that sit on top of this communication model.

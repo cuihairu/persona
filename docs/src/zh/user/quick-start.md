@@ -33,7 +33,7 @@ pnpm --filter persona-desktop run dev
 ```
 
 > 构建细节与逐字节可复现口径见
-> [REPRODUCIBLE_BUILDS.md](https://github.com/cuihairu/persona/blob/main/docs/REPRODUCIBLE_BUILDS.md)。
+> [REPRODUCIBLE_BUILDS.md](../../reference/REPRODUCIBLE_BUILDS)。
 
 ### 首次使用
 
@@ -82,7 +82,7 @@ persona import vault-backup.persenc --decrypt --mode merge --backup   # 恢复
 
 自托管服务器用户还可用 `persona backup push` 把整库快照异地保管。
 完整实操（含网盘冷备警告、恢复语义）见
-[STORAGE_AND_SYNC.md 的备份章节](https://github.com/cuihairu/persona/blob/main/docs/STORAGE_AND_SYNC.md)。
+[STORAGE_AND_SYNC.md 的备份章节](../../reference/STORAGE_AND_SYNC)。
 
 ## 可选：多设备端到端加密同步
 
@@ -93,10 +93,10 @@ persona import vault-backup.persenc --decrypt --mode merge --backup   # 恢复
 
 离线并发修改同一凭据不会丢数据（双版本保留，由你裁决）。部署步骤、
 诚实边界与冲突裁决详见
-[STORAGE_AND_SYNC.md](https://github.com/cuihairu/persona/blob/main/docs/STORAGE_AND_SYNC.md)。
+[STORAGE_AND_SYNC.md](../../reference/STORAGE_AND_SYNC)。
 
 ## 下一步
 
 - 项目简介——问题边界与设计理念
 - 安全特性——密钥层级与加密体系
-- [工程文档](https://github.com/cuihairu/persona/tree/main/docs)——威胁模型、E2EE 同步设计等深度材料
+- [工程文档](../../reference/)——威胁模型、E2EE 同步设计等深度材料

@@ -1,4 +1,4 @@
-> [English](CONTRIBUTING.md) | **中文**
+> [English](https://github.com/cuihairu/persona/blob/main/docs/CONTRIBUTING.md) | **中文**
 
 # 贡献指南
 

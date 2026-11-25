@@ -5,7 +5,7 @@ server sees only ciphertext and metadata and cannot decrypt credentials): sensit
 material is stored encrypted locally, and the CLI, desktop app, browser extension, and SSH
 Agent all perform unlocking, auditing, and policy checks through the same core service. For
 the full threat model, see
-[Threat Model and Periodic Security Reviews](https://github.com/cuihairu/persona/blob/main/docs/THREAT_MODEL.md).
+[Threat Model and Periodic Security Reviews](../reference/THREAT_MODEL).
 
 ## Core Protections
 

@@ -1,0 +1,1 @@
+../../../CONNECT_AUTOMATION_DESIGN.zh.md

@@ -1,4 +1,4 @@
-> [English](SSH_AGENT_FEATURES.md) | **中文**
+> [English](https://github.com/cuihairu/persona/blob/main/docs/SSH_AGENT_FEATURES.md) | **中文**
 
 # Persona SSH Agent - 完整功能说明
 
@@ -607,7 +607,7 @@ cargo check -p persona-ssh-agent
 - [SSH Agent Protocol](https://datatracker.ietf.org/doc/html/draft-miller-ssh-agent-14)
 - [OpenSSH Agent Source](https://github.com/openssh/openssh-portable/blob/master/authfd.c)
 - [ed25519-dalek Documentation](https://docs.rs/ed25519-dalek/)
-- [Persona Project README](../README.md)
+- [Persona Project README](https://github.com/cuihairu/persona/blob/main/README.md)
 
 ## 更新日志
 

@@ -1,6 +1,6 @@
 # Wallet Key Hierarchy & Signing — Design
 
-> [English](WALLET_DESIGN.md) | [中文](WALLET_DESIGN.zh.md)
+> [English](WALLET_DESIGN.md) | [中文](https://github.com/cuihairu/persona/blob/main/docs/WALLET_DESIGN.zh.md)
 
 Status: **current-state inventory + decisions** (2026-10-13, M5 wallet graduation
 track). This doc answers four things: the key hierarchy (seed ↔ master key

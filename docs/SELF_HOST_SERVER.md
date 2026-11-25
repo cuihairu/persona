@@ -1,6 +1,6 @@
 # Self-hosting persona-server (one-command startup)
 
-> [English](SELF_HOST_SERVER.md) | [中文](SELF_HOST_SERVER.zh.md)
+> [English](SELF_HOST_SERVER.md) | [中文](https://github.com/cuihairu/persona/blob/main/docs/SELF_HOST_SERVER.zh.md)
 
 `persona-server` is an optional sync/backup relay. It is off by default: the
 desktop app and CLI are fully functional locally without configuring a server

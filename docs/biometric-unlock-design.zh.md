@@ -1,4 +1,4 @@
-> [English](biometric-unlock-design.md) | **中文**
+> [English](https://github.com/cuihairu/persona/blob/main/docs/biometric-unlock-design.md) | **中文**
 
 # 生物识别解锁设计（调用系统功能解锁 vault）
 

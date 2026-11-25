@@ -1,13 +1,13 @@
-> [English](WALLET_DESIGN.md) | **中文**
+> [English](https://github.com/cuihairu/persona/blob/main/docs/WALLET_DESIGN.md) | **中文**
 
 # 钱包密钥层级与签名 — 设计
 
 > 状态：**现状盘点 + 定案**（2026-10-13，M5 钱包毕业轨道）。本文回答四件事：
 > 密钥层级（seed ↔ master key 包装）、口令变更的 re-wrap 语义、分身与钱包的
 > 绑定模型、签名确认的 UX 与后端策略；威胁模型扩展见
-> [THREAT_MODEL.md「钱包（实验轨道）」节](THREAT_MODEL.md)。关联：
-> [ROADMAP M5](ROADMAP.md#milestone-5-wallet-graduation-deferred-until-milestone-4-experimental-today)、
-> [KEY_HIERARCHY.md](KEY_HIERARCHY.md)（分身保险库层级——钱包是其中注明的
+> [THREAT_MODEL.md「钱包（实验轨道）」节](https://github.com/cuihairu/persona/blob/main/docs/THREAT_MODEL.md)。关联：
+> [ROADMAP M5](https://github.com/cuihairu/persona/blob/main/docs/ROADMAP.md#milestone-5-wallet-graduation-deferred-until-milestone-4-experimental-today)、
+> [KEY_HIERARCHY.md](https://github.com/cuihairu/persona/blob/main/docs/KEY_HIERARCHY.md)（分身保险库层级——钱包是其中注明的
 > 独立第六条 KDF 路径）。
 
 **本文与代码的边界**：§1/§2 是现状盘点（已在库中实现）；§2.1/§3/§4/§5 是
@@ -136,7 +136,7 @@ persist` 链；策略差异只在确认形式（桌面 modal vs CLI 提示），
 
 ## 6. 威胁模型扩展
 
-见 [THREAT_MODEL.md](THREAT_MODEL.md)「钱包（实验轨道）」节：钱包密钥
+见 [THREAT_MODEL.md](https://github.com/cuihairu/persona/blob/main/docs/THREAT_MODEL.md)「钱包（实验轨道）」节：钱包密钥
 列为最高级资产、导出面（keystore/WIF/明文 JSON）单独列边界、实验性
 声明与升级路径。本文 §2.1/§3 与该节互相引用。
 

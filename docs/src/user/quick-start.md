@@ -36,7 +36,7 @@ pnpm --filter persona-desktop run dev
 ```
 
 > For build details and the byte-for-byte reproducibility contract, see
-> [REPRODUCIBLE_BUILDS.md](https://github.com/cuihairu/persona/blob/main/docs/REPRODUCIBLE_BUILDS.md).
+> [REPRODUCIBLE_BUILDS.md](../reference/REPRODUCIBLE_BUILDS).
 
 ### First Run
 
@@ -95,7 +95,7 @@ persona import vault-backup.persenc --decrypt --mode merge --backup   # restore
 Self-hosted server users can additionally run `persona backup push` to keep an
 off-site snapshot of the whole vault. For the full walkthrough (including the
 cloud-drive cold-storage warning and restore semantics), see
-[the backup section of STORAGE_AND_SYNC.md](https://github.com/cuihairu/persona/blob/main/docs/STORAGE_AND_SYNC.md).
+[the backup section of STORAGE_AND_SYNC.md](../reference/STORAGE_AND_SYNC).
 
 ## Optional: Multi-Device End-to-End Encrypted Sync
 
@@ -110,10 +110,10 @@ across devices:
 Concurrent offline edits to the same credential never lose data (both versions
 are kept and you decide). For deployment steps, honest boundaries, and conflict
 adjudication, see
-[STORAGE_AND_SYNC.md](https://github.com/cuihairu/persona/blob/main/docs/STORAGE_AND_SYNC.md).
+[STORAGE_AND_SYNC.md](../reference/STORAGE_AND_SYNC).
 
 ## Next Steps
 
 - Project introduction — problem boundaries and design philosophy
 - Security features — key hierarchy and encryption stack
-- [Engineering docs](https://github.com/cuihairu/persona/tree/main/docs) — threat model, E2EE sync design, and other deep-dive material
+- [Engineering docs](../reference/) — threat model, E2EE sync design, and other deep-dive material

@@ -1,4 +1,4 @@
-> [English](BRIDGE_PROTOCOL.md) | **中文**
+> [English](https://github.com/cuihairu/persona/blob/main/docs/BRIDGE_PROTOCOL.md) | **中文**
 
 # Persona 桥（Bridge）协议 v2
 

@@ -94,7 +94,7 @@ known_hosts 校验、速率限制、每密钥 / 每主机 allow/deny、签名确
 ## 供应链安全
 
 persona 对自己的依赖链做持续检查，细节与操作手册见
-[供应链安全检查指南](https://github.com/cuihairu/persona/blob/main/docs/SUPPLY_CHAIN_SECURITY.zh.md)：
+[供应链安全检查指南](../reference/SUPPLY_CHAIN_SECURITY.zh)：
 
 - **CI 门禁**：`cargo deny check`（RustSec 漏洞 + 许可证 allowlist + 禁用
   依赖 + 来源检查）与 `cargo audit` 每个 push / PR 必跑；JS/TS 侧 pnpm
@@ -103,7 +103,7 @@ persona 对自己的依赖链做持续检查，细节与操作手册见
   未列入即拒绝。
 - **锁文件**：Cargo.lock 与 pnpm-lock.yaml 提交入库（docs 子站独立 npm），
   构建可复现；镜像基础层按 digest 钉死（
-  [可复现构建](https://github.com/cuihairu/persona/blob/main/docs/REPRODUCIBLE_BUILDS.md)）。
+  [可复现构建](../../reference/REPRODUCIBLE_BUILDS)）。
 - **复审节奏**：RustSec 与 npm audit 每月复查；KDF 参数、备份加密、威胁
   模型每季度复审；deny.toml 豁免必须在 PR 说明理由。
 
@@ -121,13 +121,13 @@ persona 对自己的依赖链做持续检查，细节与操作手册见
 
 ## 深读
 
-- [威胁模型与周期性安全审查](https://github.com/cuihairu/persona/blob/main/docs/THREAT_MODEL.zh.md)
+- [威胁模型与周期性安全审查](../reference/THREAT_MODEL.zh)
   ——资产、边界、STRIDE 全表、逐端点威胁登记
-- [供应链安全检查指南](https://github.com/cuihairu/persona/blob/main/docs/SUPPLY_CHAIN_SECURITY.zh.md)
+- [供应链安全检查指南](../reference/SUPPLY_CHAIN_SECURITY.zh)
   ——工具链、许可证策略、漏洞处理流程
-- [Key Hierarchy](https://github.com/cuihairu/persona/blob/main/docs/KEY_HIERARCHY.zh.md)
+- [Key Hierarchy](../reference/KEY_HIERARCHY.zh)
   ——密钥派生与包裹层级
-- [E2EE 同步设计稿](https://github.com/cuihairu/persona/blob/main/docs/E2EE_SYNC_DESIGN.zh.md)
+- [E2EE 同步设计稿](../reference/E2EE_SYNC_DESIGN.zh)
   ——同步链路的密钥与威胁登记
 
 ## 相关页面

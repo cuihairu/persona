@@ -1,4 +1,4 @@
-> [English](PASSKEYS_DESIGN.md) | **中文**
+> [English](https://github.com/cuihairu/persona/blob/main/docs/PASSKEYS_DESIGN.md) | **中文**
 
 # Persona Passkey（WebAuthn）设计
 

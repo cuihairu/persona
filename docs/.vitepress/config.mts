@@ -8,10 +8,11 @@ const base = process.env.VITEPRESS_BASE ?? "/persona/";
 // 历史页（analysis/*）中文侧只留同款 superseded 横幅，不硬造翻译。
 // 侧边栏只挂有实内容的页面：占位白页（仅一行标题）已删除，板块有稳定
 // 内容后再挂回——空板块不如不挂。根目录 docs/*.md 工程文档（E2EE 同步
-// 设计、威胁模型、可复现构建等）经 GitHub 链接在 nav「路线图」同款方式
-// 可达，不在此重复——用户视角的整合篇（user/sync、user/security）挂在
-// 用户手册，文内链回这些设计文档。语言切换用 VitePress 官方 locale
-// 切换器（多 locale 自动出现，不硬编码 nav 链接）。
+// 设计、威胁模型、可复现构建等）经 src/reference/ 软链挂进站点（单一来
+// 源=docs/ 根，preserveSymlinks 使软链页内相对链接按 reference/ 解析），
+// 正文引用一律站内相对链；仅 GitHub 独有目标（review 记录、issues、仓根
+// 运行手册）保留绝对链。语言切换用 VitePress 官方 locale 切换器（多
+// locale 自动出现，不硬编码 nav 链接）。
 const sidebarZh = [
   {
     text: "项目概述",
@@ -79,6 +80,31 @@ const sidebarZh = [
         text: "桌面应用内填充注入（Windows）",
         link: "/zh/design/desktop-fill",
       },
+    ],
+  },
+  {
+    text: "工程参考",
+    items: [
+      { text: "参考总览", link: "/zh/reference/" },
+      { text: "威胁模型", link: "/zh/reference/THREAT_MODEL.zh" },
+      {
+        text: "E2EE 同步设计",
+        link: "/zh/reference/E2EE_SYNC_DESIGN.zh",
+      },
+      {
+        text: "供应链安全",
+        link: "/zh/reference/SUPPLY_CHAIN_SECURITY.zh",
+      },
+      { text: "密钥层级", link: "/zh/reference/KEY_HIERARCHY.zh" },
+      {
+        text: "可复现构建",
+        link: "/zh/reference/REPRODUCIBLE_BUILDS.zh",
+      },
+      {
+        text: "存储与同步",
+        link: "/zh/reference/STORAGE_AND_SYNC.zh",
+      },
+      { text: "路线图", link: "/zh/reference/ROADMAP.zh" },
     ],
   },
   {
@@ -170,6 +196,25 @@ const sidebar = [
     ],
   },
   {
+    text: "Engineering Reference",
+    items: [
+      { text: "Reference Index", link: "/reference/" },
+      { text: "Threat Model", link: "/reference/THREAT_MODEL" },
+      { text: "E2EE Sync Design", link: "/reference/E2EE_SYNC_DESIGN" },
+      {
+        text: "Supply Chain Security",
+        link: "/reference/SUPPLY_CHAIN_SECURITY",
+      },
+      { text: "Key Hierarchy", link: "/reference/KEY_HIERARCHY" },
+      {
+        text: "Reproducible Builds",
+        link: "/reference/REPRODUCIBLE_BUILDS",
+      },
+      { text: "Storage and Sync", link: "/reference/STORAGE_AND_SYNC" },
+      { text: "Roadmap", link: "/reference/ROADMAP" },
+    ],
+  },
+  {
     text: "Development Guide",
     items: [
       { text: "Setup", link: "/development/setup" },
@@ -184,7 +229,13 @@ const sidebar = [
 
 export default withMermaid(
   defineConfig({
-    vite: { build: { target: "esnext" } },
+    vite: {
+      build: { target: "esnext" },
+      // reference/ 板块用软链同源 docs/ 根工程文档（单一来源）。Vite 默认按
+      // realpath 解析模块，软链页内的相对链接会被算到 docs/ 根而判死链；
+      // preserveSymlinks 让模块 id 停在软链路径，相对链接按 reference/ 解析。
+      resolve: { preserveSymlinks: true },
+    },
     base,
     title: "Persona",
     description: "Master your digital identity. Switch freely with one click.",
@@ -216,14 +267,8 @@ export default withMermaid(
             { text: "UI", link: "/previews/ui" },
             { text: "Develop", link: "/development/structure" },
             { text: "API", link: "/api/sync" },
-            {
-              text: "Engineering Docs",
-              link: "https://github.com/cuihairu/persona/tree/main/docs",
-            },
-            {
-              text: "Roadmap",
-              link: "https://github.com/cuihairu/persona/blob/main/docs/ROADMAP.md",
-            },
+            { text: "Reference", link: "/reference/" },
+            { text: "Roadmap", link: "/reference/ROADMAP" },
           ],
           sidebar,
           outline: {
@@ -277,14 +322,8 @@ export default withMermaid(
             { text: "界面", link: "/zh/previews/ui" },
             { text: "开发", link: "/zh/development/structure" },
             { text: "API", link: "/zh/api/sync" },
-            {
-              text: "工程文档",
-              link: "https://github.com/cuihairu/persona/tree/main/docs",
-            },
-            {
-              text: "路线图",
-              link: "https://github.com/cuihairu/persona/blob/main/docs/ROADMAP.md",
-            },
+            { text: "参考", link: "/zh/reference/" },
+            { text: "路线图", link: "/zh/reference/ROADMAP.zh" },
           ],
           sidebar: sidebarZh,
           outline: {

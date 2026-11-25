@@ -29,7 +29,7 @@ crypto 动作（bridge 协议消息类型，均要求配对 + session HMAC 认�
 | 保存/更新    | `save_credential`   | user gesture + 桌面审批（credential_save）+ origin binding + 审计 |
 | 密码生成     | `generate_password` | 认证 session；纯生成不落库                                        |
 
-协议细节见 [BRIDGE_PROTOCOL](https://github.com/cuihairu/persona/blob/main/docs/BRIDGE_PROTOCOL.md)。
+协议细节见 [BRIDGE_PROTOCOL](../../reference/BRIDGE_PROTOCOL)。
 
 本地动作（core 直连入口）：
 

@@ -1,6 +1,6 @@
 # Persona Bridge Protocol v2
 
-> [English](BRIDGE_PROTOCOL.md) | [中文](BRIDGE_PROTOCOL.zh.md)
+> [English](BRIDGE_PROTOCOL.md) | [中文](https://github.com/cuihairu/persona/blob/main/docs/BRIDGE_PROTOCOL.zh.md)
 
 The Persona Native Messaging Bridge Protocol defines secure communication between the browser extension and the local CLI/Desktop.
 

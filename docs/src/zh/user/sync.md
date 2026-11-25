@@ -129,7 +129,7 @@ SQLite。
 | `ghcr.io/cuihairu/persona-relay`  | 同步 + 配对信箱薄壳：只想当中转、不想要其余端点时的最小面     |
 
 - persona-server 自建（compose / cargo / Docker）：见
-  [SELF_HOST_SERVER.md](https://github.com/cuihairu/persona/blob/main/docs/SELF_HOST_SERVER.md)。
+  [SELF_HOST_SERVER.md](../../reference/SELF_HOST_SERVER)。
 - persona-relay 运行与配置面（环境变量、健康检查、端口）：见
   [README-relay.md](https://github.com/cuihairu/persona/blob/main/README-relay.md)。
 
@@ -138,14 +138,14 @@ SQLite。
 
 ## 深读
 
-- [E2EE 同步设计稿](https://github.com/cuihairu/persona/blob/main/docs/E2EE_SYNC_DESIGN.zh.md)
+- [E2EE 同步设计稿](../reference/E2EE_SYNC_DESIGN.zh)
   ——密钥层级、SRP 认证、快照协议、威胁登记的完整设计
-- [跨设备同步（默认同步方式）](https://github.com/cuihairu/persona/blob/main/docs/sync-group-mode.zh.md)
+- [跨设备同步（默认同步方式）](../reference/sync-group-mode.zh)
   ——配对协议与实现状态对账
-- [云盘同步传输](https://github.com/cuihairu/persona/blob/main/docs/CLOUD_DRIVE_SYNC.zh.md)
+- [云盘同步传输](../reference/CLOUD_DRIVE_SYNC.zh)
   ——云盘传输的目录布局与游标设计
 - [同步 API](../api/sync) —— `/api/v1/sync/*` 端点参考
-- [SELF_HOST_SERVER.md](https://github.com/cuihairu/persona/blob/main/docs/SELF_HOST_SERVER.md) /
+- [SELF_HOST_SERVER.md](../../reference/SELF_HOST_SERVER) /
   [README-relay.md](https://github.com/cuihairu/persona/blob/main/README-relay.md)
   ——自托管两个镜像的运行手册
 

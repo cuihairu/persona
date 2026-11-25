@@ -18,7 +18,7 @@ In the core data model, materials live in three tables (all owned by an identity
 | `passkeys`       | WebAuthn passkeys (RP binding, attestation retained)                                                                                                                       |
 
 Security properties (see Security Design and
-[Key Hierarchy](https://github.com/cuihairu/persona/blob/main/docs/KEY_HIERARCHY.md)):
+[Key Hierarchy](../reference/KEY_HIERARCHY)):
 
 - Every credential is encrypted with its **own item key** (AES-GCM), and the master
   key only wraps item keys — a single-item leak does not affect other materials;
@@ -44,7 +44,7 @@ direct consequences of this separation:
   as `request_fill` / `save_credential`, adjudicated by the local core;
 - SSH private keys are **never exported** — external programs request the signature
   result, not the key itself (private-key export is forbidden by default; see
-  [SSH Agent Features](https://github.com/cuihairu/persona/blob/main/docs/SSH_AGENT_FEATURES.md)).
+  [SSH Agent Features](../reference/SSH_AGENT_FEATURES)).
 
 ## Plans
 

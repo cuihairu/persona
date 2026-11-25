@@ -1,0 +1,1 @@
+../../NON_INTERACTIVE_MODE.md

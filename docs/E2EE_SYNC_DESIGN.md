@@ -1,6 +1,6 @@
 # E2EE Sync Design (Stage 0)
 
-> [English](E2EE_SYNC_DESIGN.md) | [中文](E2EE_SYNC_DESIGN.zh.md)
+> [English](E2EE_SYNC_DESIGN.md) | [中文](https://github.com/cuihairu/persona/blob/main/docs/E2EE_SYNC_DESIGN.zh.md)
 
 > Status: **Design doc; stages 1–4 have all landed (2026-09, per-stage status in the §11 table)**.
 > This is the kickoff document for TODO "step 3" (Connect endpoint + E2EE sync + SRP device

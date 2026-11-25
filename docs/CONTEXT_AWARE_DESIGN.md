@@ -1,6 +1,6 @@
 # Context-Aware Identity Suggestion — Design
 
-> [English](CONTEXT_AWARE_DESIGN.md) | [中文](CONTEXT_AWARE_DESIGN.zh.md)
+> [English](CONTEXT_AWARE_DESIGN.md) | [中文](https://github.com/cuihairu/persona/blob/main/docs/CONTEXT_AWARE_DESIGN.zh.md)
 
 Status: **Stages 1+2 implemented** (2026-10-12: core `ContextService` + `context.toml`
 parsing + `persona suggest [--json]` + `persona context map/get/unmap/status`;
@@ -18,7 +18,7 @@ the response gains a `context` field and items gain an `identity` annotation, an
 corrupt mappings degrade silently); same day, browser half: the popup consumes `context`/`identity` — ordering
 follows the bridge-side order (the suggested identity is already ranked first), each entry is labeled with its identity name, and one line at the top reads "Context suggests X"
 (`autofillUx.ts` pure-function test, 5 cases). Remaining: the desktop tray candidate.
-Related: [Core concept: context](src/concepts/context.md),
+Related: [Core concept: context](https://github.com/cuihairu/persona/blob/main/docs/src/concepts/context.md),
 [ROADMAP M7](ROADMAP.md#milestone-7-identity-runtime-positioning-concepts-feature-track-follows).
 
 ## 1. Goals and positioning

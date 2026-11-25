@@ -60,7 +60,7 @@ map/unmap` manages static mappings, `persona shell-hook` puts candidates into yo
   silently degrading to plain suggestions when a mapping is broken).
 
 For the full design see
-[CONTEXT_AWARE_DESIGN](https://github.com/cuihairu/persona/blob/main/docs/CONTEXT_AWARE_DESIGN.md)
+[CONTEXT_AWARE_DESIGN](../reference/CONTEXT_AWARE_DESIGN)
 (phases 1–4 implemented).
 Across all of it, the mechanism obeys one hard rule: **context only ever influences
 suggestions and defaults — it never bypasses policy to allow an action.**

@@ -62,5 +62,5 @@ Asset Inventory.
   boundaries.
 - Project Structure Set up local development and browse the
   monorepo layout.
-- [Engineering Docs](https://github.com/cuihairu/persona/tree/main/docs) In-depth
+- [Engineering Docs](reference/) In-depth
   documentation on E2EE sync design, threat model, reproducible builds, and more.

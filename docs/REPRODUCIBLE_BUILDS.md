@@ -1,6 +1,6 @@
 # Reproducible Builds
 
-> [English](REPRODUCIBLE_BUILDS.md) | [中文](REPRODUCIBLE_BUILDS.zh.md)
+> [English](REPRODUCIBLE_BUILDS.md) | [中文](https://github.com/cuihairu/persona/blob/main/docs/REPRODUCIBLE_BUILDS.zh.md)
 
 Status: **deb artifacts are byte-for-byte reproducible on the same machine** (measured against the
 2026-09-24 baseline); the toolchain is pinned (1.97.0), build-machine paths are remapped

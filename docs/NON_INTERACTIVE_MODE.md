@@ -1,6 +1,6 @@
 # CLI Non-Interactive Mode Guide
 
-> [English](NON_INTERACTIVE_MODE.md) | [中文](NON_INTERACTIVE_MODE.zh.md)
+> [English](NON_INTERACTIVE_MODE.md) | [中文](https://github.com/cuihairu/persona/blob/main/docs/NON_INTERACTIVE_MODE.zh.md)
 
 Persona CLI supports a non-interactive (headless) mode for use in CI/CD pipelines, automation scripts, and other scenarios where user interaction is not possible.
 
@@ -451,7 +451,7 @@ persona add --name "Test" --email "test@example.com" --yes
 
 - [Threat Model](./THREAT_MODEL.md)
 - [Self-Host Server](./SELF_HOST_SERVER.md)
-- [README](../README.md) – CLI usage examples (non-interactive flags per command)
+- [README](https://github.com/cuihairu/persona/blob/main/README.md) – CLI usage examples (non-interactive flags per command)
 
 ---
 

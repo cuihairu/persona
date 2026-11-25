@@ -2,7 +2,7 @@
 
 Persona Server 的设备认证轨道：基于 SRP（Secure Remote Password）的设备
 登录，换取短期 Bearer 令牌。协议设计见
-[E2EE_SYNC_DESIGN](https://github.com/cuihairu/persona/blob/main/docs/E2EE_SYNC_DESIGN.md)。
+[E2EE_SYNC_DESIGN](../../reference/E2EE_SYNC_DESIGN)。
 
 ## 认证模型
 
@@ -36,4 +36,4 @@ Persona Server 的设备认证轨道：基于 SRP（Secure Remote Password）的
 ## 与客户端的衔接
 
 桌面端「设置 → 同步设备」完成上述握手；CLI 走环境变量配置
-（见 [STORAGE_AND_SYNC.md](https://github.com/cuihairu/persona/blob/main/docs/STORAGE_AND_SYNC.md) 的客户端配置节）。
+（见 [STORAGE_AND_SYNC.md](../../reference/STORAGE_AND_SYNC) 的客户端配置节）。

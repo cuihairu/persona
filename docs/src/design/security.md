@@ -3,7 +3,7 @@
 This page describes the security design constraints that Persona's current
 implementation is expected to follow. For the fuller treatment of assets, trust
 boundaries, and the STRIDE analysis, see the
-[threat model and periodic security review](https://github.com/cuihairu/persona/blob/main/docs/THREAT_MODEL.md).
+[threat model and periodic security review](../reference/THREAT_MODEL).
 
 ## Layered Security Boundaries
 

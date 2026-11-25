@@ -4,7 +4,7 @@ Persona Server's end-to-end-encrypted sync track: the server **relays
 ciphertext only** — the ciphertext operation log (oplog), device envelopes,
 and group-key envelopes — and never holds any ability to decrypt. For the full
 protocol, see
-[E2EE_SYNC_DESIGN](https://github.com/cuihairu/persona/blob/main/docs/E2EE_SYNC_DESIGN.md).
+[E2EE_SYNC_DESIGN](../reference/E2EE_SYNC_DESIGN).
 
 Every endpoint requires a Bearer token (obtained via the
 Authentication API).
@@ -56,7 +56,7 @@ Authentication API).
 - Retention policy: oplog/events are pruned on a rolling window set via env
   (no pruning by default), and the window must be ≥ the offline period of the
   slowest device — see the deployment section of
-  [STORAGE_AND_SYNC.md](https://github.com/cuihairu/persona/blob/main/docs/STORAGE_AND_SYNC.md).
+  [STORAGE_AND_SYNC.md](../reference/STORAGE_AND_SYNC).
 
 ## Operations Surface
 
@@ -65,4 +65,4 @@ Unauthenticated endpoints: `GET /` (service info), `GET /health`, and
 and queries (`/api/v1/events`) and encrypted-backup custody
 (`/api/v1/backups`) run on separate Bearer token tracks — see the endpoint
 table in
-[STORAGE_AND_SYNC.md](https://github.com/cuihairu/persona/blob/main/docs/STORAGE_AND_SYNC.md).
+[STORAGE_AND_SYNC.md](../reference/STORAGE_AND_SYNC).

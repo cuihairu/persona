@@ -1,4 +1,4 @@
-> [English](SUPPLY_CHAIN_SECURITY.md) | **中文**
+> [English](https://github.com/cuihairu/persona/blob/main/docs/SUPPLY_CHAIN_SECURITY.md) | **中文**
 
 # 供应链安全检查指南
 

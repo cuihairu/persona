@@ -3,7 +3,7 @@
 Persona Server's device authentication track: device login based on SRP
 (Secure Remote Password), trading the proof for a short-lived Bearer token.
 For the protocol design, see
-[E2EE_SYNC_DESIGN](https://github.com/cuihairu/persona/blob/main/docs/E2EE_SYNC_DESIGN.md).
+[E2EE_SYNC_DESIGN](../reference/E2EE_SYNC_DESIGN).
 
 ## Authentication Model
 
@@ -47,4 +47,4 @@ login steps that obtain the token; `register` sits behind Bearer protection
 The desktop app completes this handshake under "Settings → Sync Devices"; the
 CLI is configured through environment variables (see the client configuration
 section of
-[STORAGE_AND_SYNC.md](https://github.com/cuihairu/persona/blob/main/docs/STORAGE_AND_SYNC.md)).
+[STORAGE_AND_SYNC.md](../reference/STORAGE_AND_SYNC)).

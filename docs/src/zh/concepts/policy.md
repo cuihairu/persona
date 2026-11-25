@@ -57,4 +57,4 @@ rules:
 
 该规则层落地后，上面那张「已落地」表里的可配置项会成为规则引擎的
 **内建默认集**，规则引擎本身依然是 core 内、不绕过硬门槛的那一层。
-实现节奏见[路线图](https://github.com/cuihairu/persona/blob/main/docs/ROADMAP.md)。
+实现节奏见[路线图](../../reference/ROADMAP)。

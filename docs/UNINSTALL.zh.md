@@ -1,4 +1,4 @@
-> [English](UNINSTALL.md) | **中文**
+> [English](https://github.com/cuihairu/persona/blob/main/docs/UNINSTALL.md) | **中文**
 
 # 卸载与数据保留（卸载不删数据，重装接续）
 

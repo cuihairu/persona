@@ -1,6 +1,6 @@
 # Client Communication Architecture
 
-> [English](CLIENT_COMMUNICATION_ARCHITECTURE.md) | [中文](CLIENT_COMMUNICATION_ARCHITECTURE.zh.md)
+> [English](CLIENT_COMMUNICATION_ARCHITECTURE.md) | [中文](https://github.com/cuihairu/persona/blob/main/docs/CLIENT_COMMUNICATION_ARCHITECTURE.zh.md)
 
 > **Status: target architecture / protocol design — NOT the current state.**
 > The unified IPC layer described here (the `IpcMessage` message structure, the

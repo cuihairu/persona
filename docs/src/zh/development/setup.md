@@ -68,10 +68,10 @@ cargo clippy --all-targets -- -D warnings   # 在 desktop/src-tauri/ 下再跑�
 
 - **可复现 deb**：`scripts/build-repro.sh`（或加 `--docker` 进标准容器构建），
   细节见
-  [REPRODUCIBLE_BUILDS.md](https://github.com/cuihairu/persona/blob/main/docs/REPRODUCIBLE_BUILDS.md)。
+  [REPRODUCIBLE_BUILDS.md](../../reference/REPRODUCIBLE_BUILDS)。
 - **server 镜像**：`docker build -f docker/Dockerfile.server .`
 
 ## 下一步
 
 - 项目结构——monorepo 布局与 crate 职责
-- [工程文档](https://github.com/cuihairu/persona/tree/main/docs)——设计文档全集
+- [工程文档](../../reference/)——设计文档全集
