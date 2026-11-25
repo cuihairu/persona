@@ -1,6 +1,6 @@
-//! Web3 Secret Storage v3 导入（scrypt/pbkdf2 KDF 参数、keccak MAC、
-//! AES-128-CTR）。密码固定，覆盖的是结构解析与 KDF 参数钳制路径。
-//! 入口：`crypto::wallet_import_export::import_from_json`。
+//! Web3 Secret Storage v3 import (scrypt/pbkdf2 KDF params, keccak MAC,
+//! AES-128-CTR). The password is fixed; this targets structural parsing and
+//! KDF parameter clamping paths. Entry point: `crypto::wallet_import_export::import_from_json`.
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;

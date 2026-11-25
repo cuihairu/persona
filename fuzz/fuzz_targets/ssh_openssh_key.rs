@@ -1,5 +1,5 @@
-//! OpenSSH 私钥导入解析（OpenSSH format / PKCS#8 / PKCS#1 / SEC1，含 PBES2）。
-//! 入口：`crypto::ssh_import::import_openssh_private_key`。
+//! Parses OpenSSH private key import (OpenSSH format / PKCS#8 / PKCS#1 / SEC1, including PBES2).
+//! Entry point: `crypto::ssh_import::import_openssh_private_key`.
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;

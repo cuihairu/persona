@@ -1,6 +1,7 @@
-//! context.toml 映射解析（全局 `~/.persona/context.toml` 与仓库内
-//! `.persona/context.toml` 共用同一解析器）。正则键须单引号字面串；这里专找
-//! 语法变体导致的 panic 或静默误判。入口：`context::ContextMapFile::parse`。
+//! Parses the context.toml mapping (the global `~/.persona/context.toml` and
+//! the in-repo `.persona/context.toml` share one parser). Regex keys must be
+//! single-quoted literal strings; this target hunts for panics or silent
+//! misjudgment from syntax variants. Entry point: `context::ContextMapFile::parse`.
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;

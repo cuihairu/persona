@@ -1,6 +1,6 @@
-//! WebAuthn `navigator.credentials.create` 的 creation-options JSON 解析
-//! （rp/user 必填、alg 白名单、collectedClientData 之外的 options 侧校验）。
-//! 入口：`crypto::passkey::parse_creation_options`。
+//! Parses WebAuthn `navigator.credentials.create` creation-options JSON
+//! (required rp/user, alg allowlist, options-side validation beyond
+//! collectedClientData). Entry point: `crypto::passkey::parse_creation_options`.
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
