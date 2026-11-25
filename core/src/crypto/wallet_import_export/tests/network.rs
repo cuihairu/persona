@@ -20,8 +20,9 @@ fn parse_network_name_covers_all_known_networks() {
     let err = import_from_json(Uuid::new_v4(), None, &custom, password).unwrap_err();
     assert!(err.to_string().contains("Custom"));
 
-    // EVM networks succeed end-to-end. 地址必须写真实派生值：恢复一致性
-    // 核对（2026-11-13 深审 Critical 修复）会拒绝与助记词派生不符的地址。
+    // EVM networks succeed end-to-end. Addresses must be real derived values: the
+    // recovery consistency check (2026-11-13 deep audit, Critical fix) rejects
+    // address sets that disagree with the mnemonic derivation.
     for network in [
         "polygon",
         "arbitrum",

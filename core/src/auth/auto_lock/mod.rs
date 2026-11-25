@@ -29,17 +29,19 @@ mod tests;
 
 /// Enhanced auto-lock manager with advanced features
 pub struct AutoLockManager {
-    /// 配置快照。锁保护的目的是支持运行期更新（`update_base_config`）：
-    /// 服务层把命令传来的设置同步进来，而管理器不能重建——重建会丢掉
-    /// 在管 session、后台任务与回调。读侧全是短临界区同步访问，用
-    /// std 锁即可（不跨 await）。
+    /// Configuration snapshot. The lock exists to support runtime updates
+    /// (`update_base_config`): the service layer pushes command-line settings
+    /// in here, and the manager must not be rebuilt — a rebuild would lose the
+    /// tracked sessions, background task, and callbacks. All reads are short
+    /// synchronous critical sections, so a std lock suffices (never held
+    /// across an await).
     config: SyncRwLock<EnhancedAutoLockConfig>,
     sessions: Arc<RwLock<HashMap<String, SessionInfo>>>,
     callbacks: Arc<RwLock<Vec<AutoLockCallback>>>,
     audit_repo: Option<AuditLogRepository>,
-    /// 审计事件上报器（None = 不上报）。由
-    /// [`crate::PersonaService::set_event_emitter`] 传播注入——service 是
-    /// 唯一注入口，宿主（desktop/CLI）只跟 service 打交道。
+    /// Audit event emitter (None = no reporting). Injected via propagation
+    /// from [`crate::PersonaService::set_event_emitter`] — the service is the
+    /// single injection point; hosts (desktop/CLI) only deal with the service.
     event_emitter: Option<Emitter>,
     background_task: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
     current_user: Arc<RwLock<Option<Uuid>>>,
@@ -97,15 +99,17 @@ impl AutoLockManager {
             let current_user = *self.current_user.read().await;
             let log = session_audit_log(session_id, current_user, action, reason);
             let _ = repo.create(&log).await;
-            // 先写本地库再尽力上报（与 PersonaService::log_audit 同序）
+            // Write to the local database first, then best-effort reporting
+            // (same ordering as PersonaService::log_audit)
             if let Some(ref emitter) = self.event_emitter {
                 emitter.emit(&log);
             }
         }
     }
 }
-/// 构造带 session 上下文的审计行（helper 与后台监控任务共用——后者是
-/// 'static 闭包不能引用 self，只克隆本函数需要的数据进去）。
+/// Build an audit log row with session context (shared by the helper and the
+/// background monitoring task — the latter is a 'static closure that cannot
+/// reference `self`, so only the data this function needs is cloned into it).
 fn session_audit_log(
     session_id: &str,
     current_user: Option<Uuid>,

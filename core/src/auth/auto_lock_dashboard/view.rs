@@ -1,5 +1,5 @@
-//! 面板视图与报表：`DashboardView` 布局（组件/图表/过滤器）与
-//! `DashboardReport` 四类报表载荷。
+//! Dashboard views and reports: `DashboardView` layout (components,
+//! charts, filters) and the four `DashboardReport` report payloads.
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;

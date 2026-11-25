@@ -7,9 +7,10 @@ async fn connect_token_requires_unlocked_vault() {
     let service = PersonaService::new(db).await.unwrap();
     assert!(!service.is_unlocked());
 
-    // 锁定态管理面被拒:敏感门禁先于解锁门禁触发,按 SERVICE_LOCKED
-    // 语义报认证失败(桌面据此回解锁屏);数据面的 VaultLocked/503
-    // 语义由 connect_hides_archived_items_and_gates_when_locked 覆盖。
+    // A locked vault rejects the admin surface: the sensitive gate fires before the unlock gate and
+    // reports an authentication failure per the SERVICE_LOCKED semantics (the desktop returns to the
+    // unlock screen on this); the data plane's VaultLocked/503 semantics are covered by
+    // connect_hides_archived_items_and_gates_when_locked.
     let err = service
         .create_connect_token("t".into(), connect_read_scope(), None, None)
         .await
@@ -29,7 +30,7 @@ async fn connect_token_lifecycle_hash_only_storage_and_revocation() {
         .create_connect_token("  ci runner  ".into(), connect_read_scope(), None, None)
         .await
         .unwrap();
-    // 明文形态:前缀 + 32B base64url(43 字符),哈希/指纹与呈现值一致
+    // Plaintext shape: prefix + 32B base64url (43 chars); the hash/fingerprint match the presented value
     assert!(presented.starts_with("pconn_"));
     assert_eq!(presented.len(), "pconn_".len() + 43);
     assert_eq!(row.label, "ci runner");
@@ -40,7 +41,7 @@ async fn connect_token_lifecycle_hash_only_storage_and_revocation() {
     );
     assert!(row.last_used_at.is_none() && row.revoked_at.is_none());
 
-    // 库里只有哈希(64 hex)与指纹,绝无呈现值明文
+    // The database holds only the hash (64 hex) and the fingerprint; the presented plaintext is never stored
     let raw = sqlx::query("SELECT hash, fingerprint FROM connect_tokens")
         .fetch_all(db.pool())
         .await
@@ -51,7 +52,7 @@ async fn connect_token_lifecycle_hash_only_storage_and_revocation() {
     assert_eq!(stored_hash.len(), 64);
     assert!(!stored_hash.contains("pconn_"));
 
-    // 鉴权命中 + last_used 落库
+    // Auth hit + last_used persisted
     assert!(service
         .connect_authenticate(&presented)
         .await
@@ -61,7 +62,7 @@ async fn connect_token_lifecycle_hash_only_storage_and_revocation() {
     assert_eq!(listed.len(), 1);
     assert!(listed[0].last_used_at.is_some());
 
-    // 吊销即时生效;重复吊销幂等返回 false
+    // Revocation takes effect immediately; a repeat revocation is idempotent and returns false
     assert!(service.revoke_connect_token(&row.id).await.unwrap());
     assert!(!service.revoke_connect_token(&row.id).await.unwrap());
     assert!(service
@@ -70,7 +71,7 @@ async fn connect_token_lifecycle_hash_only_storage_and_revocation() {
         .unwrap()
         .is_none());
 
-    // 未知/畸形 token 一律 None(同形,防探测)
+    // Unknown/malformed tokens are always None (same shape, anti-probing)
     assert!(service
         .connect_authenticate("pconn_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
         .await
@@ -150,7 +151,7 @@ async fn connect_data_plane_filters_by_scope() {
         .await
         .unwrap();
 
-    // 全量 scope:全部身份/条目可见
+    // Full scope: all identities/items visible
     let all = connect_read_scope();
     assert_eq!(
         service
@@ -169,7 +170,7 @@ async fn connect_data_plane_filters_by_scope() {
         3
     );
 
-    // identities 限定 [A]:B 的条目不可见;显式 identity=B 参数 → 空列表(防探测)
+    // identities limited to [A]: B's items are invisible; an explicit identity=B parameter -> empty list (anti-probing)
     let only_a = ConnectTokenScope {
         identities: vec![id_a.id],
         ..connect_read_scope()
@@ -196,7 +197,7 @@ async fn connect_data_plane_filters_by_scope() {
         .unwrap()
         .is_empty());
 
-    // item_types 限定 Password:卡与 TOTP 不在列
+    // item_types limited to Password: cards and TOTP are not listed
     let pwd_only = ConnectTokenScope {
         item_types: vec![ConnectItemType::Password],
         ..connect_read_scope()
@@ -208,7 +209,7 @@ async fn connect_data_plane_filters_by_scope() {
     assert_eq!(items.len(), 1);
     assert_eq!(items[0].id, cred_a.id);
 
-    // 单条读取:scope 外与不存在同形 None
+    // Single read: out-of-scope and nonexistent are the same-shape None
     assert!(service
         .connect_get_item_data(&token_of(&only_a), &cred_b.id)
         .await
@@ -227,7 +228,7 @@ async fn connect_data_plane_filters_by_scope() {
     assert_eq!(cred.id, cred_a.id);
     assert!(matches!(data, CredentialData::Password(_)));
 
-    // TOTP:TwoFactor 项出码,密码项 None
+    // TOTP: a TwoFactor item yields a code, a password item yields None
     let code = service
         .connect_totp(&token_of(&all), &cred_totp.id)
         .await
@@ -270,7 +271,7 @@ async fn connect_hides_archived_items_and_gates_when_locked() {
         .unwrap()
         .is_some());
 
-    // 归档后对 Connect 数据面不可见
+    // After archiving, the item is invisible to the Connect data plane
     let mut archived = service.get_credential(&cred.id).await.unwrap().unwrap();
     archived.is_active = false;
     service.update_credential(&archived).await.unwrap();
@@ -285,7 +286,7 @@ async fn connect_hides_archived_items_and_gates_when_locked() {
         .unwrap();
     assert!(items.iter().all(|c| c.id != cred.id));
 
-    // 锁定后数据面/管理面全部 503 语义(VaultLocked)
+    // When locked, both data plane and admin surface follow the 503 semantics (VaultLocked)
     service.lock();
     let err = service
         .connect_get_item_data(&token_of(&all), &cred.id)
@@ -298,8 +299,8 @@ async fn connect_hides_archived_items_and_gates_when_locked() {
             .await
             .unwrap_err(),
     );
-    // authenticate 本身无锁定门禁:DR-4 的 503 由宿主层在鉴权之前拦截,
-    // core 层的 token 验证只读 connect_tokens 表(不涉解密)。
+    // authenticate itself has no lock gate: DR-4's 503 is intercepted by the host layer before auth,
+    // and core-level token validation only reads the connect_tokens table (no decryption involved).
     assert!(service
         .connect_authenticate("pconn_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
         .await
@@ -307,7 +308,7 @@ async fn connect_hides_archived_items_and_gates_when_locked() {
         .is_none());
 }
 
-/// create_connect_token 的标签防御臂：trim 后为空与超 128 字符一律拒绝。
+/// Label defence arm of create_connect_token: blank after trimming and longer than 128 chars are always rejected.
 #[tokio::test]
 async fn connect_token_label_boundaries_are_rejected() {
     let (service, _db) = connect_fixture().await;
@@ -325,7 +326,7 @@ async fn connect_token_label_boundaries_are_rejected() {
     assert!(long.to_string().contains("1..=128"), "{long}");
 }
 
-/// 无 Read verb 的 scope：四个读端点一律空结果（同形，不泄露存在性）。
+/// A scope without the Read verb: all four read endpoints return empty results (uniform shape, no existence leakage).
 #[tokio::test]
 async fn connect_endpoints_without_read_verb_return_empty() {
     let (service, _db) = connect_fixture().await;
@@ -357,9 +358,10 @@ async fn connect_endpoints_without_read_verb_return_empty() {
         .is_none());
 }
 
-/// use 动词 token（批2）：签名/出码类授权不带来读取能力——纯 use
-/// scope 在四个数据面端点一律同形空/None；同 scope 加 read 即可读，
-/// 证明拒绝来自动词集而非身份或类型维度。
+/// use-verb token (batch 2): signing/code-generation grants carry no read ability -- a pure use
+/// scope returns uniformly empty/None on the four data-plane endpoints; adding read to the same
+/// scope makes them readable, proving the denial comes from the verb set and not the identity
+/// or item-type dimension.
 #[tokio::test]
 async fn connect_use_verb_token_cannot_read_data_plane() {
     let (service, _db) = connect_fixture().await;
@@ -437,10 +439,11 @@ async fn connect_use_verb_token_cannot_read_data_plane() {
         .is_some());
 }
 
-/// unknown:{指纹} 节流表有界（audit 批2 #7）：每个随机伪造 token 的指纹
-/// 都不同，无上限时可被反复携带随机 token 的请求无界撑大内存。超限后
-/// 新 key 丢弃（false = 不写审计），表长封顶；窗口内已有 key 的节流
-/// 语义不受洪水影响。
+/// Boundedness of the unknown:{fingerprint} throttle table (audit batch 2 #7): every randomly
+/// forged token has a distinct fingerprint, so without a cap requests replaying random tokens
+/// could blow memory up without bound. Past the cap, new keys are dropped (false = no audit
+/// written) and the table length stays capped; the throttling semantics of keys already in the
+/// window are unaffected by the flood.
 #[tokio::test]
 async fn connect_throttle_marks_table_is_bounded() {
     let db = Database::in_memory().await.unwrap();
@@ -460,17 +463,18 @@ async fn connect_throttle_marks_table_is_bounded() {
         "表长恰好到上限"
     );
 
-    // 洪水期新 key 被丢弃，表长不再增长。
+    // During the flood new keys are dropped and the table length stops growing.
     assert!(!service.connect_throttle_should_write("unknown:overflow"));
     assert!(!service.connect_throttle_should_write(&format!("unknown:fill-{max}")));
     assert_eq!(service.connect_audit_marks.lock().unwrap().len(), max);
 
-    // 窗口内已有 key 维持节流（false，不重写不扩容）。
+    // A key already in the window keeps being throttled (false, no rewrite, no growth).
     assert!(!service.connect_throttle_should_write("unknown:fill-0"));
 }
 
-/// 过期与主体绑定（迁移 019）：未到期 token 鉴权放行；已过期的
-/// 同形拒绝（与吊销同形）并记失败审计。创建期拒绝过去时刻。
+/// Expiry bound to the principal (migration 019): a token not yet expired authenticates; an
+/// expired one gets the same-shaped denial (same shape as revocation) plus a failure audit.
+/// At creation time, past timestamps are rejected.
 #[tokio::test]
 async fn connect_authenticate_rejects_expired_token() {
     let (service, db) = connect_fixture().await;
@@ -491,7 +495,7 @@ async fn connect_authenticate_rejects_expired_token() {
         .unwrap()
         .is_some());
 
-    // 创建期：过去/现在时刻直接拒绝。
+    // At creation: past/present timestamps are rejected outright.
     let past = service
         .create_connect_token(
             "past".into(),
@@ -503,7 +507,7 @@ async fn connect_authenticate_rejects_expired_token() {
         .unwrap_err();
     assert!(past.to_string().contains("expiry must be in the future"));
 
-    // 运行中过期：直接落库为过去时刻，authenticate 拒绝并节流记审计。
+    // Expiry mid-flight: write a past timestamp straight to the database; authenticate denies and records a throttled audit.
     let (stale, stale_row) = service
         .create_connect_token(
             "stale".into(),
@@ -539,8 +543,9 @@ async fn connect_authenticate_rejects_expired_token() {
     );
 }
 
-/// scope 拒绝写审计（架构校正批2）：此前 scope 拒绝零审计。scope 外
-/// 的单条读取返回 None（防探测）同时记一条 UnauthorizedAccess。
+/// Out-of-scope denials write an audit (architecture correction batch 2): previously scope denials
+/// produced zero audits. An out-of-scope single-item read returns None (anti-probing) while also
+/// recording an UnauthorizedAccess entry.
 #[tokio::test]
 async fn connect_scope_denial_writes_unauthorized_access_audit() {
     let (service, db) = connect_fixture().await;
@@ -571,7 +576,7 @@ async fn connect_scope_denial_writes_unauthorized_access_audit() {
     scope.identities = vec![id_a.id];
     let token = token_of(&scope);
 
-    // 越 scope 的单条读取：None + 恰好一条 UnauthorizedAccess。
+    // An out-of-scope single-item read: None plus exactly one UnauthorizedAccess.
     assert!(service
         .connect_get_item_data(&token, &cred_b.id)
         .await
@@ -593,7 +598,7 @@ async fn connect_scope_denial_writes_unauthorized_access_audit() {
         denials[0].error_message
     );
 
-    // scope 内读取不写拒绝审计。
+    // In-scope reads write no denial audit.
     assert!(service
         .connect_get_item_data(&token_of(&connect_read_scope()), &cred_b.id)
         .await
@@ -606,8 +611,8 @@ async fn connect_scope_denial_writes_unauthorized_access_audit() {
     assert_eq!(after.len(), 1, "granted read must not add a denial audit");
 }
 
-/// connect_totp 的 scope/存在性防御臂：未知 id、scope 外身份、
-/// 未授权 Totp 条目类型一律 None（与列表 404 同形）。
+/// scope/existence defence arms of connect_totp: an unknown id, an out-of-scope identity, and an
+/// unauthorized Totp item type all return None (same shape as the list 404).
 #[tokio::test]
 async fn connect_totp_gates_unknown_identity_and_unscoped_type() {
     let (service, _db) = connect_fixture().await;
@@ -636,14 +641,14 @@ async fn connect_totp_gates_unknown_identity_and_unscoped_type() {
         .await
         .unwrap();
 
-    // 未知 id → None
+    // Unknown id -> None
     assert!(service
         .connect_totp(&token_of(&connect_read_scope()), &Uuid::new_v4())
         .await
         .unwrap()
         .is_none());
 
-    // scope 限定到别的身份 → None（防探测同形）
+    // Scope restricted to a different identity -> None (same anti-probing shape)
     let other_only = ConnectTokenScope {
         identities: vec![Uuid::new_v4()],
         ..connect_read_scope()
@@ -654,7 +659,7 @@ async fn connect_totp_gates_unknown_identity_and_unscoped_type() {
         .unwrap()
         .is_none());
 
-    // item_types 未授权 Totp → None
+    // item_types not authorized for Totp -> None
     let no_totp = ConnectTokenScope {
         item_types: vec![ConnectItemType::Password],
         ..connect_read_scope()
@@ -666,7 +671,7 @@ async fn connect_totp_gates_unknown_identity_and_unscoped_type() {
         .is_none());
 }
 
-/// list_items 的 item_type 过滤分支：显式条目类型只回同型条目。
+/// The item_type filter branch of list_items: an explicit item type only returns items of that type.
 #[tokio::test]
 async fn connect_list_items_filters_by_item_type() {
     let (service, _db) = connect_fixture().await;

@@ -1,6 +1,6 @@
-//! Identity 仓储：`IdentityRepository` 与 `Repository<Identity>` 实现。
-//! 原 repository.rs 拆分（LAY-017）：identity 段原样迁出，外部路径经
-//! `storage::repository::*` 再导出保持。
+//! Identity repository: `IdentityRepository` and the `Repository<Identity>` implementation.
+//! Split out of the original repository.rs (LAY-017): the identity section was migrated verbatim,
+//! with external paths preserved through the `storage::repository::*` re-exports.
 
 use super::Repository;
 use crate::models::{Identity, IdentityType};

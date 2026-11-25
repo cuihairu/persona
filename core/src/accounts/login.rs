@@ -1,21 +1,27 @@
-//! 账号域密码制注册/登录编排（feature `accounts`）。
+//! Account-domain password registration/login orchestration (feature `accounts`).
 //!
-//! 纪律：SRP 数学（Argon2id 预 hash、M1 推导、M2 核验）只在 core 完成，
-//! 口令与 premaster 不出本模块；调用方（桌面命令层）拿到的要么是最终
-//! wire 值、要么是编排产物。纯 wire 传输在 [`super::remote::AccountsApi`]
-//! （其模块文档声明"不含密码学/编排"，本模块就是那个"调用方"角色在
-//! core 内的落点——渲染层不做任何 SRP 数学）。
+//! Discipline: the SRP math (Argon2id pre-hash, M1 derivation, M2
+//! verification) happens only in core; the password and premaster never
+//! leave this module. The caller (desktop command layer) receives either
+//! final wire values or orchestration products. Pure wire transport lives
+//! in [`super::remote::AccountsApi`] (whose module docs state it holds no
+//! "cryptography/orchestration" — this module is where that "caller" role
+//! lands inside core: the rendering layer does no SRP math at all).
 //!
-//! 两段编排，均叠在 wire 方法之上：
+//! Two orchestrations, both layered on top of the wire methods:
 //!
-//! - [`AccountsApi::register_srp_credential`]：口令 → salt/verifier →
-//!   `POST /accounts/{id}/srp/register`。端点 Bearer-gated，实例须
-//!   `with_bearer`；全新账号还没有账号会话，引导链由调用方解析（静态
-//!   服务器令牌是服务器 `require_account_bearer` 契约内的合法 Bearer）。
-//! - [`AccountsApi::srp_login`]：challenge → M1 → verify → **M2 核验** →
-//!   交付 15 分钟令牌。裸 wire 的 `srp_challenge`/`srp_verify` 不核验
-//!   M2（wire 只透传），面向 UI 的登录一律走本编排：服务器证明核验
-//!   通过才交付令牌，核验失败不落地任何状态。
+//! - [`AccountsApi::register_srp_credential`]: password → salt/verifier →
+//!   `POST /accounts/{id}/srp/register`. The endpoint is Bearer-gated and
+//!   the instance must be built with `with_bearer`; a brand-new account
+//!   has no account session yet, so the caller resolves the bootstrap
+//!   chain (a static server token is a legal Bearer under the server's
+//!   `require_account_bearer` contract).
+//! - [`AccountsApi::srp_login`]: challenge → M1 → verify → **M2
+//!   verification** → deliver the 15-minute token. The bare wire
+//!   `srp_challenge`/`srp_verify` do not verify M2 (wire is pass-through
+//!   only), so all UI-facing logins go through this orchestration: the
+//!   token is delivered only once the server proof verifies, and a failed
+//!   verification lands no state.
 
 use base64::engine::general_purpose::STANDARD as B64;
 use base64::Engine as _;
@@ -25,30 +31,33 @@ use super::remote::{AccountsApi, SrpChallengeRequest, SrpRegisterRequest, SrpVer
 use crate::auth::srp::{self, SrpClientLogin};
 use crate::{PersonaError, Result};
 
-/// [`AccountsApi::srp_login`] 的产物：15 分钟账号登录令牌 + 双向认证
-/// 会话指纹。令牌由调用方持有（桌面端直接进 OS keyring，不经渲染层
-/// 持久化，也不随编排响应下发到前端）。
+/// Product of [`AccountsApi::srp_login`]: a 15-minute account login token plus
+/// the mutual-authentication session fingerprint. The caller holds the token
+/// (desktop drops it straight into the OS keyring, never persisted via the
+/// rendering layer and never pushed to the frontend with the orchestration response).
 #[derive(Debug)]
 pub struct AccountSrpLoginOutcome {
-    /// SRP 15 分钟令牌（服务器 TTL 900s），可作 Bearer 或交 sessions
-    /// 端点兑换 24h 会话。
+    /// The SRP 15-minute token (server TTL 900s); usable as a Bearer or redeemable at the
+    /// sessions endpoint for a 24h session.
     pub token: String,
-    /// 令牌剩余有效期（秒），来自服务器响应。
+    /// Remaining token validity in seconds, from the server response.
     pub expires_in_secs: u64,
-    /// SHA-256(premaster) hex——与设备域 `RemoteLoginOutcome` 同语义，
-    /// 会话绑定校验用；无下游消费者时可忽略。
+    /// SHA-256(premaster) hex — same semantics as the device-domain `RemoteLoginOutcome`,
+    /// used for session-binding checks; ignore when no downstream consumer exists.
     pub session_key_fingerprint: String,
-    /// premaster 原始字节（4096-bit group 下 512B 级）。与设备域对称
-    /// 暴露；上层不用就 drop。
+    /// Raw premaster bytes (~512B for the 4096-bit group). Exposed symmetrically with the
+    /// device domain; upper layers that do not need it can just drop it.
     pub session_key: Vec<u8>,
 }
 
 impl AccountsApi {
-    /// 口令 → SRP salt/verifier（Argon2id 预 hash，主密码不出设备）→
-    /// 注册为账号的密码登录凭证。`device_name` 同时是 SRP identity，
-    /// 与服务器挑战/核验两侧一致（见 server `account_srp_challenge`）。
-    /// 同一 `device_name` 重复注册被服务器以 409 拒绝（`INSERT OR
-    /// IGNORE` 语义），换设备名即新增一条密码凭证。
+    /// Password → SRP salt/verifier (Argon2id pre-hash; the master password
+    /// never leaves the device) → registered as the account's password login
+    /// credential. `device_name` is also the SRP identity, matching both
+    /// sides of the server's challenge/verify (see server `account_srp_challenge`).
+    /// Re-registering the same `device_name` is rejected by the server with
+    /// 409 (`INSERT OR IGNORE` semantics); use a different device name to add
+    /// another password credential.
     pub async fn register_srp_credential(
         &self,
         account_id: &str,
@@ -64,11 +73,12 @@ impl AccountsApi {
         self.srp_register(account_id, &req).await
     }
 
-    /// 一步完成账号 SRP 登录：本地临时密钥对 → challenge（盐 + 服务器
-    /// 公开值 B）→ M1（Argon2id 预 hash）→ verify → **核验服务器证明
-    /// M2** → 交付令牌。顺序不可交换：M2 不过（MITM/服务器错乱）说明
-    /// 对端不是持有 verifier 的服务器，令牌再"新鲜"也不可信——整体
-    /// 失败且不落地任何状态。
+    /// Complete account SRP login in one step: local ephemeral keypair →
+    /// challenge (salt + server public value B) → M1 (Argon2id pre-hash) →
+    /// verify → **verify the server proof M2** → deliver the token. The order
+    /// is not interchangeable: if M2 fails (MITM / server glitch) the peer is
+    /// not the server holding the verifier, and no token is trustworthy
+    /// however "fresh" it looks — fail as a whole and land no state.
     pub async fn srp_login(
         &self,
         account_id: &str,
@@ -92,7 +102,7 @@ impl AccountsApi {
         let server_public = B64.decode(&challenge.server_public).map_err(|_| {
             PersonaError::Io("account srp challenge server_public malformed".into())
         })?;
-        // 消耗式：login 在此交出临时私钥，proof 携带待核验状态
+        // Consuming: login surrenders its ephemeral private key here; proof carries the pending verification state
         let proof = login.process(device_name, password, &salt, &server_public)?;
         let verified = self
             .srp_verify(
@@ -106,7 +116,7 @@ impl AccountsApi {
         let server_proof = B64
             .decode(&verified.server_proof)
             .map_err(|_| PersonaError::Io("account srp verify server_proof malformed".into()))?;
-        // M2 核验通过才把 token 视作可信产物带出本函数
+        // Only once M2 verification passes is the token carried out of this function as a trusted product
         let session_key = proof.verify_server(&server_proof)?;
         Ok(AccountSrpLoginOutcome {
             token: verified.token,
@@ -129,14 +139,15 @@ mod tests {
     const DEVICE: &str = "laptop";
     const PASSWORD: &str = "correct horse battery staple";
 
-    /// 服务器侧待决握手脚本：(b_priv, client_public) 按 session_id 存，
-    /// verify 步取走核验——与 server `SrpChallengeEntry` 同构的最小态。
+    /// Server-side pending-handshake script: (b_priv, client_public) stored by
+    /// session_id and taken out at the verify step for checking — the minimal
+    /// state isomorphic to server `SrpChallengeEntry`.
     #[derive(Default)]
     struct MockServer {
         registered: Option<(Vec<u8>, Vec<u8>)>, // (salt, verifier)
         handshakes: HashMap<String, (Vec<u8>, Vec<u8>)>, // session_id -> (b_priv, client_public)
         next_session: u32,
-        /// 注入故障：verify 响应回伪造 M2（MITM 模拟）
+        /// Fault injection: the verify response returns a forged M2 (MITM simulation)
         tamper_server_proof: bool,
         verify_requests: u32,
     }
@@ -148,9 +159,10 @@ mod tests {
         body: String,
     }
 
-    /// 一次性 TCP 假服务器，**跑真 SRP 服务器侧数学**（server_challenge /
-    /// server_verify），对拍 [`srp_login`] 的完整往返——canned 响应会让
-    /// M2 核验必败，编排骨拼不过假服务器。
+    /// A one-shot TCP fake server that **runs the real server-side SRP math**
+    /// (server_challenge / server_verify) to cross-check the full round trip
+    /// of [`srp_login`] — canned responses would make M2 verification always
+    /// fail, so the orchestration would not stand up against a stub server.
     fn spawn_srp_mock<F>(handler: F) -> String
     where
         F: Fn(&CapturedRequest) -> (u16, String) + Send + 'static,
@@ -223,8 +235,9 @@ mod tests {
             .to_string()
     }
 
-    /// mock 工厂：verifier 已预置入库（tests 2/3 直接可登录），并挂
-    /// register 路由供 test 1 走真引导。返回 (url, 共享状态)。
+    /// mock factory: the verifier is pre-seeded in storage (tests 2/3 can log in
+    /// directly), and a register route is attached so test 1 exercises real
+    /// bootstrapping. Returns (url, shared state).
     fn spawn_registered_mock() -> (String, Arc<Mutex<MockServer>>) {
         let state = Arc::new(Mutex::new(MockServer::default()));
         {
@@ -307,8 +320,8 @@ mod tests {
                                     .to_string(),
                                 )
                             }
-                            // 与 server 一致：M1 不对 = 401（同时记账锁户，
-                            // mock 不模拟锁户计数）
+                            // Same as the server: a wrong M1 = 401 (which also books an account
+                            // lockout; the mock does not simulate lockout counting)
                             Err(_) => (401, r#"{"error":{"code":"unauthorized"}}"#.to_string()),
                         }
                     }
@@ -323,7 +336,7 @@ mod tests {
     async fn srp_login_round_trip_verifies_server_proof_and_delivers_token() {
         let (url, state) = spawn_registered_mock();
 
-        // 引导：静态令牌作 Bearer 注册凭证（ challenges/verify 是公开端点）
+        // Bootstrap: the static token serves as the Bearer credential for registration (challenge/verify are public endpoints)
         let bootstrap = AccountsApi::with_bearer(&url, "static-server-token").unwrap();
         bootstrap
             .register_srp_credential(ACCOUNT, DEVICE, PASSWORD)
@@ -335,12 +348,12 @@ mod tests {
             "salt 是 32B 随机值"
         );
 
-        // 登录走无 Bearer 实例（公开端点不得携带）
+        // Login uses a no-Bearer instance (public endpoints must not carry one)
         let client = AccountsApi::new(&url).unwrap();
         let outcome = client.srp_login(ACCOUNT, DEVICE, PASSWORD).await.unwrap();
         assert_eq!(outcome.token, "tok-15m");
         assert_eq!(outcome.expires_in_secs, 900);
-        // 双向认证：指纹与服务器侧独立推导的 premaster 指纹一致
+        // Mutual authentication: the fingerprint matches the premaster fingerprint derived independently on the server side
         assert!(!outcome.session_key_fingerprint.is_empty());
         assert_eq!(outcome.session_key.len(), 512);
         assert_eq!(state.lock().unwrap().verify_requests, 1);

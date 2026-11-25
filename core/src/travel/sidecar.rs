@@ -1,5 +1,6 @@
-//! sidecar 的路径、加密封装与原子落盘：gzip + PERSENC1（travel 独立
-//! 口令，与主密码无关），crash-safe 写入。
+//! Sidecar path, encrypted wrapping, and atomic write: gzip + PERSENC1
+//! (an independent travel passphrase, unrelated to the master password),
+//! written crash-safely.
 
 use crate::backup::file_crypto::{decrypt_bytes, encrypt_bytes, is_persona_encrypted, KdfParams};
 use crate::backup::snapshot::{gzip_bytes, maybe_gunzip};
@@ -17,9 +18,12 @@ pub fn sidecar_path(db_path: &Path) -> PathBuf {
         .join(SIDECAR_FILENAME)
 }
 
-/// 序列化 → gzip → PERSENC1（默认 64 MiB Argon2id；与备份链同款参数，
-/// 但口令独立——travel 口令忘了不影响主库，反之亦然）。明文 JSON 在
-/// 内存短暂存在（与备份链的快照明文同等暴露面，见模块注释限制节）。
+/// Serialize -> gzip -> PERSENC1 (default 64 MiB Argon2id; the same
+/// parameters as the backup chain, but an independent passphrase -- a
+/// forgotten travel passphrase does not affect the main database and vice
+/// versa). The plaintext JSON exists briefly in memory (the same exposure
+/// as the backup chain's snapshot plaintext; see the limitations section of
+/// the module docs).
 pub(crate) fn seal_pack(
     pack: &TravelPack,
     passphrase: &str,
@@ -32,7 +36,9 @@ pub(crate) fn seal_pack(
         .map_err(|e| PersonaError::CryptographicError(format!("travel pack encryption: {e}")))
 }
 
-/// 解密解包并校验 format。口令错（GCM 认证失败）与格式不符分路报错。
+/// Decrypt, unpack, and verify the format. A wrong passphrase (GCM
+/// authentication failure) and a format mismatch are reported through
+/// separate error branches.
 pub(crate) fn open_pack(bytes: &[u8], passphrase: &str) -> PersonaResult<TravelPack> {
     if !is_persona_encrypted(bytes) {
         return Err(PersonaError::Validation(
@@ -59,8 +65,9 @@ pub(crate) fn open_pack(bytes: &[u8], passphrase: &str) -> PersonaResult<TravelP
     Ok(pack)
 }
 
-/// 原子写 sidecar：同目录 `.tmp` 写完 fsync 后 rename（crash-safe），
-/// Unix 下 0600（主库同级的最高敏度文件）。
+/// Atomic sidecar write: write a `.tmp` file in the same directory, fsync,
+/// then rename (crash-safe); mode 0600 on Unix (the most sensitive file at
+/// the level of the main database).
 pub(crate) fn write_sidecar_atomic(path: &Path, bytes: &[u8]) -> PersonaResult<()> {
     let parent = path
         .parent()

@@ -1,12 +1,15 @@
-//! `SyncSession` 冲突裁决域（LAY-021 拆分）：`list_conflicts` /
-//! `conflict_item_count` / `resolve_conflict`（谓词矩阵见 `super::resolve`）。
+//! `SyncSession` conflict resolution domain (split out by LAY-021):
+//! `list_conflicts` / `conflict_item_count` / `resolve_conflict` (see
+//! `super::resolve` for the predicate matrix).
 
 use super::*;
 
 impl<R: SyncRemote> SyncSession<R> {
-    /// 冲突裁决视图（阶段 3c）：全部待裁决条目（主位 + 副本的解密快照）。
-    /// 任一版本解不开（损坏）的条目整条跳过——不可裁决但留驻 oplog，
-    /// 不阻塞其余条目的展示。
+    /// Conflict resolution view (phase 3c): all pending entries (master
+    /// position + decrypted snapshots of the copies).
+    /// An entry whose any version cannot be unwrapped (corrupt) is skipped
+    /// wholesale -- it stays unresolvable but remains in the oplog, without
+    /// blocking the display of the other entries.
     pub async fn list_conflicts(&self) -> Result<Vec<ConflictEntry>> {
         let mut entries = Vec::new();
         for item_id in self.sync_repo.item_ids().await? {
@@ -19,21 +22,30 @@ impl<R: SyncRemote> SyncSession<R> {
         Ok(entries)
     }
 
-    /// 当前待裁决的冲突条目数（run_cycle 报告的 `conflicts` 真值）。
+    /// Number of currently pending conflict entries (the `conflicts` truth
+    /// reported by run_cycle).
     pub async fn conflict_item_count(&self) -> Result<usize> {
         Ok(self.list_conflicts().await?.len())
     }
 
-    /// 裁决：采纳一个冲突副本。副本内容以本机新 lamport 重新入账
-    /// （put 复用副本 payload 字节——快照与 wrapped item key 都是 group 域
-    /// 的，设备无关；tombstone 复用空 payload），并按其内容写主库。新
-    /// lamport 严格大于冲突双方 → LWW 自然赢回主位，其余版本全部淘汰出
-    /// 裁决视图（oplog append-only，数据不丢，只是不再出现在视图里）。
+    /// Resolve: adopt one conflicting copy. The copy content is re-logged
+    /// with a fresh local lamport (a put reuses the copy's payload bytes --
+    /// the snapshot and wrapped item key are both in the group domain and
+    /// device-independent; a tombstone reuses the empty payload), and the
+    /// master database is written from it. The new lamport is strictly
+    /// greater than both sides of the conflict, so LWW naturally wins back
+    /// the master position and every other version is dropped from the
+    /// resolution view (the oplog is append-only, so nothing is lost, they
+    /// just stop appearing in the view).
     ///
-    /// 写序 = 先主库后 oplog（见 [`crate::sync::resolve`] 模块文档）：主库失败
-    /// 即 Err（oplog 未动，重试安全）；oplog 失败可重试（重写主库幂等）。
-    /// 副本引用的身份尚未同步时主库写不了 → Err 且绝不记账（记 op 不写
-    /// 主库 = 静默分叉，下一轮同步补齐身份后再裁决）。
+    /// Write order = master database first, then oplog (see the
+    /// [`crate::sync::resolve`] module docs): a master failure returns Err
+    /// (the oplog is untouched, so retrying is safe); an oplog failure is
+    /// retryable (rewriting the master is idempotent).
+    /// If the identity referenced by the copy has not been synced yet, the
+    /// master cannot be written -> Err and nothing is recorded (logging an
+    /// op without writing the master = silent divergence; resolve again after
+    /// the next sync completes the identity).
     pub async fn resolve_conflict(
         &self,
         master: &EncryptionService,
@@ -42,8 +54,9 @@ impl<R: SyncRemote> SyncSession<R> {
     ) -> Result<()> {
         let view = item_view(self.sync_repo.item_ops(item_id).await?);
         let Some(adopted) = view.conflicts.iter().find(|op| op.op_id == adopt_op_id) else {
-            // 副本不存在 = 已被裁决过（采纳任一版本后其余版本淘汰出视图）
-            // 或 op_id 打错——同一句话报给调用方。
+            // A missing copy means it was already resolved (adopting any
+            // version drops the rest from the view) or the op_id was
+            // mistyped -- the caller gets the same message either way.
             return Err(PersonaError::NotFound(format!(
                 "conflict copy {adopt_op_id} not found for item {item_id} (already resolved?)"
             ))
@@ -58,7 +71,7 @@ impl<R: SyncRemote> SyncSession<R> {
         }
         let (kind, op, payload) = (adopted.kind, adopted.op, adopted.payload.clone());
 
-        // 先主库后 oplog。
+        // Master database first, then oplog.
         match op {
             OpType::Put => {
                 let Some(payload) = payload.as_ref() else {
@@ -91,16 +104,21 @@ impl<R: SyncRemote> SyncSession<R> {
             }
         }
 
-        // 入账前防御性时钟推进：保证本机新 op 的 lamport 严格大于被采纳
-        // 副本。正常流程 pull 已 bump 过时钟（record 的 local+1 已够大）；
-        // 直连裁决（不经 run_cycle）时本机时钟可能仍停在副本同高，先 MAX
-        // 推进。放在主库写之后——前置校验失败（上方 Err 臂）零副作用。
+        // Defensive clock advance before recording: guarantees the local
+        // lamport of the new op is strictly greater than the adopted copy's.
+        // In the normal flow, pull has already bumped the clock (record's
+        // local+1 is large enough); when resolving directly without
+        // run_cycle, the local clock may still sit at the copy's height, so
+        // advance it to at least that value first. This happens after the
+        // master write -- a failed pre-check (the Err arms above) has no
+        // side effects.
         let local = self.sync_repo.get_state().await?.local_lamport;
         if local <= adopted.lamport {
             self.sync_repo.bump_lamport(adopted.lamport + 1).await?;
         }
 
-        // oplog 记账：本机新 lamport 的采纳 op 入 push 队列，随下轮推走。
+        // Record to the oplog: the adopt op, carrying a fresh local lamport,
+        // enters the push queue and goes out with the next cycle.
         self.engine
             .record_local_change(item_id, kind, op, payload)
             .await?;

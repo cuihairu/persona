@@ -44,8 +44,9 @@ pub struct Identity {
     /// Whether this identity is currently active
     pub is_active: bool,
 
-    /// 旅行模式标记：travel mode 进入时该身份的数据随身份一起移出本设备
-    /// （打包进加密 sidecar 后从库中删除），退出时原样恢复
+    /// Travel mode marker: when travel mode is entered, this identity's data
+    /// moves off-device together with the identity (packed into an encrypted
+    /// sidecar and then deleted from the database), and is restored as-is on exit
     #[serde(default)]
     pub travel_marked: bool,
 }

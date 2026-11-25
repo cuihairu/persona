@@ -1,9 +1,12 @@
-//! 无账号信箱中继客户端：会话创建/投递/轮询与双端驱动循环。
-//! （明文 HTTP 仅放行 loopback——配对材料不过公网明文。）
+//! Accountless mailbox relay client: session creation / posting / polling and
+//! the two-sided drive loops.
+//! (Cleartext HTTP is allowed only for loopback — pairing material never
+//! travels the public internet in the clear.)
 
-/// 中转信箱客户端（feature `remote-auth`）：persona-server
-/// `/api/v1/pairing/*`。只做 wire（URL/方法/JSON/状态码/错误映射），
-/// 密码学与状态机在 [`PairingHost`]/[`PairingGuest`]。
+/// Relay mailbox client (feature `remote-auth`): the persona-server
+/// `/api/v1/pairing/*` endpoints. Handles only the wire layer (URL / method /
+/// JSON / status code / error mapping); crypto and the state machine live in
+/// [`PairingHost`]/[`PairingGuest`].
 use std::time::Duration;
 
 use base64::Engine as _;
@@ -13,9 +16,10 @@ use serde::Deserialize;
 use super::{PairingGuest, PairingHost, PairingInviteLink, PairingMessage};
 use crate::{PersonaError, Result};
 
-/// 轮询间隔（take 即消费，无需长轮询）。
+/// Polling interval (take is consuming, so long polling is unnecessary).
 pub const POLL_EVERY: Duration = Duration::from_millis(500);
-/// 单次配对的生命周期上限（对应中转 TTL 600s 的上限内侧）。
+/// Lifecycle ceiling for a single pairing (sits inside the relay's 600s TTL
+/// ceiling).
 pub const DRIVE_DEADLINE: Duration = Duration::from_secs(90);
 
 #[derive(Debug, Deserialize)]
@@ -90,8 +94,9 @@ impl PairingRelayClient {
         )
     }
 
-    /// 非 2xx/422 统一转 [`PersonaError::Io`]（带服务器 error.message）；
-    /// 422 转 [`PersonaError::Validation`]（队列满/载荷超限等）。
+    /// Non-2xx/422 responses are uniformly mapped to [`PersonaError::Io`]
+    /// (carrying the server's error.message); 422 maps to
+    /// [`PersonaError::Validation`] (queue full, payload too large, etc.).
     async fn ensure_success(resp: reqwest::Response, step: &str) -> Result<reqwest::Response> {
         if resp.status().is_success() {
             return Ok(resp);
@@ -116,7 +121,8 @@ impl PairingRelayClient {
         }
     }
 
-    /// 建会话（host）：POST /sessions，返回 (session_id, expires_in_secs)。
+    /// Create a session (host): POST /sessions, returning
+    /// (session_id, expires_in_secs).
     pub async fn create_session(
         &self,
         salt: &[u8; super::PAIRING_SALT_LEN],
@@ -141,7 +147,7 @@ impl PairingRelayClient {
         Ok((created.session_id, created.expires_in_secs))
     }
 
-    /// 会话元信息（guest 取 salt）。
+    /// Session metadata (this is how the guest obtains the salt).
     pub async fn session_info(&self, session_id: &str) -> Result<RelaySessionInfo> {
         let resp = self
             .http
@@ -165,7 +171,7 @@ impl PairingRelayClient {
         })
     }
 
-    /// DELETE /sessions/{id}（完成/放弃后清理；幂等）。
+    /// DELETE /sessions/{id} (cleanup after completion/abandonment; idempotent).
     pub async fn delete_session(&self, session_id: &str) -> Result<()> {
         let resp = self
             .http
@@ -210,7 +216,7 @@ impl PairingRelayClient {
         self.post_message(session_id, "to-guest", msg).await
     }
 
-    /// GET /sessions/{id}/messages/{direction}（取即消费）。
+    /// GET /sessions/{id}/messages/{direction} (taking consumes the messages).
     async fn take_messages(
         &self,
         session_id: &str,
@@ -253,9 +259,11 @@ impl PairingRelayClient {
         self.take_messages(session_id, "to-guest").await
     }
 
-    /// host 全自动驱动：等到 guest 的 ClientPublic 后交付 ServerOffer 与
-    /// Handoff（[`PairingGuest`] 侧确认流程见 [`Self::join_begin`]）。
-    /// 返回 host 短指纹（供 UI 与 guest 比对）。错码/超期 → Err。
+    /// Fully automated host drive loop: wait for the guest's ClientPublic, then
+    /// deliver ServerOffer and Handoff (the confirmation flow on the
+    /// [`PairingGuest`] side is [`Self::join_begin`]).
+    /// Returns the host's short fingerprint (for UI comparison against the
+    /// guest's). Wrong code / expiry → Err.
     pub async fn drive_host(
         &self,
         host: &mut PairingHost,
@@ -286,9 +294,11 @@ impl PairingRelayClient {
         }
     }
 
-    /// guest 第一步：解码邀请串、取 salt、起配、交 ClientPublic、
-    /// 等回 ServerOffer。返回 (guest, 短指纹)——指纹展示给用户比对，
-    /// 比对通过后调 [`Self::join_confirm`] 才真正入组。
+    /// Guest step one: decode the invite link, fetch the salt, start pairing,
+    /// post ClientPublic, and wait for ServerOffer. Returns (guest, short
+    /// fingerprint) — the fingerprint is shown to the user for comparison, and
+    /// joining the group only happens once [`Self::join_confirm`] is called
+    /// after comparison passes.
     pub async fn join_begin(&self, link: &PairingInviteLink) -> Result<(PairingGuest, String)> {
         let info = self.session_info(&link.session_id).await?;
         if info.salt.len() != super::PAIRING_SALT_LEN {
@@ -312,7 +322,8 @@ impl PairingRelayClient {
                 let Some(reply) = guest.handle_message(msg)? else {
                     return Err(PersonaError::Io("配对意外提前完成".into()).into());
                 };
-                // ServerOffer 已消费 → ClientProof 待用户确认，先不投
+                // ServerOffer consumed → ClientProof awaits user confirmation,
+                // so hold off on posting it
                 debug_assert!(
                     matches!(reply, PairingMessage::ClientProof { .. }),
                     "join_begin 只应停在 ClientProof 前"
@@ -329,10 +340,11 @@ impl PairingRelayClient {
         }
     }
 
-    /// guest 第二步：用户指纹比对通过——交 ClientProof，等 Handoff，
-    /// 解出组密钥。调用后 [`PairingGuest::group_key`] 有值。
+    /// Guest step two: the user's fingerprint comparison passed — post
+    /// ClientProof, wait for Handoff, and extract the group key. After the call
+    /// [`PairingGuest::group_key`] has a value.
     pub async fn join_confirm(&self, guest: &mut PairingGuest, session_id: &str) -> Result<()> {
-        // 取出 join_begin 持有的待投 M1
+        // Take the M1 held by join_begin, awaiting delivery
         let proof_msg = guest
             .take_pending_proof()
             .ok_or_else(|| PersonaError::Io("join_confirm 前必须先 join_begin".into()))?;
@@ -343,7 +355,7 @@ impl PairingRelayClient {
                 if let Some(_reply) = guest.handle_message(msg)? {
                     return Err(PersonaError::Io("后续不应再有应答消息".into()).into());
                 }
-                // None = 配对完成，组密钥已落袋
+                // None = pairing complete, group key already captured
                 self.delete_session(session_id).await.ok();
                 return Ok(());
             }

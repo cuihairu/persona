@@ -2,14 +2,15 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-/// 映射条目：模式 → 分身名。仓库内映射只允许明文引用分身名，
-/// 不涉及密钥材料（设计 §5）。
+/// A mapping entry: pattern → identity name. Repo-local mappings may
+/// only reference identity names in plaintext; no secret material is
+/// involved (design §5).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct IdentityEntry {
     pub identity: String,
 }
 
-/// `context.toml` 文件模型。TOML 形态：
+/// File model for `context.toml`. TOML shape:
 ///
 /// ```toml
 /// `[project."github.com/cuihairu/persona"]`
@@ -19,7 +20,8 @@ pub struct IdentityEntry {
 /// identity = "Ops"
 /// ```
 ///
-/// BTreeMap 保证文件重写输出顺序稳定；键为模式原文（引号内，含 `.`/`/`）。
+/// BTreeMap keeps the file-rewrite output order stable; keys are the raw
+/// pattern text (as written inside quotes, including `.` and `/`).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ContextMapFile {
     #[serde(
@@ -41,7 +43,7 @@ impl ContextMapFile {
         toml::to_string_pretty(self).map_err(|e| e.to_string())
     }
 
-    /// 空表（无任何条目）。
+    /// Empty table (no entries at all).
     pub fn is_empty(&self) -> bool {
         self.projects.is_empty() && self.hosts.is_empty()
     }

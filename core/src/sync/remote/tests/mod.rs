@@ -36,7 +36,7 @@ fn sample_delete() -> SyncOp {
 }
 
 fn wire_to_op(wire: WireOpOut) -> Option<SyncOp> {
-    // WireOpOut 与 WireOp 字段同形，经 JSON 往返保证测试与真实 wire 一致
+    // WireOpOut has the same shape as WireOp; round-tripping through JSON keeps the tests faithful to the real wire
     let json = serde_json::to_value(&wire).unwrap();
     let parsed: WireOp = serde_json::from_value(json).unwrap();
     op_from_wire(parsed)
@@ -47,17 +47,17 @@ fn to_in(out: WireOpOut) -> WireOp {
     serde_json::from_value(json).unwrap()
 }
 
-// ---- HTTP 编排防御臂补齐轮（2026-09-29 覆盖率）----
-// 手写 TCP mock（沿 auth/remote_http.rs 测试惯例）：core dev-deps 无
-// 现成 HTTP mock，reqwest 对手写 TCP 响应完全够用。每连接读一个请求、
-// 按 handler 回 `Connection: close` 响应；status 0 = 不回包直接断开。
+// ---- Round filling out the HTTP orchestration defense arms (2026-09-29 coverage) ----
+// Hand-written TCP mock (following the auth/remote_http.rs test conventions): the core dev-deps have no
+// ready-made HTTP mock, and reqwest handles hand-written TCP responses just fine. Each connection reads one
+// request and answers a `Connection: close` response per the handler; status 0 = drop the connection without replying.
 
 use std::sync::{Arc, Mutex};
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
-/// mock 收到的一次请求（方法 + 路径带 query + authorization 头原值）。
+/// A single request the mock received (method + path with query + the raw authorization header value).
 struct Captured {
     method: String,
     path: String,
@@ -67,8 +67,8 @@ struct Captured {
 
 type Handler = Arc<dyn Fn(Captured) -> (u16, String) + Send + Sync>;
 
-/// 起本地 mock，返回 base_url。accept loop 挂在 multi_thread runtime
-/// 的后台 task 上，测试结束随 runtime 一起丢弃。
+/// Starts a local mock and returns its base_url. The accept loop runs on a background task of the multi_thread
+/// runtime and is dropped together with the runtime when the test ends.
 async fn spawn_mock(handler: Handler) -> String {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -102,8 +102,8 @@ async fn spawn_mock(handler: Handler) -> String {
     format!("http://{addr}")
 }
 
-/// 读一个请求头（GET 空 body / POST JSON body 都只需头即可判定；
-/// body 留在内核缓冲由连接关闭回收）。
+/// Reads one request head (the head alone decides things whether it is a GET with an empty body or a POST with a
+/// JSON body; the body stays in the kernel buffer and is reclaimed when the connection closes).
 async fn read_request(stream: &mut TcpStream) -> Option<Captured> {
     let mut buf = Vec::new();
     let mut tmp = [0u8; 4096];
@@ -125,8 +125,8 @@ async fn read_request(stream: &mut TcpStream) -> Option<Captured> {
     let auth = head
         .lines()
         .find_map(|l| l.strip_prefix("authorization: ").map(str::to_string));
-    // body：按 Content-Length 把余量读全（PUT 的 JSON 体断言要看；
-    // 无长度的 GET 视为空）。此前 body 留在内核缓冲由连接关闭回收。
+    // Body: read the remainder in full according to Content-Length (assertions on the PUT JSON body need it;
+    // a lengthless GET counts as empty). Previously the body stayed in the kernel buffer and was reclaimed by the connection closing.
     let content_length: usize = head
         .lines()
         .find_map(|l| l.strip_prefix("content-length: ").map(str::to_string))

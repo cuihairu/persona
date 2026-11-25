@@ -1,17 +1,19 @@
 use super::*;
 
 impl PersonaService {
-    /// Connect 审计与 last_used 落库节流窗口（同 key 每 60s 至多一次）。
+    /// Throttle window for Connect auditing and `last_used` persistence (at most once per key per 60s).
     pub(crate) const CONNECT_THROTTLE: Duration = Duration::from_secs(60);
 
-    /// 节流表容量上限：`unknown:{指纹}` 的 key 由请求方 token 决定，每个
-    /// 随机伪造 token 都不重复，无上限时可被无界撑大内存（audit 批2 #7）。
-    /// 超限时先清过期项腾位，仍满则丢弃本次标记（false = 不写审计）——
-    /// 洪水自限，表长封顶；窗口内已有 key 的节流不受影响。
+    /// Throttle table capacity cap: keys of the form `unknown:{fingerprint}` are driven by the
+    /// caller's token, and every randomly forged token is unique, so an unbounded table could let
+    /// memory grow without limit (audit batch 2 #7).
+    /// When over the cap, expired entries are purged first to make room; if still full, this
+    /// mark is dropped (false = no audit written) — the flood self-limits and the table length
+    /// is capped; throttling for keys already in the window is unaffected.
     pub(crate) const CONNECT_THROTTLE_MARKS_MAX: usize = 4096;
 
-    /// 锁定门禁：Connect 数据面只在解锁会话内可用（DR-4；端点层把
-    /// [`PersonaError::VaultLocked`] 映射为 503）。
+    /// Lock gate: the Connect data plane is only available in an unlocked session (DR-4; the
+    /// endpoint layer maps [`PersonaError::VaultLocked`] to 503).
     pub(crate) fn connect_gate(&self) -> Result<()> {
         if !self.is_unlocked() {
             return Err(PersonaError::VaultLocked(
@@ -22,10 +24,13 @@ impl PersonaService {
         Ok(())
     }
 
-    /// 同 key 节流：窗口内已写过则 false，否则刷新窗口并放行。
-    /// 内存态，进程重启即清——防刷屏/批量写，不是访问限额。
-    /// 表长封顶 [`Self::CONNECT_THROTTLE_MARKS_MAX`]：未知 token 洪水的
-    /// 不重复指纹不再入表（对应审计也不写），内存不随请求量增长。
+    /// Same-key throttling: returns false if already written within the window, otherwise
+    /// refreshes the window and allows the write.
+    /// In-memory state, cleared on process restart — prevents log spam/bulk writes, not an
+    /// access rate limit.
+    /// Table length is capped at [`Self::CONNECT_THROTTLE_MARKS_MAX`]: unique fingerprints from
+    /// unknown-token floods are no longer inserted (and no audit is written for them), so memory
+    /// does not grow with request volume.
     pub(crate) fn connect_throttle_should_write(&self, key: &str) -> bool {
         let mut marks = self.connect_audit_marks.lock().unwrap();
         let now = Instant::now();
@@ -44,11 +49,12 @@ impl PersonaService {
         }
     }
 
-    /// 创建 Connect token：返回 `(presented 明文, 库行)`——明文仅此一次
-    /// 展示，调用方（桌面设置页/CLI）负责「关闭后无法再次查看」语义。
-    /// `principal` 绑定调用方身份（空/空白归一为 `None`）；`expires_at`
-    /// 为 `None` = 永不过期（旧数据语义）。管理操作走敏感门禁（reauth）
-    /// + 解锁会话（DR-5）。
+    /// Create a Connect token: returns `(presented plaintext, db row)` — the plaintext is shown
+    /// only this once; the caller (desktop settings page/CLI) owns the "cannot be viewed again
+    /// after closing" semantics.
+    /// `principal` binds the caller identity (empty/whitespace normalized to `None`); `expires_at`
+    /// = `None` means never expires (legacy data semantics). Management operations go through the
+    /// sensitive gate (reauth) + unlocked session (DR-5).
     pub async fn create_connect_token(
         &self,
         label: String,
@@ -121,8 +127,9 @@ impl PersonaService {
         Ok((presented, row))
     }
 
-    /// Token 管理列表（含已吊销，管理面展示吊销状态）。行含哈希——调用方
-    /// 序列化时剥除（桌面/CLI 都只展示 label/指纹/scope/时间戳）。
+    /// Token management listing (includes revoked; the admin surface shows revocation status).
+    /// Rows contain hashes — the caller strips them during serialization (desktop/CLI show only
+    /// label/fingerprint/scope/timestamps).
     pub async fn list_connect_tokens(&self) -> Result<Vec<ConnectTokenRow>> {
         self.connect_gate()?;
         Ok(ConnectTokenRepository::new(self.db.clone())
@@ -130,8 +137,9 @@ impl PersonaService {
             .await?)
     }
 
-    /// 吊销（幂等：重复吊销返回 false）。即时生效——鉴权每请求查表，
-    /// 无缓存窗口（DR-2）。管理操作走敏感门禁（reauth）+ 解锁会话。
+    /// Revoke (idempotent: repeated revocation returns false). Takes effect immediately — auth
+    /// looks up the table on every request, with no cache window (DR-2). Management operations go
+    /// through the sensitive gate (reauth) + unlocked session.
     pub async fn revoke_connect_token(&self, id: &Uuid) -> Result<bool> {
         self.ensure_sensitive_operation_allowed().await?;
         self.connect_gate()?;
@@ -152,9 +160,10 @@ impl PersonaService {
         Ok(revoked)
     }
 
-    /// 每请求鉴权：呈现值 → SHA-256 → 查表 → 吊销判定。命中即节流落库
-    /// `last_used_at` 并节流记审计（自动化轮询不刷屏）；未知/吊销 token
-    /// 的尝试也节流记失败审计（指纹前缀做 key，可审计但不刷屏）。
+    /// Per-request auth: presented value → SHA-256 → table lookup → revocation check. On a hit,
+    /// throttled persistence of `last_used_at` and throttled audit (so automated polls don't spam
+    /// the log); attempts with unknown/revoked tokens also write throttled failure audits (keyed
+    /// by fingerprint prefix — auditable without spam).
     pub async fn connect_authenticate(&self, presented: &str) -> Result<Option<ConnectTokenRow>> {
         let Some(hash) = crate::connect::hash_token(presented) else {
             return Ok(None);
@@ -189,7 +198,7 @@ impl PersonaService {
             }
             return Ok(None);
         }
-        // 过期 token 与吊销同形拒绝（迁移 019：expires_at 判定）。
+        // Expired tokens are rejected in the same shape as revoked ones (migration 019: expires_at check).
         if row.expired() {
             if self.connect_throttle_should_write(&format!("expired:{}", row.id)) {
                 self.log_audit(
@@ -219,8 +228,9 @@ impl PersonaService {
         Ok(Some(row))
     }
 
-    /// token 读裁决的 404 形映射：统一授权入口判 Denied → `false`，
-    /// 端点层映射空列表/None（与 404 同形，不泄露存在性）。
+    /// 404-shaped mapping for token read decisions: the unified authorization entry treats Denied
+    /// as `false`, and the endpoint layer maps it to an empty list/None (same shape as a 404, so
+    /// existence is not leaked).
     pub(crate) fn token_allows_read(principal: &AuthzPrincipal, resource: &AuthzResource) -> bool {
         authorize(
             principal,
@@ -231,13 +241,14 @@ impl PersonaService {
         .is_allowed()
     }
 
-    /// scope 拒绝审计（架构校正批2 补全）：此前 scope 拒绝零审计。节流
-    /// 落库（与 used/unknown 同窗口），记 token 指纹与拒绝点，自动化
-    /// 轮询不刷屏；列表内逐条过滤属正常降噪行为，不逐条记。
+    /// Scope-denial auditing (completed in architecture correction batch 2): previously scope
+    /// denials were not audited at all. Throttled persistence (same window as used/unknown),
+    /// recording the token fingerprint and denial point, so automated polls don't spam the log;
+    /// per-row filtering within a list is normal noise reduction and is not recorded per row.
     pub(crate) async fn audit_scope_denied(&self, token: &ConnectTokenRow, detail: &str) {
         if self.connect_throttle_should_write(&format!("denied:{}", token.id)) {
-            // token id 不是 identity/credential 外键：直构日志只载
-            // resource_id（与删除事件同策略），不走 log_audit 的外键臂。
+            // A token id is not an identity/credential FK: the log is built directly carrying only
+            // resource_id (same policy as deletion events), bypassing log_audit's FK arm.
             let log = AuditLog::new(
                 AuditAction::UnauthorizedAccess,
                 ResourceType::Connect,
@@ -253,7 +264,7 @@ impl PersonaService {
         }
     }
 
-    /// scope 内身份列表（id + 名称）。
+    /// Identity list within scope (id + name).
     pub async fn connect_list_identities(&self, token: &ConnectTokenRow) -> Result<Vec<Identity>> {
         self.connect_gate()?;
         let principal = AuthzPrincipal::ConnectToken {
@@ -271,8 +282,8 @@ impl PersonaService {
             .collect())
     }
 
-    /// scope 内条目元数据。`?identity=`/`?type=`/`?title=` 精确过滤；
-    /// identity 参数越 scope 返回空列表（不报错，防探测）。
+    /// Item metadata within scope. `?identity=`/`?type=`/`?title=` filter exactly;
+    /// an identity parameter outside scope returns an empty list (no error, to prevent probing).
     pub async fn connect_list_items(
         &self,
         token: &ConnectTokenRow,
@@ -319,8 +330,8 @@ impl PersonaService {
             .collect())
     }
 
-    /// 单条全字段（解密后）。scope 外/归档/不存在一律 `None`——端点层
-    /// 统一映射 404（与 403 同形）。
+    /// A single item's full fields (after decryption). Out-of-scope/archived/nonexistent all
+    /// yield `None` — the endpoint layer maps them uniformly to 404 (same shape as 403).
     pub async fn connect_get_item_data(
         &self,
         token: &ConnectTokenRow,
@@ -358,8 +369,8 @@ impl PersonaService {
         Ok(Some((cred, data)))
     }
 
-    /// 当前 TOTP 码 + 剩余秒（复用 core RFC 6238 路径；scope 外/非
-    /// TwoFactor 一律 `None`）。
+    /// Current TOTP code + seconds remaining (reuses the core RFC 6238 path; out-of-scope/non-
+    /// TwoFactor all yield `None`).
     pub async fn connect_totp(
         &self,
         token: &ConnectTokenRow,
@@ -377,8 +388,8 @@ impl PersonaService {
         let Some(cred) = self.get_credential(id).await? else {
             return Ok(None);
         };
-        // 单条裁决涵盖身份与类型两维；非 TwoFactor 条目随后的数据门
-        // （`CredentialData::TwoFactor`）同形 None。
+        // A single decision covers both the identity and type dimensions; for non-TwoFactor items
+        // the subsequent data gate (`CredentialData::TwoFactor`) likewise yields None.
         if !cred.is_active {
             return Ok(None);
         }

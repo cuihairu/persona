@@ -1,5 +1,6 @@
-//! 通用行编解码：SQLite 行 ↔ JSON（值级探测，SQLite 动态类型保真），
-//! 以及表/列名白名单与恢复写入。
+//! Generic row codec: SQLite row <-> JSON (value-level probing with
+//! SQLite dynamic-type fidelity), plus table/column whitelists and the
+//! restore write path.
 
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
@@ -9,9 +10,11 @@ use sqlx::{AssertSqlSafe, Column, Row};
 use super::PACKED_TABLES_IN_INSERT_ORDER;
 use crate::{PersonaError, PersonaResult};
 
-/// 一行 → JSON map。按**值**逐级探测实际存储类型（SQLite 同一列可存
-/// 不同类型值，列声明类型不可信）：NULL/TEXT → i64 → f64 → BLOB。
-/// INTEGER 与 BOOLEAN 声明列的值统一落 i64（存储等价，bind 回 int）。
+/// Row -> JSON map. Probe the actual stored type **value by value** (one
+/// SQLite column can hold different kinds of values, so the declared column
+/// type is untrustworthy): NULL/TEXT -> i64 -> f64 -> BLOB. Values from
+/// INTEGER- and BOOLEAN-declared columns both land in i64 (storage-equivalent,
+/// bound back as int).
 pub(super) fn row_to_json(row: &sqlx::sqlite::SqliteRow) -> PersonaResult<Map<String, Value>> {
     let mut map = Map::new();
     for col in row.columns() {
@@ -40,7 +43,7 @@ pub(super) fn row_to_json(row: &sqlx::sqlite::SqliteRow) -> PersonaResult<Map<St
     Ok(map)
 }
 
-/// JSON 值 → 可 bind 的单元格。
+/// JSON value -> bindable cell.
 enum Cell {
     Null,
     Int(i64),
@@ -85,7 +88,8 @@ fn value_to_cell(key: &str, value: &Value) -> PersonaResult<Cell> {
     })
 }
 
-/// 列名白名单校验（列名来自我们自己的 SELECT *，此处防御脏 pack）。
+/// Column-name whitelist validation (column names come from our own SELECT
+/// *; this guards against a dirty pack).
 fn check_column_name(key: &str) -> PersonaResult<()> {
     if key.is_empty() || !key.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_') {
         return Err(PersonaError::Validation(format!(
@@ -95,7 +99,7 @@ fn check_column_name(key: &str) -> PersonaResult<()> {
     Ok(())
 }
 
-/// 表名白名单校验。
+/// Table-name whitelist validation.
 pub(super) fn check_table_name(name: &str) -> PersonaResult<()> {
     if PACKED_TABLES_IN_INSERT_ORDER.contains(&name) {
         Ok(())
@@ -125,8 +129,9 @@ pub(super) async fn insert_rows(
                 columns.push_str(", ");
                 placeholders.push_str(", ");
             }
-            // 白名单已限 [A-Za-z0-9_]，双引号仅用于越过 SQL 关键字
-            //（如 wallet_addresses 的 "index" 列）。
+            // The whitelist limits names to [A-Za-z0-9_]; double quotes only
+            // escape SQL keywords (e.g. the "index" column of
+            // wallet_addresses).
             columns.push('"');
             columns.push_str(key);
             columns.push('"');

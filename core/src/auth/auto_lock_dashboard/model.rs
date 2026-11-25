@@ -1,6 +1,7 @@
-//! 面板数据模型：指标聚合（`DashboardMetrics`/`PerformanceMetrics`）、
-//! 系统健康（`SystemHealth`/`HealthAlert`）、合规统计、通知设置（含阈值与
-//! 免打扰时段）与自动锁事件留痕 `AutoLockEventRecord`。
+//! Dashboard data models: metric aggregation (`DashboardMetrics`/
+//! `PerformanceMetrics`), system health (`SystemHealth`/`HealthAlert`),
+//! compliance statistics, notification settings (thresholds and quiet
+//! hours), and the auto-lock event record `AutoLockEventRecord`.
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;

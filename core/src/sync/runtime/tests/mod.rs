@@ -1,7 +1,9 @@
-//! runtime 拆分（LAY-021）测试枢纽：跨域共享的 fixture/helper + 按域分组。
-//! 各分组经 `use super::*` 级联（枢纽导入与 helper 对后代可见）；
-//! 单域私有 helper 随域分组（SharedRemote 系在 session、retention_days 与
-//! pending_after_resolve 在 gc、assert_variant 在 conflicts）。
+//! runtime split (LAY-021) test hub: fixtures/helpers shared across domains,
+//! plus per-domain grouping.
+//! Each group cascades through `use super::*` (hub imports and helpers are
+//! visible to descendants); domain-private helpers live with their group
+//! (the SharedRemote family in session, retention_days and
+//! pending_after_resolve in gc, assert_variant in conflicts).
 
 use super::*;
 use crate::models::credential::{
@@ -20,7 +22,8 @@ mod gc;
 mod rotate;
 mod session;
 
-/// 内存远端：push 收集（Arc 共享给测试断言）、pull 返回空页。
+/// In-memory remote: push collects ops (the Arc is shared with test
+/// assertions), pull returns an empty page.
 struct MemRemote {
     pushed: Arc<Mutex<Vec<SyncOp>>>,
 }
@@ -129,7 +132,7 @@ fn session_for(
     (session, pushed_log)
 }
 
-// ---- 冲突裁决（阶段 3c）----
+// ---- Conflict resolution (phase 3c) ----
 
 use chrono::Utc as TestUtc;
 
@@ -186,8 +189,8 @@ fn conflict_delete_op(item_id: Uuid, device_id: Uuid, lamport: u64) -> SyncOp {
     }
 }
 
-/// 造一对真冲突（同 item、同 lamport、异设备），按全序返回
-/// (主位 op, 副本 op)。
+/// Build a genuine conflict pair (same item, same lamport, different
+/// devices) and return them in total order as (primary op, copy op).
 fn seeded_conflict(item_id: Uuid, group: &GroupKey, identity_id: Uuid) -> (SyncOp, SyncOp) {
     let (a, b) = (Uuid::new_v4(), Uuid::new_v4());
     let (winner, loser) = if a > b { (a, b) } else { (b, a) };

@@ -1,45 +1,55 @@
-//! Travel Mode（旅行模式）：把被标记身份的数据整包移出本设备，退出时
-//! 原样恢复（1Password「remove vaults from devices」语义）。
+//! Travel Mode: move all data of the marked identities off this device in
+//! one piece and restore it unchanged on exit (1Password's
+//! "remove vaults from devices" semantics).
 //!
-//! # 数据流
+//! # Data flow
 //!
-//! enter：读被标记身份的全部行（12 张表）+ 附件 blob 文件字节（磁盘密封
-//! 态，不解密）→ `TravelPack` 序列化 → gzip → PERSENC1 加密（独立 travel
-//! 口令，与主密码无关）→ 写 sidecar `<db dir>/travel.persenc` → 单事务
-//! 从主库删除（先剥离 audit_logs 的 FK 引用）。主库零痕迹（连名字都没有）；
-//! 主密码打不开 sidecar。
+//! enter: read every row of the marked identities (12 tables) + the
+//! attachment blob file bytes (sealed on disk, never decrypted) ->
+//! serialize a `TravelPack` -> gzip -> PERSENC1 encryption (a travel
+//! passphrase independent of the master password) -> write the sidecar
+//! `<db dir>/travel.persenc` -> delete from the main database in one
+//! transaction (audit_logs FK references stripped first). The main database
+//! is left with zero trace (not even a name); the master password cannot
+//! open the sidecar.
 //!
-//! exit：读 sidecar → 解密解包（校验 format）→ 单事务 `INSERT OR REPLACE`
-//! 恢复（父表在前）+ settings 复位 → 重写 blob 文件 → 删 sidecar。
-//! 行 id、加密形态（`wrapped_item_key`/`encrypted_data` 字节）不变——
-//! per-item key 由主密钥包裹，主密码未变则恢复后可解；也因此旅行模式
-//! 期间拒绝改主密码（见 `PersonaService::change_master_password` 拦截）。
+//! exit: read the sidecar -> decrypt and unpack (verifying the format) ->
+//! restore with a single `INSERT OR REPLACE` transaction (parent tables
+//! first) + reset settings -> rewrite the blob files -> delete the sidecar.
+//! Row ids and the encrypted form (`wrapped_item_key` / `encrypted_data`
+//! bytes) are unchanged -- per-item keys are wrapped by the master key, so
+//! as long as the master password is unchanged they stay decryptable after
+//! restore; that is why changing the master password is refused while travel
+//! mode is active (see the check in `PersonaService::change_master_password`).
 //!
-//! # 崩溃窗口语义
+//! # Crash-window semantics
 //!
-//! | 崩溃点 | 状态 | 恢复方式 |
+//! | Crash point | State | Recovery |
 //! |---|---|---|
-//! | sidecar 已写、事务未提交 | sidecar 存在、`travel_mode=false`、行未删 | enter 拒绝（sidecar 已存在），提示删残留 sidecar 或直接 exit 恢复 |
-//! | 事务已提交、blob 文件未删 | 行已删、文件残留 | exit 时按 storage_path 原路径覆写文件，自愈 |
-//! | 用户手删 sidecar | `travel_mode=true` 且 sidecar 缺失 | `travel_status().inconsistent = true`——数据仅存于 sidecar，已丢失（诚实呈现，不假装可恢复） |
+//! | sidecar written, transaction not committed | sidecar present, `travel_mode=false`, rows untouched | enter refuses (sidecar already exists); delete the leftover sidecar or just exit to restore |
+//! | transaction committed, blob files not removed | rows deleted, files left behind | exit overwrites the files at their original storage_path, self-healing |
+//! | user deleted the sidecar by hand | `travel_mode=true` with the sidecar missing | `travel_status().inconsistent = true` -- the data lived only in the sidecar and is gone (reported honestly rather than faking recoverability) |
 //!
-//! # 已知限制
+//! # Known limitations
 //!
-//! - travel 口令忘了 = sidecar 不可解 = 数据只能靠 enter 之前的整库备份
-//!   （备份是时间点快照，含当时仍在库内的被标记身份）。
-//! - 本机攻击者可删除/替换 sidecar（拒绝服务）；替换者没有 travel 口令
-//!   就构造不出能通过 GCM 认证的密文，注入不可行。
-//! - audit_logs 不随行（只记 id 无明文，留作存证）；change_history 快照
-//!   含明文元数据，随行。
+//! - A forgotten travel passphrase = unreadable sidecar = the data can only
+//!   come back from a full-database backup taken before enter (a backup is a
+//!   point-in-time snapshot that still contains the marked identities).
+//! - A local attacker can delete or replace the sidecar (denial of service);
+//!   without the travel passphrase a replacer cannot build ciphertext that
+//!   passes GCM authentication, so injection is not feasible.
+//! - audit_logs do not travel (they hold ids only, no plaintext, and are
+//!   kept as evidence); change_history snapshots contain plaintext metadata
+//!   and do travel.
 //!
-//! # 模块布局
+//! # Module layout
 //!
-//! - `model`：pack / status / counts 类型与格式常量
-//! - `codec`：SQLite 行 ↔ JSON 的值级编解码与白名单校验
-//! - `pack`：跨库读取聚合（build_pack）
-//! - `sidecar`：sidecar 路径与加密封装（seal / open / 原子落盘）
-//! - `tx`：enter / exit 单事务（含 favicon 缓存清理与 settings 旗标）
-//! - `blob`：附件文件的读写与路径逃逸防御
+//! - `model`: pack / status / counts types and format constants
+//! - `codec`: value-level SQLite row <-> JSON codec plus whitelist validation
+//! - `pack`: cross-database read aggregation (`build_pack`)
+//! - `sidecar`: sidecar path and encrypted wrapping (seal / open / atomic write)
+//! - `tx`: the enter / exit transactions (including favicon cache pruning and the settings flags)
+//! - `blob`: attachment file I/O and path-escape defense
 
 use sha2::{Digest, Sha256};
 
@@ -57,16 +67,17 @@ pub use sidecar::sidecar_path;
 pub(crate) use sidecar::{open_pack, seal_pack, write_sidecar_atomic};
 pub(crate) use tx::{apply_enter_tx, apply_exit_tx};
 
-/// sidecar 文件名（放在库文件同目录）。
+/// Sidecar file name (placed next to the database file).
 pub const SIDECAR_FILENAME: &str = "travel.persenc";
 
-/// 格式名（open_pack 校验）。
+/// Format name (checked by `open_pack`).
 pub const FORMAT_NAME: &str = "persona-travel-1";
 
-/// 格式版本。
+/// Format version.
 pub const FORMAT_VERSION: u32 = 1;
 
-/// enter 时打包的表（恢复时按此顺序插回，父表在前——FK 依赖序）。
+/// Tables packed on enter (restored in this order, parent tables first --
+/// FK dependency order).
 const PACKED_TABLES_IN_INSERT_ORDER: &[&str] = &[
     "identities",
     "credentials",

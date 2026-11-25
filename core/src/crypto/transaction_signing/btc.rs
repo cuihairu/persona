@@ -54,7 +54,7 @@ pub(super) fn sign_with_secp256k1(
     signing_key: &SigningKey,
     message: &[u8],
 ) -> PersonaResult<Signature> {
-    // signature 3.0 的 DigestSigner 改收 Fn(&mut D) 闭包
+    // signature 3.0's DigestSigner now takes an Fn(&mut D) closure
     Ok(signing_key.sign_digest(|d: &mut Sha256| d.update(message)))
 }
 

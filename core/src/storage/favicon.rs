@@ -3,7 +3,7 @@ use crate::storage::Database;
 use crate::{PersonaError, Result};
 use sqlx::Row;
 
-/// Repository for favicon cache operations（host 级去重的公开数据缓存）
+/// Repository for favicon cache operations (host-level deduplicated public-data cache)
 pub struct FaviconRepository {
     db: Database,
 }
@@ -14,7 +14,7 @@ impl FaviconRepository {
         Self { db }
     }
 
-    /// 按 host 查缓存；未命中返回 None
+    /// Look up the cache by host; returns None on a miss
     pub async fn get(&self, host: &str) -> Result<Option<FaviconCacheEntry>> {
         let query = r#"
             SELECT host, mime_type, data, created_at, updated_at
@@ -33,8 +33,9 @@ impl FaviconRepository {
         }
     }
 
-    /// 批量查缓存。数量级为列表页 hosts（数十~数百），逐 host 索引点查足够，
-    /// 避免动态 IN 占位符拼接；调用方负责去重。
+    /// Batch cache lookup. The volume is the list-page hosts (tens to a few hundred),
+    /// so a per-host indexed point lookup is sufficient and avoids splicing dynamic
+    /// IN placeholders; callers are responsible for deduplication.
     pub async fn get_many(&self, hosts: &[String]) -> Result<Vec<FaviconCacheEntry>> {
         let mut entries = Vec::new();
         for host in hosts {
@@ -45,7 +46,8 @@ impl FaviconRepository {
         Ok(entries)
     }
 
-    /// 抓取成功后 upsert；保留首次 created_at，仅刷新 mime/data/updated_at
+    /// Upsert after a successful fetch; keeps the original created_at and only
+    /// refreshes mime/data/updated_at
     pub async fn upsert(&self, host: &str, mime_type: &str, data: &[u8]) -> Result<()> {
         let now = chrono::Utc::now().to_rfc3339();
         let query = r#"
@@ -133,7 +135,7 @@ mod tests {
             .unwrap();
         let first = repo.get("example.com").await.unwrap().unwrap();
 
-        // 时间戳列是秒级精度依赖 rfc3339；同瞬间内 created_at 必须保留
+        // The timestamp column is second-precision via rfc3339; created_at must be preserved within the same second
         repo.upsert("example.com", "image/png", b"new-bytes")
             .await
             .unwrap();
@@ -178,7 +180,7 @@ mod tests {
         let repo = FaviconRepository::new(db.clone());
         repo.upsert("bad.com", "image/png", b"x").await.unwrap();
 
-        // 绕过仓储直接写入非法时间戳，行解析应报 Database 错而非 panic
+        // Bypass the repository and write an invalid timestamp directly; row parsing should report a Database error rather than panic
         sqlx::query("UPDATE favicon_cache SET created_at = 'not-a-date' WHERE host = 'bad.com'")
             .execute(db.pool())
             .await

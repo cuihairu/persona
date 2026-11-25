@@ -294,8 +294,9 @@ fn keystore_rejects_oversized_scrypt_work_factor() {
     assert!(err.to_string().contains("work factor too high"));
 }
 
-/// n/r 都取 u32::MAX：128*r*n 溢出 u64（debug 下 panic / release 下回绕）。
-/// checked_mul 必须转为"work factor too high"而非崩溃。
+/// n and r both set to u32::MAX: 128*r*n overflows u64 (panics in debug,
+/// wraps in release). checked_mul must turn that into a "work factor too
+/// high" error rather than a crash.
 #[test]
 fn keystore_rejects_overflowing_scrypt_work_factor() {
     let crypto = KeystoreCrypto {
@@ -329,8 +330,9 @@ fn keystore_rejects_overflowing_scrypt_work_factor() {
     );
 }
 
-/// pbkdf2 迭代数无上界 = 恶意 keystore 可让导入挂死（c 是 u32，
-/// 40 亿次 HMAC 在真机上要跑数小时）。必须在派生前拒绝。
+/// An unbounded pbkdf2 iteration count lets a hostile keystore hang the import
+/// (c is a u32; 4 billion HMAC rounds take hours on real hardware). Reject it
+/// before deriving anything.
 #[test]
 fn keystore_rejects_oversized_pbkdf2_iterations() {
     let json = build_pbkdf2_keystore_json(&[0x33u8; 32], "pw", 100)
@@ -343,8 +345,9 @@ fn keystore_rejects_oversized_pbkdf2_iterations() {
     );
 }
 
-/// dklen 无上界 = 恶意 keystore 可凭一个 u32 让派生输出缓冲直接分配
-/// 4 GiB（u32::MAX），内存 DoS。scrypt 与 pbkdf2 两条 KDF 臂都要拦。
+/// An unbounded dklen lets a hostile keystore force a 4 GiB (u32::MAX)
+/// allocation for the derived-key buffer out of a single u32 field — a memory
+/// DoS. Both the scrypt and pbkdf2 KDF arms must reject it.
 #[test]
 fn keystore_rejects_oversized_dklen_before_allocating() {
     let base = build_pbkdf2_keystore_json(&[0x44u8; 32], "pw", 100);
@@ -381,18 +384,20 @@ fn keystore_rejects_oversized_dklen_before_allocating() {
     assert!(err.to_string().contains("dklen"), "unexpected error: {err}");
 }
 
-/// 确定性变异 harness：以合法小工作因子 keystore 为基线，做字节翻转、
-/// 截断与字段级篡改，断言解析器是全函数——任何变异要么 Ok 要么 Err，
-/// 绝不 panic。补上 ROADMAP 登记的 keystore 变异 harness 缺口。
+/// Deterministic mutation harness: starting from a valid keystore with a small
+/// work factor, it applies byte flips, truncations and field-level tampering and
+/// asserts the parser is total — every mutation yields Ok or Err, never a panic.
+/// Fills the keystore mutation-harness gap tracked in ROADMAP.
 #[test]
 fn keystore_mutation_harness_is_total() {
     let base = build_pbkdf2_keystore_json(&[0x55u8; 32], "harness-pass", 100);
-    // 基线本身必须可解，否则 harness 锚点失效。
+    // The baseline itself must be decryptable, or the harness anchor is void.
     assert!(import_from_keystore(&base, "harness-pass").is_ok());
 
     let mut cases: Vec<(String, String)> = Vec::new();
     let bytes = base.as_bytes();
-    // 字节翻转：全串按步长取样，每个位置打三种替换值。
+    // Byte flips: sample the whole string at a fixed stride, writing three
+    // replacement values at each position.
     for pos in (0..bytes.len()).step_by(7) {
         for val in [0x00u8, 0xFF, 0x22] {
             let mut mutated = base.clone().into_bytes();
@@ -403,14 +408,15 @@ fn keystore_mutation_harness_is_total() {
             ));
         }
     }
-    // 截断：从空串到接近全长的锚点长度。
+    // Truncations: anchor lengths from the empty string up to nearly the full length.
     for len in [0usize, 1, 2, 5, 10, 50, 100, base.len() / 2, base.len() - 1] {
         cases.push((
             format!("truncate@{len}"),
             base[..len.min(base.len())].to_string(),
         ));
     }
-    // 字段级篡改：类型混淆、未知算法、越界参数、坏 hex。
+    // Field-level tampering: type confusion, unknown algorithms, out-of-range
+    // parameters, and bad hex.
     for (label, mutation) in [
         (
             "version-string",
@@ -442,7 +448,8 @@ fn keystore_mutation_harness_is_total() {
             ),
         ),
         ("mac-empty", {
-            // 用 serde 改 mac 更稳：直接定位 `"mac":"..."` 值段。
+            // Mutating mac through serde is safer: it targets the `"mac":"..."` value span
+            // directly.
             let mut keystore: serde_json::Value = serde_json::from_str(&base).unwrap();
             keystore["crypto"]["mac"] = serde_json::json!("");
             keystore.to_string()
@@ -464,7 +471,7 @@ fn keystore_mutation_harness_is_total() {
     for (label, mutated) in cases {
         let result = std::panic::catch_unwind(|| import_from_keystore(&mutated, "harness-pass"));
         match result {
-            Ok(Ok(_)) | Ok(Err(_)) => {} // 全函数：两种返回都合法
+            Ok(Ok(_)) | Ok(Err(_)) => {} // total: both outcomes are legal
             Err(_) => panic!("keystore mutation harness panicked on case: {label}"),
         }
     }

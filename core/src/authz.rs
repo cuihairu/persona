@@ -1,31 +1,41 @@
-//! 统一授权入口（架构校正批1）：动作词汇、主体/资源/上下文与纯策略
-//! 裁决。[`authorize`] 是唯一的策略裁决点——此前分散在四处（core 敏感
-//! 操作门、Connect token scope 过滤、SSH Agent 签名策略、CLI 导出确认）
-//! 的授权判定，现在都从这里取裁决，再各自映射到既有可观察行为（错误
-//! 变体 / 空·None 的 404 形 / failure 包 / 取消提示）。
+//! Unified authorization entry point (architecture correction batch 1): the
+//! action vocabulary, principal/resource/context, and pure policy decisions.
+//! [`authorize`] is the single policy decision point — authorization checks
+//! previously scattered across four sites (the core sensitive-operation gate,
+//! Connect token scope filtering, SSH Agent signing policy, CLI export
+//! confirmation) now take their ruling from here and each map it onto the
+//! existing observable behavior (error variants / the 404 shape of
+//! empty-None / failure packages / cancel prompts).
 //!
-//! 边界（不放松任何现有机制）：
-//! - 状态性门禁不进纯函数——会话锁、自动锁、敏感重认证仍由
-//!   `ensure_sensitive_operation_allowed` 把守；token 吊销与查表校验仍在
-//!   service 层；主机规则/频率/确认计数仍在 agent 的 `PolicyEnforcer`。
-//!   本模块只回答「该主体能否对该资源做该动作，或是否需要交互履约」。
-//! - [`AuthzDecision::InteractionRequired`] 表示策略允许但需调用边履约
-//!   （CLI 确认、桌面对话框、agent 审批/生物识别）；履约完成前视同未
-//!   授权。非交互上下文直接拒绝（fail-closed），不产生「等一个永远不
-//!   来的确认」。
-//! - 动词模型统一 read/use/export/sign：Connect token 可被授予 `read`/
-//!   `use`（创建期 `validate` 限定子集，见 `ConnectTokenScope::validate`），
-//!   export/sign 对 token 一律拒绝（不是 Connect 动词）；agent 密钥唯一
-//!   能力是签名；本地会话的导出永远要求显式确认。
+//! Boundaries (no existing mechanism is loosened):
+//! - Stateful gates stay out of the pure functions — session lock, auto-lock,
+//!   and sensitive re-authentication are still guarded by
+//!   `ensure_sensitive_operation_allowed`; token revocation and table lookups
+//!   remain in the service layer; host rules / rate limits / confirmation
+//!   counts remain in the agent's `PolicyEnforcer`. This module only answers
+//!   "may this principal perform this action on this resource, or is
+//!   interactive fulfillment required?"
+//! - [`AuthzDecision::InteractionRequired`] means the policy allows but the
+//!   calling edge must fulfill it (CLI confirmation, desktop dialog, agent
+//!   approval/biometrics); until fulfillment completes it counts as
+//!   unauthorized. Non-interactive contexts are refused outright
+//!   (fail-closed) and never produce "waiting for a confirmation that will
+//!   never come".
+//! - The verb model is unified as read/use/export/sign: a Connect token can be
+//!   granted `read`/`use` (the `validate` at creation time restricts the
+//!   subset, see `ConnectTokenScope::validate`), export/sign are always
+//!   refused for tokens (not Connect verbs); an agent key's only capability is
+//!   signing; a local session's export always requires explicit confirmation.
 
 use crate::connect::token::{ConnectTokenScope, ConnectVerb};
 use crate::models::CredentialType;
 use crate::PersonaError;
 use uuid::Uuid;
 
-/// 授权动作。`Read` 读元数据/数据，`Use` 在本库内使用凭据（解密展示、
-/// 签名断言），`Export` 导出秘密本体（离开库边界），`Sign` 用密钥对外
-/// 签名（SSH agent 数据面）。
+/// Authorization action. `Read` reads metadata/data, `Use` uses credentials
+/// within this vault (decrypt-and-reveal, signing assertions), `Export` moves
+/// the secret itself out (crosses the vault boundary), `Sign` signs external
+/// data with a key (SSH agent data plane).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AuthzAction {
     Read,
@@ -35,8 +45,9 @@ pub enum AuthzAction {
 }
 
 impl AuthzAction {
-    /// Connect verb 折算：`read`/`use` 可授予 token（use 供签名/出码类
-    /// 端点，导出永不授予）；export/sign 不是 Connect 动词（无对应端点）。
+    /// Connect verb conversion: `read`/`use` can be granted to tokens (`use`
+    /// serves the signing/code-output endpoints, export is never granted);
+    /// export/sign are not Connect verbs (no corresponding endpoint).
     pub fn connect_verb(self) -> Option<ConnectVerb> {
         match self {
             Self::Read => Some(ConnectVerb::Read),
@@ -55,9 +66,10 @@ impl AuthzAction {
     }
 }
 
-/// 授权主体。`LocalSession` = 本机已认证会话（状态门禁在 service 层）；
-/// `ConnectToken` = 浏览器扩展自动化 token（scope 三维随行）；`AgentKey`
-/// = SSH agent 持有的签名密钥。
+/// Authorization principal. `LocalSession` = an authenticated local session
+/// (stateful gating lives in the service layer); `ConnectToken` = the browser
+/// extension automation token (carries its three-dimensional scope);
+/// `AgentKey` = a signing key held by the SSH agent.
 #[derive(Debug, Clone)]
 pub enum AuthzPrincipal {
     LocalSession,
@@ -70,24 +82,25 @@ pub enum AuthzPrincipal {
     },
 }
 
-/// 被访问资源。
+/// The resource being accessed.
 #[derive(Debug, Clone)]
 pub enum AuthzResource {
-    /// vault 级（列表、元数据、管理面）。
+    /// Vault level (listing, metadata, management surface).
     Vault,
-    /// 某身份本体。
+    /// A specific identity.
     Identity { id: Uuid },
-    /// 某身份下的凭据条目。
+    /// A credential entry under a specific identity.
     Credential {
         identity_id: Uuid,
         credential_type: CredentialType,
     },
-    /// SSH agent 持有的签名密钥。
+    /// A signing key held by the SSH agent.
     SshKey { credential_id: Uuid },
 }
 
-/// 授权上下文：调用来源与交互能力。`interactive = false` 时任何
-/// `InteractionRequired` 判定折叠为拒绝（无履约边可用）。
+/// Authorization context: the calling origin and interactivity. When
+/// `interactive = false`, any `InteractionRequired` ruling collapses to a
+/// denial (no fulfillment edge is available).
 #[derive(Debug, Clone, Copy)]
 pub struct AuthzContext {
     pub origin: &'static str,
@@ -95,25 +108,26 @@ pub struct AuthzContext {
 }
 
 impl AuthzContext {
-    /// 本机入口（CLI/桌面）。
+    /// Local entry (CLI/desktop).
     pub const LOCAL: Self = Self {
         origin: "local",
         interactive: true,
     };
-    /// Connect 自动化端点（无人值守，永不交互）。
+    /// Connect automation endpoint (unattended, never interactive).
     pub const CONNECT: Self = Self {
         origin: "connect",
         interactive: false,
     };
-    /// SSH agent（交互经审批处理器/生物识别，非本判定层职责）。
+    /// SSH agent (interactivity goes through the approval handler / biometrics, not this decision layer's concern).
     pub const AGENT: Self = Self {
         origin: "ssh-agent",
         interactive: false,
     };
 }
 
-/// 裁决结果。`Allowed` 放行；`InteractionRequired` 需调用边履约（确认框
-/// /生物识别），未履约视同未授权；`Denied` 一律拒绝。
+/// The ruling. `Allowed` lets it through; `InteractionRequired` requires the
+/// calling edge to fulfill it (confirmation dialog / biometrics) and counts as
+/// unauthorized until fulfilled; `Denied` refuses outright.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AuthzDecision {
     Allowed,
@@ -127,9 +141,12 @@ impl AuthzDecision {
     }
 }
 
-/// 把裁决折算成领域错误：`Denied` → [`PersonaError::Forbidden`]（身份已过
-/// 但动作越权，与认证失败区分）；`Allowed` / `InteractionRequired` 放行——
-/// 后者由调用边履约（确认框），履约失败由调用方报错，不在此折算。
+/// Convert a ruling into a domain error: `Denied` →
+/// [`PersonaError::Forbidden`] (identity already established but the action is
+/// out of scope, distinct from authentication failure); `Allowed` /
+/// `InteractionRequired` pass through — the latter is fulfilled at the calling
+/// edge (confirmation dialog), and fulfillment failure is reported by the
+/// caller, not converted here.
 pub fn denied_error(decision: &AuthzDecision) -> Option<PersonaError> {
     match decision {
         AuthzDecision::Denied { reason } => Some(PersonaError::Forbidden(format!(
@@ -139,7 +156,7 @@ pub fn denied_error(decision: &AuthzDecision) -> Option<PersonaError> {
     }
 }
 
-/// 唯一策略裁决点。
+/// The single policy decision point.
 pub fn authorize(
     principal: &AuthzPrincipal,
     resource: &AuthzResource,
@@ -153,8 +170,9 @@ pub fn authorize(
     }
 }
 
-/// 本地会话策略：读/用/签名放行（状态性门禁由 service 层把守）；导出
-/// 永远要求调用边显式确认——非交互上下文直接拒绝。
+/// Local session policy: read/use/sign are allowed (stateful gating is
+/// guarded by the service layer); export always requires explicit confirmation
+/// at the calling edge — non-interactive contexts are refused outright.
 fn authorize_local(
     resource: &AuthzResource,
     action: AuthzAction,
@@ -176,8 +194,10 @@ fn authorize_local(
     }
 }
 
-/// Connect token 策略：动词集折算（非 `read` 一律拒绝）+ scope 三维
-/// （身份 × 类型 × 动词）。scope 外资源同形拒绝，端点层映射 404 形。
+/// Connect token policy: verb set conversion (anything not `read` is refused)
+/// plus the three-dimensional scope (identity × type × verb). Out-of-scope
+/// resources are refused in the same shape, which the endpoint layer maps to a
+/// 404 form.
 fn authorize_token(
     scope: &ConnectTokenScope,
     resource: &AuthzResource,
@@ -219,16 +239,17 @@ fn authorize_token(
                 }
             }
         }
-        // token 永远碰不到 agent 密钥（跨上下文隔离）。
+        // Tokens can never touch agent keys (cross-context isolation).
         AuthzResource::SshKey { .. } => AuthzDecision::Denied {
             reason: "connect tokens cannot access agent keys".to_string(),
         },
     }
 }
 
-/// Agent 密钥策略：唯一能力是对自己的密钥签名（主机规则/频率/确认计数
-/// 等条件策略由 agent 的 `PolicyEnforcer` 在机制层把守）；密钥材料不经
-/// agent 读取或导出。
+/// Agent key policy: the only capability is signing with its own key
+/// (conditional policy such as host rules / rate limits / confirmation counts
+/// is guarded at the mechanism layer by the agent's `PolicyEnforcer`); key
+/// material is never read or exported through the agent.
 fn authorize_agent_key(
     principal: &AuthzPrincipal,
     resource: &AuthzResource,
@@ -298,8 +319,9 @@ mod tests {
         }
     }
 
-    /// 拒绝未授权：无 read 动词的 token、token 请求非 Connect 动词、
-    /// agent 密钥请求非签名动作，一律 Denied。
+    /// Deny unauthorized: a token without the read verb, a token requesting a
+    /// non-Connect verb, and an agent key requesting a non-signing action are
+    /// all Denied.
     #[test]
     fn deny_unauthorized_actions() {
         let no_read = ConnectTokenScope {
@@ -314,8 +336,9 @@ mod tests {
         );
         assert!(matches!(d, AuthzDecision::Denied { .. }));
 
-        // token 请求 use/export/sign：read-only scope 未授予 use（export/
-        // sign 本就不是 Connect 动词，任何 scope 都不可能授予）。
+        // Token requests use/export/sign: the read-only scope did not grant
+        // use (export/sign are not Connect verbs in the first place, so no
+        // scope could ever grant them).
         for action in [AuthzAction::Use, AuthzAction::Export, AuthzAction::Sign] {
             let d = authorize(
                 &AuthzPrincipal::ConnectToken {
@@ -331,7 +354,7 @@ mod tests {
             );
         }
 
-        // agent 密钥只能签名；读/用一律拒绝。
+        // Agent keys can only sign; read/use are refused outright.
         let key = AuthzPrincipal::AgentKey {
             credential_id: Uuid::new_v4(),
             identity_id: Uuid::new_v4(),
@@ -349,8 +372,9 @@ mod tests {
         }
     }
 
-    /// 跨上下文访问：token 只看得见 scope 内身份/类型；agent 密钥只对
-    /// 自己签名；token 与 agent 密钥互不可见。
+    /// Cross-context access: a token only sees identities/types within scope;
+    /// an agent key only signs its own key; tokens and agent keys are mutually
+    /// invisible.
     #[test]
     fn cross_context_access_is_denied() {
         let id_a = Uuid::new_v4();
@@ -361,7 +385,7 @@ mod tests {
         };
         let principal = AuthzPrincipal::ConnectToken { scope: scoped };
 
-        // A 内可见，B 内拒绝。
+        // Visible inside A, refused inside B.
         assert!(authorize(
             &principal,
             &cred(id_a),
@@ -378,7 +402,7 @@ mod tests {
             ),
             AuthzDecision::Denied { .. }
         ));
-        // 身份本体同样按 scope 隔离。
+        // Identity objects are isolated by scope too.
         assert!(matches!(
             authorize(
                 &principal,
@@ -388,7 +412,7 @@ mod tests {
             ),
             AuthzDecision::Denied { .. }
         ));
-        // scope 外敏感类型（SSH key 由排除法永不可见，即使空 item_types）。
+        // Sensitive type outside scope (SSH keys are never visible by exclusion, even with empty item_types).
         let ssh_cred = AuthzResource::Credential {
             identity_id: id_a,
             credential_type: CredentialType::SshKey,
@@ -402,7 +426,7 @@ mod tests {
             ),
             AuthzDecision::Denied { .. }
         ));
-        // token 摸 agent 密钥：跨上下文拒绝。
+        // Token touching an agent key: refused as cross-context.
         assert!(matches!(
             authorize(
                 &principal,
@@ -415,7 +439,7 @@ mod tests {
             AuthzDecision::Denied { .. }
         ));
 
-        // agent 密钥对别人的密钥签名：密钥不匹配拒绝。
+        // Agent key signing someone else's key: refused on key mismatch.
         let key = AuthzPrincipal::AgentKey {
             credential_id: Uuid::new_v4(),
             identity_id: Uuid::new_v4(),
@@ -431,7 +455,7 @@ mod tests {
             ),
             AuthzDecision::Denied { .. }
         ));
-        // 自己的密钥签名：放行（条件策略在 PolicyEnforcer）。
+        // Signing its own key: allowed (conditional policy lives in the PolicyEnforcer).
         let own = AuthzResource::SshKey {
             credential_id: match key {
                 AuthzPrincipal::AgentKey { credential_id, .. } => credential_id,
@@ -441,8 +465,10 @@ mod tests {
         assert!(authorize(&key, &own, AuthzAction::Sign, &AuthzContext::AGENT).is_allowed());
     }
 
-    /// 敏感导出：本地会话导出永远要求交互履约；非交互上下文（无人值守
-    /// 的调用边）直接拒绝，不会「等一个永远不来的确认」。
+    /// Sensitive export: a local session's export always requires interactive
+    /// fulfillment; a non-interactive context (an unattended calling edge) is
+    /// refused outright and never "waits for a confirmation that will never
+    /// come".
     #[test]
     fn sensitive_export_requires_interaction() {
         let d = authorize(
@@ -461,7 +487,7 @@ mod tests {
         );
         assert!(matches!(d, AuthzDecision::Denied { .. }));
 
-        // agent 密钥导出同理（当前无导出路径，此为未来路径的策略边界）。
+        // Agent key export follows the same rule (there is no export path today; this is the policy boundary for a future path).
         let key = AuthzPrincipal::AgentKey {
             credential_id: Uuid::new_v4(),
             identity_id: Uuid::new_v4(),
@@ -476,7 +502,7 @@ mod tests {
         );
         assert!(matches!(d, AuthzDecision::Denied { .. }));
 
-        // 读/用/签名在交互与非交互上下文一致放行（状态门禁另算）。
+        // Read/use/sign are allowed identically in interactive and non-interactive contexts (stateful gating is a separate matter).
         for ctx in [&AuthzContext::LOCAL, &AuthzContext::CONNECT] {
             assert!(authorize(
                 &AuthzPrincipal::LocalSession,
@@ -495,8 +521,8 @@ mod tests {
         }
     }
 
-    /// 全 scope token 的可见性 = 现行 allows_* 语义：空 = 全部（合法类型
-    /// 内），vault 级读放行。
+    /// Full-scope token visibility = the current allows_* semantics: empty =
+    /// all (within legal types), vault-level read allowed.
     #[test]
     fn token_read_matrix_matches_scope_semantics() {
         let principal = AuthzPrincipal::ConnectToken {
@@ -510,7 +536,7 @@ mod tests {
         )
         .is_allowed());
 
-        // 合法类型全可见。
+        // All legal types fully visible.
         for t in [
             CredentialType::Password,
             CredentialType::ApiKey,
@@ -524,7 +550,7 @@ mod tests {
                 authorize(&principal, &r, AuthzAction::Read, &AuthzContext::CONNECT).is_allowed()
             );
         }
-        // 非法类型（custom/wallet）永不可见。
+        // Illegal types (custom/wallet) are never visible.
         for t in [
             CredentialType::CryptoWallet,
             CredentialType::Custom("x".into()),
@@ -540,8 +566,10 @@ mod tests {
         }
     }
 
-    /// use 动词 token（架构校正批2）：签名/出码类操作可授予，导出与
-    /// 签名之外的读路径按 scope 判定；纯 use token 读不到数据面。
+    /// A token with the use verb (architecture correction batch 2):
+    /// signing/code-output operations can be granted, while export and read
+    /// paths outside signing are decided by scope; a pure-use token cannot
+    /// read the data plane.
     #[test]
     fn token_use_verb_grants_use_but_never_export() {
         let id = Uuid::new_v4();
@@ -552,7 +580,7 @@ mod tests {
         };
         let principal = AuthzPrincipal::ConnectToken { scope };
 
-        // use 在 scope 内凭据上放行；export/sign 永远拒绝（非 Connect 动词）。
+        // use is allowed on in-scope credentials; export/sign are always refused (not Connect verbs).
         assert!(authorize(
             &principal,
             &cred(id),
@@ -567,7 +595,7 @@ mod tests {
             ));
         }
 
-        // 纯 use token：读不到（read 未授予）。
+        // Pure-use token: cannot read (read was not granted).
         let use_only = AuthzPrincipal::ConnectToken {
             scope: ConnectTokenScope {
                 identities: vec![],
@@ -593,10 +621,12 @@ mod tests {
         .is_allowed());
     }
 
-    /// SSH 私钥的使用与导出是不同动作、不同裁决（验收标准）：agent 密钥
-    /// 唯一能力是对自己的密钥签名（输出签名，不回传材料）；导出在无人
-    /// 值守的 agent 上下文拒绝，只有交互的本地会话可走且需履约；token
-    /// 对密钥材料一律不可见。
+    /// Using and exporting an SSH private key are different actions with
+    /// different rulings (acceptance criteria): an agent key's only capability
+    /// is signing with its own key (produces a signature, never returns
+    /// material); export is refused in an unattended agent context, and only
+    /// interactive local sessions can carry it, with fulfillment required;
+    /// key material is never visible to tokens.
     #[test]
     fn ssh_key_sign_and_export_are_different_decisions() {
         let credential_id = Uuid::new_v4();
@@ -607,14 +637,14 @@ mod tests {
         };
         let own = AuthzResource::SshKey { credential_id };
 
-        // 使用（签名）放行。
+        // Use (signing) allowed.
         assert!(authorize(&key, &own, AuthzAction::Sign, &AuthzContext::AGENT).is_allowed());
-        // 导出在无人值守的 agent 上下文拒绝（fail-closed）。
+        // Export refused in an unattended agent context (fail-closed).
         assert!(matches!(
             authorize(&key, &own, AuthzAction::Export, &AuthzContext::AGENT),
             AuthzDecision::Denied { .. }
         ));
-        // 同一导出动作在交互的本地会话可走，但要求调用边履约。
+        // The same export action goes through in an interactive local session, but requires fulfillment at the calling edge.
         assert!(matches!(
             authorize(
                 &AuthzPrincipal::LocalSession,
@@ -627,7 +657,7 @@ mod tests {
             ),
             AuthzDecision::InteractionRequired { .. }
         ));
-        // token 对密钥材料一律不可见（即使带 read+use 全动词集）。
+        // Key material is never visible to tokens (even with the full read+use verb set).
         let token = AuthzPrincipal::ConnectToken {
             scope: ConnectTokenScope {
                 identities: vec![],
@@ -646,8 +676,9 @@ mod tests {
         }
     }
 
-    /// 裁决→错误的折算：只有 `Denied` 产 `Forbidden`（含原拒绝原因）；
-    /// `Allowed` 与 `InteractionRequired` 都不产错误——后者由调用边履约。
+    /// Ruling -> error conversion: only `Denied` produces `Forbidden` (with
+    /// the original refusal reason); `Allowed` and `InteractionRequired`
+    /// produce no error — the latter is fulfilled at the calling edge.
     #[test]
     fn denied_error_maps_only_denied() {
         assert!(denied_error(&AuthzDecision::Allowed).is_none());

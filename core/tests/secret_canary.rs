@@ -1,19 +1,25 @@
-//! AUDIT-021 合成 canary：含密 data 结构手写 Debug 脱敏的回归测试。
+//! AUDIT-021 synthetic canary: regression test for the hand-written Debug
+//! redaction of secret-bearing data structures.
 //!
-//! `core/src/models/credential.rs` 的含密结构一律不派生 Debug，改为手写
-//! 实现——秘密字段输出 `[redacted]`（条目密码哈希输出 `[set]`），防止任何
-//! `{:?}`/`dbg!`/错误链把主密码、SSH 私钥、TOTP/HOTP seed、API key、
-//! 卡号/CVV、助记词、证件号等打进日志、toast、崩溃报告或测试快照。
+//! The secret-bearing structures in `core/src/models/credential.rs` never derive
+//! Debug; they get a hand-written implementation instead — secret fields print
+//! `[redacted]` (an entry's password hash prints `[set]`) — so that no `{:?}`/
+//! `dbg!`/error chain can write the master passphrase, an SSH private key, a
+//! TOTP/HOTP seed, an API key, a card number/CVV, a mnemonic or an ID number
+//! into logs, toasts, crash reports or test snapshots.
 //!
-//! 本测试以唯一 canary 值构造每个结构并 `format!("{:?}")`，断言三件事：
-//! 1. 秘密值绝不出现（任一 canary 泄漏即失败）；
-//! 2. 脱敏占位符确实在场；
-//! 3. 非密诊断字段保留可见。
+//! This test constructs each structure with unique canary values and
+//! `format!("{:?}")`s it, asserting three things:
+//! 1. the secret value never appears (any canary leaking is a failure);
+//! 2. the redaction placeholder is actually present;
+//! 3. non-secret diagnostic fields stay visible.
 //!
-//! 新增含密 data 结构时必须同步在此登记，防止顺手 derive(Debug)。
+//! Any newly added secret-bearing data structure must be registered here in step,
+//! to prevent a careless derive(Debug).
 //!
-//! 私有 `LegacyTwoFactorData`/`LegacyGameTokenData` 的 Debug 无法从这里
-//! 触达，由 credential.rs 模块内 `mod tests` 的同口径测试覆盖。
+//! The Debug of the private `LegacyTwoFactorData`/`LegacyGameTokenData` cannot
+//! be reached from here and is covered by the equivalent tests in the `mod tests`
+//! inside credential.rs.
 
 use std::collections::HashMap;
 
@@ -23,7 +29,7 @@ use persona_core::models::credential::{
     TwoFactorData,
 };
 
-/// 断言 `dbg` 不含任何 canary（秘密零泄漏）、含脱敏占位符，且诊断字段保留。
+/// Assert that `dbg` contains no canary (zero secret leakage), contains the redaction placeholder, and keeps the diagnostic fields.
 fn assert_redacted(dbg: &str, canaries: &[&str], visible: &[&str]) {
     for c in canaries {
         assert!(!dbg.contains(c), "secret canary leaked: {c} in {dbg}");
@@ -97,7 +103,7 @@ fn crypto_wallet_data_debug_redacts_seed_material() {
         ],
     );
 
-    // None 分支：占位符缺席但秘密照旧零泄漏，哈希位如实显示 None。
+    // The None branch: the placeholder is absent but there is still zero secret leakage, and the hash slot honestly shows None.
     let bare = CryptoWalletData {
         mnemonic_phrase: None,
         private_key: None,
@@ -238,7 +244,7 @@ fn two_factor_data_debug_redacts_seed() {
         &["GitHub", "alice@example.com", "SHA1"],
     );
 
-    // HOTP 字段走的是透传（非密），Some 值应如实可见。
+    // HOTP fields are pass-through (non-secret), so the Some value should be visible as-is.
     let hotp = TwoFactorData {
         hotp: Some(true),
         initial_counter: Some(7),

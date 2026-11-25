@@ -21,8 +21,8 @@ async fn scan_health_flags_expiring_software_license() {
         })
     };
 
-    // 快到期（ISO 文本）与远未到期（点分文本）各一条；另留一条到期日
-    // 不可解析的自由文本——必须静默跳过而不是报错。
+    // One expiring soon (ISO text) and one far from expiry (dotted text); also keep a free-text
+    // entry whose expiry date cannot be parsed — it must be silently skipped, not errored.
     let soon = (chrono::Utc::now() + chrono::Duration::days(10))
         .format("%Y-%m-%d")
         .to_string();
@@ -73,9 +73,10 @@ async fn scan_health_flags_expiring_software_license() {
     assert_eq!(expiring[0].credential_name, "JetBrains");
 }
 
-/// 扫描规则面成片覆盖：ApiKey/BankCard 过期与临期、不可解析到期静默、
-/// 弱口令复用组（ServerConfig.password 与 SshKey.passphrase 同源）、
-/// inactive 跳过、解密失败凭据跳过且不中断整个扫描。
+/// Blanket coverage of the scan rule surface: ApiKey/BankCard expired and near-expiry, unparseable
+/// expiry silently skipped, the weak-password reuse group (ServerConfig.password and
+/// SshKey.passphrase sharing a source), inactive skipped, and a decryption-failed credential
+/// skipped without interrupting the whole scan.
 #[tokio::test]
 async fn scan_health_covers_expiry_rules_and_skips_inactive_undecryptable() {
     let (db, service) = unlocked_service().await;
@@ -124,7 +125,7 @@ async fn scan_health_covers_expiry_rules_and_skips_inactive_undecryptable() {
         )
         .await
         .unwrap();
-    // BankCard：过期（01/20）与不可解析（数据质量，静默跳过）各一张
+    // BankCard: one expired (01/20) and one unparseable (data quality, silently skipped)
     service
         .create_credential(
             identity.id,
@@ -145,7 +146,7 @@ async fn scan_health_covers_expiry_rules_and_skips_inactive_undecryptable() {
         )
         .await
         .unwrap();
-    // 弱口令复用组：ServerConfig.password 与 SshKey.passphrase 同值
+    // Weak-password reuse group: ServerConfig.password and SshKey.passphrase share the same value
     service
         .create_credential(
             identity.id,
@@ -181,16 +182,16 @@ async fn scan_health_covers_expiry_rules_and_skips_inactive_undecryptable() {
         .await
         .unwrap();
 
-    // inactive：计入 total_credentials 但不产生 issue
+    // inactive: counted in total_credentials but produces no issue
     let disabled =
         seed_credential(&service, identity.id, "Disabled", CredentialType::Password).await;
     let updated = sqlx::query("UPDATE credentials SET is_active = 0 WHERE id = ?")
-        .bind(disabled.id.to_string()) // sqlite 存 TEXT，Uuid 绑定不匹配
+        .bind(disabled.id.to_string()) // sqlite stores TEXT; a Uuid bind would not match
         .execute(db.pool())
         .await
         .unwrap();
     assert_eq!(updated.rows_affected(), 1);
-    // 解密失败：encrypted_data 换垃圾字节 → warn + 跳过，扫描继续
+    // Decryption failure: encrypted_data swapped for garbage bytes -> warn + skip, and the scan continues
     let broken = seed_credential(&service, identity.id, "Broken", CredentialType::Password).await;
     let updated = sqlx::query("UPDATE credentials SET encrypted_data = ? WHERE id = ?")
         .bind(vec![0u8, 1, 2, 3])
@@ -296,7 +297,7 @@ async fn scan_health_breach_rule_reports_and_tolerates_checker_failure() {
         .iter()
         .all(|i| i.credential_name.starts_with("Pwned")));
 
-    // checker 故障：整份报告照常返回，只是没有 breach 类 issue
+    // Checker failure: the full report still returns, just without breach-type issues
     let report = service
         .scan_health_with(
             HealthScanConfig::default(),
@@ -310,8 +311,8 @@ async fn scan_health_breach_rule_reports_and_tolerates_checker_failure() {
         .all(|i| !matches!(i.kind, HealthIssueKind::BreachedPassword { .. })));
 }
 
-/// stale 规则：updated_at 早于 stale_after_days 的凭据报 StaleUnchanged，
-/// 天数取整到日。
+/// The stale rule: credentials whose updated_at is earlier than stale_after_days report
+/// StaleUnchanged, with the day count rounded down to whole days.
 #[tokio::test]
 async fn scan_health_flags_stale_credentials_with_day_count() {
     let (db, service) = unlocked_service().await;
@@ -345,7 +346,7 @@ async fn scan_health_flags_stale_credentials_with_day_count() {
         stale_issues[0].kind,
         HealthIssueKind::StaleUnchanged { days: 400 }
     ));
-    let _ = fresh; // 新凭据不报 stale（隐含：上面只筛出一条）
+    let _ = fresh; // a fresh credential is not reported stale (implied: only one entry was filtered above)
 }
 
 #[tokio::test]
@@ -356,7 +357,7 @@ async fn scan_health_flags_two_factor_available_until_covered() {
         .await
         .unwrap();
 
-    // GitHub 登录（目录站点、无 TOTP）→ 应提示；内部站点不在目录 → 不提示。
+    // A GitHub login (directory site, no TOTP) -> should be suggested; an internal site is not in the directory -> no suggestion.
     let mut github =
         seed_credential(&service, identity.id, "GitHub", CredentialType::Password).await;
     github.url = Some("https://github.com".to_string());
@@ -382,7 +383,7 @@ async fn scan_health_flags_two_factor_available_until_covered() {
         other => panic!("wrong kind: {other:?}"),
     }
 
-    // 存进 GitHub 的 TOTP 后再扫：提示消失（同站覆盖）。
+    // After a TOTP is stored for GitHub and the scan reruns: the suggestion disappears (same-site override).
     service
         .create_credential(
             identity.id,
@@ -402,7 +403,7 @@ async fn scan_health_flags_two_factor_available_until_covered() {
         )
         .await
         .unwrap();
-    // create_credential 无 url 参数：历史测试同款 update 路径补 url
+    // create_credential has no url parameter: set the url via the same update path the historical tests use
     let mut totp = service
         .get_credentials_for_identity(&identity.id)
         .await

@@ -1,9 +1,10 @@
 use super::*;
 
-/// 审计日志查询条件。
+/// Audit log query conditions.
 ///
-/// 所有条件按 AND 组合：服务层先用最具选择性的数据库查询取数，
-/// 再对剩余条件做内存过滤，`limit` 最后截断。
+/// All conditions are AND-combined: the service layer first fetches rows using the most
+/// selective database query, then filters the remaining conditions in memory, and
+/// finally truncates with `limit`.
 #[derive(Debug, Clone, Default)]
 pub struct AuditLogQuery {
     pub user_id: Option<String>,
@@ -12,7 +13,7 @@ pub struct AuditLogQuery {
     pub failures_only: bool,
     pub security_sensitive_only: bool,
     pub time_range: Option<(chrono::DateTime<chrono::Utc>, chrono::DateTime<chrono::Utc>)>,
-    /// 最多返回条数（按时间降序取前 N 条）
+    /// Maximum number of rows to return (the first N rows, newest first)
     pub limit: Option<usize>,
 }
 
@@ -139,8 +140,8 @@ impl PersonaService {
                 | AuditAction::ConnectTokenCreated
                 | AuditAction::ConnectTokenRevoked
                 | AuditAction::ConnectTokenUsed => {
-                    // Passkey/Connect token id 均不是 credential/identity FK;
-                    // resource_id 载主键,只附身份上下文。
+                    // Passkey/Connect token ids are not credential/identity FKs;
+                    // resource_id carries the primary key, identity context only.
                     if let Some(identity_id_val) = identity_id {
                         log = log.with_identity_id(Some(identity_id_val));
                     }
@@ -164,7 +165,7 @@ impl PersonaService {
             }
         }
         let _ = self.audit_repo.create(&log).await;
-        // 尽力而为的远端复制（见 events::Emitter）：本地审计库才是存证源
+        // Best-effort remote replication (see events::Emitter): the local audit store is the source of record
         if let Some(emitter) = &self.event_emitter {
             emitter.emit(&log);
         }

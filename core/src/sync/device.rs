@@ -1,10 +1,12 @@
-//! 设备身份的宿主持久化记录（E2EE_SYNC_DESIGN DR-1/DR-3）。
+//! Host-persisted records of a device identity (E2EE_SYNC_DESIGN DR-1/DR-3).
 //!
-//! 设备私钥由宿主落 OS keyring（service `persona-device`，desktop）或
-//! 0600 文件（headless `--device-key-file`，CLI）——core 不依赖 keyring，
-//! 只定义记录格式：一个 JSON 文本，私钥 b64 编码。desktop 与 CLI 共用
-//! 同一格式；记录文本落哪、怎么保护随宿主（core 文档口径：持久化由
-//! 宿主负责）。
+//! The host stores the device private key in the OS keyring (service
+//! `persona-device`, desktop) or in a 0600 file (headless `--device-key-file`,
+//! CLI)——core does not depend on keyring and only defines the record format:
+//! a single JSON document with the private key b64-encoded. Desktop and CLI
+//! share the same format; where the record text is stored and how it is
+//! protected are up to the host (per the core documentation stance:
+//! persistence is the host's responsibility).
 
 use base64::engine::general_purpose::STANDARD as B64;
 use base64::Engine as _;
@@ -13,8 +15,10 @@ use uuid::Uuid;
 use super::keys::DeviceKeyPair;
 use crate::{PersonaError, Result};
 
-/// 一台设备加入同步后的身份：服务器分配的 `device_id`、登记名、密钥对。
-/// 私钥字节只在 [`DeviceKeyPair`] 内（Drop 时清零），本结构不额外复制。
+/// The identity of a device after it joins sync: the server-assigned
+/// `device_id`, the registered name, and the keypair. The private key bytes
+/// live only inside [`DeviceKeyPair`] (zeroed on Drop); this struct keeps no
+/// additional copies.
 pub struct DeviceIdentity {
     pub device_id: Uuid,
     pub device_name: String,
@@ -22,8 +26,9 @@ pub struct DeviceIdentity {
 }
 
 impl DeviceIdentity {
-    /// 生成新设备身份（随机 X25519 密钥对；device_id 由服务器登记时分配，
-    /// 登记后用 [`Self::with_device_id`] 回填）。
+    /// Generate a fresh device identity (random X25519 keypair; device_id is
+    /// assigned by the server at registration time, then filled back in with
+    /// [`Self::with_device_id`]).
     pub fn generate(device_name: impl Into<String>) -> Result<Self> {
         Ok(Self {
             device_id: Uuid::nil(),
@@ -32,14 +37,15 @@ impl DeviceIdentity {
         })
     }
 
-    /// 登记成功后回填服务器分配的 device_id。
+    /// Fill back in the server-assigned device_id after successful registration.
     pub fn with_device_id(mut self, device_id: Uuid) -> Self {
         self.device_id = device_id;
         self
     }
 
-    /// 存储文本（一个 JSON：b64 私钥）。宿主落 keyring/文件时写的就是
-    /// 这个字符串——格式稳定，跨端（desktop/CLI）可互换。
+    /// Storage text (one JSON: the b64 private key). This is exactly the
+    /// string the host writes to the keyring/file——the format is stable and
+    /// interchangeable across platforms (desktop/CLI).
     pub fn to_stored_json(&self) -> String {
         serde_json::json!({
             "device_id": self.device_id.to_string(),
@@ -49,9 +55,10 @@ impl DeviceIdentity {
         .to_string()
     }
 
-    /// 从存储文本恢复。任何一处不可解析（坏 JSON / 坏 UUID / 坏 b64 /
-    /// 长度不对）一律 Err——fail-closed：记录损坏宁可让用户重新 join，
-    /// 不猜、不带病运行。
+    /// Restore from storage text. If any part fails to parse (bad JSON / bad
+    /// UUID / bad b64 / wrong length) the result is Err——fail-closed: on a
+    /// corrupt record it is better to have the user re-join than to guess or
+    /// run while sick.
     pub fn from_stored_json(raw: &str) -> Result<Self> {
         let value: serde_json::Value = serde_json::from_str(raw)
             .map_err(|_| PersonaError::InvalidInput("malformed device record JSON".to_string()))?;
@@ -118,14 +125,14 @@ mod tests {
     #[test]
     fn stored_json_rejects_malformed_records() {
         assert!(DeviceIdentity::from_stored_json("not json").is_err());
-        // 缺字段
+        // Missing field
         assert!(DeviceIdentity::from_stored_json("{\"device_id\":\"x\"}").is_err());
-        // 坏 UUID
+        // Bad UUID
         assert!(DeviceIdentity::from_stored_json(
             "{\"device_id\":\"nope\",\"device_name\":\"d\",\"secret_key\":\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\"}"
         )
         .is_err());
-        // 私钥长度不对（31B / 33B）
+        // Wrong private key length (31B / 33B)
         for bad_len in [&[0u8; 31][..], &[0u8; 33][..]] {
             let record = serde_json::json!({
                 "device_id": "00000000-0000-0000-0000-000000000000",
@@ -136,7 +143,8 @@ mod tests {
         }
     }
 
-    /// 三个字段逐个整条缺失（不是坏值）各有专属报错，fail-closed 不猜。
+    /// Each of the three fields missing entirely (not a bad value) gets its
+    /// own dedicated error; fail-closed, no guessing.
     #[test]
     fn stored_json_rejects_missing_fields_individually() {
         let id = "00000000-0000-0000-0000-000000000000";

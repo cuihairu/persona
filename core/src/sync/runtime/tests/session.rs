@@ -1,9 +1,11 @@
-//! 会话装配/backfill/run_cycle 域测试（含双设备收敛 SharedRemote 系私有 helper）。
+//! Session assembly / backfill / run_cycle domain tests (includes the
+//! SharedRemote family of private helpers for two-device convergence).
 
 use super::*;
 
-/// 完整语义内存远端（pull 游标与 server 同构、支持库级快照存取），
-/// 双设备收敛等价性集成测试用。
+/// Fully semantic in-memory remote (its pull cursor is isomorphic to the
+/// server's, and it supports library snapshot storage), for the two-device
+/// convergence equivalence integration tests.
 #[derive(Clone)]
 struct SharedRemote {
     state: Arc<Mutex<SharedState>>,
@@ -90,9 +92,11 @@ fn shared_session(
     }
 }
 
-// 双设备收敛等价性（S2 集成测试）：A 全量产出 → 手动打包上传快照 →
-// B（空库新设备）run_cycle 装快照起步 → B 主库与 A 逐行一致、B 不
-// 重复物化 A 的增量（游标在覆盖位点）。
+// Two-device convergence equivalence (S2 integration test): A produces a
+// full set -> manually packs and uploads a snapshot -> B (an empty-database
+// new device) bootstraps from the snapshot via run_cycle -> B's master
+// database matches A row by row, and B does not re-materialize A's delta
+// (the cursor sits at the overwrite position).
 #[tokio::test]
 async fn snapshot_bootstrap_converges_like_full_replay() {
     let (db_a, identity_a, master_a) = seeded_db().await;
@@ -111,8 +115,10 @@ async fn snapshot_bootstrap_converges_like_full_replay() {
     session_a.backfill_existing(&master_a).await.unwrap();
     session_a.run_cycle(&master_a).await.unwrap();
 
-    // A 手动打包上传（阈值 1000 不触发，集成路径直接驱动）。打包回调在
-    // 引擎收敛之后执行——快照内容与覆盖水位同取收敛后的一致视图。
+    // A manually packs and uploads (the 1000 threshold does not fire; the
+    // integration path drives it directly). The packing callback runs after
+    // the engine converges -- the snapshot content and the overwrite
+    // watermark both read from the same post-convergence view.
     let (seq, _) = session_a
         .engine
         .upload_library_snapshot(|| async {
@@ -124,11 +130,14 @@ async fn snapshot_bootstrap_converges_like_full_replay() {
         .unwrap();
     assert_eq!(seq, 2, "覆盖位点 = 已推平水位");
 
-    // B：空库、同组密钥、不同 master —— run_cycle 应先装快照再物化
+    // B: empty database, same group key, different master -- run_cycle should
+    // install the snapshot first, then materialize
     let db_b = Database::in_memory().await.unwrap();
     db_b.migrate().await.unwrap();
     let master_b = EncryptionService::new(&EncryptionService::generate_key());
-    // 身份行是设备本地可预置事实（配对流程已建）；走同步链的只有凭据 op
+    // The identity row is a locally pre-seedable device fact (the pairing
+    // flow already created it); only credential ops go through the sync
+    // chain
     IdentityRepository::new(db_b.clone())
         .create(&Identity {
             id: identity_a.id,
@@ -150,7 +159,8 @@ async fn snapshot_bootstrap_converges_like_full_replay() {
     names.sort();
     assert_eq!(names, vec!["alpha".to_string(), "beta".to_string()]);
 
-    // B 的游标推到覆盖位点：再次 pull 只拿到空增量
+    // B's cursor has advanced to the overwrite position: a further pull
+    // yields an empty delta only
     let watermark = SyncRepository::new(db_b.clone())
         .local_watermark()
         .await
@@ -158,10 +168,14 @@ async fn snapshot_bootstrap_converges_like_full_replay() {
     assert_eq!(watermark, 2);
 }
 
-// 深审 Critical 回归（2026-11-13）：快照打包必须在收敛（push/pull）之后。
-// 并发设备在打包前推上服务器的新 op 会进上传时的收敛 pull 与覆盖水位，
-// 若不在快照密文里就被服务器 `seq ≤ S` 裁剪——restore 永久丢该 op。
-// 老签名（先打包密文再上传）正是这个顺序；现签名把打包钉在收敛后。
+// Deep-review Critical regression (2026-11-13): snapshot packing must happen
+// after convergence (push/pull).
+// A new op that a concurrent device pushes to the server before packing will
+// enter the convergence pull and the overwrite watermark at upload time; if
+// it is not inside the snapshot ciphertext, the server prunes it by
+// `seq <= S` -- restore loses that op permanently.
+// The old signature (pack the ciphertext first, then upload) had exactly
+// that order; the current signature pins packing to after convergence.
 #[tokio::test]
 async fn snapshot_upload_packs_after_convergence() {
     let (db_a, identity_a, master_a) = seeded_db().await;
@@ -179,7 +193,7 @@ async fn snapshot_upload_packs_after_convergence() {
     session_a.backfill_existing(&master_a).await.unwrap();
     session_a.run_cycle(&master_a).await.unwrap();
 
-    // 并发设备 C 在 A 打包前把一条新 op 推上远端
+    // Concurrent device C pushes a new op to the remote before A packs
     let (db_c, identity_c, master_c) = seeded_db().await;
     let cred_c = CredentialRepository::new(db_c.clone());
     store_credential(&cred_c, identity_c.id, "gamma", &master_c, "s3").await;
@@ -188,8 +202,9 @@ async fn snapshot_upload_packs_after_convergence() {
     session_c.run_cycle(&master_c).await.unwrap();
     assert_eq!(remote.state.lock().unwrap().ops.len(), 2);
 
-    // A 上传快照：打包回调此时必须已看到收敛 pull 拉进的 gamma op，
-    // 否则服务器按水位裁剪后 gamma 既不在快照也不在 oplog。
+    // A uploads the snapshot: the packing callback must by now have seen the
+    // gamma op pulled in by the convergence pull, otherwise after the server
+    // prunes by watermark, gamma is in neither the snapshot nor the oplog.
     let (seq, _) = session_a
         .engine
         .upload_library_snapshot(|| async {
@@ -200,15 +215,17 @@ async fn snapshot_upload_packs_after_convergence() {
         .await
         .unwrap();
 
-    // 上传的密文可解且含 gamma；覆盖位点 = 收敛后的 head
+    // The uploaded ciphertext opens and contains gamma; the overwrite
+    // position = the post-convergence head
     let (_, sealed) = remote.state.lock().unwrap().snapshot.clone().unwrap();
     let payload = LibrarySnapshotPayload::open(&sealed, &group).unwrap();
     assert_eq!(payload.ops.len(), 2);
     assert_eq!(seq, 2, "覆盖位点 = 收敛后的水位");
 }
 
-// 会话编排核心：backfill 幂等（首次灌入 N 条，再跑 0 条）+ run_cycle
-// 把本地 pending 推上远端 + capture 产出的 put 随下一轮周期推走。
+// Session orchestration core: backfill is idempotent (N entries seeded on
+// the first run, 0 on a rerun) + run_cycle pushes local pending entries to
+// the remote + a put produced by capture goes out with the next cycle.
 #[tokio::test]
 async fn session_backfills_pushes_and_captures() {
     let (db, identity, master) = seeded_db().await;
@@ -218,20 +235,21 @@ async fn session_backfills_pushes_and_captures() {
 
     let (session, pushed_log) = session_for(&db, Uuid::new_v4(), GroupKey::generate().unwrap());
 
-    // 首次灌入 2 条，重复调用幂等（0 条）
+    // First run seeds 2 entries; a repeated call is idempotent (0 entries)
     let first = session.backfill_existing(&master).await.unwrap();
     assert_eq!(first, 2);
     let second = session.backfill_existing(&master).await.unwrap();
     assert_eq!(second, 0);
 
-    // 周期推走 2 条 pending
+    // The cycle pushes out the 2 pending entries
     let report = session.run_cycle(&master).await.unwrap();
     assert_eq!(report.pushed, 2);
     assert_eq!(report.pulled, 0);
     assert_eq!(report.backfilled, 0);
 
-    // capture 产出的新 put 随下一轮周期推走（capture 持 engine Arc，
-    // 与 run_cycle 共享同一 pending 队列）
+    // A new put produced by capture goes out with the next cycle (capture
+    // holds the engine Arc and shares the same pending queue with
+    // run_cycle)
     let capture = session.capture();
     let item_key = EncryptionService::generate_key();
     let sealed = SyncItemSnapshot::from_credential(
@@ -261,7 +279,8 @@ async fn session_backfills_pushes_and_captures() {
     assert_eq!(pushed_log.lock().unwrap().len(), 3);
 }
 
-// legacy 凭据（无 wrapped_item_key）：backfill 跳过不报错
+// Legacy credentials (no wrapped_item_key): backfill skips them without
+// erroring
 #[tokio::test]
 async fn backfill_skips_legacy_credentials() {
     let (db, identity, master) = seeded_db().await;
@@ -282,14 +301,15 @@ async fn backfill_skips_legacy_credentials() {
     assert_eq!(count, 1, "legacy 行跳过，modern 行灌入");
 }
 
-/// backfill 对坏行逐条跳过不阻断：unwrap 失败、密文坏、明文非
-/// CredentialData 三种损坏各一条，全部 skip（返回 0，远端零推送）。
+/// backfill skips bad rows one by one without blocking: one row each for
+/// unwrap failure, corrupt ciphertext, and plaintext that is not
+/// CredentialData -- all skipped (returns 0, nothing pushed to the remote).
 #[tokio::test]
 async fn backfill_skips_corrupt_credentials_one_by_one() {
     let (db, identity, master) = seeded_db().await;
     let cred_repo = CredentialRepository::new(db.clone());
 
-    // wrapped key 是垃圾字节 → item key unwrap 失败
+    // The wrapped key is junk bytes -> item key unwrap fails
     cred_repo
         .create(&Credential::new(
             identity.id,
@@ -302,7 +322,8 @@ async fn backfill_skips_corrupt_credentials_one_by_one() {
         .await
         .unwrap();
 
-    // wrapped 合法但密文坏 → credential decrypt 失败
+    // The wrapped key is valid but the ciphertext is corrupt -> credential
+    // decrypt fails
     let item_key = EncryptionService::generate_key();
     cred_repo
         .create(&Credential::new(
@@ -316,7 +337,8 @@ async fn backfill_skips_corrupt_credentials_one_by_one() {
         .await
         .unwrap();
 
-    // 可解密但明文不是 CredentialData → from_bytes 失败
+    // Decryptable but the plaintext is not CredentialData -> from_bytes
+    // fails
     let ciphertext = KeyHierarchy::new(&master)
         .encrypt_with_item_key(&item_key, b"not credential data")
         .unwrap();
@@ -338,7 +360,7 @@ async fn backfill_skips_corrupt_credentials_one_by_one() {
     assert!(pushed_log.lock().unwrap().is_empty());
 }
 
-// open 的密码学半步：坏信封 fail-closed
+// The cryptographic half-step of open: a bad envelope fails closed
 #[cfg(feature = "remote-auth")]
 #[test]
 fn open_own_envelope_rejects_malformed() {
@@ -346,15 +368,18 @@ fn open_own_envelope_rejects_malformed() {
     assert!(
         crate::sync::envelope::open_group_key(b"short", identity.key_pair.secret_bytes()).is_err()
     );
-    // 80B 但不是包给这把私钥的（随机字节）——认证必失败
+    // 80B but not wrapped for this private key (random bytes) --
+    // authentication must fail
     assert!(
         crate::sync::envelope::open_group_key(&[0x5Au8; 80], identity.key_pair.secret_bytes())
             .is_err()
     );
 }
 
-/// run_cycle 报告的 conflicts 是待裁决条目数（真值），不是 3b 误用的
-/// 「本机主位跳过计数」：灌入一条冲突后跑周期，报告 conflicts == 1。
+/// The `conflicts` reported by run_cycle is the count of pending resolution
+/// entries (the truth), not the phase-3b misuse of "local primary-position
+/// skip count": seed one conflict, run a cycle, and the report says
+/// conflicts == 1.
 #[tokio::test]
 async fn run_cycle_reports_conflict_count_truth() {
     let (db, identity, master) = seeded_db().await;
@@ -368,6 +393,7 @@ async fn run_cycle_reports_conflict_count_truth() {
     let (session, _) = session_for(&db, Uuid::new_v4(), group);
     let report = session.run_cycle(&master).await.unwrap();
     assert_eq!(report.conflicts, 1);
-    // 物化主位落库（远端内容），裁决等用户
+    // The master position is materialized into the database (the remote's
+    // content); the resolution waits for the user
     assert_eq!(report.materialized, 1);
 }

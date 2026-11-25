@@ -1,11 +1,11 @@
-//! 共享 HTTP 底座：base URL 归一、bearer 注入、非 2xx 统一转错。
+//! Shared HTTP foundation: base URL normalization, bearer injection, and a uniform mapping of non-2xx to errors.
 
 use std::time::Duration;
 
 use crate::{PersonaError, Result};
 
-/// 共享 HTTP 底座：base URL 归一、bearer 注入、非 2xx 统一转错。
-/// [`HttpSyncRemote`]（oplog 推拉）与 [`SyncAdminApi`]（设备/信封管理）共用。
+/// Shared HTTP foundation: base URL normalization, bearer injection, and a uniform mapping of non-2xx to errors.
+/// Used by both [`HttpSyncRemote`] (oplog pull/push) and [`SyncAdminApi`] (device/envelope management).
 #[derive(Clone)]
 pub(super) struct SyncHttp {
     base_url: String,
@@ -14,9 +14,9 @@ pub(super) struct SyncHttp {
 }
 
 impl SyncHttp {
-    /// `base_url` 形如 `http://127.0.0.1:8080`（尾部 `/` 容忍）。请求超时
-    /// 60s：单批最多 500 条 KB 级密文，要覆盖慢速链路，但远小于备份链的
-    /// 300s。
+    /// `base_url` looks like `http://127.0.0.1:8080` (a trailing `/` is tolerated). The request timeout is
+    /// 60s: a single batch holds at most 500 KB-scale ciphertexts, which must cover slow links while staying
+    /// far below the backup chain's 300s.
     pub(super) fn new(base_url: impl Into<String>, token: impl Into<String>) -> Result<Self> {
         let http = reqwest::Client::builder()
             .timeout(Duration::from_secs(60))
@@ -41,9 +41,9 @@ impl SyncHttp {
             .bearer_auth(&self.token)
     }
 
-    /// 非 2xx 统一转 [`PersonaError::Io`]：带状态码与服务器 error.message
-    /// 摘要（无则省略）。401/503 语义（令牌过期 / API 未配置）由调用方按
-    /// 状态码字符串自行提示——本层不区分重试策略。
+    /// Non-2xx is mapped to [`PersonaError::Io`]: the status code plus the server's error.message
+    /// summary (omitted when absent). The 401/503 semantics (expired token / API not configured) are
+    /// reported by the caller from the status code string — this layer does not distinguish retry policies.
     pub(super) async fn ensure_success(
         resp: reqwest::Response,
         step: &str,

@@ -1,8 +1,8 @@
 use super::*;
 
-/// mock 基建自身的两臂：status 0（不回包直接断开——Handler 约定，
-/// 驱动客户端 send 失败）；请求头读到一半客户端断连（read_request
-/// EOF → None，mock 不 panic 静默回收）。
+/// The two arms of the mock infrastructure itself: status 0 (drop the connection without replying — the
+/// Handler contract — which drives the client's send failure); and the client disconnecting mid request
+/// head (read_request EOF -> None, so the mock silently reclaims the connection instead of panicking).
 #[tokio::test(flavor = "multi_thread")]
 async fn mock_status_zero_and_mid_header_disconnect_are_tolerated() {
     let base = spawn_mock(Arc::new(|_req| (0, String::new()))).await;
@@ -13,7 +13,7 @@ async fn mock_status_zero_and_mid_header_disconnect_are_tolerated() {
         "{err}"
     );
 
-    // 半个请求头后直接断连
+    // Disconnect right after half a request head
     let mut raw = TcpStream::connect(base.trim_start_matches("http://"))
         .await
         .unwrap();
@@ -24,10 +24,10 @@ async fn mock_status_zero_and_mid_header_disconnect_are_tolerated() {
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 }
 
-/// push/pull 的 send 失败臂都带步骤名（fail-closed，错误不吞）。
+/// The send-failure arms of push and pull both carry the step name (fail-closed, no swallowed errors).
 #[tokio::test(flavor = "multi_thread")]
 async fn push_pull_connection_failures_carry_step_names() {
-    // bind 后立即 drop：端口必然无服务
+    // Drop right after binding: nothing can be listening on that port
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let dead = listener.local_addr().unwrap();
     drop(listener);
@@ -45,7 +45,7 @@ async fn push_pull_connection_failures_carry_step_names() {
     );
 }
 
-/// 200 但 body 不是 JSON：push/pull 各自的 malformed 响应臂。
+/// A 200 whose body is not JSON: the malformed response arm for push and pull alike.
 #[tokio::test(flavor = "multi_thread")]
 async fn push_pull_malformed_bodies_are_rejected() {
     let base = spawn_mock(Arc::new(|_req| (200, "not json at all".to_string()))).await;
@@ -63,7 +63,7 @@ async fn push_pull_malformed_bodies_are_rejected() {
     );
 }
 
-/// 非 JSON 错误体（反代 502 HTML）：只报状态码，不透传脏内容。
+/// A non-JSON error body (a reverse proxy's 502 HTML): only the status code is reported, never the dirty content.
 #[tokio::test(flavor = "multi_thread")]
 async fn error_status_without_json_body_omits_summary() {
     let base = spawn_mock(Arc::new(|_req| (502, "<html>boom</html>".to_string()))).await;
@@ -71,7 +71,7 @@ async fn error_status_without_json_body_omits_summary() {
 
     let err = remote.push_ops(&[sample_put()]).await.unwrap_err();
     let msg = err.to_string();
-    // reqwest 的 StatusCode Display 带规范原因短语
+    // reqwest's StatusCode Display carries the canonical reason phrase
     assert!(
         msg.contains("sync push failed (HTTP 502 Bad Gateway)"),
         "{msg}"
@@ -79,8 +79,8 @@ async fn error_status_without_json_body_omits_summary() {
     assert!(!msg.contains("boom"), "{msg}");
 }
 
-/// wire 形状正面断言：bearer 头每请求携带、push 走 POST /oplog、
-/// pull 的 since 游标进 query。
+/// Happy-path wire shape assertions: the bearer header is sent with every request, push goes over
+/// POST /oplog, and pull's since cursor lands in the query string.
 #[tokio::test(flavor = "multi_thread")]
 async fn push_sends_bearer_and_pull_sends_cursor_query() {
     let captured: Arc<Mutex<Vec<Captured>>> = Default::default();

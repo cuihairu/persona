@@ -1,5 +1,5 @@
-//! 附件 blob 文件保护：storage_path 路径逃逸防御、密封态原字节读写
-//! 与 sha256 完整性校验。
+//! Attachment blob file protection: storage_path escape defense, sealed
+//! raw-byte read/write, and sha256 integrity checks.
 
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
@@ -9,7 +9,8 @@ use super::model::TravelBlobFile;
 use super::sha256_hex;
 use crate::{PersonaError, PersonaResult};
 
-/// 读附件文件（密封态原字节）。storage_path 防逃逸（历史脏数据防御）。
+/// Read an attachment file (sealed raw bytes). Guards against storage_path
+/// escapes (defense against historical dirty data).
 pub(super) fn read_blob_file(root: &Path, storage_path: &str) -> PersonaResult<Vec<u8>> {
     let relative = Path::new(storage_path);
     if relative.is_absolute()
@@ -25,7 +26,8 @@ pub(super) fn read_blob_file(root: &Path, storage_path: &str) -> PersonaResult<V
         .map_err(|e| PersonaError::Io(format!("failed to read attachment {storage_path}: {e}")))
 }
 
-/// 写附件文件（密封态原字节；exit 时父目录按需创建）。
+/// Write an attachment file (sealed raw bytes; the parent directory is
+/// created on demand during exit).
 pub(super) fn write_blob_file(root: &Path, storage_path: &str, bytes: &[u8]) -> PersonaResult<()> {
     let relative = Path::new(storage_path);
     if relative.is_absolute()
@@ -54,8 +56,9 @@ pub(super) fn write_blob_file(root: &Path, storage_path: &str, bytes: &[u8]) -> 
     })
 }
 
-/// 删除被移除身份的附件 blob 文件（enter 事务提交后 best-effort：
-/// 失败项 warn 并计入返回清单——exit 会按 storage_path 覆写自愈）。
+/// Delete the attachment blob files of the removed identities (best-effort
+/// after the enter transaction commits: failures are logged as warnings and
+/// returned in the list -- exit self-heals by overwriting via storage_path).
 pub(crate) fn delete_blob_files(root: &Path, files: &[TravelBlobFile]) -> Vec<String> {
     let mut failures = Vec::new();
     for file in files {
@@ -83,9 +86,11 @@ pub(crate) fn delete_blob_files(root: &Path, files: &[TravelBlobFile]) -> Vec<St
     failures
 }
 
-/// 重写附件 blob 文件（exit 事务提交后；行已恢复，此步失败可整条重试，
-/// INSERT OR REPLACE 与文件覆写均幂等）。路径逃逸校验先于内容校验：
-/// 坏路径直接拒绝，不浪费解码与哈希。
+/// Rewrite the attachment blob files (after the exit transaction commits;
+/// the rows are restored by then, so a failure here can simply retry the
+/// whole thing -- both INSERT OR REPLACE and the file overwrite are
+/// idempotent). The path-escape check runs before the content check: a bad
+/// path is rejected outright without wasting decode and hashing work.
 pub(crate) fn write_blob_files(root: &Path, files: &[TravelBlobFile]) -> PersonaResult<()> {
     for file in files {
         let relative = Path::new(&file.storage_path);

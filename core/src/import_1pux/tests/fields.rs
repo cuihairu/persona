@@ -146,8 +146,9 @@ fn parse_otpauth_uri_hotp_host_sets_counter_flag() {
     assert_eq!(params.algorithm.as_deref(), Some("SHA1"));
     assert_eq!(params.digits, Some(6));
 
-    // 映射进 TwoFactorData 后计数器型标记与起始计数器都要带上，否则导入的
-    // HOTP 条目会退化成时间型、出码即错。
+    // When mapped into TwoFactorData the counter-based flag and the initial
+    // counter must both be carried, otherwise the imported
+    // HOTP entry degrades to time-based and generates wrong codes.
     let data = parse_totp_value(
         "otpauth://hotp/Example:alice?secret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ&counter=7",
         "Example",

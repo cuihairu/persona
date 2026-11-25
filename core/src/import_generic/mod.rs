@@ -1,19 +1,26 @@
-//! 通用格式导入（FEATURE_GAP_ANALYSIS #20）：CSV + Bitwarden JSON 导出解析
-//! 与导入规划。
+//! Generic-format import (FEATURE_GAP_ANALYSIS #20): parsing of CSV + Bitwarden
+//! JSON exports and planning the import.
 //!
-//! 覆盖主流明文导出形：
-//! - **CSV**（按表头嗅探列角色）：Bitwarden CSV（含 `type` 列分流）、Chrome、
-//!   Firefox、1Password CSV、KeePass 1.x/2.x CSV；
-//! - **Bitwarden JSON**（`encrypted: false` 的明文导出；密码保护导出明确
-//!   拒绝并指路）。
+//! Covers the mainstream plaintext export shapes:
+//! - **CSV** (column roles sniffed from the headers): Bitwarden CSV (with
+//!   `type`-column branching), Chrome,
+//!   Firefox, 1Password CSV, KeePass 1.x/2.x CSV;
+//! - **Bitwarden JSON** (plaintext exports with `encrypted: false`;
+//!   password-protected exports are explicitly
+//!   rejected with guidance).
 //!
-//! 与 [`crate::import_1pux`] 同一条设计线：解析 → 纯函数规划出
-//! [`ImportPlan`]，CLI/桌面先预览再确认后落库。CSV 导出没有容器概念，
-//! 整个文件落进一个身份（`identity_name` 由调用方给定，通常是文件名 stem）；
-//! Bitwarden 的 folder 映射为 persona 标签而非身份（folder 是库内轻量分组，
-//! 不是 1Password vault 那种容器）。KeePass 走其 CSV 导出（KeePass →
-//! Export → CSV），不直读 KDBX 加密容器——与 1PUX/maFile 一致的明文容器
-//! 策略，避免引入 keepass-rs 重依赖。
+//! Same design line as [`crate::import_1pux`]: parse → a pure function plans an
+//! [`ImportPlan`], which the CLI/desktop preview before confirming and writing
+//! to the store. A CSV export has no notion of containers,
+//! so the whole file lands in a single identity (`identity_name` is supplied by
+//! the caller, usually the filename stem);
+//! Bitwarden's folder maps to a persona tag rather than an identity (a folder
+//! is a lightweight grouping inside the vault,
+//! not a container like a 1Password vault). KeePass goes through its CSV export
+//! (KeePass →
+//! Export → CSV) and never reads the KDBX encrypted container directly — the
+//! same plaintext-container
+//! policy as 1PUX/maFile, avoiding the heavy keepass-rs dependency.
 
 use anyhow::Result;
 
@@ -29,40 +36,45 @@ use bitwarden::{parse_bitwarden_json, plan_bitwarden};
 pub use bitwarden::{BitwardenFolder, BitwardenItem};
 use csv::{parse_csv, plan_csv};
 
-/// 通用导入的唯一容器键：整个文件一个身份，凭据经它回链。
+/// The single container key for generic imports: one identity per whole file,
+/// with credentials linked back through it.
 pub const GENERIC_VAULT_KEY: &str = "generic-import";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GenericExportFormat {
-    /// 密码管理器 CSV 导出（表头嗅探列角色，映射见 csv.rs `map_roles`）
+    /// A password manager CSV export (column roles sniffed from headers; see
+    /// `map_roles` in csv.rs for the mapping)
     Csv,
-    /// Bitwarden 明文 JSON 导出（`encrypted: false`）
+    /// A Bitwarden plaintext JSON export (`encrypted: false`)
     BitwardenJson,
 }
 
-/// 解析产物：CSV 记录集或 Bitwarden JSON 导出。
+/// The product of parsing: a CSV record set or a Bitwarden JSON export.
 #[derive(Debug, Clone)]
 pub enum GenericExport {
     Csv(CsvExport),
     BitwardenJson(BitwardenExport),
 }
 
-/// CSV 导出：表头 + 数据行（列与表头按位对齐，缺列由 `flexible` 容忍）。
+/// A CSV export: headers + data rows (columns align with the headers
+/// positionally; short rows are tolerated via `flexible`).
 #[derive(Debug, Clone)]
 pub struct CsvExport {
     pub headers: Vec<String>,
     pub rows: Vec<Vec<String>>,
 }
 
-/// Bitwarden 明文 JSON 导出。
+/// A Bitwarden plaintext JSON export.
 #[derive(Debug, Clone)]
 pub struct BitwardenExport {
     pub folders: Vec<BitwardenFolder>,
     pub items: Vec<BitwardenItem>,
 }
 
-/// 自动嗅探格式：剥掉 UTF-8 BOM 后，`{`/`[` 开头当 JSON，否则当 CSV。
-/// 扩展名不可靠（用户常改名），按内容判断。
+/// Sniff the format automatically: after stripping a UTF-8 BOM, a leading
+/// `{`/`[` means JSON, anything else is treated as CSV.
+/// The extension is not trustworthy (users often rename files), so judge by
+/// content.
 pub fn detect_format(bytes: &[u8]) -> GenericExportFormat {
     let head = String::from_utf8_lossy(strip_utf8_bom(bytes));
     match head.trim_start().starts_with('{') || head.trim_start().starts_with('[') {
@@ -71,7 +83,7 @@ pub fn detect_format(bytes: &[u8]) -> GenericExportFormat {
     }
 }
 
-/// 解析通用导出文件。`format` 传 `None` 时自动嗅探。
+/// Parse a generic export file. Pass `None` for `format` to sniff automatically.
 pub fn parse_generic(bytes: &[u8], format: Option<GenericExportFormat>) -> Result<GenericExport> {
     match format.unwrap_or_else(|| detect_format(bytes)) {
         GenericExportFormat::Csv => parse_csv(bytes).map(GenericExport::Csv),
@@ -87,8 +99,10 @@ fn strip_utf8_bom(bytes: &[u8]) -> &[u8] {
         .unwrap_or(bytes)
 }
 
-/// 把通用导出映射成 [`ImportPlan`]：整个文件落进一个身份（`identity_name`，
-/// 描述里记录 `source_label` 便于溯源）。纯函数、无 IO。
+/// Map a generic export into an [`ImportPlan`]: the whole file lands in one
+/// identity (`identity_name`,
+/// with `source_label` recorded in the description for traceability). A pure
+/// function with no IO.
 pub fn plan_generic_import(
     export: &GenericExport,
     identity_name: &str,

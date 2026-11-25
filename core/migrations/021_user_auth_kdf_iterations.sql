@@ -1,16 +1,23 @@
 -- Migration 021: persist the PBKDF2 iteration count used for master-key
--- derivation (docs/review/2026-10-16-kdf-decision.md, 已代决).
+-- derivation (docs/review/2026-10-16-kdf-decision.md, already decided by proxy).
 --
--- 为什么必须持久化：迭代数是派生主密钥的输入之一，改了迭代数、同一口令派生
--- 出的密钥就完全不同。常量此前写死在调用点（100k），就地改常量会让所有既有
--- 库的主密钥对不上、item key 包裹层整体解不开——数据级事故。
+-- Why persistence is required: the iteration count is one of the inputs to
+-- deriving the master key, so changing it makes the key derived from the same
+-- passphrase entirely different. The constant was previously hard-coded at the
+-- call sites (100k), and editing it in place would desync the master key of
+-- every existing vault and make the item-key wrapping layer unopenable as a
+-- whole — a data-level incident.
 --
--- 存量行的取值：DEFAULT 必须是**升级前的旧口径 100000**。这样：
---   * 迁移前创建的库 → 读回 100000 → 解锁时按旧迭代数派生 → 旧包裹层解得开；
---   * 解锁成功后若旧值低于现行下限（600000），service 在内存里惰性
---     re-wrap（re-wrap 用新迭代数派生的密钥，口令与 salt 都不变）并把本列
---     推进到 600000，下次解锁直接走新口径。
---   * 新建库 → INSERT 显式写 600000。
--- 新库不会读到 DEFAULT，所以 DEFAULT 只对历史行有意义。
+-- Value for pre-existing rows: DEFAULT must be **the pre-upgrade figure of
+-- 100000**. This way:
+--   * vaults created before the migration → read back 100000 → derive with the
+--     old iteration count at unlock → the old wrapping layer opens;
+--   * after a successful unlock, if the old value is below the current floor
+--     (600000), the service lazily re-wraps in memory (the re-wrap uses a key
+--     derived with the new iteration count; passphrase and salt are unchanged)
+--     and advances this column to 600000, so the next unlock goes straight to
+--     the new figure.
+--   * new vaults → INSERT explicitly writes 600000.
+-- A new vault never reads DEFAULT, so DEFAULT only matters for historical rows.
 
 ALTER TABLE user_auth ADD COLUMN kdf_iterations INTEGER NOT NULL DEFAULT 100000;

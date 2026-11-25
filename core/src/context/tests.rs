@@ -19,7 +19,7 @@ fn map_toml(text: &str) -> ContextMapFile {
     ContextMapFile::parse(text).expect("valid map")
 }
 
-// ---- URL 归一化 ----
+// ---- URL normalization ----
 
 #[test]
 fn normalizes_scp_style_remote() {
@@ -61,7 +61,7 @@ fn local_path_remotes_have_no_forge_identity() {
     assert_eq!(normalize_remote_url(""), None);
 }
 
-// ---- .git/config 解析 ----
+// ---- .git/config parsing ----
 
 #[test]
 fn parses_origin_url_from_git_config() {
@@ -96,7 +96,7 @@ fn url_outside_origin_section_is_ignored() {
     assert_eq!(parse_origin_url(config), None);
 }
 
-// ---- repo 发现 ----
+// ---- repo discovery ----
 
 #[test]
 fn discovers_repo_by_walking_up_parents() {
@@ -141,7 +141,7 @@ fn no_git_dir_yields_none() {
     assert_eq!(discover_git_repo(&dir), None);
 }
 
-// ---- 映射表解析 ----
+// ---- mapping table parsing ----
 
 #[test]
 fn parses_context_map_toml() {
@@ -179,7 +179,7 @@ fn map_roundtrips_through_toml() {
     assert_eq!(ContextMapFile::parse(&text).unwrap(), m);
 }
 
-// ---- 建议决策 ----
+// ---- suggestion decision ----
 
 #[test]
 fn project_mapping_hit_scores_full() {
@@ -296,7 +296,8 @@ fn multiple_signals_same_identity_sum_scores() {
 
 #[test]
 fn tie_break_prefers_active_then_name_order() {
-    // 同模式重复键在 TOML 层会报重复键；用两个同权重不同模式制造平局。
+    // Duplicate keys with the same pattern would be a duplicate-key error at
+    // the TOML layer; use two equal-weight different patterns to create a tie.
     let maps =
         map_toml("[host.\"^h$\"]\nidentity = \"Beta\"\n\n[host.\"^h.*$\"]\nidentity = \"Alpha\"\n");
     let r = suggest(
@@ -309,7 +310,7 @@ fn tie_break_prefers_active_then_name_order() {
         None,
     );
     assert_eq!(r.candidates.len(), 2);
-    assert_eq!(r.candidates[0].identity, "Alpha"); // 平局 active 优先
+    assert_eq!(r.candidates[0].identity, "Alpha"); // ties prefer active
     let r2 = suggest(
         &signals(None, Some("h")),
         None,
@@ -319,7 +320,7 @@ fn tie_break_prefers_active_then_name_order() {
         &names(&["Alpha", "Beta", "Zeta"]),
         None,
     );
-    assert_eq!(r2.candidates[0].identity, "Alpha"); // 无 active 命中 → 名字升序
+    assert_eq!(r2.candidates[0].identity, "Alpha"); // no active hit → name ascending
 }
 
 #[test]
@@ -373,9 +374,12 @@ fn unknown_mapping_identity_is_skipped_with_warning() {
 
 #[test]
 fn forged_signals_only_shape_suggestion_never_authorize() {
-    // 设计铁律：建议不授权——伪造信号只改变候选，纯函数无授权副作用。
-    // 同一映射下，攻击者改 PERSONA_HOST 只能让「建议」指向别的分身，
-    // 不会改变任何策略结果（这里以纯函数输出断言其唯一效果）。
+    // Design iron rule: suggestions do not authorize — forged signals only
+    // change the candidates; the pure function has no authorization
+    // side effects. Under the same mapping, an attacker changing
+    // PERSONA_HOST can only point the "suggestion" at a different identity,
+    // never changing any policy result (here we assert the sole effect via
+    // the pure function's output).
     let maps = map_toml("[host.\"^evil$\"]\nidentity = \"Ops\"\n");
     let legit = suggest(
         &signals(None, Some("dev-pc")),
@@ -398,7 +402,8 @@ fn forged_signals_only_shape_suggestion_never_authorize() {
     assert!(legit.candidates.is_empty());
     assert_eq!(legit.active.as_deref(), Some("Default"));
     assert_eq!(forged.candidates[0].identity, "Ops");
-    // 两种情况下 active 指针都不变——建议函数没有写路径。
+    // The active pointer is unchanged in both cases — the suggestion
+    // function has no write path.
     assert_eq!(legit.active, forged.active);
 }
 
@@ -435,7 +440,8 @@ fn empty_identity_name_in_mapping_warns() {
 
 #[test]
 fn no_mappings_matches_today_behavior() {
-    // 验收「无映射时输出=active」：candidates 空 + active 原样带回。
+    // Acceptance for "with no mapping the output = active": empty
+    // candidates + active passed back unchanged.
     let r = suggest(
         &signals(Some("github.com/a/b"), Some("dev-pc")),
         None,
@@ -450,7 +456,7 @@ fn no_mappings_matches_today_behavior() {
     assert_eq!(r.active.as_deref(), Some("Solo"));
 }
 
-// ---- 历史学习（阶段 2，设计 §4.1） ----
+// ---- historical learning (phase 2, design §4.1) ----
 
 #[test]
 fn learn_counts_produce_low_weight_candidate() {
@@ -524,8 +530,10 @@ fn learn_and_mapping_same_identity_accumulate() {
 
 #[test]
 fn learn_takes_first_of_prec_sorted_counts() {
-    // 仓库层按 (次数降序, 名字升序) 传参；首名即学习候选——这里锁定
-    // 纯函数「取首个」的契约，平局规则归仓库层。
+    // The repo layer passes counts as (count descending, name ascending);
+    // the first name is the learning candidate — here we lock in the
+    // pure function's "take the first" contract; tie rules belong to the
+    // repo layer.
     let counts = vec![
         ("Tied-B".to_string(), 5),
         ("Tied-A".to_string(), 5),

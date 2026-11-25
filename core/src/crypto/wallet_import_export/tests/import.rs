@@ -122,9 +122,10 @@ fn test_import_from_private_key_solana() {
     assert_eq!(wallet.addresses[0].address, expected);
 }
 
-// 深审 Major 回归（2026-11-13）：单密钥 Solana 钱包存的是原始 32 字节
-// Ed25519 种子，签名路径此前无条件按 64 字节 SLIP-0010 根节点解析，
-// 导入成功却永远无法签名。
+// Deep-audit Major regression (2026-11-13): a single-key Solana wallet stores
+// the raw 32-byte Ed25519 seed, but the signing path used to unconditionally
+// parse it as a 64-byte SLIP-0010 root node, so import succeeded yet the
+// wallet could never sign.
 #[test]
 fn single_address_solana_wallet_signs_with_raw_seed() {
     let mut wallet = import_from_private_key(
@@ -141,22 +142,23 @@ fn single_address_solana_wallet_signs_with_raw_seed() {
     let WalletSigningKey::Ed25519(ed) = key else {
         panic!("expected Ed25519 signing key");
     };
-    // 签名密钥必须复现自身地址（此前解析错位，公钥对不上地址）
+    // The signing key must reproduce its own address (the earlier misparse left
+    // the public key disagreeing with the address).
     let derived =
         crate::crypto::address_generator::generate_solana_address(&ed.public_bytes()).unwrap();
     assert_eq!(derived, address);
     let sig = ed.sign(b"payload");
     assert!(ed.verify(b"payload", &sig));
 
-    // 错误密码不得解密
+    // A wrong password must not decrypt the key.
     assert!(signing_key_for_address(&wallet, "wrong", &address).is_err());
 
     wallet.addresses.clear();
 }
 
-// 深审 Major 回归（2026-11-13）：0xFF…FF 不是合法 secp256k1 标量
-//（≥ 曲线阶 n），但任何 32 字节都是合法 Ed25519 种子——导入侧的
-// secp256k1 校验不得对 Solana 生效。
+// Deep-audit Major regression (2026-11-13): 0xFF…FF is not a valid secp256k1
+// scalar (>= the curve order n), but any 32 bytes are a valid Ed25519 seed —
+// the import-side secp256k1 validation must not apply to Solana.
 #[test]
 fn solana_seed_import_skips_secp256k1_validation() {
     let wallet = import_from_private_key(
@@ -176,9 +178,10 @@ fn solana_seed_import_skips_secp256k1_validation() {
     assert_eq!(wallet.addresses[0].address, expected);
 }
 
-// 深审 Major 回归（2026-11-13）：Solana HD 导出私钥此前按 secp256k1
-// XPrv 解析 Ed25519 根节点，必然报错——现在按 SLIP-0010 逐地址派生导出，
-// 且整包 JSON 可无损还原（恢复一致性核对放行）。
+// Deep-audit Major regression (2026-11-13): Solana HD private-key export used
+// to parse the Ed25519 root node as a secp256k1 XPrv and always failed — it
+// now exports per-address SLIP-0010 derivations, and the whole JSON bundle
+// restores losslessly (the recovery consistency check passes).
 #[test]
 fn solana_hd_wallet_export_roundtrips_private_keys() {
     let password = "pw";
@@ -201,7 +204,8 @@ fn solana_hd_wallet_export_roundtrips_private_keys() {
         .expect("solana HD export must carry private keys");
     assert_eq!(keys.len(), 2);
 
-    // 每把导出密钥必须是 32 字节 hex，且重派生公钥等于其地址
+    // Every exported key must be 32-byte hex, and re-deriving its public key must
+    // match the address it is keyed by.
     for (addr, key_hex) in keys {
         let secret: [u8; 32] = hex::decode(key_hex.as_str().unwrap())
             .unwrap()
@@ -214,7 +218,7 @@ fn solana_hd_wallet_export_roundtrips_private_keys() {
         assert_eq!(&derived, addr);
     }
 
-    // JSON 恢复：地址逐一一致
+    // JSON recovery: addresses must match one-for-one.
     let restored = import_from_json(Uuid::new_v4(), None, &exported, password).unwrap();
     let restored_addrs: Vec<&str> = restored
         .addresses
@@ -301,8 +305,9 @@ fn test_import_from_private_key_accepts_wif() {
     .is_err());
 }
 
-// 深审 Major 回归（2026-11-13）：import_from_private_key 的 WIF 回退入口
-// 此前绕过 import_from_wif 的 testnet/非压缩两道检查。
+// Deep-audit Major regression (2026-11-13): the WIF fallback of
+// import_from_private_key used to bypass import_from_wif's testnet and
+// uncompressed-format checks.
 #[test]
 fn import_from_private_key_wif_fallback_enforces_wif_contract() {
     // Testnet WIF: version byte 0xef, compressed suffix.
@@ -576,8 +581,9 @@ fn import_from_json_error_paths() {
 #[test]
 fn import_from_json_defaults_optional_fields() {
     // extended_public_key / description / watch_only are serde-defaulted.
-    // addresses 必须写真实派生地址：恢复一致性核对（2026-11-13 深审
-    // Critical 修复）会拒绝与助记词派生不符的地址集。
+    // addresses must be the real derived values: the recovery consistency check
+    // (2026-11-13 deep audit, Critical fix) rejects address sets that disagree
+    // with the mnemonic derivation.
     let reference = import_from_mnemonic(
         Uuid::new_v4(),
         "Ref".to_string(),
@@ -632,10 +638,12 @@ fn test_import_bitcoin_private_key_yields_p2wkh_address() {
     assert!(wif.starts_with('K') || wif.starts_with('L'));
 }
 
-// 深审 Critical 回归（2026-11-13）：带 BIP39 passphrase 的 HD 导出，
-// JSON 里只有助记词、passphrase 无法随文件走——恢复时用空 passphrase
-// 会派生出另一个钱包。恢复一致性核对必须拒绝静默错位恢复，而不是
-// 假装成功（老行为：恢复出完全不同地址的钱包还覆盖 xpub）。
+// Deep-audit Critical regression (2026-11-13): for an HD export carrying a
+// BIP39 passphrase, the JSON holds only the mnemonic and the passphrase cannot
+// travel with the file — restoring with an empty passphrase derives a different
+// wallet. The recovery consistency check must reject the silently misaligned
+// restore instead of pretending it succeeded (old behavior: restoring a wallet
+// with entirely different addresses still overwrote the xpub).
 #[test]
 fn json_restore_of_passphrase_export_is_refused() {
     let identity_id = Uuid::new_v4();
@@ -661,7 +669,8 @@ fn json_restore_of_passphrase_export_is_refused() {
         "error must point at the missing passphrase: {err}"
     );
 
-    // 对照组：无 passphrase 导出照常恢复，地址逐一一致
+    // Control group: the passphrase-free export restores as usual, with addresses
+    // matching one-for-one.
     let plain = import_from_mnemonic(
         identity_id,
         "Plain HD".to_string(),

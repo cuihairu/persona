@@ -1,18 +1,22 @@
-//! 账号域 HTTP 客户端（feature `accounts`）：persona-server
-//! `/api/v1/accounts/*`。wire 契约的权威定义在 `server/src/api/accounts.rs`：
-//! 错误包络 `{"error":{"code","message",…}}`，正文为 JSON，204 为无体成功。
+//! Account-domain HTTP client (feature `accounts`): persona-server
+//! `/api/v1/accounts/*`. The authoritative definition of the wire contract is
+//! in `server/src/api/accounts.rs`: error envelope
+//! `{"error":{"code","message",…}}`, JSON bodies, and a bodyless 204 for success.
 //!
-//! 纪律与 `sync/remote.rs` 一致：本模块只做 wire（URL/方法/JSON/状态码/错误
-//! 映射），不含任何密码学或会话编排——SRP 数学、WebAuthn 仪式由调用方
-//! 完成后把最终值交过来。端点按服务器契约分两类：
+//! The discipline matches `sync/remote.rs`: this module only does wire work
+//! (URL / method / JSON / status code / error mapping) and contains no
+//! cryptography or session orchestration — SRP math and the WebAuthn
+//! ceremony are completed by the caller, who hands over the final values.
+//! Endpoints fall into two classes under the server contract:
 //!
-//! - 公开端点（[`AccountsApi::new`]）：register / passkeys create·register·
-//!   login-options / srp challenge·verify / recovery-codes verify；
-//! - Bearer 端点（[`AccountsApi::with_bearer`]）：srp register / recovery-codes
-//!   生成 / devices 三件套 / sessions 两件套。
+//! - Public endpoints ([`AccountsApi::new`]): register / passkeys create·register·
+//!   login-options / srp challenge·verify / recovery-codes verify;
+//! - Bearer endpoints ([`AccountsApi::with_bearer`]): srp register / recovery-codes
+//!   generation / the three device endpoints / the two session endpoints.
 //!
-//! Bearer 三选一（服务器 `require_account_bearer`）：静态服务器令牌、SRP 15
-//! 分钟短期令牌、账号 24h 会话令牌——本模块不判定哪个有效，只负责原样携带。
+//! Bearer is one of three (server `require_account_bearer`): the static server
+//! token, the SRP 15-minute short-lived token, or the account 24h session token —
+//! this module does not decide which is valid, it only carries it through as-is.
 use reqwest::Method;
 use std::time::Duration;
 
@@ -38,10 +42,12 @@ pub use srp::{
     SrpChallengeRequest, SrpChallengeResponse, SrpRegisterRequest, SrpRegisterResponse,
     SrpVerifyRequest, SrpVerifyResponse,
 };
-// ---- 共享 HTTP 底座 ----
+// ---- Shared HTTP foundation ----
 
-/// base URL 归一、可选 bearer 注入、非 2xx 统一转错。与 `sync/remote.rs`
-/// 的 `SyncHttp` 同构，但账号与 sync 是两套服务器认证面，不复用互串。
+/// Base-URL normalization, optional bearer injection, and a uniform error
+/// conversion for non-2xx. Isomorphic to `SyncHttp` in `sync/remote.rs`, but
+/// accounts and sync are two separate server authentication surfaces, so they
+/// do not share an implementation.
 #[derive(Clone)]
 struct AccountHttp {
     base_url: String,
@@ -79,8 +85,9 @@ impl AccountHttp {
         builder
     }
 }
-/// 对 persona-server `/api/v1/accounts/*` 的客户端。公开端点免认证；
-/// Bearer 端点（见模块文档清单）用 [`Self::with_bearer`] 构造。
+/// Client for persona-server `/api/v1/accounts/*`. Public endpoints need no
+/// authentication; Bearer endpoints (see the list in the module docs) are built
+/// with [`Self::with_bearer`].
 #[derive(Clone)]
 pub struct AccountsApi {
     http: AccountHttp,
@@ -92,8 +99,9 @@ impl AccountsApi {
         })
     }
 
-    /// 非 2xx 统一转 [`PersonaError::Io`]：带状态码与服务器 error.message
-    /// 摘要（无则省略）。204 等无体成功直接放行。
+    /// Non-2xx is uniformly converted to [`PersonaError::Io`]: carries the status code and
+    /// a digest of the server's error.message (omitted when absent). Bodyless successes
+    /// such as 204 pass straight through.
     async fn ensure_success(resp: reqwest::Response, step: &str) -> Result<reqwest::Response> {
         if resp.status().is_success() {
             return Ok(resp);
@@ -117,8 +125,9 @@ impl AccountsApi {
         }
     }
 
-    /// 携带 Bearer 的客户端。Bearer 由宿主提供（静态服务器令牌 / SRP 短期
-    /// 令牌 / 账号会话令牌——本层不判定，原样携带，服务器裁决）。
+    /// A client that carries a Bearer. The Bearer is supplied by the host (the
+    /// static server token / the SRP short-lived token / the account session token —
+    /// this layer does not decide; it carries it through as-is and the server adjudicates).
     pub fn with_bearer(base_url: impl Into<String>, bearer: impl Into<String>) -> Result<Self> {
         Ok(Self {
             http: AccountHttp::new(base_url, Some(bearer.into()))?,

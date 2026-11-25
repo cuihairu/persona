@@ -1,5 +1,7 @@
-//! 安全策略与评估：`SecurityStrategy` 聚合条件与动作，`should_trigger`
-//! 对 `SecurityContext` 求值，`execute_actions` 产生通知/事件/锁定副作用。
+//! Security strategies and evaluation: `SecurityStrategy` aggregates
+//! conditions and actions, `should_trigger` evaluates them against a
+//! `SecurityContext`, and `execute_actions` produces notification/event/lock
+//! side effects.
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;

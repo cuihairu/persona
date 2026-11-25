@@ -1,4 +1,5 @@
-//! 备份与安全：备份信息/位置/助记词备份方式、安全设置与安全等级。
+//! Backup and security: backup info/location/mnemonic backup method, security
+//! settings and security levels.
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};

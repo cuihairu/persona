@@ -2,7 +2,7 @@ use super::*;
 use crate::models::{CredentialData, PasswordCredentialData};
 use crate::storage::Database;
 
-// ----- Connect 本机自动化(阶段 1:token 生命周期/scope/锁定门禁)-----
+// ----- Connect local automation (phase 1: token lifecycle/scope/lock gate) -----
 
 use crate::connect::{ConnectItemType, ConnectTokenScope, ConnectVerb};
 
@@ -14,8 +14,8 @@ fn connect_read_scope() -> ConnectTokenScope {
     }
 }
 
-/// scope → 测试用 token 行：数据面方法以完整 token 行为入参
-/// （拒绝审计需带 token id / 指纹）。
+/// scope -> test token row: data-plane methods take a full token row as their input
+/// (denial audits need the token id / fingerprint).
 fn token_of(scope: &ConnectTokenScope) -> ConnectTokenRow {
     ConnectTokenRow {
         id: Uuid::new_v4(),
@@ -31,7 +31,7 @@ fn token_of(scope: &ConnectTokenScope) -> ConnectTokenRow {
     }
 }
 
-/// 已解锁服务 + 独立 Database 句柄(直接查表断言哈希存储用)。
+/// Unlocked service + an independent Database handle (to query tables directly, e.g. asserting hash storage).
 async fn connect_fixture() -> (PersonaService, Database) {
     let db = Database::in_memory().await.unwrap();
     db.migrate().await.unwrap();
@@ -48,7 +48,7 @@ fn assert_vault_locked(err: anyhow::Error) {
     ));
 }
 
-/// list_connect_tokens 只挂解锁门禁(无 reauth):锁定即 VaultLocked。
+/// list_connect_tokens carries only the unlock gate (no reauth): a locked vault yields VaultLocked.
 fn assert_vault_locked_but_auth_gate_first_free(err: anyhow::Error) {
     assert!(matches!(
         err.downcast_ref::<PersonaError>(),
@@ -185,8 +185,8 @@ async fn convert_credential_to_legacy(
         .unwrap();
 }
 
-/// travel 测试夹具：解锁服务 + workspaces 行（travel_status/enter/exit
-/// 读写 settings 需要；unlocked_service 不建行）+ sidecar 目录。
+/// Travel test fixture: unlocked service + a workspaces row (needed by travel_status/enter/exit
+/// reading and writing settings; unlocked_service does not create a row) + a sidecar directory.
 async fn travel_fixture() -> (tempfile::TempDir, Database, PersonaService) {
     let dir = tempfile::tempdir().unwrap();
     let db = Database::in_memory().await.unwrap();
@@ -210,11 +210,11 @@ async fn travel_fixture() -> (tempfile::TempDir, Database, PersonaService) {
 // ------------------------------------------------------------------
 
 // ------------------------------------------------------------------
-// Custom fields（1Password 对齐）：per-item key 密封的 metadata blob
+// Custom fields (1Password parity): metadata blob sealed with the per-item key
 // ------------------------------------------------------------------
 
 // ------------------------------------------------------------------
-// Item history（1Password 对齐）：create/update/delete 自动记录
+// Item history (1Password parity): create/update/delete recorded automatically
 // ------------------------------------------------------------------
 
 // ------------------------------------------------------------------
@@ -226,7 +226,7 @@ async fn travel_fixture() -> (tempfile::TempDir, Database, PersonaService) {
 // ------------------------------------------------------------------
 
 // ------------------------------------------------------------------
-// PBKDF2 iteration upgrade (migration 021, 2026-10-16 已代决)
+// PBKDF2 iteration upgrade (migration 021, already decided on 2026-10-16)
 // ------------------------------------------------------------------
 
 // ------------------------------------------------------------------
@@ -270,17 +270,17 @@ async fn travel_fixture() -> (tempfile::TempDir, Database, PersonaService) {
 // ------------------------------------------------------------------
 
 // ------------------------------------------------------------------
-// update_credential_data：编辑密文 payload（复用原 item key）
+// update_credential_data: edit the ciphertext payload (reuse the existing item key)
 // ------------------------------------------------------------------
 
-// ---- favicon（feature = "favicon"）：编排与缓存语义 ----
+// ---- favicon (feature = "favicon"): orchestration and cache semantics ----
 
 // ------------------------------------------------------------------
-// Watchtower 扩展规则（1Password 对齐）：软件许可到期 + 2FA available
+// Watchtower extended rules (1Password parity): software license expiry + 2FA available
 // ------------------------------------------------------------------
 
-// Breach 规则走 SHA-1 摘要缝：命中 corpus 报 BreachedPassword；checker
-// 故障不致命（offline 规则的报告照常返回）。
+// The Breach rule goes through the SHA-1 digest seam: a corpus hit reports BreachedPassword; a
+// checker failure is not fatal (offline rules still return their reports).
 struct FixedBreaches {
     counts: HashMap<String, u64>,
 }
@@ -312,10 +312,10 @@ use crate::models::Workspace;
 use crate::storage::UserAuthRepository;
 
 // ------------------------------------------------------------------
-// Travel Mode（旅行模式）集成：enter 真移除 → exit 原样恢复
+// Travel Mode integration: enter truly removes -> exit restores as-is
 // ------------------------------------------------------------------
 
-// ----- 防御臂覆盖轮（2026-09-30 llvm-cov 缺口最大模块 service.rs）-----
+// ----- Defense-arm coverage round (2026-09-30, service.rs was the module with the largest llvm-cov gaps) -----
 
 #[cfg(all(test, feature = "favicon"))]
 mod favicon_tests {
@@ -334,7 +334,7 @@ mod favicon_tests {
         service
     }
 
-    /// 恒 200 + PNG 的 fake favicon 源；返回注入用 base 与请求计数。
+    /// A fake favicon source that always returns 200 + PNG; returns the base for injection and a request counter.
     async fn spawn_fake() -> (String, Arc<Mutex<usize>>) {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
@@ -408,7 +408,7 @@ mod favicon_tests {
         assert_eq!(first.data, PNG);
         assert_eq!(*hits.lock().unwrap(), 1);
 
-        // 二次请求走缓存：host 归一后命中，不再外联
+        // The second request goes through the cache: a hit after host normalization, no new outbound call
         let second = service
             .fetch_favicon_for_credential(&credential.id, &fetcher)
             .await
@@ -421,7 +421,7 @@ mod favicon_tests {
     async fn fetch_shares_cache_across_credentials_of_same_host() {
         let service = unlocked_service().await;
         let a = credential_with_url(&service, "A", Some("https://a.com")).await;
-        let b = credential_with_url(&service, "B", Some("a.com")).await; // 裸域名同 host
+        let b = credential_with_url(&service, "B", Some("a.com")).await; // bare domain, same host
         let (base, hits) = spawn_fake().await;
         let fetcher = FaviconFetcher::new().unwrap().with_base_url(base);
 
@@ -435,7 +435,11 @@ mod favicon_tests {
             .unwrap();
 
         assert_eq!(entry.host, "a.com");
-        assert_eq!(*hits.lock().unwrap(), 1, "同 host 第二条凭据必须共享缓存");
+        assert_eq!(
+            *hits.lock().unwrap(),
+            1,
+            "the second credential on the same host must share the cache"
+        );
     }
 
     #[tokio::test]
@@ -487,7 +491,11 @@ mod favicon_tests {
                 .is_some_and(|e| matches!(e, PersonaError::InvalidInput(_))),
             "got: {err}"
         );
-        assert_eq!(*hits.lock().unwrap(), 0, "SSRF 拒绝后绝不外联");
+        assert_eq!(
+            *hits.lock().unwrap(),
+            0,
+            "no outbound call after an SSRF rejection"
+        );
     }
 
     #[tokio::test]
@@ -515,7 +523,7 @@ mod favicon_tests {
             .await
             .unwrap();
 
-        // 大小写/空白归一去重；b.com 未缓存不出现
+        // Case/whitespace normalization dedupes; b.com is not cached and does not appear
         let entries = service
             .get_cached_favicons(&[
                 "A.COM".to_string(),
@@ -527,7 +535,11 @@ mod favicon_tests {
 
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].host, "a.com");
-        assert_eq!(*hits.lock().unwrap(), 1, "批量读绝不外联");
+        assert_eq!(
+            *hits.lock().unwrap(),
+            1,
+            "batch reads never make outbound calls"
+        );
     }
 
     #[tokio::test]

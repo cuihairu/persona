@@ -94,9 +94,10 @@ async fn test_optimize_caches_keeps_expired_but_idle_sessions() {
     );
 }
 
-/// 策略缓存真实 TTL 逐出（audit 批2 #8）：占位实现 `retain(|_, _| true)`
-/// 从不删除，条目只增不减。带时间戳后，过期条目（> cache_ttl）被
-/// 逐出并计入 removed_*，新鲜条目保留。
+/// Real TTL eviction of the policy caches (audit batch 2 #8): the placeholder
+/// `retain(|_, _| true)` never removed anything, so entries only ever grew.
+/// With timestamps in place, expired entries (> cache_ttl) are evicted and
+/// counted in removed_*, while fresh entries are kept.
 #[tokio::test]
 async fn optimize_caches_evicts_expired_policy_entries() {
     let config = EnhancedAutoLockConfig::default();

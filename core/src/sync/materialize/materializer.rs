@@ -18,8 +18,8 @@ use crate::{Database, Result};
 
 use super::report::{MaterializeOutcome, MaterializeReport};
 
-/// oplog → 主库的物化器。持有仓储句柄；主密钥与 group key 逐调用传入
-/// （主密钥随解锁会话生灭，group key 只属于同步装配层）。
+/// Materializer from the oplog into the primary store. Holds repository handles; the primary key and the group key are passed in per call
+/// (the primary key lives and dies with the unlock session, while the group key belongs to the sync assembly layer only).
 pub struct Materializer {
     pub(super) credential_repo: CredentialRepository,
     pub(super) identity_repo: IdentityRepository,
@@ -39,8 +39,8 @@ impl Materializer {
         }
     }
 
-    /// 物化 oplog 中全部 item（幂等，可反复跑）。`local_device_id` 用来
-    /// 识别「主位是本机 op」的跳过情形。
+    /// Materializes every item in the oplog (idempotent, safe to re-run). `local_device_id` is used to
+    /// recognize the "primary is a local op" skip case.
     pub async fn materialize_all(
         &self,
         master: &EncryptionService,
@@ -64,8 +64,8 @@ impl Materializer {
                     report.pending_identity.push((item_id, identity_id));
                 }
                 Err(e) => {
-                    // 尽力而为：单 item 失败（如快照损坏）不中断整体，
-                    // op 仍在 oplog，可排查后重跑。
+                    // Best effort: a single item failure (e.g. a corrupt snapshot) does not abort the pass;
+                    // the op stays in the oplog and can be re-run after investigation.
                     tracing::warn!(item_id = %item_id, error = %e, "materialize item failed; kept in oplog");
                 }
             }
@@ -73,7 +73,7 @@ impl Materializer {
         Ok(report)
     }
 
-    /// 物化单个 item 的主位。
+    /// Materializes the primary of a single item.
     pub async fn materialize_item(
         &self,
         item_id: &Uuid,
@@ -97,7 +97,7 @@ impl Materializer {
                 }
                 OpType::Put => {
                     let Some(payload) = primary.payload else {
-                        // 协议不变量违反（put 必带 payload）：fail-closed，不写库。
+                        // Protocol invariant violation (a put always carries a payload): fail-closed, do not write.
                         tracing::warn!(item_id = %item_id, "remote put without payload; ignored");
                         return Ok(MaterializeOutcome::NoPrimary);
                     };
@@ -113,7 +113,7 @@ impl Materializer {
             },
             ItemKind::Passkey => match primary.op {
                 OpType::Delete => {
-                    // passkeys 表无入站 FK，无需摘引用
+                    // The passkeys table has no inbound FK, so no reference cleanup is needed
                     self.passkey_repo.delete(item_id).await?;
                     Ok(MaterializeOutcome::Tombstoned)
                 }
@@ -135,24 +135,24 @@ impl Materializer {
                     .await
                 }
             },
-            // Identity 的捕获与物化在后续批次；未知 kind 不产生本地写
+            // Identity capture and materialization land in a later batch; unknown kinds produce no local writes
             ItemKind::Identity | ItemKind::Unknown => {
                 Ok(MaterializeOutcome::SkippedUnsupportedKind)
             }
         }
     }
 
-    /// 物化一个 tombstone 主位：先摘掉 audit_logs 对该凭据的引用再删行
-    /// （audit 的 FK 是 NO ACTION，不先 detach 会 787 拒删）。公开给冲突
-    /// 裁决复用：采纳 delete 副本走同一条删行路径。
+    /// Materializes a tombstone primary: clears the `audit_logs` reference to the credential before deleting the row
+    /// (the audit FK is NO ACTION; without detaching first, the delete is rejected with 787). Public for reuse by
+    /// conflict arbitration: adopting a delete copy takes the same row-deletion path.
     pub async fn materialize_delete(&self, item_id: &Uuid) -> Result<()> {
         self.audit_repo.clear_credential_reference(item_id).await?;
         self.credential_repo.delete(item_id).await?;
         Ok(())
     }
 
-    /// 物化一个 put 主位进主库（重包 item key 到本机主密钥）。公开给
-    /// 冲突裁决复用：采纳 put 副本走同一条落库路径（[`super::resolve`]）。
+    /// Materializes a put primary into the primary store (rewraps the item key to the local primary key). Public
+    /// for reuse by conflict arbitration: adopting a put copy takes the same write path ([`super::resolve`]).
     pub async fn materialize_put(
         &self,
         item_id: &Uuid,
@@ -175,8 +175,8 @@ impl Materializer {
             });
         }
 
-        // 重包：同一把 item key 改由本机主密钥包裹（附件不变量维持——
-        // item key 不变，已封存的附件照常可解）。
+        // Rewrap: the same item key is now wrapped by the local primary key (the attachment invariant holds —
+        // the item key is unchanged, so archived attachments remain decryptable).
         let hierarchy = KeyHierarchy::new(master);
         let wrapped_local = master.encrypt(&item_key).map_err(|e| {
             crate::PersonaError::CryptographicError(format!("failed to wrap item key: {e}"))
@@ -225,10 +225,11 @@ impl Materializer {
         Ok(MaterializeOutcome::Written)
     }
 
-    /// 物化一个 passkey put 主位进主库。私钥信封原样搬运：item key 字节
-    /// 不变（group 信封拆出后重包到本机主密钥），物化后的行照常可解私钥；
-    /// 设备本地使用态（`created_at`/`sign_count`/`last_used_at`）由
-    /// [`PasskeyRepository::upsert_synced`] 保留，远端不携带。
+    /// Materializes a passkey put primary into the primary store. The private-key envelope is carried over
+    /// as-is: the item key bytes are unchanged (unwrapped from the group envelope, then rewrapped to the
+    /// local primary key), so the materialized row still decrypts the private key; the device-local usage
+    /// state (`created_at`/`sign_count`/`last_used_at`) is preserved by [`PasskeyRepository::upsert_synced`]
+    /// and is not carried by the remote.
     async fn materialize_passkey_put(
         &self,
         item_id: &Uuid,
@@ -251,7 +252,7 @@ impl Materializer {
             });
         }
 
-        // 重包：同一把 item key 改由本机主密钥包裹（私钥信封不变量维持）。
+        // Rewrap: the same item key is now wrapped by the local primary key (the private-key envelope invariant holds).
         let wrapped_local = master.encrypt(&item_key).map_err(|e| {
             crate::PersonaError::CryptographicError(format!("failed to wrap item key: {e}"))
         })?;

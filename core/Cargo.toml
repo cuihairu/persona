@@ -10,22 +10,22 @@ description = "Core cryptographic and storage functionality for Persona"
 doctest = false
 
 [dependencies]
-# 加密相关
+# Crypto-related
 ring.workspace = true
 argon2.workspace = true
 aes-gcm.workspace = true
-# 设备认证 SRP-6a（auth/srp.rs，E2EE 同步轨道阶段 1）
+# Device authentication SRP-6a (auth/srp.rs, phase 1 of the E2EE sync track)
 num-bigint.workspace = true
 subtle.workspace = true
 ed25519-dalek.workspace = true
-# E2EE 同步 device envelope + group key 层级（sync/，阶段 2，DR-1）
+# E2EE sync device envelope + group key hierarchy (sync/, phase 2, DR-1)
 x25519-dalek.workspace = true
 hkdf.workspace = true
 rand.workspace = true
 getrandom.workspace = true
 zeroize.workspace = true
 
-# 密码学 - BIP/加密货币相关
+# Crypto - BIP/cryptocurrency related
 bip39.workspace = true
 bip32.workspace = true
 k256.workspace = true
@@ -50,45 +50,48 @@ bech32.workspace = true
 p256.workspace = true
 coset.workspace = true
 base64.workspace = true
-# OpenSSH 私钥文件导入（crypto/ssh_import.rs）+ PEM 家族（ssh_import_pem.rs）
+# OpenSSH private key file import (crypto/ssh_import.rs) + the PEM family (ssh_import_pem.rs)
 ssh-key.workspace = true
 pkcs1.workspace = true
 pkcs8.workspace = true
-# ssh-key 0.7 的 Rng 口径：rand_core 0.10 移除 OsRng，SysRng（getrandom）可失败，
-# 用 UnwrapErr 包装成 Infallible 供 CryptoRng 边界；keygen 与测试 fixture 都用它
+# The Rng story for ssh-key 0.7: rand_core 0.10 removed OsRng, and SysRng
+# (getrandom) can fail, so it is wrapped with UnwrapErr into an Infallible for the
+# CryptoRng bound; both keygen and the test fixtures use it
 rand_core.workspace = true
 
-# Watchtower 泄露检查（HIBP k-anonymity）——可选：trait 与解析纯函数不依赖网络
-# json feature：ServerEventSink 的 .json() 请求体需要（workspace 默认未开）
+# Watchtower breach checks (HIBP k-anonymity) — optional: the trait and the pure
+# parsing functions do not need the network
+# the json feature: ServerEventSink's .json() request body needs it (not on by
+# default at the workspace level)
 reqwest = { workspace = true, optional = true, features = ["json"] }
 
-# 上报 wire 层 gzip（请求体压缩；reqwest 的 gzip feature 是响应解压，
-# 不适用于 POST body）
+# gzip on the reporting wire layer (request-body compression; reqwest's gzip
+# feature is response decompression, so it does not apply to POST bodies)
 flate2 = { workspace = true, optional = true }
 
-# 数据库
+# Database
 sqlx = { workspace = true, features = ["chrono", "uuid"], optional = true }
 
-# 序列化
+# Serialization
 serde.workspace = true
 serde_json.workspace = true
 bincode.workspace = true
 
-# 异步运行时
+# Async runtime
 tokio.workspace = true
 
-# 日志
+# Logging
 tracing.workspace = true
 tracing-subscriber.workspace = true
 
-# 错误处理
+# Error handling
 anyhow.workspace = true
 thiserror.workspace = true
 
-# 时间处理
+# Time handling
 chrono.workspace = true
 
-# 其他依赖
+# Other dependencies
 async-trait.workspace = true
 dirs.workspace = true
 hex.workspace = true
@@ -96,41 +99,46 @@ tempfile.workspace = true
 uuid.workspace = true
 regex.workspace = true
 toml = "1.1"
-# 上下文建议的 host 信号来源（PERSONA_HOST 覆盖 → gethostname，core/src/context.rs）
+# Host signal source for the context (overridden by PERSONA_HOST → gethostname, core/src/context.rs)
 hostname = "0.4"
 url.workspace = true
-# 1PUX（1Password 导出）ZIP 容器解析
+# 1PUX (1Password export) ZIP container parsing
 zip.workspace = true
-# 通用格式导入（#20）：Bitwarden/Chrome/Firefox/1Password/KeePass CSV 导出
+# Generic format import (#20): Bitwarden/Chrome/Firefox/1Password/KeePass CSV exports
 csv.workspace = true
 
 [dev-dependencies]
 mockall.workspace = true
 tokio-test = "0.4"
 proptest.workspace = true
-# 集成测试里的 BreachChecker stub 需要 trait 宏
+# The BreachChecker stubs in the integration tests need the trait macro
 async-trait.workspace = true
-# RP 侧实现，用作 authenticator 产物的回归裁判；
-# vendored openssl 使 webauthn-rs 在无系统 OpenSSL 头文件的环境可构建（仅测试）
+# The RP-side implementation, used as the regression judge for authenticator
+# artifacts; vendored openssl makes webauthn-rs buildable in environments without
+# system OpenSSL headers (tests only)
 openssl = { version = "0.10", features = ["vendored"] }
 webauthn-rs.workspace = true
 
 [features]
 default = ["sqlite", "hibp", "favicon", "events-server", "backup"]
 sqlite = ["sqlx"]
-# HIBP k-anonymity HTTP 客户端；trait 与解析纯函数无需此 feature
+# HIBP k-anonymity HTTP client; the trait and the pure parsing functions do not need this feature
 hibp = ["dep:reqwest"]
-# favicon 按需抓取 HTTP 客户端（独立于 hibp：关掉一个不影响另一个）
+# On-demand favicon-fetch HTTP client (independent of hibp: disabling one does not affect the other)
 favicon = ["dep:reqwest"]
-# ServerEventSink：审计事件 POST 到 persona-server（reqwest 本就随
-# hibp/favicon 在 default 树，进 default 对下游零增量）
+# ServerEventSink: audit events POSTed to persona-server (reqwest is already in the
+# default tree alongside hibp/favicon, so joining default is zero-cost for
+# downstream)
 events-server = ["dep:reqwest", "dep:flate2"]
-# 整库加密备份：PERSENC1 字节加密（flate2）+ VACUUM INTO 快照（sqlite）
-# + persona-server 备份端点客户端（reqwest；同上在 default 树零增量）
+# Whole-database encrypted backup: PERSENC1 byte encryption (flate2) + VACUUM INTO
+# snapshots (sqlite) + a persona-server backup-endpoint client (reqwest; same
+# as above, zero-cost in the default tree)
 backup = ["dep:reqwest", "dep:flate2", "sqlite"]
-# SRP 设备认证的 HTTP 客户端编排（auth/remote_http.rs；reqwest 同上在
-# default 树零增量）。E2EE 同步轨道阶段 1 客户端半边
+# SRP device-authentication HTTP client orchestration (auth/remote_http.rs; reqwest is the same as
+# above, zero-cost in the default tree). The client side of phase 1 of the
+# E2EE sync track
 remote-auth = ["dep:reqwest"]
-# 账号域 HTTP 客户端（accounts/remote.rs，persona-server /accounts/*）。
-# 不进 default：CLI headless 无账号 UI，桌面宿主按需开启
+# Accounts-domain HTTP client (accounts/remote.rs, persona-server /accounts/*).
+# Not in default: the headless CLI has no accounts UI, and the desktop host
+# enables it on demand
 accounts = ["dep:reqwest"]

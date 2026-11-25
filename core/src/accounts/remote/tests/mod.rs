@@ -8,8 +8,8 @@ struct CapturedRequest {
     body: String,
 }
 
-/// 起一个一次性 TCP 假服务器：读请求（head + Content-Length 体），
-/// 调 handler 得 (状态码, 响应体)，回写极简 HTTP/1.1 响应。
+/// Spins up a one-shot TCP fake server: reads the request (head + Content-Length body),
+/// calls the handler to get (status code, response body), and writes back a minimal HTTP/1.1 response.
 fn spawn_mock<F>(handler: F) -> String
 where
     F: Fn(&CapturedRequest) -> (u16, String) + Send + 'static,
@@ -21,7 +21,7 @@ where
             let Ok(mut stream) = stream else { break };
             let mut buf = Vec::new();
             let mut byte = [0u8; 1];
-            // head 到 \r\n\r\n
+            // head up to \r\n\r\n
             while !buf.ends_with(b"\r\n\r\n") {
                 if stream.read(&mut byte).unwrap_or(0) == 0 {
                     break;

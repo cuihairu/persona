@@ -1,5 +1,6 @@
-//! 中转线路消息：`PairingMessage` 枚举、base64 wire 编解码与邀请串
-//! `PairingInviteLink`（版本前缀 + 载荷编解码）。
+//! Relay-line messages: the `PairingMessage` enum, base64 wire
+//! encoding/decoding, and the invite link `PairingInviteLink` (version prefix +
+//! payload encoding/decoding).
 
 use base64::Engine as _;
 
@@ -8,20 +9,22 @@ use crate::{PersonaError, PersonaResult};
 use super::guest::{GuestOffer, GuestProof};
 use super::host::{HostHandoff, HostOffer};
 
-// ---- 中转 wire 消息 ----
+// ---- Relay wire messages ----
 
-/// 双端经中转信箱递送的配对消息（信箱内层载荷；中转不解释内容，
-/// 只见 SRP 公开消息与 AEAD 密文——零知识）。
+/// Pairing messages shuttled between both sides via the relay mailbox (the
+/// inner payload of the mailbox; the relay does not interpret the contents and
+/// only ever sees SRP public messages and AEAD ciphertext — zero knowledge).
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum PairingMessage {
-    /// guest → host：client ephemeral public（A_pub）。
+    /// guest → host: client ephemeral public (A_pub).
     ClientPublic { client_public: String },
-    /// host → guest：server ephemeral public（B_pub）。
+    /// host → guest: server ephemeral public (B_pub).
     ServerOffer { server_public: String },
-    /// guest → host：指纹比对通过后提交的 M1。
+    /// guest → host: M1 submitted after the fingerprint comparison passes.
     ClientProof { client_proof: String },
-    /// host → guest：M2 + AEAD 包裹的组密钥（配对收尾，单次投递）。
+    /// host → guest: M2 + the AEAD-wrapped group key (pairing wrap-up, single
+    /// delivery).
     Handoff {
         server_proof: String,
         wrapped_group_key: String,
@@ -43,28 +46,28 @@ pub(super) mod wire {
 }
 
 impl PairingMessage {
-    /// guest 第一步：从 [`GuestOffer`] 组装。
+    /// Guest step one: assembled from [`GuestOffer`].
     pub fn client_public(offer: &GuestOffer) -> Self {
         Self::ClientPublic {
             client_public: wire::encode(&offer.client_public),
         }
     }
 
-    /// host 应答：从 [`HostOffer`] 组装。
+    /// Host reply: assembled from [`HostOffer`].
     pub fn server_offer(offer: &HostOffer) -> Self {
         Self::ServerOffer {
             server_public: wire::encode(&offer.server_public),
         }
     }
 
-    /// guest 第二步：从 [`GuestProof`] 组装。
+    /// Guest step two: assembled from [`GuestProof`].
     pub fn client_proof(proof: &GuestProof) -> Self {
         Self::ClientProof {
             client_proof: wire::encode(&proof.client_proof),
         }
     }
 
-    /// host 收尾：从 [`HostHandoff`] 组装。
+    /// Host wrap-up: assembled from [`HostHandoff`].
     pub fn handoff(handoff: &HostHandoff) -> Self {
         Self::Handoff {
             server_proof: wire::encode(&handoff.server_proof),
@@ -73,13 +76,14 @@ impl PairingMessage {
     }
 }
 
-// ---- 邀请串（host → guest 的带外载体） ----
+// ---- Invite link (the out-of-band carrier, host → guest) ----
 
-/// 配对邀请串的版本前缀。
+/// Version prefix of the pairing invite link.
 pub const INVITE_LINK_PREFIX: &str = "persona-pair-1";
 
-/// 邀请串载荷：短码 + 中转地址 + 会话 id。短码仍是核心交互（双方比对
-/// 时看到同一个码），会话定位是技术载荷（QR 或剪贴板传递）。
+/// Invite-link payload: short code + relay address + session id. The short code
+/// remains the core interaction (both sides see the same code when comparing);
+/// session addressing is technical payload (carried by QR code or clipboard).
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct PairingInviteLink {
     pub code: String,

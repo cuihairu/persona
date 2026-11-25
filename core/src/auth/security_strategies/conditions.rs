@@ -1,5 +1,6 @@
-//! 策略条件模型：时间/位置/设备/行为/网络五类设置结构与
-//! `SecurityCondition` 组合条件求值树。
+//! Policy condition model: the five setting structures (time, location,
+//! device, behavior, network) and the `SecurityCondition` composite
+//! condition evaluation tree.
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;

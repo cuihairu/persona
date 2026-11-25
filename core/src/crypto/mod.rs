@@ -7,13 +7,15 @@ pub mod hashing;
 pub mod key_hierarchy;
 pub mod keys;
 pub mod passkey;
-// ssh_import 不做 glob 再导出：import_openssh_private_key 语义已足够限定，
-// 但 ImportedSshKey/函数名以 ssh_ 前缀挂在 crypto 下更清晰，调用方走限定路径。
+// ssh_import is not glob re-exported: import_openssh_private_key is already
+// specific enough, while prefixing ImportedSshKey and the functions with ssh_
+// under crypto reads more clearly; callers use the qualified path.
 pub mod ssh_import;
-// PEM 家族（PKCS#8/PKCS#1/SEC1）解码与格式嗅探，入口在 ssh_import 的
-// import_private_key_file / inspect_private_key_file。
+// PEM family (PKCS#8/PKCS#1/SEC1) decoding and format sniffing, with entry
+// points at ssh_import's import_private_key_file / inspect_private_key_file.
 mod ssh_import_pem;
-// ssh_generate 与 ssh_import 共用字段口径（classify/公钥行/指纹/PEM 编码）。
+// ssh_generate shares the field conventions (classify / public-key lines /
+// fingerprints / PEM encoding) with ssh_import.
 pub mod ssh_generate;
 pub mod sshsig;
 pub mod steam;
@@ -32,8 +34,9 @@ pub use hashing::*;
 pub use key_hierarchy::*;
 pub use keys::*;
 pub use passkey::*;
-// sshsig 不做 glob 再导出：sign/verify 是通用名，挂在 crypto 命名空间下
-// 太容易撞语义；调用方走 `crypto::sshsig::` 限定路径。
+// sshsig is not glob re-exported: sign/verify are generic names that would
+// clash too easily in the crypto namespace; callers use the qualified
+// `crypto::sshsig::` path.
 pub use steam::*;
 pub use totp::*;
 pub use transaction_psbt::*;

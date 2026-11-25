@@ -6,7 +6,8 @@ fn test_enhanced_config_serde_defaults() {
     assert_eq!(config.warning_time_secs, 60);
     assert_eq!(config.max_concurrent_sessions, 5);
     assert!(!config.enable_warnings);
-    // 「默认安全」：敏感操作后强制上锁随 serde default 收紧为开
+    // Secure by default: force locking after sensitive operations is
+    // tightened to on by the serde default.
     assert!(config.force_lock_sensitive);
     assert_eq!(config.activity_grace_period_secs, 5);
     assert_eq!(config.background_check_interval_secs, 30);

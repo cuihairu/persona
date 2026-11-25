@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 pub struct AuthorizeDeviceRequest {
     /// sync_devices.id
     pub device_id: String,
-    /// base64，32 字节 X25519
+    /// base64, 32-byte X25519
     pub public_key: String,
 }
 
@@ -41,8 +41,8 @@ pub struct AccountDevicesList {
 }
 
 impl AccountsApi {
-    /// POST /accounts/{id}/devices（Bearer）。把已登记的 sync 设备（按
-    /// device_id + 公钥比对）关联到账号。
+    /// POST /accounts/{id}/devices (Bearer). Links an already-registered sync device
+    /// (matched by device_id + public key) to the account.
     pub async fn authorize_device(
         &self,
         account_id: &str,
@@ -64,7 +64,7 @@ impl AccountsApi {
         Ok(value)
     }
 
-    /// GET /accounts/{id}/devices（Bearer）。账号下的已授权设备列表。
+    /// GET /accounts/{id}/devices (Bearer). The list of devices authorized under the account.
     pub async fn list_account_devices(&self, account_id: &str) -> Result<AccountDevicesList> {
         let resp = self
             .http
@@ -79,7 +79,7 @@ impl AccountsApi {
         Ok(value)
     }
 
-    /// DELETE /accounts/{id}/devices/{device_id}（Bearer）。204 无体成功。
+    /// DELETE /accounts/{id}/devices/{device_id} (Bearer). A bodyless 204 means success.
     pub async fn revoke_account_device(&self, account_id: &str, device_id: &str) -> Result<bool> {
         let resp = self
             .http

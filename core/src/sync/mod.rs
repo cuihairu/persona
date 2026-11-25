@@ -1,29 +1,43 @@
-//! E2EE 同步核心（E2EE_SYNC_DESIGN 阶段 2）。
+//! E2EE sync core (E2EE_SYNC_DESIGN phase 2).
 //!
-//! 信任根 = 主密码 + 每设备私钥（DR-1）；同步密文与主密码解耦——条目由
-//! per-item key 封装（本地同款信封结构），item key 由 group key 包裹，
-//! group key 只以「设备信封」形态存在于服务器（[`envelope`]）。
+//! Trust root = master password + a private key per device (DR-1); the sync
+//! ciphertext is decoupled from the master password——entries are wrapped by a
+//! per-item key (the same envelope shape as locally), the item key is wrapped
+//! by the group key, and the group key exists on the server only in the form
+//! of a "device envelope" ([`envelope`]).
 //!
-//! - [`capture`]：service 写路径的同步捕获缝（trait + 装配层默认实现）
-//! - [`snapshot`]：oplog payload 密文的明文格式（元数据 + CredentialData 复合快照）
-//! - [`keys`]：group key / 设备密钥对的生成与类型
-//! - [`device`]：设备身份的 keyring/文件记录格式（宿主持久化共用）
-//! - [`envelope`]：`persona-dev-env-1` 信封密封与开启
-//! - [`oplog`]：SyncOp 结构 + LWW/冲突双版本纯逻辑（DR-4）
-//! - [`engine`]：push/pull 周期编排 + Lamport 时钟 + travel 闸
-//! - [`cursor`]：服务器 seq 游标编解码（server 分页与本机水位共用格式）
-//! - [`materialize`]：pull 后把 oplog 主位落进主库（凭据行物化）
-//! - [`resolve`]：冲突裁决数据面（可展示版本 + 采纳入账，阶段 3c）
-//! - [`runtime`]：SyncSession 会话装配（open 拆信封/backfill 存量/run_cycle/
-//!   capture 产出）——宿主 sync_now 的一次性入口
+//! - [`capture`]: the sync capture seam on the service write path (trait + a
+//!   default implementation in the assembly layer)
+//! - [`snapshot`]: the plaintext format of the oplog payload ciphertext
+//!   (metadata + CredentialData composite snapshot)
+//! - [`keys`]: generation and types of the group key / device keypair
+//! - [`device`]: the keyring/file record format of the device identity
+//!   (shared for host persistence)
+//! - [`envelope`]: sealing and opening of the `persona-dev-env-1` envelope
+//! - [`oplog`]: the SyncOp structure + the pure LWW/conflict dual-version
+//!   logic (DR-4)
+//! - [`engine`]: push/pull cycle orchestration + Lamport clock + travel gate
+//! - [`cursor`]: encoding and decoding of the server seq cursor (the format is
+//!   shared between server pagination and the local watermark)
+//! - [`materialize`]: writing the oplog primary entries into the main DB after
+//!   a pull (materializing credential rows)
+//! - [`resolve`]: the conflict resolution data plane (displayable versions +
+//!   acceptance bookkeeping, phase 3c)
+//! - [`runtime`]: assembly of the SyncSession (opening envelopes on open /
+//!   backfilling the stock / run_cycle / capture output)——the one-shot entry
+//!   point for the host's sync_now
 //!
-//! 本模块只做纯密码层与数据结构；本地持久化在 [`crate::storage::sync_repository`]。
-//! 设备私钥的持久化（OS keyring `persona-device` / 0600 文件 fallback）由宿主
-//! 负责——core 不依赖 keyring。HTTP wire 层在 [`remote`]（cfg remote-auth）。
+//! This module only holds the pure crypto layer and data structures; local
+//! persistence lives in [`crate::storage::sync_repository`]. Persisting the
+//! device private key (OS keyring `persona-device` / 0600 file fallback) is
+//! the host's responsibility——core does not depend on keyring. The HTTP wire
+//! layer is in [`remote`] (cfg remote-auth).
 //!
-//! 动态密码配对（跨设备同步 S1，`docs/sync-group-mode.md`）在 [`pairing`]：
-//! 零账号入组，短码经 Argon2id 域分隔后进 SRP-6a PAKE，组密钥以 pairing
-//! key AEAD 包裹经中转递交，中转零知识。
+//! Dynamic password pairing (cross-device sync S1, `docs/sync-group-mode.md`)
+//! lives in [`pairing`]: joining a group with no account, the short code goes
+//! through an Argon2id domain separator and then into SRP-6a PAKE, and the
+//! group key is wrapped with pairing-key AEAD and delivered via the relay,
+//! which stays zero-knowledge.
 
 pub mod capture;
 pub mod cursor;

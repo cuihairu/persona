@@ -1,4 +1,5 @@
-//! 地址维护域（LAY-022 拆分）：add_address / update_address_usage 与地址落库 helper。
+//! Address-maintenance domain (LAY-022 split): add_address /
+//! update_address_usage plus the address persistence helpers.
 
 use super::*;
 

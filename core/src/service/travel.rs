@@ -1,8 +1,8 @@
 use super::*;
 
 impl PersonaService {
-    /// 旅行模式状态。无门禁：旗标与 sidecar 存在性都不含秘密（锁屏界面
-    /// 也要能提示"数据不在这台设备上"）。
+    /// Travel mode status. Ungated: neither the flag nor sidecar existence contains secrets
+    /// (the lock screen also needs to be able to say "the data is not on this device").
     #[cfg(feature = "backup")]
     pub async fn travel_status(&self, db_path: &Path) -> Result<TravelStatus> {
         let workspaces = Repository::find_all(&self.workspace_repo).await?;
@@ -20,15 +20,17 @@ impl PersonaService {
             active,
             entered_at,
             sidecar_exists,
-            // 旗标说在旅行模式，但数据容器没了（被手删/损毁）：数据已丢，
-            // 诚实呈现而非假装可恢复（见 travel.rs 模块注释崩溃窗口表）。
+            // The flag says travel mode is active, but the data container is gone (deleted by
+            // hand/corrupted): the data is lost, so present it honestly rather than pretending
+            // it is recoverable (see the crash-window table in the travel.rs module comments).
             inconsistent: active && !sidecar_exists,
         })
     }
 
-    /// 标记/取消标记身份（enter 时随之整包移出本设备）。编辑元数据级
-    /// 操作，与 update_identity 同门禁（不设敏感重认证——移动秘密的
-    /// 门禁在 enter 这一步）。幂等：重复标记同一状态直接成功。
+    /// Mark/unmark an identity (on enter, its whole data pack moves off this device). A
+    /// metadata-level editing operation, gated the same as update_identity (no sensitive
+    /// re-auth — the gate for moving secrets sits at the enter step). Idempotent: marking the
+    /// same state again simply succeeds.
     #[cfg(feature = "backup")]
     pub async fn set_travel_marked(&self, identity_id: &Uuid, marked: bool) -> Result<()> {
         self.ensure_unlocked()?;
@@ -55,8 +57,9 @@ impl PersonaService {
         Ok(())
     }
 
-    /// 进入旅行模式：被标记身份全部数据打包加密进 sidecar 后从主库删除
-    /// （真移除语义，主库零痕迹）。顺序即安全语义：先写 sidecar 再动库。
+    /// Enter travel mode: all data of marked identities is packed and encrypted into the sidecar
+    /// and then deleted from the primary database (true removal semantics, zero trace in the
+    /// primary). Order is the security semantics: write the sidecar first, then touch the database.
     #[cfg(feature = "backup")]
     pub async fn enter_travel_mode(
         &self,
@@ -74,8 +77,9 @@ impl PersonaService {
 
         let sidecar = crate::travel::sidecar_path(db_path);
         if sidecar.exists() {
-            // 崩溃窗口 1 的残留（sidecar 已写、事务未提交）：库与盘面
-            // 不一致时不自动覆盖——由用户决定删残留还是直接 exit 恢复。
+            // Leftover from crash window 1 (sidecar written, transaction not committed): when the
+            // database and disk disagree, do not overwrite automatically — let the user decide
+            // whether to delete the leftover or run exit to restore directly.
             return Err(PersonaError::Validation(format!(
                 "travel sidecar already exists at {}; remove the leftover file or run travel exit to restore",
                 sidecar.display()
@@ -112,13 +116,13 @@ impl PersonaService {
         crate::travel::write_sidecar_atomic(&sidecar, &sealed)?;
 
         if let Err(e) = crate::travel::apply_enter_tx(self.db.pool(), &pack).await {
-            // 事务失败（非崩溃）：回收 sidecar，盘面回到 enter 前状态
+            // Transaction failure (not a crash): reclaim the sidecar so the disk returns to the pre-enter state
             let _ = std::fs::remove_file(&sidecar);
             return Err(e.into());
         }
 
-        // 事务已提交：blob 文件删除 best-effort——失败项在 exit 时按
-        // storage_path 原路径覆写自愈，不阻塞 enter 的成功。
+        // Transaction committed: blob file deletion is best-effort — failed items self-heal at
+        // exit by overwriting the original storage_path, and do not block a successful enter.
         if let Some(root) = attachments_root {
             for failure in crate::travel::delete_blob_files(root, &pack.attachment_files) {
                 tracing::warn!("travel enter: attachment file not removed: {failure}");
@@ -137,9 +141,10 @@ impl PersonaService {
         Ok(counts)
     }
 
-    /// 退出旅行模式：sidecar 解密解包后原样恢复（行 id 与加密形态字节
-    /// 不变），全部落地后删 sidecar。中途任何失败 sidecar 都保留，整条
-    /// exit 可重试（恢复行与文件覆写均幂等）。
+    /// Exit travel mode: decrypt and unpack the sidecar, restore as-is (row ids and the encrypted
+    /// form are byte-identical), then delete the sidecar once everything has landed. Any failure
+    /// along the way leaves the sidecar in place, so the whole exit is retryable (row restore and
+    /// file overwrite are both idempotent).
     #[cfg(feature = "backup")]
     pub async fn exit_travel_mode(&self, db_path: &Path, passphrase: &str) -> Result<TravelCounts> {
         self.ensure_sensitive_operation_allowed().await?;
@@ -155,8 +160,9 @@ impl PersonaService {
 
         crate::travel::apply_exit_tx(self.db.pool(), &pack).await?;
 
-        // 行已恢复：blob 文件覆写。pack 带着附件却没有存储位就无法落
-        // 字节——报配置错误而不是悄悄丢数据（行已插回，补上存储后重试）。
+        // Rows restored: overwrite the blob files. A pack carrying attachments with no storage
+        // location has nowhere to write the bytes — report a configuration error rather than
+        // silently dropping data (rows are already inserted; attach storage and retry).
         if !pack.attachment_files.is_empty() {
             let root = self
                 .attachment_manager

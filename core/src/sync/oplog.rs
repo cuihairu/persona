@@ -1,17 +1,26 @@
-//! oplog 条目结构与 LWW 冲突解决（E2EE_SYNC_DESIGN DR-4 / §5 / §7）。
+//! oplog entry structure and LWW conflict resolution (E2EE_SYNC_DESIGN DR-4 /
+//! §5 / §7).
 //!
-//! 全序 = `(lamport, device_id)`：lamport 大者赢，相等比 device_id 字典序；
-//! 两端独立计算结果必然一致。同 item 两个版本 **lamport 相等且来自不同设备**
-//! = 真冲突（离线双编辑典型形态）→ 保双版本：胜者占主位，负者进冲突区，
-//! 等用户裁决（裁决 UI 属阶段 3，这里保证不丢数据、不静默覆盖）。
+//! Total order = `(lamport, device_id)`: the larger lamport wins; on a tie,
+//! compare device_id lexicographically; both sides computing independently
+//! must agree. Two versions of the same item with **equal lamport from
+//! different devices** = a true conflict (the typical offline double-edit
+//! shape) → keep both versions: the winner holds the primary position, the
+//! loser goes into the conflict zone and waits for user adjudication (the
+//! resolution UI is phase 3; this layer guarantees no data loss and no silent
+//! overwrite).
 //!
-//! 与设计稿的一处偏差：`conflict_of` 不作为落库快照列，而是
-//! [`item_view`] 从该 item 的 op 集合**推导**（主位 = 全序最大者；副本 =
-//! 与主位 lamport 相等但 device 不同的其余版本）——append-only 日志免维护，
-//! 语义等价且不存在「主位被覆盖后副本指向失效」的问题。
+//! One deviation from the design doc: `conflict_of` is not a persisted
+//! snapshot column; instead [`item_view`] **derives** it from the item's op
+//! set (primary = the max in the total order; copies = the remaining versions
+//! with a lamport equal to the primary but a different device)——the
+//! append-only log needs no maintenance, the semantics are equivalent, and
+//! there is no "copies dangling after the primary is overwritten" problem.
 //!
-//! 删除 = tombstone（payload 为空的 delete op），参与同样的 LWW，防止离线
-//! 删除被旧版本复活；服务器只存与转发，不做任何胜负判定。
+//! Deletion = tombstone (a delete op with an empty payload), participating in
+//! the same LWW, preventing an offline deletion from being revived by an old
+//! version; the server only stores and forwards, making no win/loss
+//! decisions.
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -19,10 +28,14 @@ use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use uuid::Uuid;
 
-/// 同步条目类型。与服务器 wire 层的 kind 字符串一一对应（snake_case）。
-/// `Unknown` 是前向兼容兜底：新版客户端引入的新 kind 在旧版 pull 落库后
-/// 可存可参与 LWW（kind 不参与裁决），只是不被本地理解/渲染——序列化
-/// 回 wire 时写作 "unknown"（不保真，但未知 kind 本就不产生本地写）。
+/// The sync item type. Corresponds one-to-one with the kind strings of the
+/// server wire layer (snake_case). `Unknown` is the forward-compatibility
+/// fallback: a new kind introduced by a newer client can be stored and
+/// participate in LWW after being pulled and persisted by an older build
+/// (kind does not participate in adjudication); it is simply not
+/// understood/rendered locally——when serialized back to the wire it is
+/// written as "unknown" (not lossless, but an unknown kind never produces a
+/// local write in the first place).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ItemKind {
@@ -33,7 +46,8 @@ pub enum ItemKind {
     Unknown,
 }
 
-/// 操作类型：put = 写入/更新；delete = tombstone（payload 恒空）。
+/// The operation type: put = write/update; delete = tombstone (the payload
+/// is always empty).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum OpType {
@@ -41,19 +55,23 @@ pub enum OpType {
     Delete,
 }
 
-/// oplog 条目的密文载荷（§5）：全部字节都是密文，服务器不可读。
+/// The ciphertext payload of an oplog entry (§5): every byte is ciphertext,
+/// unreadable to the server.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SyncPayload {
     pub ciphertext: Vec<u8>,
-    /// 被 group key 包裹的 per-item key（本地 wrapped_item_key 同源）。
+    /// The per-item key wrapped by the group key (same origin as the local
+    /// wrapped_item_key).
     pub wrapped_item_key: Vec<u8>,
 }
 
-/// 一条同步操作（§5 SyncOp）。`timestamp` 仅展示，**不参与任何排序**
-/// （时钟只信客户端 Lamport 计数）。
+/// One sync operation (§5 SyncOp). `timestamp` is display-only and
+/// **participates in no ordering** (the clock trusts only the client Lamport
+/// counter).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SyncOp {
-    /// 幂等去重键（push 重放 / pull 重复投递均按此忽略）。
+    /// Idempotency dedup key (push replays / pull duplicate deliveries are
+    /// ignored on this).
     pub op_id: Uuid,
     pub item_id: Uuid,
     pub kind: ItemKind,
@@ -61,7 +79,7 @@ pub struct SyncOp {
     pub lamport: u64,
     pub device_id: Uuid,
     pub timestamp: Option<DateTime<Utc>>,
-    /// delete（tombstone）时为 None。
+    /// None for delete (tombstone).
     pub payload: Option<SyncPayload>,
 }
 
@@ -71,33 +89,39 @@ impl SyncOp {
     }
 }
 
-/// LWW 全序比较（DR-4）：先比 lamport，再比 device_id。**不含 op_id**——
-/// 同 (lamport, device_id) 的两条 op 在协议上不应共存（单设备时钟单调）。
+/// LWW total-order comparison (DR-4): lamport first, then device_id.
+/// **op_id is not included**——two ops with the same (lamport, device_id)
+/// should not coexist under the protocol (a single device's clock is
+/// monotonic).
 pub fn compare_ops(a: &SyncOp, b: &SyncOp) -> Ordering {
     a.lamport
         .cmp(&b.lamport)
         .then(a.device_id.cmp(&b.device_id))
 }
 
-/// 真冲突：同一 item、lamport 相等、来自不同设备（DR-4 定义）。
+/// True conflict: same item, equal lamport, from different devices (DR-4
+/// definition).
 pub fn is_true_conflict(a: &SyncOp, b: &SyncOp) -> bool {
     a.item_id == b.item_id && a.lamport == b.lamport && a.device_id != b.device_id
 }
 
-/// 单个 item 的 LWW 视图：主位 + 冲突副本区。
+/// The LWW view of a single item: the primary position + the conflict copy
+/// zone.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ItemState {
-    /// 当前胜者（put 或 tombstone）。
+    /// The current winner (put or tombstone).
     pub primary: Option<SyncOp>,
-    /// 真冲突中被淘汰的并发版本，等待用户裁决（阶段 3 UI）。
+    /// The concurrent versions retired in a true conflict, waiting for user
+    /// adjudication (phase 3 UI).
     pub conflicts: Vec<SyncOp>,
 }
 
 impl ItemState {
-    /// 从该 item 的全部 op 推导视图（[`item_view`] 的方法形态）。
+    /// Derive the view from all ops of the item (the method form of
+    /// [`item_view`]).
     pub fn from_ops(ops: Vec<SyncOp>) -> Self {
         let mut state = Self::default();
-        // 以确定顺序回放，等价于逐条 apply
+        // Replay in a deterministic order, equivalent to applying one by one
         let mut ops = ops;
         ops.sort_by(|a, b| {
             b.lamport
@@ -117,26 +141,32 @@ impl ItemState {
     }
 }
 
-/// 从一组同 item 的 op 推导主位与冲突副本（见模块文档的 conflict_of 偏差）。
+/// Derive the primary and conflict copies from a set of ops of the same item
+/// (see the conflict_of deviation in the module docs).
 pub fn item_view(ops: Vec<SyncOp>) -> ItemState {
     ItemState::from_ops(ops)
 }
 
-/// 单步应用结果。
+/// The result of a single apply step.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StepOutcome {
-    /// incoming 成为新主位。`demoted` 仅在真冲突赢方替换时出现——被降级的
-    /// 前主位（本函数已将其推入 `conflicts`，此处返回供调用方感知/审计）。
+    /// `incoming` becomes the new primary. `demoted` only appears when a true
+    /// conflict's winner replaces it——the former primary that got demoted
+    /// (this function has already pushed it into `conflicts`; it is returned
+    /// here for the caller to observe/audit).
     Applied { demoted: Option<SyncOp> },
-    /// incoming 是并发输家，降级为冲突副本。
+    /// `incoming` is a concurrent loser, demoted to a conflict copy.
     ConflictCopy,
-    /// 旧版本、重放（op_id 已见）、或同 (lamport, device_id) 的越界重复。
+    /// An old version, a replay (op_id already seen), or an out-of-bounds
+    /// duplicate with the same (lamport, device_id).
     Ignored,
 }
 
-/// 把一条 op 应用到 item 状态（纯函数；[`apply_batch`] 的单步内核）。
+/// Apply one op to the item state (pure function; the single-step core of
+/// [`apply_batch`]).
 pub fn apply_op(state: &mut ItemState, incoming: SyncOp) -> StepOutcome {
-    // 幂等：op_id 已在主位或副本区 → 重放/重复投递，忽略
+    // Idempotency: op_id already in the primary or the copy zone → a
+    // replay/duplicate delivery, ignore
     if state.seen_op(&incoming.op_id) {
         return StepOutcome::Ignored;
     }
@@ -147,17 +177,20 @@ pub fn apply_op(state: &mut ItemState, incoming: SyncOp) -> StepOutcome {
     match compare_ops(&incoming, &incumbent) {
         Ordering::Less => {
             if incoming.lamport == incumbent.lamport {
-                // 并发输家（真冲突败方晚到）：保双版本
+                // Concurrent loser (the true-conflict loser arriving late):
+                // keep both versions
                 state.conflicts.push(incoming);
                 StepOutcome::ConflictCopy
             } else {
-                // 严格旧版本（含对 tombstone 的迟到 put：防复活）
+                // Strictly older version (including a late put against a
+                // tombstone: prevents revival)
                 StepOutcome::Ignored
             }
         }
         Ordering::Greater => {
             if incoming.lamport == incumbent.lamport {
-                // 真冲突赢方：前主位降级进冲突区（保双版本）
+                // True-conflict winner: the former primary is demoted into
+                // the conflict zone (keep both versions)
                 let demoted = state.primary.replace(incoming);
                 state
                     .conflicts
@@ -169,15 +202,17 @@ pub fn apply_op(state: &mut ItemState, incoming: SyncOp) -> StepOutcome {
             }
         }
         Ordering::Equal => {
-            // 同 (lamport, device_id) 而 op_id 不同：违反单设备时钟单调的
-            // 协议不变量。防御性忽略后到者，不覆盖、不崩溃。
+            // Same (lamport, device_id) but a different op_id: violates the
+            // protocol invariant of per-device clock monotonicity. Defensively
+            // ignore the later arrival; do not overwrite, do not crash.
             StepOutcome::Ignored
         }
     }
 }
 
-/// 一批 ops 的应用汇总。`max_lamport` 供调用方推进本机时钟：
-/// `local = max(local, report.max_lamport)`（pull 时钟推进，DR-4）。
+/// The summary of applying a batch of ops. `max_lamport` lets the caller
+/// advance the local clock: `local = max(local, report.max_lamport)` (pull
+/// clock advancement, DR-4).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct BatchReport {
     pub applied: usize,
@@ -186,9 +221,11 @@ pub struct BatchReport {
     pub max_lamport: u64,
 }
 
-/// 应用一批 pull 到的 op（§7 操作序）：先按 (lamport, device_id, op_id)
-/// **降序**稳定排序，再逐条 [`apply_op`]。乱序投递/跨批乱序天然容错——
-/// 终态只取决于 op 集合本身，与到达顺序无关。
+/// Apply a batch of pulled ops (§7 operation order): first stable-sort them
+/// **descending** by (lamport, device_id, op_id), then apply one by one via
+/// [`apply_op`]. Out-of-order delivery / cross-batch disorder is naturally
+/// tolerated——the final state depends only on the op set itself, not on the
+/// arrival order.
 pub fn apply_batch(items: &mut BTreeMap<Uuid, ItemState>, ops: Vec<SyncOp>) -> BatchReport {
     let mut ops = ops;
     ops.sort_by(|a, b| {
@@ -258,7 +295,7 @@ mod tests {
         let b = put(3, DEVICE_B, 1);
         assert_eq!(compare_ops(&b, &a), Ordering::Greater);
         assert!(is_true_conflict(&a, &b));
-        assert!(!is_true_conflict(&a, &a)); // 自身非冲突
+        assert!(!is_true_conflict(&a, &a)); // An op is not a conflict with itself
     }
 
     #[test]
@@ -309,7 +346,8 @@ mod tests {
 
     #[test]
     fn tombstone_prevents_revival_by_stale_put() {
-        // 离线删除被旧版本复活是 DR-4 明确防住的形态
+        // An offline deletion being revived by an older version is exactly
+        // the shape DR-4 explicitly guards against
         let mut state = ItemState::default();
         apply_op(&mut state, put(1, DEVICE_A, 0));
         apply_op(&mut state, delete(2, DEVICE_A));
@@ -327,7 +365,7 @@ mod tests {
         let b = put(3, DEVICE_B, 2);
         assert!(is_true_conflict(&a, &b));
 
-        // A 先到：B 赢（device 字典序），A 降级
+        // A arrives first: B wins (device_id lexicographic), A is demoted
         let mut state1 = ItemState::default();
         apply_op(&mut state1, a.clone());
         assert_eq!(
@@ -339,7 +377,8 @@ mod tests {
         assert_eq!(state1.primary.as_ref().unwrap().device_id, DEVICE_B);
         assert_eq!(state1.conflicts, vec![a.clone()]);
 
-        // B 先到：A 直接降级——两种到达顺序终态一致（收敛）
+        // B arrives first: A is demoted outright——both arrival orders reach
+        // the same final state (convergence)
         let mut state2 = ItemState::default();
         apply_op(&mut state2, b.clone());
         assert_eq!(apply_op(&mut state2, a.clone()), StepOutcome::ConflictCopy);
@@ -353,7 +392,7 @@ mod tests {
         apply_op(&mut state, op.clone());
         assert_eq!(apply_op(&mut state, op.clone()), StepOutcome::Ignored);
 
-        // 副本区的 op_id 重放同样忽略
+        // Replaying an op_id from the copy zone is likewise ignored
         let loser = put(2, DEVICE_A, 5);
         let winner = put(2, DEVICE_B, 6);
         apply_op(&mut state, loser.clone());
@@ -380,7 +419,8 @@ mod tests {
         late.op_id = Uuid::new_v4();
         let mut state = ItemState::default();
         apply_op(&mut state, early);
-        // 同 (lamport, device)：后到者忽略——墙钟新旧不影响
+        // Same (lamport, device): the later arrival is ignored——wall-clock
+        // recency has no bearing
         assert_eq!(apply_op(&mut state, late), StepOutcome::Ignored);
     }
 
@@ -400,8 +440,10 @@ mod tests {
         reversed.reverse();
         let rev = apply_batch(&mut shuffled, reversed);
         assert_eq!(forward, shuffled);
-        // 只有全序最大的一条成为主位；其余是严格旧版本，被正确忽略
-        // （历史仍在本地 items 表，LWW 视图只留胜者）
+        // Only the maximum in the total order becomes the primary; the rest
+        // are strictly older versions and are correctly ignored (the history
+        // still lives in the local items table; the LWW view keeps only the
+        // winner)
         assert_eq!(fwd.applied, 1);
         assert_eq!(fwd.ignored, 2);
         assert_eq!(fwd.max_lamport, 3);
@@ -413,7 +455,8 @@ mod tests {
         let ops = vec![put(1, DEVICE_A, 0), put(2, DEVICE_B, 1)];
         let mut items = BTreeMap::new();
         let first = apply_batch(&mut items, ops.clone());
-        // lamport 2 为主位，lamport 1 是严格旧版本 → 只 applied 一条
+        // lamport 2 is the primary, lamport 1 is a strictly older version →
+        // only one op is applied
         assert_eq!(first.applied, 1);
         assert_eq!(first.max_lamport, 2);
         let replay = apply_batch(&mut items, ops);
@@ -441,11 +484,11 @@ mod tests {
     fn item_view_derives_primary_and_conflicts_from_full_log() {
         let mut ops = vec![
             put(1, DEVICE_A, 0),
-            put(2, DEVICE_A, 1), // 主位历史
-            put(3, DEVICE_B, 2), // 当前主位
-            put(3, DEVICE_A, 3), // 与主位真冲突 → 副本
+            put(2, DEVICE_A, 1), // Primary history
+            put(3, DEVICE_B, 2), // Current primary
+            put(3, DEVICE_A, 3), // True conflict with the primary → copy
         ];
-        // 故意乱序喂
+        // Feed it deliberately out of order
         ops.swap(0, 3);
         let state = item_view(ops);
         assert_eq!(state.primary.as_ref().unwrap().lamport, 3);

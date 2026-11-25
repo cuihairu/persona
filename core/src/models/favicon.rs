@@ -1,11 +1,13 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-/// 单次批量读缓存上限（防 IPC 滥用；放非 feature 门控处，
-/// service 的批量读与抓取模块共用）
+/// Upper limit on hosts per batched cache read (guards against IPC abuse;
+/// placed outside feature gates so both the service's batched-read and fetch
+/// modules can share it)
 pub const MAX_HOSTS_PER_REQUEST: usize = 500;
 
-/// favicon 缓存行（host 级去重；公开数据明文存储，不参与加密体系）
+/// Favicon cache row (host-level dedup; public data stored in plaintext,
+/// outside the encryption scheme)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FaviconCacheEntry {
     pub host: String,

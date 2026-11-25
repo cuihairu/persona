@@ -1,4 +1,5 @@
-//! 交易模型：构建请求、签名交易/签名与方案、广播状态。
+//! Transaction models: build requests, signed transaction/signature and
+//! proposals, broadcast status.
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};

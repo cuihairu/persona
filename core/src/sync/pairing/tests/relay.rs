@@ -16,7 +16,8 @@ mod relay_tests {
         body: String,
     }
 
-    /// 内存双向信箱（假 relay 的状态面；句柄供测试直接注错/注入消息）。
+    /// In-memory two-way mailbox (the mock relay's state surface; tests use the
+    /// handle to inject errors/messages directly).
     #[derive(Default)]
     struct Mailbox {
         salt: Option<Vec<u8>>,
@@ -24,8 +25,8 @@ mod relay_tests {
         to_guest: Vec<Vec<u8>>,
     }
 
-    /// 一次性 TCP 假 relay：内存双向信箱，路由与 server /pairing/* 一致。
-    /// 返回 (base_url, 信箱句柄)。
+    /// One-shot TCP mock relay: an in-memory two-way mailbox whose routes match
+    /// the server's /pairing/*. Returns (base_url, mailbox handle).
     fn spawn_mock_relay() -> (String, Arc<Mutex<Mailbox>>) {
         use base64::Engine as _;
         let state = Arc::new(Mutex::new(Mailbox::default()));
@@ -130,7 +131,7 @@ mod relay_tests {
             relay_url: base_url,
             session_id: session_id.clone(),
         };
-        // 邀请串往返
+        // Invite link round trip
         let decoded = PairingInviteLink::decode(&link.encode()).unwrap();
         assert_eq!(decoded, link);
 
@@ -145,13 +146,14 @@ mod relay_tests {
 
         let guest_client = PairingRelayClient::new(&link.relay_url).unwrap();
         let (mut guest, guest_fp) = guest_client.join_begin(&link).await.unwrap();
-        // 先 confirm（drive_host 在等 ClientProof，先 await 会死锁到超时）
+        // Confirm first (drive_host is waiting for ClientProof; awaiting it
+        // first would deadlock until timeout)
         guest_client
             .join_confirm(&mut guest, &link.session_id)
             .await
             .unwrap();
         assert_eq!(guest.group_key(), Some(&group_key));
-        // host 侧收尾后取指纹比对
+        // Once the host side has wrapped up, fetch and compare fingerprints
         let host_fp = host_task.await.unwrap().unwrap();
         assert_eq!(host_fp, guest_fp, "双侧指纹必须一致（UI 比对基础）");
     }
@@ -171,7 +173,7 @@ mod relay_tests {
         assert!(PairingRelayClient::new("http://[::1]:8000").is_ok());
         // https:// always allowed.
         assert!(PairingRelayClient::new("https://relay.example.com").is_ok());
-        // URL 本身不可解析 → 配置错误
+        // The URL itself cannot be parsed → configuration error
         assert!(PairingRelayClient::new("not a url at all").is_err());
     }
 
@@ -182,7 +184,8 @@ mod relay_tests {
         let (_host, invite) = PairingHost::new_invite().unwrap();
         let (session_id, _ttl) = client.create_session(&invite.salt).await.unwrap();
 
-        // 中转被篡改：session_info 回短 salt → join_begin 拒绝
+        // Relay tampering: session_info returns a short salt → join_begin
+        // rejects it
         mailbox.lock().unwrap().salt = Some(vec![0u8; 8]);
         let link = PairingInviteLink {
             code: invite.code,
@@ -202,7 +205,8 @@ mod relay_tests {
         let (_host, invite) = PairingHost::new_invite().unwrap();
         let (session_id, _ttl) = client.create_session(&invite.salt).await.unwrap();
 
-        // 未走 join_begin：guest 手里没有待投 M1 → join_confirm 拒绝
+        // join_begin never ran: the guest holds no pending M1 → join_confirm
+        // rejects
         let (mut guest, _offer) = PairingGuest::start(&invite.code, &invite.salt).unwrap();
         let err = client
             .join_confirm(&mut guest, &session_id)
@@ -218,7 +222,8 @@ mod relay_tests {
         let (mut host, invite) = PairingHost::new_invite().unwrap();
         let (session_id, _ttl) = client.create_session(&invite.salt).await.unwrap();
 
-        // 直接往 to-host 信箱塞一条方向/时序错的消息 → drive_host 报错退出
+        // Post a message with the wrong direction/ordering straight into the
+        // to-host mailbox → drive_host errors out
         client
             .post_to_host(
                 &session_id,

@@ -94,22 +94,26 @@ impl PersonaService {
         self.biometric_provider = provider;
     }
 
-    /// 注入/移除审计事件上报器（`None` 关闭上报）。调用方负责 emitter 的
-    /// `start()`/`stop()` 生命周期；`log_audit` 只做同步入队，绝不阻塞。
+    /// Inject/remove the audit event reporter (`None` turns reporting off). The caller owns the
+    /// emitter's `start()`/`stop()` lifecycle; `log_audit` only enqueues synchronously and never
+    /// blocks.
     ///
-    /// 同步传播给 [`AutoLockManager`]——它的 SessionLocked/Unlocked 审计
-    /// 写库后走同一上报链；宿主只跟 service 打交道，无需单独接线。
+    /// Propagates to [`AutoLockManager`] as well — its SessionLocked/Unlocked audits go through
+    /// the same reporting chain once written to the database; hosts only deal with the service
+    /// and need no separate wiring.
     pub fn set_event_emitter(&mut self, emitter: Option<Emitter>) {
         self.event_emitter = emitter.clone();
         self.auto_lock_manager.set_event_emitter(emitter);
     }
 
-    /// 注入同步捕获缝（E2EE_SYNC_DESIGN §5）。装配层（宿主/集成测试）在
-    /// 解锁后调用：service 把条目级写变更交给实现方，由它包 group 信封并
-    /// 记入 oplog。`None` = 未启用同步，写路径零开销跳过。
+    /// Inject the sync capture seam (E2EE_SYNC_DESIGN §5). Called by the assembly layer
+    /// (host/integration tests) after unlock: the service hands item-level write changes to the
+    /// implementor, which wraps the group envelope and records them in the oplog. `None` = sync
+    /// not enabled, and the write path skips with zero cost.
     ///
-    /// 不需要 `&mut`：捕获缝是运行期可换的运行态附件，与
-    /// [`Self::set_event_emitter`] 的生命周期不同（后者构造期注入即可）。
+    /// No `&mut` needed: the capture seam is a runtime-swappable runtime attachment, with a
+    /// different lifecycle from [`Self::set_event_emitter`] (which only needs to be injected at
+    /// construction time).
     pub async fn attach_sync_capture(&self, capture: Option<Arc<dyn SyncCapture>>) {
         *self.sync_capture.write().await = capture;
     }
@@ -157,9 +161,10 @@ impl PersonaService {
     /// Configure auto-lock settings
     pub async fn configure_auto_lock(&mut self, config: crate::auth::AutoLockConfig) -> Result<()> {
         self.auto_lock_timeout = Duration::from_secs(config.inactivity_timeout_secs);
-        // 同步进管理器（含 require_reauth_sensitive / sensitive_operation_timeout_secs）：
-        // 管理器不能重建——重建会丢掉在管 session、后台任务与回调，所以
-        // 之前只更新了超时副本，命令层的敏感操作再认证开关从未生效。
+        // Sync into the manager (including require_reauth_sensitive / sensitive_operation_timeout_secs):
+        // the manager cannot be rebuilt — a rebuild would drop the sessions it manages, its
+        // background tasks, and its callbacks. Previously only the timeout copy was updated, so
+        // the command layer's sensitive-operation re-auth toggle never took effect.
         self.auto_lock_manager.update_base_config(config);
         Ok(())
     }
@@ -270,13 +275,15 @@ impl PersonaService {
         Ok(())
     }
 
-    /// Connect token 面的敏感活动刷新（connect-server 鉴权中间件每请求调用）。
+    /// Sensitive-activity refresh on the Connect token surface (called per request by the
+    /// connect-server auth middleware).
     ///
-    /// scoped token 即再认证：刷新敏感与活动计时、解除敏感超时锁
-    /// （[`AutoLockManager::refresh_sensitive`]，无 force-lock 判定）。
-    /// 无会话时为 no-op——机会性刷新，不改变任何拒绝语义。没有它，无人值守
-    /// serve 在登录 5 分钟后的首个读密文请求会撞 `force_lock_sensitive` 锁
-    /// 且 token 面无再认证入口（实测 500）。
+    /// A scoped token counts as re-auth: refreshes the sensitive and activity timers and lifts
+    /// the sensitive timeout lock ([`AutoLockManager::refresh_sensitive`], no force-lock
+    /// decision). A no-op when there is no session — an opportunistic refresh that changes no
+    /// denial semantics. Without it, an unattended serve hits the `force_lock_sensitive` lock
+    /// on its first ciphertext read 5 minutes after login, and the token surface has no
+    /// re-auth entry point (observed as a 500).
     pub async fn mark_authorized_request(&self) -> Result<()> {
         let session_id = self.current_session_id.read().await.clone();
         let Some(session_id) = session_id else {
@@ -339,8 +346,8 @@ impl PersonaService {
     pub(crate) async fn ensure_sensitive_operation_allowed(&self) -> Result<()> {
         self.ensure_unlocked_with_auto_lock().await?;
         if self.needs_reauth().await {
-            // 专用错误变体：客户端（桌面/CLI）据此弹出重新认证流程，
-            // 与普通认证失败区分开。
+            // Dedicated error variant: clients (desktop/CLI) use it to pop the re-auth flow,
+            // distinguishing it from an ordinary authentication failure.
             return Err(PersonaError::ReauthRequired(
                 "Re-authentication required for sensitive operation".to_string(),
             )
@@ -349,13 +356,15 @@ impl PersonaService {
         Ok(())
     }
 
-    /// 统一授权入口（本地会话数据面）。纯策略裁决走 [`authz::authorize`]：
-    /// Denied 立即失败；Export 的 `InteractionRequired` 由调用边履约
-    /// （CLI 确认/桌面对话框），core 侧不重复弹窗。随后状态性门禁照旧
-    /// 把守会话锁/自动锁/敏感重认证——机制层不变，只是判定词汇统一。
+    /// Unified authorization entry point (local session data plane). Pure policy decisions go
+    /// through [`authz::authorize`]: Denied fails immediately; Export's `InteractionRequired` is
+    /// fulfilled at the call edge (CLI confirmation / desktop dialog), and core does not prompt
+    /// again. Stateful gates then keep guarding session lock / auto-lock / sensitive re-auth as
+    /// before — the mechanism layer is unchanged; only the decision vocabulary is unified.
     ///
-    /// 管理面操作（token 创建/吊销、旅行模式进出）保持既有敏感门禁，
-    /// 不引入数据面动词（写动词未拍板，见 authz 模块注释）。
+    /// Admin-surface operations (token creation/revocation, travel mode enter/exit) keep their
+    /// existing sensitive gate; no data-plane verbs are introduced (write verbs are not settled;
+    /// see the authz module comments).
     pub(crate) async fn ensure_authorized(
         &self,
         resource: &AuthzResource,
@@ -380,8 +389,8 @@ impl PersonaService {
         Ok(())
     }
 
-    /// 主密钥加密服务（sync_now 等宿主编排需要：backfill/run_cycle 要
-    /// unwrap item key）。锁未解时 Err。
+    /// Master key encryption service (needed by host orchestration such as sync_now: backfill/run_cycle
+    /// must unwrap item keys). Errs while the vault is locked.
     pub fn get_master_encryption_service(&self) -> Result<&EncryptionService> {
         self.master_encryption.as_ref().ok_or_else(|| {
             PersonaError::AuthenticationFailed("Service is locked".to_string()).into()

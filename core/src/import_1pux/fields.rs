@@ -1,5 +1,6 @@
-//! 字段级提取：section 字段检索、 concealed 值探测、TOTP 值收集与
-//! otpauth:// URI / 裸 base32 密钥解析。
+//! Field-level extraction: section-field lookup, concealed-value probing,
+//! TOTP value collection, and
+//! otpauth:// URI / bare base32 secret parsing.
 
 use anyhow::{bail, Context, Result};
 
@@ -163,7 +164,8 @@ pub(crate) fn parse_totp_value(
 }
 
 /// Parse an `otpauth://totp/...` or `otpauth://hotp/...` URI (mirrors the CLI
-/// TOTP template parser). HOTP 条目按计数器型入库，`counter` 参数作缺省起点。
+/// TOTP template parser). An HOTP entry is stored as counter-based, with the
+/// `counter` parameter as the default starting point.
 pub(super) fn parse_otpauth_uri(uri: &str) -> Result<TotpParams> {
     let url = url::Url::parse(uri).context("invalid otpauth URI")?;
     if url.scheme() != "otpauth" {

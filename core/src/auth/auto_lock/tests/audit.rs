@@ -49,8 +49,10 @@ async fn test_audit_logging_on_lock_unlock() {
         .any(|l| l.session_id.as_deref() == Some(session_id.as_str())));
 }
 
-/// 审计写库后经 Emitter 上报（session_locked/session_unlocked wire 事件）；
-/// `set_event_emitter(None)` 摘除后只落本地库、不再上报。
+/// After the audit row is written to the database, the Emitter reports it
+/// (session_locked/session_unlocked wire events); once
+/// `set_event_emitter(None)` detaches it, rows only land locally and are no
+/// longer reported.
 #[tokio::test]
 async fn audit_events_feed_emitter_until_detached() {
     use crate::events::testing::{eventually, FakeSink};
@@ -107,7 +109,8 @@ async fn audit_events_feed_emitter_until_detached() {
     eventually(|| sink.call_count() >= 2).await;
     assert_eq!(sink.batches()[1][0].action, "session_unlocked");
 
-    // 摘除上报器：审计仍写本地库，但不再上报
+    // Detach the emitter: auditing still writes the local database, but no
+    // longer reports.
     manager.set_event_emitter(None);
     manager.lock_session(&session_id).await.unwrap();
     tokio::time::sleep(std::time::Duration::from_millis(20)).await;

@@ -1,9 +1,11 @@
-//! 本地 oplog 与同步状态存储（E2EE_SYNC_DESIGN §5；迁移 014）。
+//! Local oplog and sync-state storage (E2EE_SYNC_DESIGN §5; migration 014).
 //!
-//! 职责边界：本 repo 只做 append-only 落库与状态读写；LWW 裁决在
-//! [`crate::sync::oplog`]（纯函数），同步编排（push/pull/travel 闸）在
-//! 阶段 2 批 4 的 engine。`origin='remote'` 的行永不进入 push 队列；
-//! op_id 主键 + `INSERT OR IGNORE` 提供存储层幂等（重放安全）。
+//! Division of labor: this repo only does append-only persistence and
+//! state reads/writes; LWW arbitration lives in [`crate::sync::oplog`]
+//! (pure functions), and sync orchestration (push/pull/travel gating) lives in
+//! the phase 2, batch 4 engine. Rows with `origin='remote'` never enter the
+//! push queue; the op_id primary key plus `INSERT OR IGNORE` provides
+//! storage-level idempotency (replay-safe).
 
 use chrono::{DateTime, Utc};
 use sqlx::AssertSqlSafe;
@@ -15,20 +17,23 @@ use crate::storage::Database;
 use crate::sync::oplog::{OpType, SyncOp, SyncPayload};
 use crate::{PersonaError, Result};
 
-/// 本设备同步状态（sync_state 单行）。
+/// This device's sync state (the single sync_state row).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SyncState {
-    /// 本机 Lamport 时钟：本地写 = 此值 + 1；pull 后 = max(此值, 远端最大值)。
+    /// Local Lamport clock: a local write = this value + 1; after a pull =
+    /// max(this value, the remote maximum).
     pub local_lamport: u64,
-    /// 本设备在同步组中的身份（注册后填）。
+    /// This device's identity in the sync group (filled in after registration).
     pub device_id: Option<Uuid>,
-    /// pull 游标（服务器 seq），None = 从头。
+    /// Pull cursor (server seq); None = from the beginning.
     pub last_pull_cursor: Option<String>,
-    /// 最近一次成功同步周期的时间（迁移 017；None = 从未同步）。
+    /// Time of the last successful sync cycle (migration 017;
+    /// None = never synced).
     pub last_sync_at: Option<DateTime<Utc>>,
-    /// 本机最近一次库级快照的覆盖位点（迁移 018；0 = 从未有过快照）——
-    /// 上传/bootstrap 装包成功时记，快照触发阈值（E2EE_SYNC_DESIGN §5
-    /// 「触发时机」）的比较基线。
+    /// Coverage point of this machine's most recent db-level snapshot
+    /// (migration 018; 0 = no snapshot ever) — recorded when an upload or
+    /// bootstrap package install succeeds; the comparison baseline for the
+    /// snapshot trigger threshold (E2EE_SYNC_DESIGN §5 "when to trigger").
     pub last_snapshot_seq: i64,
 }
 
@@ -43,7 +48,8 @@ impl SyncRepository {
 
     // ---- sync_state ----
 
-    /// 读本设备同步状态；行不存在时返回全默认（lamport 0 / 未注册 / 无游标）。
+    /// Read this device's sync state; returns all defaults when the row is
+    /// missing (lamport 0 / not registered / no cursor).
     pub async fn get_state(&self) -> Result<SyncState> {
         let row = sqlx::query(
             "SELECT local_lamport, device_id, last_pull_cursor, last_sync_at, last_snapshot_seq
@@ -74,7 +80,8 @@ impl SyncRepository {
         })
     }
 
-    /// 只进不退地推进 Lamport 时钟（`MAX` 语义，防回退）。
+    /// Advance the Lamport clock forward only (`MAX` semantics, guarding against
+    /// regression).
     pub async fn bump_lamport(&self, to: u64) -> Result<()> {
         sqlx::query(
             "INSERT INTO sync_state (id, local_lamport) VALUES (1, ?)
@@ -111,7 +118,8 @@ impl SyncRepository {
         Ok(())
     }
 
-    /// 记「最近一次成功同步周期」时间（sync-group-mode §二.5.5 状态显示）。
+    /// Record the "last successful sync cycle" time (the status display in
+    /// sync-group-mode §2.5.5).
     pub async fn mark_synced(&self, at: DateTime<Utc>) -> Result<()> {
         sqlx::query(
             "INSERT INTO sync_state (id, last_sync_at) VALUES (1, ?)
@@ -124,9 +132,12 @@ impl SyncRepository {
         Ok(())
     }
 
-    /// 记本机最近一次库级快照的覆盖位点（上传与 bootstrap 装包成功时）。
-    /// `MAX` 语义只进不退：水位回退会让触发阈值提前误触发（多打一次包，
-    /// 无害方向）而前进方向必须诚实——谎报会推迟重打包。
+    /// Record the coverage point of this machine's most recent db-level snapshot
+    /// (on successful upload and bootstrap package install).
+    /// `MAX` semantics means forward only: a regressing watermark makes the
+    /// trigger threshold fire prematurely (an extra package, the harmless
+    /// direction), while the forward direction must be honest — overstating it
+    /// would delay a repack.
     pub async fn set_last_snapshot_seq(&self, seq: i64) -> Result<()> {
         sqlx::query(
             "INSERT INTO sync_state (id, last_snapshot_seq) VALUES (1, ?)
@@ -139,7 +150,8 @@ impl SyncRepository {
         Ok(())
     }
 
-    /// 本机已同步水位：pull 游标解回服务器 seq；无游标（从没拉过）= 0。
+    /// This machine's synced watermark: the pull cursor decoded back to a server
+    /// seq; no cursor (never pulled) = 0.
     pub async fn local_watermark(&self) -> Result<i64> {
         let state = self.get_state().await?;
         Ok(state
@@ -150,7 +162,7 @@ impl SyncRepository {
             .unwrap_or(0))
     }
 
-    /// push 队列长度（本机已产生、未推上服务器的指令数）。
+    /// Push queue length (ops produced locally but not yet pushed to the server).
     pub async fn pending_count(&self) -> Result<i64> {
         let row = sqlx::query(
             "SELECT COUNT(*) AS n FROM sync_oplog WHERE origin = 'local' AND push_state = 'pending'",
@@ -163,12 +175,14 @@ impl SyncRepository {
 
     // ---- oplog ----
 
-    /// 追加一条本地产生的 op（push 队列）。op_id 已存在则静默忽略（幂等）。
+    /// Append one locally produced op (the push queue). An existing op_id is
+    /// silently ignored (idempotent).
     pub async fn append_local_op(&self, op: &SyncOp) -> Result<()> {
         self.insert_op(op, "local", "pending").await
     }
 
-    /// 记录一条 pull 来的远端 op（幂等去重的持久依据，永不入 push 队列）。
+    /// Record a remote op pulled from the server (the durable basis for idempotent
+    /// deduplication; never enters the push queue).
     pub async fn record_remote_op(&self, op: &SyncOp) -> Result<()> {
         self.insert_op(op, "remote", "acked").await
     }
@@ -216,7 +230,8 @@ impl SyncRepository {
         Ok(row.get::<i64, _>("cnt") > 0)
     }
 
-    /// 已持久化的 op_id 集合（批量去重：pull 应用前过滤重放）。
+    /// The set of already-persisted op_ids (batch dedup: filters replays before
+    /// applying a pull).
     pub async fn existing_op_ids(&self, ids: &[Uuid]) -> Result<HashSet<Uuid>> {
         let mut seen = HashSet::new();
         for id in ids {
@@ -227,7 +242,8 @@ impl SyncRepository {
         Ok(seen)
     }
 
-    /// push 队列：本地未确认的 op，按 (lamport, device_id, op_id) 升序推平。
+    /// The push queue: local unacknowledged ops, flattened in ascending
+    /// (lamport, device_id, op_id) order.
     pub async fn pending_ops(&self, limit: i64) -> Result<Vec<SyncOp>> {
         let rows = sqlx::query(
             "SELECT op_id, item_id, kind, op, lamport, device_id, timestamp,
@@ -244,7 +260,7 @@ impl SyncRepository {
         rows.iter().map(row_to_op).collect()
     }
 
-    /// push 成功后批量确认。
+    /// Batch-acknowledge after a successful push.
     pub async fn mark_acked(&self, op_ids: &[Uuid]) -> Result<()> {
         for id in op_ids {
             sqlx::query("UPDATE sync_oplog SET push_state = 'acked' WHERE op_id = ?")
@@ -256,8 +272,9 @@ impl SyncRepository {
         Ok(())
     }
 
-    /// push 队列中尚未 ack 的 op 集合——GC 的保护集（未推出去的改动绝不
-    /// 清理）。remote 来的行恒为 acked，无需按 origin 再过滤。
+    /// The set of ops in the push queue not yet acked — GC's protected set
+    /// (changes not pushed out are never cleaned up). Rows from remote are
+    /// always acked, so no extra origin filtering is needed.
     pub async fn pending_op_ids(&self) -> Result<HashSet<Uuid>> {
         let rows: Vec<String> =
             sqlx::query_scalar("SELECT op_id FROM sync_oplog WHERE push_state = 'pending'")
@@ -270,8 +287,10 @@ impl SyncRepository {
             .collect())
     }
 
-    /// 批量删除 oplog 行（GC 专用；只删调用方按安全谓词选出的 op_id）。
-    /// 分块进事务，返回实际删除行数。
+    /// Batch-delete oplog rows (GC only; deletes only op_ids the caller selected
+    /// under a safety predicate).
+    /// Chunks inside one transaction and returns the number of rows actually
+    /// deleted.
     pub async fn delete_ops(&self, op_ids: &[Uuid]) -> Result<u64> {
         if op_ids.is_empty() {
             return Ok(0);
@@ -302,7 +321,8 @@ impl SyncRepository {
         Ok(removed)
     }
 
-    /// 某 item 的全部 op（供 [`crate::sync::oplog::item_view`] 推导主位/副本）。
+    /// All ops of one item (consumed by [`crate::sync::oplog::item_view`] to
+    /// derive the primary / replicas).
     pub async fn item_ops(&self, item_id: Uuid) -> Result<Vec<SyncOp>> {
         let rows = sqlx::query(
             "SELECT op_id, item_id, kind, op, lamport, device_id, timestamp,
@@ -317,8 +337,10 @@ impl SyncRepository {
         rows.iter().map(row_to_op).collect()
     }
 
-    /// oplog 中出现过写入的全部 item（去重，供物化层逐 item 推导视图）。
-    /// 数量级 = 本工作区被同步过的条目总数，单查询足够。
+    /// Every item that ever had a write in the oplog (deduplicated, for the
+    /// materialization layer to derive views item by item).
+    /// Order of magnitude = the total number of entries ever synced in this
+    /// workspace, so a single query suffices.
     pub async fn item_ids(&self) -> Result<Vec<Uuid>> {
         let rows = sqlx::query("SELECT DISTINCT item_id FROM sync_oplog")
             .fetch_all(self.db.pool())
@@ -412,7 +434,7 @@ mod tests {
         assert_eq!(initial.last_pull_cursor, None);
 
         repo.bump_lamport(5).await.unwrap();
-        repo.bump_lamport(3).await.unwrap(); // 回退尝试：MAX 语义挡住
+        repo.bump_lamport(3).await.unwrap(); // regression attempt: MAX semantics blocks it
         assert_eq!(repo.get_state().await.unwrap().local_lamport, 5);
 
         let device = Uuid::new_v4();
@@ -427,23 +449,23 @@ mod tests {
     async fn append_is_idempotent_and_fills_push_queue_in_order() {
         let repo = SyncRepository::new(db().await);
         let mut ops: Vec<SyncOp> = (0..3u8).map(|i| put_op(u64::from(i) + 1, i)).collect();
-        // append 顺序故意乱
+        // The append order is deliberately shuffled
         ops.swap(0, 2);
 
         for op in &ops {
             repo.append_local_op(op).await.unwrap();
-            repo.append_local_op(op).await.unwrap(); // 同 op_id 重复 append：忽略
+            repo.append_local_op(op).await.unwrap(); // duplicate append with the same op_id: ignored
         }
 
         let pending = repo.pending_ops(100).await.unwrap();
         assert_eq!(pending.len(), 3);
-        // 队列按 (lamport, ...) 升序
+        // The queue is ascending by (lamport, ...)
         let lamports: Vec<u64> = pending.iter().map(|o| o.lamport).collect();
         let mut sorted = lamports.clone();
         sorted.sort();
         assert_eq!(lamports, sorted);
 
-        // 密文载荷 round-trip（tag = lamport-1，见 put_op）
+        // Ciphertext payload round-trips (tag = lamport-1, see put_op)
         assert_eq!(
             pending[0].payload.as_ref().unwrap().ciphertext,
             vec![0u8; 16]
@@ -466,7 +488,8 @@ mod tests {
         assert!(repo.has_op(op.op_id).await.unwrap());
         assert!(repo.pending_ops(100).await.unwrap().is_empty());
 
-        // 同 op_id 再以 local 身份 append：主键幂等，不会变成待推送
+        // Appending the same op_id again as local: the primary key is idempotent, so
+        // it does not become a pending push
         repo.append_local_op(&op).await.unwrap();
         assert!(repo.pending_ops(100).await.unwrap().is_empty());
     }
@@ -501,16 +524,18 @@ mod tests {
         let local = put_op(1, 1);
         let remote = put_op(2, 2);
         repo.append_local_op(&local).await.unwrap(); // pending
-        repo.record_remote_op(&remote).await.unwrap(); // 恒 acked
+        repo.record_remote_op(&remote).await.unwrap(); // always acked
 
-        // 保护集只含 push 队列未 ack 的行（remote 行不需要 origin 过滤）
+        // The protected set contains only un-acked rows of the push queue (remote
+        // rows need no origin filtering)
         let pending = repo.pending_op_ids().await.unwrap();
         assert_eq!(pending, HashSet::from([local.op_id]));
 
         repo.mark_acked(&[local.op_id]).await.unwrap();
         assert!(repo.pending_op_ids().await.unwrap().is_empty());
 
-        // 批量删除：空集零查询直接返回 0；跨块计数准确；行真消失
+        // Batch delete: an empty set does zero queries and returns 0 directly; the
+        // count is accurate across chunks; the rows are truly gone
         assert_eq!(repo.delete_ops(&[]).await.unwrap(), 0);
         let mut many: Vec<Uuid> = Vec::new();
         for _ in 0..70 {

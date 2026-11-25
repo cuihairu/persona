@@ -1,4 +1,5 @@
-//! 冲突列表/裁决域测试（assert_variant 域内 helper）。
+//! Conflict list / resolution domain tests (assert_variant is the in-domain
+//! helper).
 
 use super::*;
 
@@ -35,7 +36,8 @@ async fn list_conflicts_exposes_both_versions_and_count() {
     );
     assert_eq!(session.conflict_item_count().await.unwrap(), 1);
 
-    // 无冲突条目（单版本）不进裁决视图
+    // A conflict-free entry (single version) does not enter the resolution
+    // view
     sync_repo
         .record_remote_op(&conflict_put_op(
             Uuid::new_v4(),
@@ -66,7 +68,8 @@ async fn resolve_adopted_put_writes_row_and_wins_primary() {
         .await
         .unwrap();
 
-    // 主库行 = 被采纳副本的内容（含重包后可解的 CredentialData）
+    // The master row = the adopted copy's content (including the
+    // CredentialData, readable after rewrapping)
     let cred_repo = CredentialRepository::new(db.clone());
     let row = cred_repo.find_by_id(&item).await.unwrap().unwrap();
     assert_eq!(row.name, "copy-name");
@@ -78,19 +81,21 @@ async fn resolve_adopted_put_writes_row_and_wins_primary() {
         other => panic!("expected password data, got {other:?}"),
     }
 
-    // oplog：本机新 lamport 的采纳 op 赢回主位，冲突区清空
+    // oplog: the adopt op with a fresh local lamport wins the master
+    // position; the conflict area is empty
     let view = item_view(sync_repo.item_ops(item).await.unwrap());
     let new_primary = view.primary.unwrap();
     assert_eq!(new_primary.device_id, local_device);
     assert!(new_primary.lamport > 5);
     assert!(view.conflicts.is_empty());
 
-    // 采纳 op 已入 push 队列且 payload 字节复用副本（设备无关）
+    // The adopt op is in the push queue and its payload bytes reuse the
+    // copy's (device-independent)
     let pending = sync_repo.pending_ops(500).await.unwrap();
     assert_eq!(pending.len(), 1);
     assert_eq!(pending[0].payload, copy.payload);
 
-    // 裁决视图清空
+    // The resolution view is empty
     assert!(session.list_conflicts().await.unwrap().is_empty());
     assert_eq!(session.conflict_item_count().await.unwrap(), 0);
 }
@@ -110,7 +115,8 @@ async fn resolve_adopted_delete_removes_row_and_wins_primary() {
     sync_repo.record_remote_op(&del).await.unwrap();
 
     let (session, _) = session_for(&db, local_device, group.clone());
-    // 先物化主位 put（行存在），再采纳 delete 副本
+    // Materialize the master-position put first (the row exists), then adopt
+    // the delete copy
     Materializer::new(db.clone())
         .materialize_all(&master, &group, local_device)
         .await
@@ -144,7 +150,8 @@ async fn resolve_adopted_delete_detaches_audit_rows_instead_of_fk_error() {
     sync_repo.record_remote_op(&del).await.unwrap();
 
     let (session, _) = session_for(&db, local_device, group.clone());
-    // 先物化主位 put（行存在），再造审计引用（audit_logs FK NO ACTION）
+    // Materialize the master-position put first (the row exists), then create
+    // an audit reference (audit_logs FK NO ACTION)
     Materializer::new(db.clone())
         .materialize_all(&master, &group, local_device)
         .await
@@ -160,7 +167,8 @@ async fn resolve_adopted_delete_detaches_audit_rows_instead_of_fk_error() {
     .await
     .unwrap();
 
-    // 采纳 delete 副本：不因审计引用拒删（此前 FK 787）
+    // Adopt the delete copy: the delete is not rejected because of the audit
+    // reference (the earlier FK 787)
     session
         .resolve_conflict(&master, item, del.op_id)
         .await
@@ -187,7 +195,8 @@ async fn resolve_rejects_unknown_primary_and_stale_op_ids() {
 
     let (session, _) = session_for(&db, Uuid::new_v4(), group);
 
-    // 采纳主位（不是副本）与未知 op_id → NotFound
+    // Adopting the master position (not a copy) and an unknown op_id both
+    // -> NotFound
     let err = session
         .resolve_conflict(&master, item, primary.op_id)
         .await
@@ -199,7 +208,8 @@ async fn resolve_rejects_unknown_primary_and_stale_op_ids() {
         .unwrap_err();
     assert_variant(err, |e| matches!(e, PersonaError::NotFound(_)));
 
-    // 裁决一次后：剩余版本淘汰出视图，再裁决同 item → NotFound
+    // After one resolution: the remaining versions drop out of the view, and
+    // resolving the same item again -> NotFound
     session
         .resolve_conflict(&master, item, copy.op_id)
         .await
@@ -211,8 +221,10 @@ async fn resolve_rejects_unknown_primary_and_stale_op_ids() {
     assert_variant(err, |e| matches!(e, PersonaError::NotFound(_)));
 }
 
-/// 副本引用未同步身份：主库写不了 → Validation 错误，且 oplog/时钟/
-/// 裁决视图零副作用（绝不记 op 不写主库 = 防静默分叉）。
+/// The copy references an unsynced identity: the master cannot be written ->
+/// a Validation error, with zero side effects on the oplog / clock /
+/// resolution view (never log an op without writing the master = guard
+/// against silent divergence).
 #[tokio::test]
 async fn resolve_with_pending_identity_errors_without_side_effects() {
     let (db, identity, master) = seeded_db().await;
@@ -221,7 +233,7 @@ async fn resolve_with_pending_identity_errors_without_side_effects() {
     let (a, b) = (Uuid::new_v4(), Uuid::new_v4());
     let (winner, loser) = if a > b { (a, b) } else { (b, a) };
     let primary = conflict_put_op(item, winner, 5, &snapshot("primary", identity.id), &group);
-    // 副本引用未知身份
+    // The copy references an unknown identity
     let copy = conflict_put_op(
         item,
         loser,
@@ -250,8 +262,9 @@ async fn resolve_with_pending_identity_errors_without_side_effects() {
     assert_eq!(session.list_conflicts().await.unwrap().len(), 1);
 }
 
-// 裁决入口的形状防御：非凭据 kind 的副本、缺 payload 的 put 副本一律
-// InvalidInput，oplog/主库零触碰。
+// Shape defenses at the resolution entry: a copy whose kind is not a
+// credential and a put copy missing its payload both fail with InvalidInput;
+// the oplog / master database are untouched.
 #[tokio::test]
 async fn resolve_rejects_non_credential_conflict_copy() {
     let (db, identity, master) = seeded_db().await;

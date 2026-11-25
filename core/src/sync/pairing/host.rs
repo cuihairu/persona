@@ -1,5 +1,6 @@
-//! 邀请端（host）：邀请面/应答面/交接面与 `PairingHost` 握手态，
-//! 含协议驱动 `handle_message`。
+//! Inviting side (host): the invite / offer / handoff facets and the
+//! `PairingHost` handshake state, including the protocol-driven
+//! `handle_message`.
 
 use sha2::Sha256;
 
@@ -12,37 +13,40 @@ use super::crypto::{
 };
 use super::message::{wire, PairingMessage};
 
-// ---- 邀请端（host） ----
+// ---- Inviting side (host) ----
 
-/// 邀请面：交给中转与 guest 的材料（短码 + salt）。
+/// Invite facet: material handed to the relay and to the guest (short code + salt).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PairingInvite {
-    /// 动态密码（展示给 guest 输入；短时效单次使用由中转层强制）。
+    /// One-time passcode (shown for the guest to type in; short TTL and single
+    /// use are enforced by the relay layer).
     pub code: String,
-    /// KDF salt（随邀请面分发，进双侧 Argon2id）。
+    /// KDF salt (distributed with the invite facet; feeds both sides' Argon2id).
     pub salt: [u8; PAIRING_SALT_LEN],
 }
 
-/// host 收到 guest 的 `client_public` 后的应答面。
+/// Offer facet, emitted by the host after receiving the guest's `client_public`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HostOffer {
-    /// SRP server public（B_pub），经中转回 guest。
+    /// SRP server public (B_pub), returned to the guest via the relay.
     pub server_public: Vec<u8>,
-    /// host 侧短指纹（UI 展示，与 guest 侧比对）。
+    /// Host-side short fingerprint (shown in the UI, compared against the guest's).
     pub fingerprint: String,
 }
 
-/// host 校验 M1 通过后的交接面（经中转单次递送 guest）。
+/// Handoff facet after the host validates M1 (delivered to the guest once, via
+/// the relay).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HostHandoff {
-    /// SRP server proof（M2）。
+    /// SRP server proof (M2).
     pub server_proof: Vec<u8>,
-    /// AEAD(pairing_key) 包裹的组密钥（nonce‖ct）。
+    /// Group key wrapped with AEAD(pairing_key) (nonce‖ct).
     pub wrapped_group_key: Vec<u8>,
 }
 
-/// 邀请端会话（内存态；短码与 verifier 都不落盘、不出端——Argon2id
-/// 派生值现场使用后即弃）。
+/// Inviting-side session (in-memory only; neither the short code nor the verifier
+/// is persisted or leaves the device — the Argon2id derived value is dropped
+/// right after in-place use).
 pub struct PairingHost {
     b_priv: [u8; 32],
     verifier: Vec<u8>,
@@ -51,13 +55,16 @@ pub struct PairingHost {
 }
 
 impl PairingHost {
-    /// 发起邀请：生成动态密码与配对 salt，现场派 verifier（不落盘）。
+    /// Start an invite: generate the passcode and pairing salt, and derive the
+    /// verifier in place (never persisted).
     pub fn new_invite() -> PersonaResult<(Self, PairingInvite)> {
         let code = generate_pairing_code();
         let salt: [u8; PAIRING_SALT_LEN] = rand::random();
         let derived = derive_pairing_secret(&code, &salt)?;
-        // verifier 由持有口令的一方计算（SRP 的 x 只在口令侧派生），
-        // 配对里 host/guest 都持同码——host 现场派完即弃，不落盘。
+        // The verifier is computed by the party holding the password (SRP's x
+        // is only derived on the password side); in pairing both host and guest
+        // hold the same code — the host derives and immediately discards it,
+        // never persisting it.
         let client_for_v = SrpClient::<Sha256>::new(crate::auth::srp::srp_group());
         let verifier = client_for_v.compute_verifier(PAIRING_IDENTITY, &derived, &salt);
         let b_priv: [u8; 32] = rand::random();
@@ -72,7 +79,8 @@ impl PairingHost {
         ))
     }
 
-    /// 接受 guest 的 `client_public`：派 B_pub 与 pairing key，出短指纹。
+    /// Accept the guest's `client_public`: derive B_pub and the pairing key, and
+    /// produce the short fingerprint.
     pub fn accept_join(&mut self, client_public: &[u8]) -> PersonaResult<HostOffer> {
         if self.handshake.is_some() || self.finished {
             return Err(PersonaError::InvalidInput(
@@ -93,19 +101,22 @@ impl PairingHost {
         })
     }
 
-    /// 当前握手的短指纹（`accept_join` 后有值，供 UI 展示比对）。
+    /// Short fingerprint of the current handshake (set after `accept_join`, for
+    /// UI display and comparison).
     pub fn fingerprint(&self) -> Option<String> {
         self.handshake
             .as_ref()
             .map(|(_, key)| pairing_fingerprint(key))
     }
 
-    /// 配对是否已完结（handoff 已交付）——完结后不再接受新 join。
+    /// Whether pairing is finished (handoff delivered) — no new join is accepted
+    /// afterwards.
     pub fn finished(&self) -> bool {
         self.finished
     }
 
-    /// guest 比对指纹通过后提交 M1：验证通过才交出 M2 + 包裹的组密钥。
+    /// M1 submitted after the guest's fingerprint comparison passes: M2 + the
+    /// wrapped group key are released only once verification succeeds.
     pub fn complete(
         &mut self,
         group_key: &[u8; PAIRING_GROUP_KEY_LEN],
@@ -127,14 +138,15 @@ impl PairingHost {
     }
 }
 
-// ---- 协议驱动（宿主侧推荐入口：信箱轮询 + handle_message） ----
+// ---- Protocol driver (recommended host entry: mailbox polling + handle_message) ----
 
 impl PairingHost {
-    /// 消费 guest 消息，产出应答消息（宿主把返回值 POST 回 to-guest 信箱）。
+    /// Consume a guest message and produce the reply (the host POSTs the return
+    /// value back to the to-guest mailbox).
     ///
-    /// `ClientPublic` → 出 [`PairingMessage::ServerOffer`]；`ClientProof`
-    /// （UI 比对指纹通过后提交）→ 出 [`PairingMessage::Handoff`]。
-    /// 其余方向/时序一律拒绝。
+    /// `ClientPublic` → [`PairingMessage::ServerOffer`]; `ClientProof`
+    /// (submitted after the UI fingerprint comparison passes) →
+    /// [`PairingMessage::Handoff`]. All other directions/orderings are rejected.
     pub fn handle_message(
         &mut self,
         msg: PairingMessage,

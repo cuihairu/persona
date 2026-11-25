@@ -126,7 +126,7 @@ async fn test_audit_query_statistics_and_cleanup() {
         .await
         .unwrap();
 
-    // 全量查询：初始化 + 建身份至少各留一条，且按时间降序
+    // Full query: initialization + identity creation each leave at least one entry, ordered by timestamp desc
     let all = service
         .query_audit_logs(AuditLogQuery::default())
         .await
@@ -137,7 +137,7 @@ async fn test_audit_query_statistics_and_cleanup() {
         "audit logs must be ordered by timestamp desc"
     );
 
-    // 按 identity 过滤
+    // Filter by identity
     let by_identity = service
         .query_audit_logs(AuditLogQuery {
             identity_id: Some(identity.id),
@@ -153,7 +153,7 @@ async fn test_audit_query_statistics_and_cleanup() {
         .iter()
         .any(|l| l.action.to_string() == "identity_created"));
 
-    // action 过滤（走 find_by_action 主查询 + 内存复核）
+    // Action filter (find_by_action primary query + in-memory recheck)
     let created = service
         .query_audit_logs(AuditLogQuery {
             action: Some(AuditAction::IdentityCreated),
@@ -165,7 +165,7 @@ async fn test_audit_query_statistics_and_cleanup() {
         .iter()
         .all(|l| l.action.to_string() == "identity_created"));
 
-    // limit 截断
+    // Limit truncation
     let limited = service
         .query_audit_logs(AuditLogQuery {
             limit: Some(1),
@@ -175,11 +175,11 @@ async fn test_audit_query_statistics_and_cleanup() {
         .unwrap();
     assert_eq!(limited.len(), 1);
 
-    // 统计
+    // Statistics
     let stats = service.audit_log_statistics().await.unwrap();
     assert!(stats.total_logs > 0);
 
-    // 时间窗口放在未来 → 空
+    // Time window set in the future -> empty
     let now = chrono::Utc::now();
     let future = service
         .query_audit_logs(AuditLogQuery {
@@ -193,7 +193,7 @@ async fn test_audit_query_statistics_and_cleanup() {
         .unwrap();
     assert!(future.is_empty());
 
-    // 清理保留 0 天 → 删光
+    // Cleanup with a 0-day retention -> everything deleted
     let deleted = service.cleanup_audit_logs(0).await.unwrap();
     assert!(deleted > 0);
     let after = service

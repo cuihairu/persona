@@ -1,32 +1,35 @@
-//! 云盘传输（Phase 2）：`CloudDriveRemote` 把 [`SyncRemote`] 实现到本机
-//! 云盘同步目录（iCloud Drive / Dropbox / Google Drive 的本地同步文件夹，
-//! OS 云代理负责跨设备分发），`CloudGroupKeyStore` 把 [`GroupKeyStore`]
-//! 实现到同一目录（设备登记表 + 每设备一枚组密钥信封文件）。
+//! Cloud-drive transport (Phase 2): `CloudDriveRemote` implements [`SyncRemote`] against the local
+//! cloud-drive sync directory (the local sync folder of iCloud Drive / Dropbox / Google Drive, where the
+//! OS cloud agent handles cross-device distribution), and `CloudGroupKeyStore` implements [`GroupKeyStore`]
+//! against the same directory (a device registry + one group key envelope file per device).
 //!
-//! **传输红线**（`docs/STORAGE_AND_SYNC.md` §云盘）：云盘目录只放**加密
-//! 产物**——绝不放活 `identities.db`（SQLite WAL 伴生文件会被云盘双向同步
-//! 打坏）。本模块只写指令分片（oplog 密文行）、快照（group key 整包密文）
-//! 与信封（X25519 密封），全是密文；主库快照由宿主的 `VACUUM INTO` 自洽
-//! 单文件产出（备份链同源）。
+//! **Transport red line** (`docs/STORAGE_AND_SYNC.md` §cloud drive): the cloud-drive directory holds
+//! **encrypted artifacts** only — never a live `identities.db` (the SQLite WAL companion files would be
+//! corrupted by bidirectional cloud sync). This module writes only instruction shards (oplog ciphertext
+//! rows), snapshots (the group-key-encrypted whole package), and envelopes (X25519 sealed) — all ciphertext;
+//! the vault snapshot is produced self-consistently as a single file by the host's `VACUUM INTO` (the same
+//! source as the backup chain).
 //!
-//! **与 HTTP 传输的语义差异（诚实登记）**：
-//! - **oplog 分片永远不物理裁剪**。服务器在快照上传后同事务删 `seq ≤ S`
-//!   的 ops（压缩），云盘没有这个压缩机制——分片是 append-only，快照是
-//!   逻辑检查点（新设备装快照后仍可全量重放，数据不因裁剪而丢）。
-//!   `put_library_snapshot` 恒返回 0（本实现不物理压缩）。
-//! - **游标是每分片行数水位**（`{"<device>": 行数, …}`），不是全局 rank。
-//!   rank 游标会跳过「晚到但 lamport 更小」的 op（设备 B 离线补写低
-//!   lamport 的 op 插到已消费的 rank 之前）——行数水位读全分片增量再
-//!   按 `(lamport, device_id, op_id)` 合并，永不跳过。
-//! - **pull 忽略 limit**：云盘是本地文件读，返回全部分片增量（一次一个
-//!   页面）；引擎按「空页才停」循环语义天然收敛。
+//! **Semantic differences from the HTTP transport (honestly documented)**:
+//! - **Oplog shards are never physically pruned.** After a snapshot upload, the server deletes `seq ≤ S`
+//!   ops in the same transaction (compaction); the cloud drive has no such compaction mechanism — shards are
+//!   append-only and snapshots are logical checkpoints (a new device can still replay everything after
+//!   installing the snapshot, so no data is lost to pruning).
+//!   `put_library_snapshot` always returns 0 (this implementation does not physically compact).
+//! - **The cursor is a per-shard row-count watermark** (`{"<device>": rows, …}`), not a global rank.
+//!   A rank cursor would skip "late-arriving ops with a smaller lamport" (device B comes back offline and
+//!   writes ops with lower lamport that land before an already-consumed rank) — the row-count watermark
+//!   reads the full shard delta and then merges by `(lamport, device_id, op_id)`, never skipping.
+//! - **pull ignores limit**: the cloud drive is a local file read, so it returns the entire shard delta (one
+//!   page at a time); the engine's "stop only on an empty page" loop semantics naturally converge.
 //!
-//! **游标复用 canonical 格式**：水位编码进 `v1:{sum}:{map}` 的 `op_id`
-//! 槽（`sum` = 已消费行数，`map` = 每分片行数 JSON）。`local_watermark`
-//! 只读 `sum`（已消费行数 = 去重后 op 计数，因 op_id 全局唯一跨分片），
-//! `SNAPSHOT_RESUME_OP_ID="0"`（引擎快照装包后写入的游标）解成空 map =
-//! 全量读——`sum` 槽保持语义，`decode_cursor` 只校验 `op_id` 非空，槽内
-//! JSON 不被任何既有消费者解读（已核验：engine/测试只取 `.0`）。
+//! **The cursor reuses the canonical format**: the watermark is encoded into the `op_id` slot of
+//! `v1:{sum}:{map}` (`sum` = consumed row count, `map` = per-shard row-count JSON). `local_watermark`
+//! reads only `sum` (consumed rows = deduplicated op count, since op_id is globally unique across shards),
+//! and `SNAPSHOT_RESUME_OP_ID="0"` (the cursor written by the engine after installing a snapshot) decodes
+//! to an empty map = a full read — the `sum` slot keeps its semantics, `decode_cursor` only validates that
+//! `op_id` is non-empty, and the JSON inside the slot is not interpreted by any existing consumer (verified:
+//! engine/tests only take `.0`).
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -43,21 +46,21 @@ use crate::sync::engine::SyncRemote;
 use crate::sync::oplog::SyncOp;
 use crate::{PersonaError, Result};
 
-/// 云盘分片文件名前缀/后缀（`dev-<device_id>.jsonl`）。
+/// Cloud-drive shard filename prefix/suffix (`dev-<device_id>.jsonl`).
 const SHARD_PREFIX: &str = "dev-";
 const SHARD_SUFFIX: &str = ".jsonl";
-/// 快照文件名前缀/后缀（`snapshot-<seq>-<device_id>.bin`）。
+/// Snapshot filename prefix/suffix (`snapshot-<seq>-<device_id>.bin`).
 const SNAPSHOT_PREFIX: &str = "snapshot-";
 const SNAPSHOT_SUFFIX: &str = ".bin";
-/// 信封文件名（`env-<device_id>.bin`）。
+/// Envelope filename (`env-<device_id>.bin`).
 const ENV_PREFIX: &str = "env-";
 const ENV_SUFFIX: &str = ".bin";
-/// 设备登记表文件名。
+/// Device registry filename.
 const REGISTRY_FILE: &str = "registry.json";
 
-/// 云盘目录上的 [`SyncRemote`]。`device_id` 是本设备（决定 push 写哪个
-/// 分片）。所有文件操作都是本地原子写（temp + fsync + rename），保证云盘
-/// 同步代理永远看不到半行分片。
+/// [`SyncRemote`] over a cloud-drive directory. `device_id` is this device (it decides which
+/// shard push writes to). Every file operation is a local atomic write (temp + fsync + rename), so the
+/// cloud sync agent never sees a half-written shard.
 pub struct CloudDriveRemote {
     dir: PathBuf,
     device_id: Uuid,
@@ -72,9 +75,9 @@ impl CloudDriveRemote {
     }
 }
 
-/// 云盘目录上的 [`GroupKeyStore`]：`registry.json`（设备登记表）+
-/// `env-<device_id>.bin`（每设备一枚组密钥信封）+ `env-<device_id>.meta.json`
-/// （sealed_by/created_at 元数据）。
+/// [`GroupKeyStore`] over a cloud-drive directory: `registry.json` (device registry) +
+/// `env-<device_id>.bin` (one group key envelope per device) + `env-<device_id>.meta.json`
+/// (sealed_by/created_at metadata).
 pub struct CloudGroupKeyStore {
     dir: PathBuf,
 }
@@ -86,7 +89,7 @@ impl CloudGroupKeyStore {
 }
 
 // ---------------------------------------------------------------------------
-// 设备登记表 + 信封（GroupKeyStore）
+// Device registry + envelopes (GroupKeyStore)
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, serde::Serialize, serde::Deserialize, Default)]
@@ -95,10 +98,11 @@ struct CloudRegistry {
     devices: Vec<CloudDevice>,
 }
 
-/// 云盘设备登记表的单条记录（宿主设备列表/授权目标公钥取用）。
+/// One record of the cloud-drive device registry (consumed by the host's device listing / for the
+/// authorization target's public key).
 ///
-/// `public_key` 是 base64 的 X25519 公钥——授权设备用它重封组密钥信封
-/// （与服务器侧 [`crate::sync::remote::SyncDevice::public_key`] 同义）。
+/// `public_key` is the base64 X25519 public key — the authorizing device uses it to reseal the group key
+/// envelope (same meaning as the server-side [`crate::sync::remote::SyncDevice::public_key`]).
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct CloudDevice {
     pub device_id: String,
@@ -128,7 +132,7 @@ async fn write_registry(dir: &Path, registry: &CloudRegistry) -> Result<()> {
     atomic_write(dir, REGISTRY_FILE, &text).await
 }
 
-/// 原子写：同目录 temp + fsync + rename（云盘代理只看到完整文件）。
+/// Atomic write: temp file in the same directory + fsync + rename (the cloud agent only ever sees complete files).
 async fn atomic_write(dir: &Path, name: &str, bytes: &[u8]) -> Result<()> {
     tokio::fs::create_dir_all(dir)
         .await
@@ -146,7 +150,7 @@ async fn atomic_write(dir: &Path, name: &str, bytes: &[u8]) -> Result<()> {
     Ok(())
 }
 
-/// 从 meta JSON 读字符串字段（缺失/坏 meta 回默认）。
+/// Reads a string field from the meta JSON (missing/corrupt meta returns the default).
 async fn meta_string(dir: &Path, device_id: Uuid, field: &str, default: String) -> String {
     let path = dir.join(format!("{ENV_PREFIX}{device_id}.meta.json"));
     match tokio::fs::read_to_string(&path).await {
@@ -167,7 +171,7 @@ impl GroupKeyStore for CloudGroupKeyStore {
             .iter()
             .any(|d| d.device_id == identity.device_id.to_string())
         {
-            return Ok(()); // 幂等：重复登记同设备无副作用
+            return Ok(()); // Idempotent: re-registering the same device has no side effects
         }
         if registry
             .devices
@@ -230,7 +234,7 @@ impl GroupKeyStore for CloudGroupKeyStore {
             let env_path = self
                 .dir
                 .join(format!("{ENV_PREFIX}{device_id}{ENV_SUFFIX}"));
-            // 无信封 = 待授权（已登记但信封未上传）→ 跳过，与服务器同语义。
+            // No envelope = pending authorization (registered but envelope not uploaded) -> skip, same semantics as the server.
             let Ok(envelope) = tokio::fs::read(&env_path).await else {
                 continue;
             };
@@ -266,15 +270,16 @@ impl GroupKeyStore for CloudGroupKeyStore {
 }
 
 impl CloudGroupKeyStore {
-    /// 列出云盘登记表的全部设备（含公钥，授权时取目标公钥用）。
-    /// 登记表不存在 = 空组。
+    /// Lists all devices in the cloud-drive registry (with public keys, used to fetch the target's public
+    /// key when authorizing). A missing registry = an empty group.
     pub async fn list_devices(&self) -> Result<Vec<CloudDevice>> {
         Ok(read_registry(&self.dir).await?.devices)
     }
 
-    /// 从登记表移除设备（吊销/离开）。尽力删除该设备的信封与 meta 文件
-    /// （残留文件不影响正确性：`group_keys` 以登记表为准，已移除设备不再
-    /// 读）。返回是否真的在登记表里删掉了（false = 不在表内，幂等）。
+    /// Removes a device from the registry (revoke/leave). Best-effort deletion of that device's envelope and
+    /// meta files (leftover files do not affect correctness: `group_keys` trusts the registry, and a removed
+    /// device is no longer read). Returns whether the device was actually removed from the registry
+    /// (false = was not in it, idempotent).
     pub async fn remove_device(&self, device_id: Uuid) -> Result<bool> {
         let mut registry = read_registry(&self.dir).await?;
         let before = registry.devices.len();
@@ -285,8 +290,8 @@ impl CloudGroupKeyStore {
             return Ok(false);
         }
         write_registry(&self.dir, &registry).await?;
-        // 信封/meta 删除尽力而为：文件系统错误只 warn（登记表已不含该
-        // 设备，孤儿文件由后续 GC 或用户清理兜底）。
+        // Envelope/meta deletion is best-effort: file system errors only warn (the registry no longer
+        // contains the device, so orphaned files are mopped up by later GC or user cleanup).
         for name in [
             format!("{ENV_PREFIX}{device_id}{ENV_SUFFIX}"),
             format!("{ENV_PREFIX}{device_id}.meta.json"),
@@ -300,8 +305,9 @@ impl CloudGroupKeyStore {
         Ok(true)
     }
 
-    /// 写设备备注（登记表内的自由文本；命令层自行保证只写本机设备）。
-    /// 返回规整（trim）后的备注。设备不在登记表 → NotFound（fail-closed）。
+    /// Writes a device remark (free text within the registry; the command layer guarantees itself that only
+    /// the local device is written). Returns the normalized (trimmed) remark. A device missing from the
+    /// registry → NotFound (fail-closed).
     pub async fn set_device_remark(&self, device_id: Uuid, remark: &str) -> Result<String> {
         let mut registry = read_registry(&self.dir).await?;
         let stored = remark.trim().to_string();
@@ -325,10 +331,10 @@ impl CloudGroupKeyStore {
 }
 
 // ---------------------------------------------------------------------------
-// 指令流 + 快照（SyncRemote）
+// Instruction stream + snapshot (SyncRemote)
 // ---------------------------------------------------------------------------
 
-/// 列目录下的全部分片（`dev-*.jsonl`），解析出 device_id。
+/// Lists all shards in the directory (`dev-*.jsonl`) and parses out the device_id.
 async fn list_shards(dir: &Path) -> Result<Vec<(Uuid, PathBuf)>> {
     let mut out = Vec::new();
     let mut entries = tokio::fs::read_dir(dir)
@@ -347,7 +353,7 @@ async fn list_shards(dir: &Path) -> Result<Vec<(Uuid, PathBuf)>> {
             continue;
         };
         let Ok(device_id) = Uuid::parse_str(rest) else {
-            continue; // 非本协议的 dev- 文件（如用户手放）→ 跳过
+            continue; // dev- files from a different protocol (e.g. placed by hand) -> skip
         };
         out.push((device_id, entry.path()));
     }
@@ -355,8 +361,9 @@ async fn list_shards(dir: &Path) -> Result<Vec<(Uuid, PathBuf)>> {
     Ok(out)
 }
 
-/// 读一个分片的全部 op 行。坏行跳过（与 HTTP pull 的单条容错口径一致：
-/// 一条损坏不废整批、不卡游标——游标按行数推进，坏行也算已消费）。
+/// Reads all op lines of one shard. Bad lines are skipped (the same per-entry tolerance as HTTP pull: one
+/// bad line does not void the batch or stall the cursor — the cursor advances by row count, and a bad line
+/// counts as consumed too).
 async fn read_shard_ops(path: &Path) -> Result<Vec<SyncOp>> {
     let text = match tokio::fs::read_to_string(path).await {
         Ok(t) => t,
@@ -381,7 +388,7 @@ async fn read_shard_ops(path: &Path) -> Result<Vec<SyncOp>> {
     Ok(ops)
 }
 
-/// 列目录下的快照（`snapshot-*.bin`），解析 `(seq, device_id)`，按 seq 升序。
+/// Lists snapshots in the directory (`snapshot-*.bin`), parses `(seq, device_id)`, ascending by seq.
 async fn list_snapshots(dir: &Path) -> Result<Vec<(i64, Uuid, PathBuf)>> {
     let mut out = Vec::new();
     let mut entries = match tokio::fs::read_dir(dir).await {
@@ -419,11 +426,12 @@ async fn list_snapshots(dir: &Path) -> Result<Vec<(i64, Uuid, PathBuf)>> {
     Ok(out)
 }
 
-/// 游标的每分片行数水位表（op_id 槽里的 JSON `{"<device>": 行数}`）。
+/// The per-shard row-count watermark table of the cursor (JSON `{"<device>": rows}` inside the op_id slot).
 type Watermarks = HashMap<Uuid, u64>;
 
-/// 从游标 op_id 槽解水位表。槽为 `"0"`（快照装包哨兵）或不可解析 →
-/// 空表 = 全量读（安全侧：永不跳过，宁可重读让引擎按 op_id 去重）。
+/// Decodes the watermark table from the cursor op_id slot. A slot of `"0"` (the snapshot-install sentinel) or an
+/// unparseable one → an empty table = a full read (the safe side: never skip, prefer re-reading so the engine
+/// can deduplicate by op_id).
 fn decode_watermarks(op_id_slot: &str) -> Watermarks {
     if op_id_slot == "0" {
         return Watermarks::new();
@@ -453,8 +461,8 @@ fn encode_watermarks(watermarks: &Watermarks) -> String {
     serde_json::Value::Object(map).to_string()
 }
 
-/// 合并排序键：`(lamport, device_id, op_id)`——与 oplog LWW 全序同构
-/// （op_id 破平保证确定性；跨分片 op_id 全局唯一，平局几乎不发生）。
+/// Merge sort key: `(lamport, device_id, op_id)` — isomorphic to the oplog LWW total order (op_id breaks
+/// ties to guarantee determinism; op_id is globally unique across shards, so ties almost never happen).
 fn merge_sort_key(op: &SyncOp) -> (u64, Uuid, Uuid) {
     (op.lamport, op.device_id, op.op_id)
 }
@@ -465,7 +473,7 @@ impl SyncRemote for CloudDriveRemote {
         let path = self
             .dir
             .join(format!("{SHARD_PREFIX}{}{SHARD_SUFFIX}", self.device_id));
-        // 读现有分片去重（op_id 幂等：崩溃后重推同 op 不再追加）。
+        // Read the existing shard to deduplicate (op_id idempotency: re-pushing the same op after a crash is not appended again).
         let existing = read_shard_ops(&path).await?;
         let mut known: HashMap<Uuid, ()> = existing.iter().map(|op| (op.op_id, ())).collect();
         let mut lines: Vec<String> = Vec::new();
@@ -484,8 +492,8 @@ impl SyncRemote for CloudDriveRemote {
             accepted += 1;
         }
         if !lines.is_empty() {
-            // 追加语义：读原文本（保留坏行原样），拼上新行，原子 rename。
-            // 云盘代理永远看不到半行分片。
+            // Append semantics: read the raw text (bad lines preserved verbatim), splice in the new lines,
+            // and rename atomically. The cloud agent never sees a half-written shard.
             let raw = tokio::fs::read_to_string(&path).await.unwrap_or_default();
             let mut final_buf = raw.into_bytes();
             for line in &lines {
@@ -507,7 +515,7 @@ impl SyncRemote for CloudDriveRemote {
         since: Option<&str>,
         _limit: u32,
     ) -> Result<(Vec<SyncOp>, Option<String>)> {
-        // 水位表：None / "0" / 坏槽 → 全量读（安全侧）。
+        // Watermark table: None / "0" / a corrupt slot -> a full read (the safe side).
         let watermarks = match since {
             Some(raw) => crate::sync::cursor::decode_cursor(raw)
                 .map(|(_, slot)| decode_watermarks(&slot))
@@ -528,7 +536,7 @@ impl SyncRemote for CloudDriveRemote {
         if new_ops.is_empty() {
             return Ok((Vec::new(), None));
         }
-        // 确定性合并 + op_id 去重（重读安全网：同 op 跨页/重放只留一份）。
+        // Deterministic merge + op_id deduplication (a re-read safety net: the same op across pages/replays is kept once).
         new_ops.sort_by_key(merge_sort_key);
         let mut seen = std::collections::HashSet::new();
         new_ops.retain(|op| seen.insert(op.op_id));
@@ -538,8 +546,8 @@ impl SyncRemote for CloudDriveRemote {
     }
 
     async fn head_seq(&self) -> Result<i64> {
-        // 组最新版本号 = 全部分片行数总和（op_id 跨分片全局唯一 → 行数
-        // 即去重 op 计数）。
+        // The group's newest version = the total row count of all shards (op_id is globally unique across
+        // shards, so row count is exactly the deduplicated op count).
         let shards = list_shards(&self.dir).await?;
         let mut total = 0i64;
         for (_, path) in &shards {
@@ -554,9 +562,10 @@ impl SyncRemote for CloudDriveRemote {
         device_id: &str,
         ciphertext: &[u8],
     ) -> Result<u64> {
-        // 文件名内容寻址 `(seq, device_id)`：不同设备永不写同一文件，
-        // 同 (seq, device) 重传幂等（跳过，不可变——快照文件一旦写入不改）。
-        // 恒返回 0：云盘分片不物理裁剪（见模块文档语义差异）。
+        // The filename is content-addressed by `(seq, device_id)`: different devices never write the same
+        // file, and re-sending the same (seq, device) is idempotent (skipped, immutable — a snapshot file is
+        // never modified once written). Always returns 0: cloud shards are not physically pruned (see the
+        // semantic differences in the module docs).
         let name = format!("{SNAPSHOT_PREFIX}{seq}-{device_id}{SNAPSHOT_SUFFIX}");
         if self.dir.join(&name).exists() {
             return Ok(0);
@@ -566,7 +575,7 @@ impl SyncRemote for CloudDriveRemote {
     }
 
     async fn get_library_snapshot(&self) -> Result<Option<(i64, Vec<u8>)>> {
-        // 取最大 seq 的快照（并发多设备各写一份 → max-seq 是确定收敛点）。
+        // Take the snapshot with the largest seq (several devices writing concurrently each produce one → max-seq is the deterministic convergence point).
         let snapshots = list_snapshots(&self.dir).await?;
         let Some((seq, _device_id, path)) = snapshots.last() else {
             return Ok(None);

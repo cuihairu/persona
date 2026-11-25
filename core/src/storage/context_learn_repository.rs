@@ -1,18 +1,20 @@
-//! Local learning history for context-aware suggestion（设计
-//! docs/CONTEXT_AWARE_DESIGN.md §4.1 阶段 2，migration 020）。
+//! Local learning history for context-aware suggestion (design
+//! docs/CONTEXT_AWARE_DESIGN.md §4.1, phase 2, migration 020).
 //!
-//! 红线：本表**只在本机**——不进同步 oplog、不上服务器（设计 §3 隐私边界）。
-//! 记录的是「用户确认了什么」（switch 落点），cwd 只存哈希不存原文；
-//! 开关默认关，未显式开启前不产生任何记录。
+//! Red line: this table is **local only** — it never enters the sync oplog and
+//! never leaves for the server (the privacy boundary in design §3). What is
+//! recorded is "what the user confirmed" (where the switch landed); cwd is
+//! stored as a hash, never as plain text; the flag defaults to off, so no
+//! records are produced until it is explicitly enabled.
 
 use crate::storage::Database;
 use crate::{PersonaError, Result};
 use sqlx::Row;
 
-/// 开关在 `context_settings` 里的键。
+/// The flag's key inside `context_settings`.
 const LEARN_ENABLED_KEY: &str = "context_learn_enabled";
 
-/// 仓库层：学习记录 + 学习开关（同一本地库）。
+/// Repository layer: learning records plus the learning flag (same local db).
 pub struct ContextLearnRepository {
     db: Database,
 }
@@ -22,7 +24,7 @@ impl ContextLearnRepository {
         Self { db }
     }
 
-    /// 学习开关（默认关：键不存在 = off）。
+    /// The learning flag (off by default: a missing key means off).
     pub async fn learn_enabled(&self) -> Result<bool> {
         let row = sqlx::query("SELECT value FROM context_settings WHERE key = ?")
             .bind(LEARN_ENABLED_KEY)
@@ -34,7 +36,8 @@ impl ContextLearnRepository {
             .unwrap_or(false))
     }
 
-    /// 打开/关闭学习。关不掉已存在的记录（数据保留，只停写）。
+    /// Turn learning on or off. Turning it off cannot remove existing records
+    /// (the data is retained; only further writes stop).
     pub async fn set_learn_enabled(&self, on: bool) -> Result<()> {
         let value = if on { "on" } else { "off" };
         sqlx::query(
@@ -49,7 +52,8 @@ impl ContextLearnRepository {
         Ok(())
     }
 
-    /// 记录一次确认：分身名 + 目录哈希 + 主机 + 时间（RFC3339）。
+    /// Record one confirmation: identity name + directory hash + host + time
+    /// (RFC3339).
     pub async fn record(
         &self,
         identity_name: &str,
@@ -70,8 +74,9 @@ impl ContextLearnRepository {
         Ok(())
     }
 
-    /// 同一目录（cwd_hash 等值）在 `since` 之后的分身使用计数，
-    /// 按 (次数降序, 名字升序) 返回——纯函数层的平局规则依赖这个顺序。
+    /// Per-identity usage counts for the same directory (cwd_hash equality)
+    /// since `since`, returned ordered by (count descending, name ascending) —
+    /// the tie-break rule in the pure-function layer depends on this order.
     pub async fn counts_since(
         &self,
         cwd_hash: &str,
@@ -100,7 +105,7 @@ impl ContextLearnRepository {
         Ok(counts)
     }
 
-    /// 学习记录总条数（`context learn status` 用）。
+    /// Total number of learning records (used by `context learn status`).
     pub async fn record_count(&self) -> Result<u64> {
         let row = sqlx::query("SELECT COUNT(*) AS total FROM context_learn")
             .fetch_one(self.db.pool())
@@ -109,7 +114,8 @@ impl ContextLearnRepository {
         Ok(row.get::<i64, _>("total").max(0) as u64)
     }
 
-    /// 清空全部学习记录（隐私出口：关掉之外还能彻底删除）。
+    /// Clear every learning record (a privacy exit: in addition to turning it off,
+    /// the data can be deleted outright).
     pub async fn clear(&self) -> Result<u64> {
         let result = sqlx::query("DELETE FROM context_learn")
             .execute(self.db.pool())
@@ -155,11 +161,11 @@ mod tests {
         repo.record("Other", &hash, Some("dev-pc"), now)
             .await
             .unwrap();
-        // 不同目录的记录不进同一组。
+        // Records from a different directory do not land in the same group.
         repo.record("Client-A", &"b".repeat(64), None, now)
             .await
             .unwrap();
-        // 30 天窗口外的记录不计入。
+        // Records outside the 30-day window are not counted.
         let old = now - chrono::Duration::days(31);
         repo.record("Client-A", &hash, None, old).await.unwrap();
 
@@ -181,7 +187,8 @@ mod tests {
         let repo = ContextLearnRepository::new(db);
         let now = chrono::Utc::now();
         let hash = "c".repeat(64);
-        // 插入顺序与名字序相反，验证输出仍按名字升序。
+        // Insertion order is the reverse of name order, to verify the output is still
+        // ascending by name.
         repo.record("Zeta", &hash, None, now).await.unwrap();
         repo.record("Alpha", &hash, None, now).await.unwrap();
         let counts = repo

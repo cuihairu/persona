@@ -28,7 +28,7 @@ pub(super) fn parse_csv(bytes: &[u8]) -> Result<CsvExport> {
                 if record.iter().any(|cell| !cell.trim().is_empty()) {
                     break record.iter().map(|c| c.trim().to_string()).collect();
                 }
-                // 跳过文件开头的空行
+                // Skip leading blank lines at the start of the file
             }
             None => bail!("CSV 文件为空或只有空行"),
         }
@@ -52,8 +52,9 @@ pub(super) fn parse_csv(bytes: &[u8]) -> Result<CsvExport> {
     Ok(CsvExport { headers, rows })
 }
 
-/// 归一表头：小写 + 只留 ASCII 字母数字，`login_name` / `Login Name` /
-/// `loginUsername` 归一后等形。
+/// Normalize a header: lowercase and keep only ASCII alphanumerics, so
+/// `login_name` / `Login Name` /
+/// `loginUsername` all reduce to the same form.
 fn normalize_header(header: &str) -> String {
     header
         .trim()
@@ -63,7 +64,7 @@ fn normalize_header(header: &str) -> String {
         .collect()
 }
 
-/// 每个文件里各列扮演的字段角色（None = 该角色没有对应列）。
+/// The field role each column plays in a given file (None = no column for that role).
 #[derive(Debug, Clone, Copy, Default)]
 struct CsvRoles {
     title: Option<usize>,
@@ -77,17 +78,18 @@ struct CsvRoles {
     item_type: Option<usize>,
 }
 
-/// 表头 → 列角色。别名表覆盖：
+/// Map headers to column roles. The alias table covers:
 /// - Bitwarden CSV：`name` / `login_uri` / `login_username` / `login_password` / `totp` / `folder` / `favorite` / `type`
 /// - Chrome：`name` / `url` / `username` / `password`
-/// - Firefox：`url` / `username` / `password`（无标题列）
+/// - Firefox: `url` / `username` / `password` (no title column)
 /// - 1Password CSV：`Title` / `Url` / `Username` / `Password` / `Notes`
 /// - KeePass 1.x：`Account` / `Login Name` / `Password` / `Web Site` / `Comments`
 /// - KeePass 2.x：`Title` / `Username` / `Password` / `URL` / `Notes`
 fn map_roles(headers: &[String]) -> CsvRoles {
     let mut roles = CsvRoles::default();
     for (index, header) in headers.iter().enumerate() {
-        // 只在角色空缺时认领：先到先得，重复列（如双 url）取第一列。
+        // Only claim a role when it is still empty: first come, first served, so duplicate
+        // columns (e.g. two url columns) resolve to the first one.
         let slot = |current: Option<usize>| current.or(Some(index));
         match normalize_header(header).as_str() {
             "title" | "name" | "account" => roles.title = slot(roles.title),
@@ -103,13 +105,13 @@ fn map_roles(headers: &[String]) -> CsvRoles {
             "folder" | "group" | "collection" => roles.folder = slot(roles.folder),
             "favorite" | "fav" => roles.favorite = slot(roles.favorite),
             "type" => roles.item_type = slot(roles.item_type),
-            _ => {} // 未知列静默忽略（各导出器都带各自的附加列）
+            _ => {} // Unknown columns are ignored silently (each exporter ships its own extra columns)
         }
     }
     roles
 }
 
-/// 取一行中某角色列的值（去首尾空白，空串视同缺列）。
+/// Read the value of a row's column for a role (trimmed; an empty string counts as absent).
 fn cell(row: &[String], slot: Option<usize>) -> Option<String> {
     slot.and_then(|i| row.get(i))
         .map(|v| v.trim().to_string())
@@ -121,7 +123,7 @@ fn favorite_truthy(value: Option<&str>) -> bool {
 }
 
 // ---------------------------------------------------------------------------
-// Bitwarden JSON schema（明文导出；宽容：缺字段按 None 处理）
+// Bitwarden JSON schema (plaintext export; lenient: missing fields read as None)
 // ---------------------------------------------------------------------------
 
 pub(super) fn plan_csv(csv: &CsvExport, identity_name: &str, source_label: &str) -> ImportPlan {
@@ -142,7 +144,8 @@ pub(super) fn plan_csv(csv: &CsvExport, identity_name: &str, source_label: &str)
         let favorite = favorite_truthy(cell(row, roles.favorite).as_deref());
         let item_type = cell(row, roles.item_type).map(|t| t.to_lowercase());
 
-        // 完全空行（含全空白单元格）：跳过且不进报告，避免噪声。
+        // A completely empty row (including all-whitespace cells): skip it and keep it out of
+        // the report to avoid noise.
         if title.is_none()
             && username.is_none()
             && password.is_none()
@@ -153,8 +156,9 @@ pub(super) fn plan_csv(csv: &CsvExport, identity_name: &str, source_label: &str)
         }
         let name = title.unwrap_or_else(|| row_title_fallback(&username, &url, index));
 
-        // Bitwarden CSV 的 type 列分流：note 落 SecureNote；card/identity
-        // 的字段不在 CSV 列里，硬塞必然丢数据——报告跳过并指路 JSON 导出。
+        // Branch on Bitwarden CSV's type column: note becomes a SecureNote; the fields for
+        // card/identity are not present in CSV columns, and forcing them in would surely lose
+        // data — so report a skip and point at the JSON export.
         match item_type.as_deref() {
             Some("note") => {
                 plan.credentials.push(PlannedCredential {

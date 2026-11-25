@@ -26,8 +26,8 @@ impl AttachmentManager {
         self.blob_store.init().await
     }
 
-    /// 附件根目录（travel mode 打包/恢复 blob 文件用；storage_path 列
-    /// 存的是相对此根的路径）
+    /// Root directory for attachments (travel mode packs/restores blob files here; the
+    /// storage_path column stores paths relative to this root)
     pub fn storage_root(&self) -> &Path {
         self.blob_store.storage_root()
     }

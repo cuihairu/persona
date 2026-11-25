@@ -1,58 +1,67 @@
-//! OpenSSH 私钥文件导入（`id_ed25519` / `id_rsa` / `id_ecdsa`）。
+//! OpenSSH private key file import (`id_ed25519` / `id_rsa` / `id_ecdsa`).
 //!
-//! openssh-key-v1 容器解析、bcrypt-pbkdf KDF 与 aes*-ctr/cbc 解密交给
-//! 审计过的 `ssh-key` crate；本模块只做产品口径：
+//! openssh-key-v1 container parsing, the bcrypt-pbkdf KDF, and aes*-ctr/cbc
+//! decryption are delegated to the audited `ssh-key` crate; this module only
+//! enforces the product conventions:
 //!
-//! - passphrase 在导入时解锁（库内 `SshKeyData.passphrase` 置 `None`）——
-//!   私钥入库后由 vault 的 per-item key 封存，密文旁边再存一遍口令
-//!   不带来任何额外安全性，只会让 agent 加载链路多一个失败点；
-//! - `private_key` 存**解锁后的 OpenSSH PEM**（与既有 ed25519 的
-//!   BASE64 seed 约定并存，见 `agents/ssh-agent` 的双格式加载）；
-//! - 指纹与公钥行在导入确认 UI 回显，用户核对指纹后再落库。
+//! - The passphrase unlocks at import time (`SshKeyData.passphrase` is set to
+//!   `None` in the store) — once the private key is stored, the vault's
+//!   per-item key seals it, and keeping the passphrase next to the ciphertext
+//!   adds no security whatsoever, only an extra failure point in the agent's
+//!   load chain;
+//! - `private_key` stores the **unlocked OpenSSH PEM** (coexisting with the
+//!   existing BASE64 seed convention for ed25519; see the dual-format loading
+//!   in `agents/ssh-agent`);
+//! - The fingerprint and public key line are echoed back in the import
+//!   confirmation UI, and the key lands in the vault only after the user
+//!   checks the fingerprint.
 
 use crate::{PersonaError, PersonaResult};
 use ssh_key::{Algorithm, EcdsaCurve, HashAlg, LineEnding};
 
-/// 导入结果：入库所需（`private_key_pem`）+ 确认 UI 所需（指纹/类型）。
+/// Import result: what storage needs (`private_key_pem`) plus what the
+/// confirmation UI needs (fingerprint / type).
 #[derive(Debug, Clone)]
 pub struct ImportedSshKey {
-    /// 库内 `SshKeyData.key_type` 口径：`ed25519` / `rsa` / `ecdsa`。
+    /// The vault's `SshKeyData.key_type` convention: `ed25519` / `rsa` / `ecdsa`.
     pub key_type: String,
-    /// SSH 线格式算法名：`ssh-ed25519` / `ssh-rsa` / `ecdsa-sha2-nistp256`。
+    /// SSH wire-format algorithm name: `ssh-ed25519` / `ssh-rsa` / `ecdsa-sha2-nistp256`.
     pub ssh_algorithm: String,
-    /// OpenSSH 公钥单行（`ssh-ed25519 AAAA… comment`），可直接贴 authorized_keys。
+    /// Single-line OpenSSH public key (`ssh-ed25519 AAAA… comment`), ready to paste into authorized_keys.
     pub public_key: String,
-    /// SHA256 指纹（`SHA256:…`），导入确认时人工核对。
+    /// SHA256 fingerprint (`SHA256:…`) for manual verification at import confirmation.
     pub fingerprint: String,
-    /// 解锁后的私钥（OpenSSH PEM 明文）；入库由 per-item key 封存。
+    /// The unlocked private key (plaintext OpenSSH PEM); storage seals it under the per-item key.
     pub private_key_pem: String,
-    /// 原文件里的 comment（可用作条目默认名称）。
+    /// The comment from the original file (usable as the entry's default name).
     pub comment: String,
 }
 
-/// 导入前预览：不要求口令（OpenSSH 容器的公钥半边是明文，密钥受保护时
-/// 也能先给指纹让人核对，再决定是否输口令解锁）。
+/// Pre-import preview: needs no passphrase (the OpenSSH container's public-key
+/// half is plaintext, so even a protected key can show its fingerprint first
+/// for human verification, before deciding whether to type the passphrase).
 #[derive(Debug, Clone)]
 pub struct SshKeyInspection {
-    /// 库内 `SshKeyData.key_type` 口径。
+    /// The vault's `SshKeyData.key_type` convention.
     pub key_type: String,
-    /// SSH 线格式算法名。
+    /// SSH wire-format algorithm name.
     pub ssh_algorithm: String,
-    /// OpenSSH 公钥单行。
+    /// Single-line OpenSSH public key.
     pub public_key: String,
-    /// SHA256 指纹（`SHA256:…`）。
+    /// SHA256 fingerprint (`SHA256:…`).
     pub fingerprint: String,
-    /// 原文件里的 comment。
+    /// The comment from the original file.
     pub comment: String,
-    /// 密钥是否受口令保护（导入时需要 passphrase）。
+    /// Whether the key is passphrase-protected (a passphrase is needed at import).
     pub encrypted: bool,
 }
 
-/// 把 ssh-key 的算法判定映射到库内口径；不支持的算法在此统一拒绝。
+/// Map ssh-key's algorithm classification onto the vault's conventions;
+/// unsupported algorithms are uniformly rejected here.
 pub(crate) fn classify(algorithm: Algorithm) -> PersonaResult<(&'static str, &'static str)> {
     Ok(match algorithm {
         Algorithm::Ed25519 => ("ed25519", "ssh-ed25519"),
-        // 0.6.7 的 Rsa 带 hash 字段（rsa-sha2-* 证书场景）；裸算法即 rsa
+        // 0.6.7's Rsa carries a hash field (for rsa-sha2-* certificate scenarios); the bare algorithm is plain rsa
         Algorithm::Rsa { .. } => ("rsa", "ssh-rsa"),
         Algorithm::Ecdsa {
             curve: EcdsaCurve::NistP256,
@@ -65,12 +74,14 @@ pub(crate) fn classify(algorithm: Algorithm) -> PersonaResult<(&'static str, &'s
     })
 }
 
-/// 解析私钥文件内容并返回导入所需字段——格式自动识别：
-/// OpenSSH 容器（含 bcrypt 口令解锁）、PKCS#8（含 PBES2 加密）、
-/// PKCS#1 RSA、SEC1 EC（仅 P-256）。PuTTY PPK 等明确不支持。
+/// Parse private key file content and return the fields needed for import —
+/// format auto-detection across: the OpenSSH container (with bcrypt
+/// passphrase unlocking), PKCS#8 (including PBES2 encryption), PKCS#1 RSA,
+/// and SEC1 EC (P-256 only). PuTTY PPK and the like are explicitly unsupported.
 ///
-/// `passphrase`：密钥受口令保护时必传；错误口令返回明确错误（不静默重试）。
-/// 未受保护的密钥传 `None`/`Some(_)` 均可（`Some` 被忽略）。
+/// `passphrase`: required when the key is passphrase-protected; a wrong
+/// passphrase returns a clear error (no silent retry). For unprotected keys
+/// either `None`/`Some(_)` is fine (a `Some` is ignored).
 pub fn import_private_key_file(
     content: &str,
     passphrase: Option<&str>,
@@ -89,9 +100,11 @@ pub fn import_private_key_file(
     finish_import(key)
 }
 
-/// 未知格式错误：点名实际看到的 PEM 头（用户拿错文件时一眼定位——
-/// 公钥/证书/ssh.com 格式各有典型头），再列全部期望格式。label 来自
-/// 用户自己的输入，回显无泄密面；截断防畸形超长行撑爆提示。
+/// Unknown-format error: names the PEM header actually seen (so a user who
+/// grabbed the wrong file can tell at a glance — public keys / certificates /
+/// ssh.com formats each have their typical header), then lists every expected
+/// format. The label comes from the user's own input, so echoing it back leaks
+/// nothing; truncation guards against a malformed overlong line blowing up the message.
 fn unrecognized_format_error(content: &str) -> PersonaError {
     const SUPPORTED: &str = "supported PEM headers: \"BEGIN OPENSSH PRIVATE KEY\", \
          \"BEGIN PRIVATE KEY\" (PKCS#8), \"BEGIN ENCRYPTED PRIVATE KEY\" (encrypted PKCS#8), \
@@ -123,9 +136,10 @@ fn unrecognized_format_error(content: &str) -> PersonaError {
     }
 }
 
-/// 导入前预览（格式自动识别）：不解锁也能给指纹/类型/是否受保护。
-/// OpenSSH 容器照旧（公钥半边明文）；加密 PKCS#8 PEM 没有明文公钥半边，
-/// 无口令时报"需要口令"。
+/// Pre-import preview (format auto-detection): can report fingerprint / type /
+/// encrypted-ness without unlocking. The OpenSSH container works as usual (the
+/// public-key half is plaintext); an encrypted PKCS#8 PEM has no plaintext
+/// public-key half, so without a passphrase it errors out asking for one.
 pub fn inspect_private_key_file(content: &str) -> PersonaResult<SshKeyInspection> {
     if let Some(note) = super::ssh_import_pem::unsupported_format_note(content) {
         return Err(PersonaError::InvalidInput(note));
@@ -146,16 +160,18 @@ pub fn inspect_private_key_file(content: &str) -> PersonaResult<SshKeyInspection
         public_key: encode_public_line(&key)?,
         fingerprint: fingerprint_of(&key),
         comment: key.comment().to_string(),
-        // PEM 走到预览成功即已明文（加密件无口令在上一步就被拒）
+        // A PEM that reached a successful preview is already plaintext (an encrypted one without a passphrase was rejected earlier)
         encrypted: false,
     })
 }
 
-/// 解析 OpenSSH 私钥文件内容并返回导入所需字段。
+/// Parse OpenSSH private key file content and return the fields needed for import.
 ///
-/// `passphrase`：密钥受口令保护时必传；错误口令返回明确错误（不静默重试）。
-/// 未受保护的密钥传 `None`/`Some(_)` 均可（`Some` 被忽略）。
-/// 不支持的算法（如 sk-* 硬件钥）与畸形内容同样返回明确错误。
+/// `passphrase`: required when the key is passphrase-protected; a wrong
+/// passphrase returns a clear error (no silent retry). For unprotected keys
+/// either `None`/`Some(_)` is fine (a `Some` is ignored).
+/// Unsupported algorithms (e.g. sk-* hardware keys) and malformed content
+/// likewise return a clear error.
 pub fn import_openssh_private_key(
     pem: &str,
     passphrase: Option<&str>,
@@ -164,7 +180,7 @@ pub fn import_openssh_private_key(
     finish_import(key)
 }
 
-/// OpenSSH 容器解码 + 口令解锁（`import_openssh_private_key` 与格式分发共用）。
+/// OpenSSH container decoding + passphrase unlocking (shared between `import_openssh_private_key` and format dispatch).
 fn decode_openssh(
     pem: &str,
     passphrase: Option<&str>,
@@ -185,7 +201,7 @@ fn decode_openssh(
     }
 }
 
-/// 解码结果 → 导入载荷（classify/公钥行/指纹/入库 PEM，双入口共用）。
+/// Decode result → import payload (classify / public key line / fingerprint / storage PEM; shared by both entry points).
 fn finish_import(key: ssh_key::private::PrivateKey) -> PersonaResult<ImportedSshKey> {
     let (key_type, ssh_algorithm) = classify(key.algorithm())?;
     let public_key = encode_public_line(&key)?;
@@ -202,7 +218,7 @@ fn finish_import(key: ssh_key::private::PrivateKey) -> PersonaResult<ImportedSsh
     })
 }
 
-/// 导入前预览：不解锁也能给指纹/类型/是否受保护。
+/// Pre-import preview: reports fingerprint / type / encrypted-ness without unlocking.
 pub fn inspect_openssh_private_key(pem: &str) -> PersonaResult<SshKeyInspection> {
     let key = ssh_key::private::PrivateKey::from_openssh(pem.trim())
         .map_err(|e| PersonaError::InvalidInput(format!("Not a valid OpenSSH private key: {e}")))?;
@@ -225,12 +241,15 @@ pub(crate) fn encode_public_line(key: &ssh_key::private::PrivateKey) -> PersonaR
     })
 }
 
-/// 公钥单行（`ssh-ed25519 AAAA… comment`）→（线格式算法名，SHA256 指纹，
-/// 位数/曲线标签）。供列表/详情展示与指纹核对；解析失败返回 None
-/// （调用方按空列展示，不报错）。
+/// Public key single line (`ssh-ed25519 AAAA… comment`) → (wire-format
+/// algorithm name, SHA256 fingerprint, bit-size / curve label). For list /
+/// detail display and fingerprint verification; a parse failure returns None
+/// (the caller shows an empty column rather than erroring).
 ///
-/// 标签口径：Ed25519→`256`，RSA→模长位数十进制，ECDSA→`P-256` 曲线名，
-/// DSA→素数位长；SK 硬件钥跟随其内部算法，证书/opaque 容器不适用为 None。
+/// Label conventions: Ed25519 → `256`, RSA → decimal modulus bit size,
+/// ECDSA → the `P-256`-style curve name, DSA → prime bit length; SK hardware
+/// keys follow their inner algorithm, while certificate / opaque containers
+/// are not applicable and yield None.
 pub fn describe_public_key_line(line: &str) -> Option<(String, String, Option<String>)> {
     let pk = ssh_key::PublicKey::from_openssh(line.trim()).ok()?;
     Some((
@@ -240,7 +259,7 @@ pub fn describe_public_key_line(line: &str) -> Option<(String, String, Option<St
     ))
 }
 
-/// 位长/曲线标签（纯展示口径，不参与任何校验）。
+/// Bit-size / curve label (display-only convention, used in no validation).
 fn key_size_label(key_data: &ssh_key::public::KeyData) -> Option<String> {
     match key_data {
         ssh_key::public::KeyData::Ed25519(_) | ssh_key::public::KeyData::SkEd25519(_) => {
@@ -257,12 +276,12 @@ fn key_size_label(key_data: &ssh_key::public::KeyData) -> Option<String> {
         ),
         ssh_key::public::KeyData::SkEcdsaSha2NistP256(_) => Some("P-256".to_string()),
         ssh_key::public::KeyData::Dsa(dsa) => Some(mpint_bits(dsa.p()).to_string()),
-        // 证书/opaque 容器：算法名仍可展示，位数不适用
+        // Certificate / opaque containers: the algorithm name is still displayable, the bit size is not applicable
         _ => None,
     }
 }
 
-/// 正整数 Mpint 的位长（`as_positive_bytes` 剥掉符号零字节，首字节必非零）。
+/// Bit length of a positive-integer Mpint (`as_positive_bytes` strips the sign-zero bytes, so the first byte is necessarily nonzero).
 fn mpint_bits(n: &ssh_key::Mpint) -> u32 {
     let Some(bytes) = n.as_positive_bytes() else {
         return 0;
@@ -288,8 +307,9 @@ mod tests {
     use ssh_key::private::PrivateKey;
     use ssh_key::Algorithm;
 
-    /// 自举生成三类测试钥：ssh-key 自身既当生成器又当解析器，
-    /// 断言走本模块的产品口径（解锁、字段完整性、指纹格式）。
+    /// Bootstraps the three kinds of test keys: ssh-key itself acts as both
+    /// generator and parser, and the assertions follow this module's product
+    /// conventions (unlocking, field integrity, fingerprint format).
     fn generate_pem(algorithm: Algorithm) -> String {
         let key =
             PrivateKey::random(&mut rand_core::UnwrapErr(rand::rngs::SysRng), algorithm).unwrap();
@@ -314,7 +334,7 @@ mod tests {
         assert_eq!(imported.ssh_algorithm, "ssh-ed25519");
         assert!(imported.public_key.starts_with("ssh-ed25519 AAAA"));
         assert!(imported.fingerprint.starts_with("SHA256:"));
-        // 解锁后的 PEM 必须能被再次解析（往返一致），且不再是密文容器
+        // The unlocked PEM must re-parse cleanly (round-trip consistency) and no longer be an encrypted container
         let reparsed = PrivateKey::from_openssh(&imported.private_key_pem).unwrap();
         assert!(!reparsed.key_data().is_encrypted());
     }
@@ -389,7 +409,7 @@ mod tests {
 
     #[test]
     fn public_pem_is_rejected() {
-        // 公钥不是私钥容器，必须在解析层被拒（用户拿错文件时给出明确口径）
+        // A public key is not a private-key container and must be rejected at the parse layer (a clear message for users who grabbed the wrong file)
         let key = PrivateKey::random(
             &mut rand_core::UnwrapErr(rand::rngs::SysRng),
             Algorithm::Ed25519,
@@ -411,8 +431,9 @@ mod tests {
 
     #[test]
     fn inspect_works_without_unlocking_encrypted_key() {
-        // OpenSSH 容器的公钥半边是明文：受保护密钥不给口令也能预览指纹，
-        // 用户先核对指纹再决定输不输口令
+        // The OpenSSH container's public-key half is plaintext: a protected key
+        // can show its fingerprint without a passphrase, and the user verifies
+        // the fingerprint first before deciding whether to enter the passphrase
         let pem = generate_encrypted_pem(Algorithm::Ed25519, "hunter2");
         let inspection = inspect_openssh_private_key(&pem).unwrap();
         assert!(inspection.encrypted);
@@ -420,7 +441,7 @@ mod tests {
         assert!(inspection.fingerprint.starts_with("SHA256:"));
         assert!(inspection.public_key.starts_with("ssh-ed25519 AAAA"));
 
-        // 解锁后的指纹与预览一致（同一把钥）
+        // The unlocked fingerprint matches the preview (same key)
         let imported = import_openssh_private_key(&pem, Some("hunter2")).unwrap();
         assert_eq!(imported.fingerprint, inspection.fingerprint);
         assert_eq!(imported.public_key, inspection.public_key);
@@ -444,7 +465,7 @@ mod tests {
 
     #[test]
     fn unrecognized_format_error_names_the_header() {
-        // 拿错文件最常见：证书/公钥而非私钥——错误里点名实际看到的头
+        // The most common wrong-file grab: a certificate / public key rather than a private key — the error names the header actually seen
         let err = import_private_key_file(
             "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----",
             None,
@@ -453,11 +474,11 @@ mod tests {
         let msg = err.to_string();
         assert!(msg.contains("\"-----BEGIN CERTIFICATE-----\""), "{msg}");
         assert!(msg.contains("is not supported"), "{msg}");
-        // 期望格式清单照列
+        // The expected-format roster is still listed
         assert!(msg.contains("BEGIN OPENSSH PRIVATE KEY"), "{msg}");
         assert!(msg.contains("BEGIN EC PRIVATE KEY"), "{msg}");
 
-        // OpenSSL 老式 DSA（严格 PEM 头、不支持的算法）同样点名
+        // OpenSSL legacy DSA (a strict PEM header with an unsupported algorithm) is likewise named
         let err = import_private_key_file(
             "-----BEGIN DSA PRIVATE KEY-----\nAAAA\n-----END DSA PRIVATE KEY-----",
             None,
@@ -469,7 +490,7 @@ mod tests {
             "{err}"
         );
 
-        // 彻底没有 PEM 头的文件：明说不是 PEM 私钥文件（PPK 有专门提示在前拦）
+        // A file with no PEM header at all: plainly not a PEM private key file (PPK gets its dedicated hint intercepted earlier)
         let err = inspect_private_key_file("random binary bytes").unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("not a PEM private key file"), "{msg}");
@@ -478,7 +499,7 @@ mod tests {
 
     #[test]
     fn describe_public_key_reports_size_and_curve() {
-        // Ed25519：固定位长 256
+        // Ed25519: fixed bit length 256
         let ed = PrivateKey::from_openssh(generate_pem(Algorithm::Ed25519)).unwrap();
         let (algo, fp, size) =
             describe_public_key_line(&ed.public_key().to_openssh().unwrap()).unwrap();
@@ -486,7 +507,7 @@ mod tests {
         assert_eq!(fp, ed.public_key().fingerprint(HashAlg::Sha256).to_string());
         assert_eq!(size.as_deref(), Some("256"));
 
-        // RSA：模长位数（与私钥自报的 key_size 交叉验证）
+        // RSA: modulus bit size (cross-validated against the private key's own key_size)
         let rsa = PrivateKey::from_openssh(generate_pem(Algorithm::Rsa { hash: None })).unwrap();
         let expected_bits = match rsa.key_data() {
             ssh_key::private::KeypairData::Rsa(rsa) => rsa.key_size().to_string(),
@@ -497,7 +518,7 @@ mod tests {
         assert_eq!(algo, "ssh-rsa");
         assert_eq!(size.as_deref(), Some(expected_bits.as_str()));
 
-        // ECDSA：曲线标签
+        // ECDSA: curve label
         let ecdsa = PrivateKey::from_openssh(generate_pem(Algorithm::Ecdsa {
             curve: EcdsaCurve::NistP256,
         }))
@@ -507,7 +528,7 @@ mod tests {
         assert_eq!(algo, "ecdsa-sha2-nistp256");
         assert_eq!(size.as_deref(), Some("P-256"));
 
-        // 垃圾输入 → None（调用方按空列展示，不报错）
+        // Garbage input → None (the caller shows an empty column rather than erroring)
         assert!(describe_public_key_line("not a key").is_none());
     }
 }

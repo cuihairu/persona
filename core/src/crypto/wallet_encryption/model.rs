@@ -1,5 +1,6 @@
-//! 钱包密钥封装：私钥/助记词/主密钥的加解密与改密，含
-//! `WalletKeyMaterial` 内存态载荷。
+//! Wallet key wrapping: encryption, decryption, and password rotation for
+//! private keys / mnemonics / master keys, plus the in-memory
+//! `WalletKeyMaterial` payload.
 
 use crate::crypto::encryption::{decrypt_data, encrypt_data};
 use crate::crypto::wallet_crypto::MasterKey;

@@ -1,5 +1,6 @@
-//! 自动锁面板核心：`AutoLockDashboard` 会话监控、指标采集、健康/合规
-//! 计算、事件监听与报表生成。
+//! Auto-lock dashboard core: `AutoLockDashboard` session monitoring,
+//! metrics collection, health/compliance computation, event listening, and
+//! report generation.
 
 use crate::auth::auto_lock::AutoLockEvent;
 use crate::auth::auto_lock_cached::{

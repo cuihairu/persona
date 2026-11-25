@@ -1,12 +1,17 @@
-//! service 写路径 → [`SyncCapture`] 捕获缝的集成测试（E2EE_SYNC_DESIGN §5）。
+//! Integration tests for the service write path → [`SyncCapture`] capture seam
+//! (E2EE_SYNC_DESIGN §5).
 //!
-//! 核心不变量：捕获到的密文与主库 `encrypted_data` **逐字节相同**，捕获到的
-//! item key 能解开这份密文——本地库与同步 oplog 共享同一份
-//! (ciphertext, item key)，装配层再用 group key 包裹（服务端两级都不可读）。
+//! Core invariant: the captured ciphertext is **byte-for-byte identical** to the
+//! main vault's `encrypted_data`, and the captured item key can open that
+//! ciphertext — the local vault and the sync oplog share the same
+//! (ciphertext, item key), with the assembly layer wrapping it again under the
+//! group key (unreadable at both server levels).
 //!
-//! 容错语义：未装配时写路径照常工作（零开销跳过）；捕获缝可随时拆卸。
-//! service 不知道 db 路径之外的一切装配细节，group key 不进 service——
-//! 这些断言在 keys.rs / 装配层测试里，此处只验证捕获契约本身。
+//! Failure-tolerance semantics: without the seam installed, the write path works
+//! as usual (a zero-cost skip); the capture seam can be detached at any time.
+//! The service knows nothing about the assembly beyond the db path, and the
+//! group key never reaches the service — those assertions live in keys.rs /
+//! the assembly-layer tests; this file only verifies the capture contract itself.
 
 use std::sync::{Arc, Mutex};
 
@@ -19,7 +24,7 @@ use persona_core::*;
 use uuid::Uuid;
 use zeroize::Zeroizing;
 
-/// 一次捕获的记录（item key 落盘前 `Zeroizing` 清零）。
+/// Record of one capture (the item key is zeroed with `Zeroizing` before hitting disk).
 #[derive(Debug, Clone)]
 struct Captured {
     item_id: Uuid,
@@ -110,8 +115,8 @@ async fn create_credential_captures_put_snapshot_with_shared_item_key() {
     assert_eq!(ev.kind, ItemKind::Credential);
     assert_eq!(ev.op, OpType::Put);
 
-    // 不变量 1：同步载荷 = 完整条目快照的密封（元数据 + CredentialData），
-    // 捕获的 item key 能拆开它。
+    // Invariant 1: the sync payload = a sealing of the full item snapshot
+    // (metadata + CredentialData), openable by the captured item key.
     let row = service.get_credential(&created.id).await.unwrap().unwrap();
     let ciphertext = ev.ciphertext.as_ref().expect("put 必带密文");
     assert!(row.wrapped_item_key.is_some());
@@ -121,7 +126,7 @@ async fn create_credential_captures_put_snapshot_with_shared_item_key() {
     assert_eq!(snapshot.identity_id, identity.id);
     assert_eq!(snapshot.data.to_bytes().unwrap(), data.to_bytes().unwrap());
 
-    // 不变量 2：同一把 item key 也封着主库密文——两份密文、一把钥匙。
+    // Invariant 2: the same item key also seals the main vault's ciphertext — two ciphertexts, one key.
     assert_ne!(
         ciphertext, &row.encrypted_data,
         "主库密文与同步密文是两次密封"
@@ -137,7 +142,7 @@ async fn create_credential_captures_put_snapshot_with_shared_item_key() {
         data.to_bytes().unwrap()
     );
 
-    // 装配层流程演练：group key 包裹后可还原同一 item key（服务器两级不可读）。
+    // Assembly-layer flow rehearsal: after group-key wrapping the same item key can be recovered (unreadable at both server levels).
     let group = GroupKey::generate().unwrap();
     let wrapped = wrap_item_key_with_group(&item_key, &group);
     assert_eq!(
@@ -180,9 +185,9 @@ async fn update_credential_data_captures_put_reusing_the_item_key() {
     assert_eq!(second.item_id, created.id);
     assert_eq!(second.op, OpType::Put);
 
-    // item key 复用不变量：编辑不换 key（附件以同一 key 封存）。
+    // Item key reuse invariant: editing does not rotate the key (attachments are sealed under the same key).
     assert_eq!(second.item_key, first.item_key);
-    // 密文变了；快照解出的是编辑后的数据。
+    // The ciphertext changed; the snapshot decrypts to the edited data.
     assert_ne!(second.ciphertext, first.ciphertext);
     let snapshot = SyncItemSnapshot::open(
         second.ciphertext.as_ref().unwrap(),
@@ -193,7 +198,7 @@ async fn update_credential_data_captures_put_reusing_the_item_key() {
         snapshot.data.to_bytes().unwrap(),
         password_data("new-pass").to_bytes().unwrap()
     );
-    // 同一把 key 也解得开主库新密文。
+    // The same key also opens the main vault's new ciphertext.
     let plaintext = EncryptionService::new(&second.item_key.unwrap())
         .decrypt(&updated.encrypted_data)
         .unwrap();
@@ -240,7 +245,7 @@ async fn delete_credential_captures_tombstone_without_payload() {
     assert!(ev.ciphertext.is_none(), "tombstone 不携带密文");
     assert!(ev.item_key.is_none(), "tombstone 不携带 item key");
 
-    // 删除不存在的凭据返回 false，不产生捕获。
+    // Deleting a nonexistent credential returns false and produces no capture.
     let missing = service.delete_credential(&Uuid::new_v4()).await.unwrap();
     assert!(!missing);
     assert_eq!(capture.snapshot().len(), 2, "no-op delete 不捕获");
@@ -301,7 +306,7 @@ async fn metadata_edit_captures_put_with_updated_snapshot() {
         .await
         .unwrap();
 
-    // 元数据编辑（不走 update_credential_data）：改名 + 打收藏。
+    // Metadata edit (not via update_credential_data): rename + favorite.
     let mut row = service.get_credential(&created.id).await.unwrap().unwrap();
     row.name = "Git 重命名".to_string();
     row.is_favorite = true;
@@ -315,7 +320,7 @@ async fn metadata_edit_captures_put_with_updated_snapshot() {
         SyncItemSnapshot::open(ev.ciphertext.as_ref().unwrap(), &ev.item_key.unwrap()).unwrap();
     assert_eq!(snapshot.name, "Git 重命名");
     assert!(snapshot.is_favorite);
-    // 秘密数据不因元数据编辑而变。
+    // The secret data is unchanged by the metadata edit.
     assert_eq!(
         snapshot.data.to_bytes().unwrap(),
         password_data("token-1").to_bytes().unwrap()
@@ -389,7 +394,7 @@ async fn create_passkey_captures_put_snapshot_and_delete_captures_tombstone() {
     assert_eq!(ev.kind, ItemKind::Passkey);
     assert_eq!(ev.op, OpType::Put);
 
-    // 快照可被捕获的 item key 拆开，语义字段与主库行一致（不含使用态）
+    // The snapshot can be opened by the captured item key, with semantic fields matching the main vault row (usage state excluded)
     let snapshot = SyncPasskeySnapshot::open(
         ev.ciphertext.as_ref().unwrap(),
         ev.item_key.as_ref().unwrap(),
@@ -399,7 +404,7 @@ async fn create_passkey_captures_put_snapshot_and_delete_captures_tombstone() {
     assert_eq!(snapshot.rp_id, "example.com");
     assert_eq!(snapshot.user_name.as_deref(), Some("alice@example.com"));
 
-    // 私钥信封原样搬运（快照与主库行同密文），捕获的 item key 能解开它
+    // The private-key envelope is carried verbatim (snapshot and main vault row share the same ciphertext), and the captured item key can open it
     let row = service
         .list_passkeys(&identity.id)
         .await
@@ -412,7 +417,7 @@ async fn create_passkey_captures_put_snapshot_and_delete_captures_tombstone() {
         .unwrap();
     assert_eq!(scalar.len(), 32, "解出的是 P-256 私钥标量");
 
-    // 删除 → tombstone（无 payload）
+    // Delete → tombstone (no payload)
     assert!(service.delete_passkey(&created.id).await.unwrap());
     let events = capture.snapshot();
     assert_eq!(events.len(), 2, "delete 恰好追加一次捕获");

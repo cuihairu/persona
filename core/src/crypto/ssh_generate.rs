@@ -1,34 +1,40 @@
-//! 页面内生成 SSH 密钥对：ed25519 / rsa-4096 / ecdsa-p256。
+//! Generate SSH keypairs in-app: ed25519 / rsa-4096 / ecdsa-p256.
 //!
-//! 产物与导入同构——明文 OpenSSH PEM 私钥入库，per-item key 封存由
-//! vault 层负责；字段口径（类型名、算法名、指纹）复用 ssh_import 的
-//! 映射，保证两条入口产出的条目形状完全一致。
+//! The output is isomorphic to what import produces — the plaintext OpenSSH PEM
+//! private key goes into the vault, with per-item key sealing left to the vault
+//! layer; the field conventions (type name, algorithm name, fingerprint) reuse
+//! ssh_import's mappings so both entry points yield identically shaped records.
 
 use crate::{PersonaError, PersonaResult};
 use ssh_key::private::{KeypairData, PrivateKey, RsaKeypair};
 use ssh_key::{Algorithm, EcdsaCurve};
 
-/// 页面/CLI 生成结果；字段与 [`super::ssh_import::ImportedSshKey`] 同口径。
+/// Result of an in-app / CLI generation; fields match
+/// [`super::ssh_import::ImportedSshKey`].
 #[derive(Debug, Clone)]
 pub struct GeneratedSshKey {
-    /// 库内类型名：`ed25519` / `rsa` / `ecdsa`。
+    /// In-app type name: `ed25519` / `rsa` / `ecdsa`.
     pub key_type: String,
-    /// SSH 线格式算法名：`ssh-ed25519` / `ssh-rsa` / `ecdsa-sha2-nistp256`。
+    /// SSH wire-format algorithm name: `ssh-ed25519` / `ssh-rsa` /
+    /// `ecdsa-sha2-nistp256`.
     pub ssh_algorithm: String,
-    /// OpenSSH 公钥单行（含 comment，可直接贴 authorized_keys）。
+    /// One-line OpenSSH public key (with comment, paste-ready for
+    /// authorized_keys).
     pub public_key: String,
-    /// SHA256 指纹（`SHA256:…`）。
+    /// SHA256 fingerprint (`SHA256:…`).
     pub fingerprint: String,
-    /// 未加密 OpenSSH PEM 私钥。
+    /// Unencrypted OpenSSH PEM private key.
     pub private_key_pem: String,
-    /// 写入钥匙的 comment。
+    /// The comment written into the key.
     pub comment: String,
 }
 
-/// RSA 固定 4096（页面口径；要别的位数时再开口子）。
+/// RSA is fixed at 4096 bits (the in-app stance; open it up if other sizes are
+/// ever needed).
 const RSA_BIT_SIZE: usize = 4096;
 
-/// 按类型生成新密钥对。`key_type`：`ed25519`（默认）/ `rsa` / `ecdsa`。
+/// Generate a new keypair of the given type. `key_type`: `ed25519` (default) /
+/// `rsa` / `ecdsa`.
 pub fn generate_ssh_keypair(key_type: &str, comment: &str) -> PersonaResult<GeneratedSshKey> {
     let algorithm = match key_type {
         "ed25519" => Algorithm::Ed25519,
@@ -43,8 +49,9 @@ pub fn generate_ssh_keypair(key_type: &str, comment: &str) -> PersonaResult<Gene
         }
     };
 
-    // ssh-key 对 RSA 不走 PrivateKey::random 的统一路径（要 rsa crate 的
-    // 素数生成），单独组 KeypairData；comment 统一事后写入
+    // ssh-key does not route RSA through the unified PrivateKey::random path
+    // (prime generation needs the rsa crate), so build KeypairData separately;
+    // the comment is written afterwards in all cases.
     let mut key = if matches!(algorithm, Algorithm::Rsa { .. }) {
         let keypair =
             RsaKeypair::random(&mut rand_core::UnwrapErr(rand::rngs::SysRng), RSA_BIT_SIZE)
@@ -72,8 +79,10 @@ pub fn generate_ssh_keypair(key_type: &str, comment: &str) -> PersonaResult<Gene
 mod tests {
     use super::*;
 
-    /// 生成→再解析的往返一致性：三类钥各自验证类型/算法/公钥行/指纹，
-    /// 指纹以重解析公钥为独立裁判（不是生成侧自己说了算）。
+    /// Generate-then-reparse round-trip consistency: each key type verifies
+    /// type / algorithm / public-key line / fingerprint, with the reparsed
+    /// public key as the independent judge of the fingerprint (the generation
+    /// side does not grade its own homework).
     fn assert_roundtrip(generated: &GeneratedSshKey, expected_type: &str, expected_algo: &str) {
         assert_eq!(generated.key_type, expected_type);
         assert_eq!(generated.ssh_algorithm, expected_algo);
@@ -108,7 +117,8 @@ mod tests {
         let generated = generate_ssh_keypair("ed25519", "cui@laptop").unwrap();
         assert_roundtrip(&generated, "ed25519", "ssh-ed25519");
         assert_eq!(generated.comment, "cui@laptop");
-        // comment 进公钥行（贴 authorized_keys 时可见）
+        // The comment lands in the public-key line (visible when pasted into
+        // authorized_keys)
         assert!(generated.public_key.ends_with("cui@laptop"));
     }
 
@@ -116,7 +126,8 @@ mod tests {
     fn generates_rsa_4096() {
         let generated = generate_ssh_keypair("rsa", "rsa-test").unwrap();
         assert_roundtrip(&generated, "rsa", "ssh-rsa");
-        // 模数恰为 4096 位（512 字节，生成器保证最高位为 1）
+        // The modulus is exactly 4096 bits (512 bytes, with the top bit guaranteed
+        // set by the generator)
         let n = reparsed_n_bytes(&generated);
         assert_eq!(n.len(), 512, "RSA modulus must be 4096-bit");
     }

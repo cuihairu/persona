@@ -1,5 +1,5 @@
-//! 加入端（guest）：出证面与 `PairingGuest` 握手态，含协议驱动
-//! `start_message`/`handle_message`/`group_key`。
+//! Joining side (guest): the proof facet and the `PairingGuest` handshake state,
+//! including the protocol-driven `start_message`/`handle_message`/`group_key`.
 
 use sha2::Sha256;
 
@@ -12,34 +12,38 @@ use super::crypto::{
 };
 use super::message::{wire, PairingMessage};
 
-// ---- 加入端（guest） ----
+// ---- Joining side (guest) ----
 
-/// guest 第一步产物：交中转转给 host 的 `client_public`。
+/// Guest's first-step output: `client_public`, relayed to the host.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GuestOffer {
     pub client_public: Vec<u8>,
 }
 
-/// guest 第二步产物：短指纹（人工比对）+ 提交 host 的 M1。
+/// Guest's second-step output: short fingerprint (human comparison) + M1
+/// submitted to the host.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GuestProof {
     pub fingerprint: String,
     pub client_proof: Vec<u8>,
 }
 
-/// 加入端会话（内存态；短码派生值不落盘）。
+/// Joining-side session (in-memory only; the derived short-code value is never
+/// persisted).
 pub struct PairingGuest {
     derived: [u8; 32],
     a_priv: [u8; 32],
     salt: Vec<u8>,
     handshake: Option<(SrpClientVerifier<Sha256>, [u8; 32])>,
     received_group_key: Option<[u8; PAIRING_GROUP_KEY_LEN]>,
-    /// `finish` 产出的 M1：UI 指纹比对通过前持有、通过后投递。
+    /// M1 produced by `finish`: held until the UI fingerprint comparison passes,
+    /// then delivered.
     pending_proof: Option<Vec<u8>>,
 }
 
 impl PairingGuest {
-    /// 用动态密码起配：派 `client_public`（经中转交 host）。
+    /// Start pairing with the passcode: derive `client_public` (sent to the host
+    /// via the relay).
     pub fn start(code: &str, salt: &[u8]) -> PersonaResult<(Self, GuestOffer)> {
         let derived = derive_pairing_secret(code, salt)?;
         let client = SrpClient::<Sha256>::new(crate::auth::srp::srp_group());
@@ -58,7 +62,8 @@ impl PairingGuest {
         ))
     }
 
-    /// 收到 host 的 B_pub：派 pairing key 与短指纹（UI 比对），出 M1。
+    /// Receive the host's B_pub: derive the pairing key and short fingerprint
+    /// (for UI comparison) and emit M1.
     pub fn finish(&mut self, server_public: &[u8]) -> PersonaResult<GuestProof> {
         if self.handshake.is_some() {
             return Err(PersonaError::InvalidInput("配对已进行中".into()));
@@ -84,7 +89,8 @@ impl PairingGuest {
         })
     }
 
-    /// 取出待投递的 M1（`finish` 后有值；取出即清空——投递只此一次）。
+    /// Take the M1 awaiting delivery (set after `finish`; taking it clears it —
+    /// delivery happens exactly once).
     pub fn take_pending_proof(&mut self) -> Option<PairingMessage> {
         let proof = self.pending_proof.take()?;
         Some(PairingMessage::ClientProof {
@@ -92,14 +98,16 @@ impl PairingGuest {
         })
     }
 
-    /// 当前握手的短指纹（`finish` 后有值，供 UI 展示比对）。
+    /// Short fingerprint of the current handshake (set after `finish`, for UI
+    /// display and comparison).
     pub fn fingerprint(&self) -> Option<String> {
         self.handshake
             .as_ref()
             .map(|(_, key)| pairing_fingerprint(key))
     }
 
-    /// 比对通过后收交接：验 M2，解出组密钥（入组完成）。
+    /// Accept the handoff once comparison passes: verify M2 and extract the group
+    /// key (join complete).
     pub fn accept_handoff(
         &mut self,
         server_proof: &[u8],
@@ -117,14 +125,16 @@ impl PairingGuest {
 }
 
 impl PairingGuest {
-    /// 起配（第一步）：返回首条消息（宿主 POST 到 to-host 信箱）。
+    /// Start pairing (step one): return the first message (the host POSTs it to
+    /// the to-host mailbox).
     pub fn start_message(code: &str, salt: &[u8]) -> PersonaResult<(Self, PairingMessage)> {
         let (guest, offer) = Self::start(code, salt)?;
         Ok((guest, PairingMessage::client_public(&offer)))
     }
 
-    /// 消费 host 消息：`ServerOffer` → 出 `ClientProof`；`Handoff`（UI
-    /// 比对通过后投递）→ 组密钥落袋，返回 `None` 表示配对完成。
+    /// Consume a host message: `ServerOffer` → `ClientProof`; `Handoff`
+    /// (delivered after the UI comparison passes) → the group key is captured
+    /// and `None` is returned, meaning pairing is complete.
     pub fn handle_message(&mut self, msg: PairingMessage) -> PersonaResult<Option<PairingMessage>> {
         match msg {
             PairingMessage::ServerOffer { server_public } => {
@@ -148,7 +158,8 @@ impl PairingGuest {
         }
     }
 
-    /// 配对完成后取组密钥（[`Self::handle_message`] 返回 `None` 后有值）。
+    /// Fetch the group key once pairing is complete (set after
+    /// [`Self::handle_message`] returns `None`).
     pub fn group_key(&self) -> Option<&[u8; PAIRING_GROUP_KEY_LEN]> {
         self.received_group_key.as_ref()
     }

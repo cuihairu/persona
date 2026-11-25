@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use uuid::Uuid;
 
 /// Change history entry for tracking modifications
-/// 用于追踪所有数据变更的历史记录
+/// Historical record used to track all data changes
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChangeHistory {
     /// Unique identifier

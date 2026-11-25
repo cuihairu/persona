@@ -1,8 +1,8 @@
-//! `connect_tokens` 表访问（CONNECT_AUTOMATION_DESIGN DR-2；迁移 015）。
+//! `connect_tokens` table access (CONNECT_AUTOMATION_DESIGN DR-2; migration 015).
 //!
-//! 只做行存取；token 生成/哈希/scope 判定在 [`crate::connect::token`]，
-//! 解锁态与审计编排在 `PersonaService` 的 `connect_*` 方法。哈希列 UNIQUE，
-//! 呈现值永不落库。
+//! Row storage only; token generation/hashing/scope decisions live in [`crate::connect::token`],
+//! and unlock state plus audit orchestration in `PersonaService`'s `connect_*` methods.
+//! The hash column is UNIQUE, and the presentation value is never persisted.
 
 use chrono::{DateTime, Utc};
 use sqlx::Row;
@@ -44,7 +44,8 @@ impl ConnectTokenRepository {
         Ok(())
     }
 
-    /// 全量列表（含已吊销——管理面要展示吊销状态）；按创建时间倒序。
+    /// Full listing (including revoked tokens — the admin surface needs to show revocation status);
+    /// ordered by creation time descending.
     pub async fn list_all(&self) -> PersonaResult<Vec<ConnectTokenRow>> {
         let rows = sqlx::query(
             "SELECT id, label, hash, fingerprint, scope, principal, created_at, last_used_at, revoked_at, expires_at
@@ -56,7 +57,7 @@ impl ConnectTokenRepository {
         rows.iter().map(row_to_token).collect()
     }
 
-    /// 哈希查表；无命中返回 `None`（与吊销同形，调用方不再区分）。
+    /// Lookup by hash; a miss returns `None` (shaped the same as revoked, so callers no longer distinguish them).
     pub async fn find_by_hash(&self, hash: &str) -> PersonaResult<Option<ConnectTokenRow>> {
         let row = sqlx::query(
             "SELECT id, label, hash, fingerprint, scope, principal, created_at, last_used_at, revoked_at, expires_at
@@ -72,7 +73,8 @@ impl ConnectTokenRepository {
         }
     }
 
-    /// 更新 `last_used_at`；调用方负责节流（DR-2：每请求计数、批量落库）。
+    /// Update `last_used_at`; callers are responsible for throttling
+    /// (DR-2: count per request, persist in batches).
     pub async fn touch_last_used(&self, id: &Uuid, now: DateTime<Utc>) -> PersonaResult<()> {
         sqlx::query("UPDATE connect_tokens SET last_used_at = ? WHERE id = ?")
             .bind(now.to_rfc3339())
@@ -83,7 +85,8 @@ impl ConnectTokenRepository {
         Ok(())
     }
 
-    /// 吊销；返回是否确实有行被置吊销（重复吊销返回 `false`，幂等）。
+    /// Revoke; returns whether a row was actually set revoked
+    /// (repeated revocation returns `false`, i.e. idempotent).
     pub async fn revoke(&self, id: &Uuid, now: DateTime<Utc>) -> PersonaResult<bool> {
         let result = sqlx::query(
             "UPDATE connect_tokens SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL",
@@ -115,7 +118,7 @@ fn row_to_token(row: &sqlx::sqlite::SqliteRow) -> PersonaResult<ConnectTokenRow>
         label: row.get("label"),
         hash: row.get("hash"),
         fingerprint: {
-            // 兼容手工插入的行：空指纹可从哈希重导出。
+            // Tolerate hand-inserted rows: an empty fingerprint can be re-derived from the hash.
             let stored: String = row.get("fingerprint");
             if stored.is_empty() {
                 fingerprint_from_hash(row.get::<String, _>("hash").as_str())
@@ -174,12 +177,12 @@ mod tests {
         repo.insert(&older).await.unwrap();
         repo.insert(&newer).await.unwrap();
 
-        // list_all：含全部行，按 created_at 倒序
+        // list_all: contains all rows, ordered by created_at descending
         let all = repo.list_all().await.unwrap();
         assert_eq!(all.len(), 2);
         assert_eq!(all[0].id, newer.id);
 
-        // find_by_hash：字段与 scope 三维完整回读
+        // find_by_hash: all fields plus the three scope dimensions round-trip fully
         let found = repo.find_by_hash(&older.hash).await.unwrap().unwrap();
         assert_eq!(found.id, older.id);
         assert_eq!(found.label, "ci token");
@@ -188,13 +191,13 @@ mod tests {
         assert!(found.last_used_at.is_none());
         assert!(!found.revoked());
 
-        // touch_last_used：回读时间戳逐秒一致
+        // touch_last_used: the read-back timestamp matches to the second
         let used_at = Utc::now();
         repo.touch_last_used(&older.id, used_at).await.unwrap();
         let found = repo.find_by_hash(&older.hash).await.unwrap().unwrap();
         assert_eq!(found.last_used_at, Some(used_at));
 
-        // revoke：首吊销 true，重复吊销幂等 false
+        // revoke: first revocation true, repeat revocation idempotent false
         let revoked_at = Utc::now();
         assert!(repo.revoke(&older.id, revoked_at).await.unwrap());
         let found = repo.find_by_hash(&older.hash).await.unwrap().unwrap();
@@ -203,7 +206,7 @@ mod tests {
         assert!(!repo.revoke(&older.id, Utc::now()).await.unwrap());
     }
 
-    /// 兼容手工插入行：空指纹从哈希重导出（row_to_token 的 is_empty 臂）。
+    /// Tolerates hand-inserted rows: empty fingerprints are re-derived from the hash (the is_empty arm of row_to_token).
     #[tokio::test]
     async fn empty_fingerprint_is_rederived_from_hash() {
         let db = Database::in_memory().await.unwrap();
@@ -226,8 +229,8 @@ mod tests {
         assert_eq!(found.fingerprint, fingerprint_from_hash(&hash));
     }
 
-    /// 迁移 019：principal 与 expires_at 完整回读；expires_at 为 NULL 时
-    /// expired() 恒假（旧数据永不过期语义不变）。
+    /// Migration 019: principal and expires_at round-trip fully; when expires_at is NULL,
+    /// expired() is always false (old data keeps its never-expires semantics).
     #[tokio::test]
     async fn principal_and_expiry_round_trip() {
         let db = Database::in_memory().await.unwrap();

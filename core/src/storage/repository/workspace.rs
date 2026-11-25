@@ -1,5 +1,5 @@
-//! Workspace 仓储：`WorkspaceRepository` 与 `Repository<Workspace>` 实现。
-//! 原 repository.rs 拆分（LAY-017）：workspace 段原样迁出。
+//! Workspace repository: `WorkspaceRepository` and the `Repository<Workspace>` implementation.
+//! Split out of the original repository.rs (LAY-017): the workspace section was migrated verbatim.
 
 use super::Repository;
 use crate::models::Workspace;

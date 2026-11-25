@@ -1,6 +1,6 @@
 use super::*;
 
-/// log_audit → emitter 挂钩：同步入队、None 解除后不再上报。
+/// log_audit -> emitter hookup: synchronous enqueue, and no more reporting after detaching with None.
 #[tokio::test]
 async fn log_audit_feeds_event_emitter_until_detached() {
     use crate::events::testing::{eventually, FakeSink};
@@ -8,7 +8,7 @@ async fn log_audit_feeds_event_emitter_until_detached() {
 
     let (_db, mut service) = unlocked_service().await;
     let sink = Arc::new(FakeSink::default());
-    // batch_size=1：单条事件即触发 notify flush（默认 100 要等 interval）
+    // batch_size=1: a single event triggers a notify flush (the default of 100 waits for the interval)
     let emitter = crate::events::Emitter::with_config(
         sink.clone(),
         crate::events::EmitterConfig {
@@ -34,7 +34,7 @@ async fn log_audit_feeds_event_emitter_until_detached() {
     assert_eq!(sink.batches()[0][0].action, "login");
     emitter.stop().await;
 
-    // None 解除挂钩：后续审计只落本地库，不再上报
+    // Detaching with None: later audits only land in the local database, no longer reported
     service.set_event_emitter(None);
     service
         .log_audit(
@@ -50,8 +50,8 @@ async fn log_audit_feeds_event_emitter_until_detached() {
     assert_eq!(sink.call_count(), 1);
 }
 
-/// `set_event_emitter` 传播到 auto_lock_manager：session 锁定审计
-/// 走同一上报链，`None` 时两处（service + manager）一起摘除。
+/// `set_event_emitter` propagates to auto_lock_manager: session-lock audits go through the same
+/// reporting chain, and `None` detaches both places (service + manager) at once.
 #[tokio::test]
 async fn set_event_emitter_propagates_to_auto_lock_manager() {
     use crate::events::testing::{eventually, FakeSink};
@@ -59,7 +59,7 @@ async fn set_event_emitter_propagates_to_auto_lock_manager() {
 
     let (_db, mut service) = unlocked_service().await;
 
-    // 注册真 session 让 force_lock_session 触达 manager 的审计路径。
+    // Register a real session so force_lock_session reaches the manager's audit path.
     let user_id = service.current_user.expect("initialized user");
     let session = Session::new(user_id.to_string(), Duration::from_secs(600));
     let session_id = session.id.clone();
@@ -89,7 +89,7 @@ async fn set_event_emitter_propagates_to_auto_lock_manager() {
         Some(session_id.as_str())
     );
 
-    // None 同步摘除 manager 侧：解锁/再锁只落本地库，不再上报
+    // None detaches the manager side too: unlock/re-lock only land in the local database, no longer reported
     service.set_event_emitter(None);
     service.unlock_session().await.unwrap();
     tokio::time::sleep(std::time::Duration::from_millis(20)).await;
@@ -172,16 +172,17 @@ async fn test_get_master_encryption_service_reports_locked() {
     assert!(err.to_string().contains("Service is locked"));
 }
 
-/// Connect 面敏感活动刷新回归：登录后敏感窗口（默认 300s）超时 →
-/// force_lock_sensitive 锁会话、敏感操作报错——无人值守 serve 实测
-/// （fleet-apply 的读密文请求 500，token 面无再认证入口，永久失败）。
-/// `mark_authorized_request`（Connect 中间件每请求调用）刷新后恢复。
+/// Regression for sensitive-activity refresh on the Connect surface: after login, the sensitive
+/// window (default 300s) expiring -> force_lock_sensitive locks the session and sensitive
+/// operations error — as observed on an unattended serve (fleet-apply's ciphertext read request
+/// got a 500, with no re-auth entry point on the token surface, so it failed permanently).
+/// `mark_authorized_request` (called by the Connect middleware per request) refreshes and recovers.
 #[tokio::test]
 async fn mark_authorized_request_clears_sensitive_timeout_lock() {
-    // 自建服务 + 运行时密码：字面量流入 authenticate_user 会被 CodeQL
-    // rust/hard-coded-cryptographic-value 标 critical（本 PR 实测，
-    // annotation core/src/service.rs:4950）；unlocked_service 内的
-    // 字面量是基线，不随本 diff 计。
+    // Hand-built service + a runtime password: a literal flowing into authenticate_user gets
+    // flagged critical by CodeQL's rust/hard-coded-cryptographic-value (observed in this PR,
+    // annotation core/src/service.rs:4950); the literal inside unlocked_service is the baseline
+    // and is not counted against this diff.
     let db = Database::in_memory().await.unwrap();
     db.migrate().await.unwrap();
     let mut service = PersonaService::new(db).await.unwrap();
@@ -209,7 +210,7 @@ async fn mark_authorized_request_clears_sensitive_timeout_lock() {
         "敏感窗口超时应报错: {err}"
     );
 
-    // token 面刷新 → 恢复（等价 Connect 中间件的每请求调用）
+    // Token-surface refresh -> recovery (equivalent to the Connect middleware's per-request call)
     service.mark_authorized_request().await.unwrap();
     service
         .update_sensitive_auto_lock_activity()
@@ -217,7 +218,7 @@ async fn mark_authorized_request_clears_sensitive_timeout_lock() {
         .expect("刷新后敏感操作应通过");
     assert!(service.is_unlocked());
 
-    // 无会话服务：机会性刷新为 no-op（不改任何拒绝语义）
+    // Service with no session: the opportunistic refresh is a no-op (changes no denial semantics)
     let fresh_db = Database::in_memory().await.unwrap();
     fresh_db.migrate().await.unwrap();
     let fresh = PersonaService::new(fresh_db).await.unwrap();
@@ -274,10 +275,11 @@ async fn test_sensitive_operation_gated_behind_reauth() {
     assert!(matches!(data, CredentialData::Password(_)));
 }
 
-/// 公开 API 的完整回路：configure_auto_lock 打开敏感闸门 → 登录
-/// （authenticate_user）记录敏感活动即放行 → 窗口过后被
-/// ReauthRequired 拦下 → 再认证恢复 → 关闭闸门同样恢复。
-/// 此前的测试只能换私有 manager 字段，公开路径下开关从未生效。
+/// The full round trip via the public API: configure_auto_lock turns the sensitive gate on ->
+/// login (authenticate_user) records sensitive activity and is let through -> after the window
+/// it is stopped by ReauthRequired -> re-auth recovers -> turning the gate off recovers likewise.
+/// Earlier tests could only swap the private manager field; the switch never took effect on the
+/// public path.
 #[tokio::test]
 async fn test_configure_auto_lock_gate_round_trip_via_public_api() {
     let (_db, mut service) = unlocked_service().await;
@@ -293,7 +295,7 @@ async fn test_configure_auto_lock_gate_round_trip_via_public_api() {
     )
     .await;
 
-    // 打开闸门，敏感窗口 1 秒。
+    // Turn the gate on with a 1-second sensitive window.
     service
         .configure_auto_lock(crate::auth::AutoLockConfig {
             inactivity_timeout_secs: 900,
@@ -304,15 +306,16 @@ async fn test_configure_auto_lock_gate_round_trip_via_public_api() {
         .await
         .unwrap();
 
-    // 生产登录路径建立 session，并把登录本身记为一次敏感验证——
-    // 刚登录的用户应能直接做敏感操作（否则闸门无法自愈：计时器只能
-    // 由成功的敏感操作刷新）。
+    // The production login path establishes a session and records the login itself as a sensitive
+    // verification — a freshly logged-in user should be able to do sensitive operations directly
+    // (otherwise the gate cannot self-heal: the timer can only be refreshed by a successful
+    // sensitive operation).
     let auth = service.authenticate_user("master-pin").await.unwrap();
     assert!(matches!(auth, AuthResult::Success));
     assert!(!service.needs_reauth().await);
     assert!(service.get_credential_data(&cred.id).await.is_ok());
 
-    // 窗口过后，同一操作被专用错误变体拦下。
+    // After the window, the same operation is stopped by the dedicated error variant.
     tokio::time::sleep(Duration::from_millis(1300)).await;
     assert!(service.needs_reauth().await);
     let err = service.get_credential_data(&cred.id).await.unwrap_err();
@@ -321,12 +324,12 @@ async fn test_configure_auto_lock_gate_round_trip_via_public_api() {
         "unexpected error: {err}"
     );
 
-    // 再认证（同一登录路径）刷新敏感计时器，操作恢复放行。
+    // Re-auth (the same login path) refreshes the sensitive timer and the operation goes through again.
     let auth = service.authenticate_user("master-pin").await.unwrap();
     assert!(matches!(auth, AuthResult::Success));
     assert!(!service.needs_reauth().await);
 
-    // 关闭闸门后，即使窗口再次过期也放行。
+    // After the gate is turned off, it lets things through even if the window expires again.
     tokio::time::sleep(Duration::from_millis(1100)).await;
     service
         .configure_auto_lock(crate::auth::AutoLockConfig::default())

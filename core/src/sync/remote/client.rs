@@ -1,5 +1,5 @@
-//! oplog 同步远端：[`HttpSyncRemote`] 走 `/api/v1/sync/oplog` 推拉与
-//! 快照传输（`SyncRemote` trait 实现）。
+//! Oplog sync remote: [`HttpSyncRemote`] handles `/api/v1/sync/oplog` push/pull and
+//! snapshot transfer (the `SyncRemote` trait implementation).
 
 use base64::engine::general_purpose::STANDARD as B64;
 use base64::Engine as _;
@@ -14,8 +14,8 @@ use super::wire::{
 };
 use crate::{PersonaError, Result};
 
-/// 对 persona-server `/api/v1/sync/oplog` 的同步远端。token 每请求携带
-/// （静态令牌或 SRP 短期令牌——服务器同一 `require_bearer`）。
+/// Sync remote against persona-server's `/api/v1/sync/oplog`. The token is sent with every request
+/// (a static token or an SRP short-lived token — the server uses the same `require_bearer`).
 #[derive(Clone)]
 pub struct HttpSyncRemote {
     http: SyncHttp,
@@ -76,7 +76,7 @@ impl SyncRemote for HttpSyncRemote {
             if let Some(op) = op_from_wire(wire) {
                 ops.push(op);
             }
-            // else：条目级损坏，跳过（模块文档的容错口径）
+            // else: per-entry corruption, skip it (the tolerance policy from the module docs)
         }
         Ok((ops, body.next_cursor))
     }
@@ -136,9 +136,10 @@ impl SyncRemote for HttpSyncRemote {
             .await
             .map_err(|e| PersonaError::Io(format!("sync snapshot fetch request failed: {e}")))?;
         if resp.status() == reqwest::StatusCode::NOT_FOUND {
-            // 404 的两个成因——新服务器尚无快照（code=absent）、老服务器
-            // 没有此路由（code=not_found）——客户端行为收敛：都退回全量
-            // 重放。两者都真实（老服务器确实无快照可取），不谎报也不误报。
+            // Two causes of a 404 — a new server with no snapshot yet (code=absent), or an old server
+            // without this route (code=not_found) — converge into one client behavior: fall back to a full
+            // replay in both cases. Both are truthful (an old server really has no snapshot to fetch);
+            // nothing is falsely claimed or misreported.
             return Ok(None);
         }
         let resp = SyncHttp::ensure_success(resp, "snapshot fetch").await?;
@@ -153,4 +154,4 @@ impl SyncRemote for HttpSyncRemote {
     }
 }
 
-// ---- 设备与 group key 信封管理（§6 设备生命周期，desktop/CLI 共用）----
+// ---- Device and group key envelope management (§6 device lifecycle, shared by desktop/CLI) ----

@@ -1,23 +1,24 @@
 use uuid::Uuid;
 
-/// 单个 item 的物化结果。
+/// Materialization outcome for a single item.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MaterializeOutcome {
-    /// 远端 put 落库（新建或覆盖既有行）。
+    /// A remote put was written to the store (new row, or overwrite of an existing one).
     Written,
-    /// 远端 tombstone 落地（本地行已删除，或本就不存在）。
+    /// A remote tombstone was applied (the local row was deleted, or it never existed).
     Tombstoned,
-    /// 主位是本机 op——主库已是事实源，无需物化。
+    /// The primary is a local op — the primary store is already the source of truth, nothing to materialize.
     SkippedLocalPrimary,
-    /// 快照引用的身份本地还没有（Identity 同步在后续批次）——留待下轮。
+    /// The identity referenced by the snapshot is not available locally yet (Identity sync lands in a later
+    /// batch) — deferred to the next round.
     SkippedPendingIdentity { identity_id: Uuid },
-    /// 不支持的条目种类（Identity 的捕获与物化在后续批次；未知 kind）。
+    /// Unsupported entry kind (Identity capture and materialization come in a later batch; unknown kinds).
     SkippedUnsupportedKind,
-    /// oplog 无该 item 的 op（防御：调用方枚举与查询竞态）。
+    /// The oplog holds no op for this item (defensive: the caller's enumeration raced with the query).
     NoPrimary,
 }
 
-/// 一轮全量物化的汇总。
+/// Summary of one full materialization pass.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct MaterializeReport {
     pub written: usize,
@@ -25,6 +26,6 @@ pub struct MaterializeReport {
     pub skipped_local_primary: usize,
     pub skipped_unsupported_kind: usize,
     pub no_primary: usize,
-    /// (item_id, identity_id)：等身份同步后重跑即可补齐。
+    /// (item_id, identity_id): re-running after the identity syncs catches these up.
     pub pending_identity: Vec<(Uuid, Uuid)>,
 }

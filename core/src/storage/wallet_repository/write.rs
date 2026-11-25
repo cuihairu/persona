@@ -1,4 +1,4 @@
-//! 钱包写入域（LAY-022 拆分）：touch/create/update/delete 与元数据落库 helper。
+//! Wallet write domain (LAY-022 split): touch/create/update/delete and metadata persistence helpers.
 
 use super::*;
 
@@ -64,9 +64,10 @@ impl CryptoWalletRepository {
 
     /// Update wallet
     ///
-    /// 全程同一事务（2026-11-13 codex 深审 Critical 修复）：钱包行更新、
-    /// 地址重建与元数据更新此前各自独立提交，中途约束失败会留下新密钥、
-    /// 残缺地址与旧元数据的混合状态；现在任一步失败整体回滚。
+    /// All steps share a single transaction (2026-11-13 codex deep review Critical fix):
+    /// the wallet row update, address rebuild, and metadata update previously committed
+    /// independently, so a mid-way constraint failure left a mixed state of the new keys,
+    /// truncated addresses, and stale metadata; now any failing step rolls back everything.
     pub async fn update(&self, wallet: &CryptoWallet) -> PersonaResult<CryptoWallet> {
         let mut tx = self.db.pool().begin().await?;
 
@@ -119,11 +120,12 @@ impl CryptoWalletRepository {
 
     /// Delete wallet
     ///
-    /// 单条父表删除（2026-11-13 codex 深审 Critical 修复）：四张子表
-    /// （wallet_addresses/wallet_metadata/transaction_requests/signed_transactions，
-    /// 见 migrations/009_crypto_wallets.sql）均带 `ON DELETE CASCADE` 且
-    /// 连接层启用外键强制，级联在 SQLite 同一条语句内完成，天然原子——
-    /// 此前逐表独立删除在中间失败时会留下半删除状态。
+    /// A single parent-table delete (2026-11-13 codex deep review Critical fix):
+    /// all four child tables (wallet_addresses/wallet_metadata/transaction_requests/signed_transactions,
+    /// see migrations/009_crypto_wallets.sql) carry `ON DELETE CASCADE` and
+    /// the connection layer enforces foreign keys, so the cascade happens within one
+    /// SQLite statement and is inherently atomic — the previous per-table deletes could leave a
+    /// half-deleted state when one failed midway.
     pub async fn delete(&self, id: &Uuid) -> PersonaResult<bool> {
         let result = sqlx::query("DELETE FROM crypto_wallets WHERE id = $1")
             .bind(id.to_string())

@@ -1,4 +1,4 @@
-//! 自动锁定的策略配置：`EnhancedAutoLockConfig` 及其 serde 缺省值。
+//! Auto-lock policy configuration: `EnhancedAutoLockConfig` and its serde defaults.
 
 use serde::{Deserialize, Serialize};
 
@@ -24,8 +24,10 @@ pub struct EnhancedAutoLockConfig {
     pub enable_warnings: bool,
 
     /// Force lock on sensitive operations after timeout
-    /// 「默认安全」：敏感操作（reveal/复制密文等）过后按 sensitive timeout
-    /// 强制上锁；旧配置未显式写 false 的（serde default）随之收紧。
+    /// Secure by default: after sensitive operations (reveal, copying
+    /// ciphertext, and so on), lock after the sensitive timeout; configs that
+    /// never explicitly wrote `false` (serde default) are tightened along with
+    /// this change.
     #[serde(default = "default_true")]
     pub force_lock_sensitive: bool,
 

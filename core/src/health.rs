@@ -774,8 +774,8 @@ mod tests {
         assert!(json.contains("two_factor_available"), "{json}");
     }
 
-    // 剩余变体的 severity 分层与 detail 模板逐一断言（模板永不嵌入
-    // 扫描到的口令本体）。
+    // Assert severity tiering and detail templates for the remaining
+    // variants one by one (templates never embed the scanned password itself).
     #[test]
     fn remaining_issue_kinds_cover_severity_and_detail_templates() {
         let reused = HealthIssueKind::ReusedPassword { group_size: 3 };
@@ -790,7 +790,7 @@ mod tests {
         assert_eq!(expired.severity(), HealthSeverity::High);
         assert!(expired.detail().contains("expired"));
 
-        // WeakPassword：score<=1 提到 High，score 2 只到 Medium。
+        // WeakPassword: score<=1 escalates to High, score 2 only to Medium.
         let weak_low = HealthIssueKind::WeakPassword { score: 1 };
         assert_eq!(weak_low.severity(), HealthSeverity::High);
         assert!(weak_low.detail().contains("score is 1"));

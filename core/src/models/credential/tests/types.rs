@@ -55,7 +55,7 @@ fn credential_type_from_str_roundtrips_all_known_variants() {
         assert_eq!(parsed.to_string(), name, "roundtrip must hold for {name}");
     }
 
-    // 未知串不报错，归入 Custom 并保留原文
+    // Unknown strings do not error; they fall back to Custom with the raw text kept
     let custom: CredentialType = "LoyaltyCard".parse().unwrap();
     assert_eq!(custom, CredentialType::Custom("LoyaltyCard".to_string()));
     assert_eq!(custom.to_string(), "LoyaltyCard");
@@ -82,5 +82,6 @@ fn security_level_from_str_rejects_unknown() {
     assert_eq!(err, "Unknown security level: extreme");
 }
 
-// serde 派生覆盖全部字段：is_active/is_favorite/metadata 也要在
-// roundtrip 里断言（序列化/反序列化的字段赋值行才全部落地）。
+// Serde derives cover every field: is_active/is_favorite/metadata must also be
+// asserted in the roundtrip (so the field assignment lines in
+// (de)serialization are all exercised).

@@ -11,7 +11,7 @@ async fn blob_files_round_trip_with_hash_check() {
     std::fs::create_dir_all(full.parent().unwrap()).unwrap();
     std::fs::write(&full, &bytes).unwrap();
 
-    // read → pack → write 回新 root，逐字节相等
+    // read -> pack -> write back into a new root, byte for byte identical
     let file = TravelBlobFile {
         storage_path: storage_path.clone(),
         sha256: sha256_hex(&bytes),
@@ -22,7 +22,7 @@ async fn blob_files_round_trip_with_hash_check() {
     write_blob_files(&new_root, &[file]).unwrap();
     assert_eq!(std::fs::read(new_root.join(&storage_path)).unwrap(), bytes);
 
-    // 删除（含 NotFound 容忍）与逃逸防御
+    // Deletion (with NotFound tolerance) and escape defense
     assert!(delete_blob_files(
         &root,
         &[TravelBlobFile {
@@ -55,7 +55,7 @@ async fn blob_files_round_trip_with_hash_check() {
     let err = write_blob_files(&new_root, std::slice::from_ref(&escaped)).unwrap_err();
     assert!(err.to_string().contains("escapes storage root"), "{err}");
 
-    // hash 不符拒绝写回
+    // A hash mismatch refuses the write-back
     let tampered = TravelBlobFile {
         storage_path: "x/y.bin".to_string(),
         sha256: sha256_hex(b"different"),
@@ -65,8 +65,9 @@ async fn blob_files_round_trip_with_hash_check() {
     assert!(err.to_string().contains("integrity check failed"), "{err}");
 }
 
-/// write_blob_file 的三条 IO 失败臂：路径逃逸、父目录创建失败
-/// （附件根本身是普通文件）、写失败（目标已是目录）。
+/// The three IO failure arms of write_blob_file: path escape, parent
+/// directory creation failure (the attachment root itself is a regular
+/// file), and write failure (the target is already a directory).
 #[test]
 fn write_blob_file_failure_arms() {
     let dir = tempfile::tempdir().unwrap();
@@ -90,8 +91,9 @@ fn write_blob_file_failure_arms() {
     );
 }
 
-/// delete_blob_files 的非 NotFound 失败必须上报（exit 自愈依赖
-/// failures 清单可见）；write_blob_files 拒绝坏 base64 载荷。
+/// Non-NotFound failures of delete_blob_files must be surfaced (exit
+/// self-healing relies on the failures list being visible);
+/// write_blob_files rejects bad base64 payloads.
 #[test]
 fn blob_file_delete_failure_and_bad_base64_are_surfaced() {
     let dir = tempfile::tempdir().unwrap();

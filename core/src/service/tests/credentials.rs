@@ -35,7 +35,7 @@ async fn custom_fields_set_read_roundtrip_seals_values() {
     let read_back = service.custom_fields(&cred.id).await.unwrap();
     assert_eq!(read_back, fields);
 
-    // 落库形态是密文：metadata blob 不含明文标签或值
+    // The stored form is ciphertext: the metadata blob holds no plaintext label or value
     let stored = service.get_credential(&cred.id).await.unwrap().unwrap();
     let blob = stored
         .metadata
@@ -126,7 +126,7 @@ async fn credential_history_records_created_updated_deleted() {
         .unwrap();
     let mut cred = seed_credential(&service, identity.id, "Gmail", CredentialType::Password).await;
 
-    // 创建 → created 行 v1（新快照有、旧快照无）
+    // Create -> created row v1 (new state present, no previous state)
     let history = service
         .get_entity_history(EntityType::Credential, &cred.id)
         .await
@@ -137,7 +137,7 @@ async fn credential_history_records_created_updated_deleted() {
     assert!(history[0].new_state.is_some());
     assert!(history[0].previous_state.is_none());
 
-    // 元数据变化 → updated 行 v2，字段级 diff 记 username 与 url
+    // Metadata change -> updated row v2, with field-level diffs for username and url
     cred.username = Some("alice".to_string());
     cred.url = Some("https://mail.example.com".to_string());
     service.update_credential(&cred).await.unwrap();
@@ -154,7 +154,7 @@ async fn credential_history_records_created_updated_deleted() {
     assert_eq!(username_change.old_value, "");
     assert_eq!(username_change.new_value, "alice");
 
-    // 无实质变化的重复 update → 不新增历史行
+    // A repeat update with no real change -> no new history row
     service.update_credential(&cred).await.unwrap();
     let history = service
         .get_entity_history(EntityType::Credential, &cred.id)
@@ -162,7 +162,7 @@ async fn credential_history_records_created_updated_deleted() {
         .unwrap();
     assert_eq!(history.len(), 2, "no-op update must not add history");
 
-    // 密文变化（密码轮换）→ 只记占位 diff；内容绝不进历史
+    // Ciphertext change (password rotation) -> only a placeholder diff; content never reaches history
     cred.encrypted_data = vec![9u8; 8];
     service.update_credential(&cred).await.unwrap();
     let history = service
@@ -176,7 +176,7 @@ async fn credential_history_records_created_updated_deleted() {
     let states = serde_json::to_string(&history[0].new_state).unwrap();
     assert!(!states.contains("encrypted_data"));
 
-    // 删除 → deleted 行 v4（凭据行已删，历史仍在）
+    // Delete -> deleted row v4 (the credential row is gone, the history stays)
     service.delete_credential(&cred.id).await.unwrap();
     let history = service
         .get_entity_history(EntityType::Credential, &cred.id)
@@ -206,7 +206,7 @@ async fn restore_credential_version_reverts_metadata_and_keeps_secrets() {
     cred.name = "Gmail Work".to_string();
     service.update_credential(&cred).await.unwrap();
 
-    // 恢复到 v1（创建态）：元数据回滚，密文原样
+    // Restore to v1 (creation state): metadata rolls back, ciphertext stays as-is
     let restored = service
         .restore_credential_version(&cred.id, 1)
         .await
@@ -222,7 +222,7 @@ async fn restore_credential_version_reverts_metadata_and_keeps_secrets() {
         "metadata restore must never touch the secret payload"
     );
 
-    // 历史多一行 restored，reason 标注目标版本
+    // History gains a restored row, with the reason naming the target version
     let history = service
         .get_entity_history(EntityType::Credential, &cred.id)
         .await
@@ -238,7 +238,7 @@ async fn restore_credential_version_reverts_metadata_and_keeps_secrets() {
     assert_eq!(username_change.old_value, "alice");
     assert_eq!(username_change.new_value, "");
 
-    // 中间版本也可恢复：回到 v2（username=alice、name=Gmail）
+    // An intermediate version is also restorable: back to v2 (username=alice, name=Gmail)
     let restored = service
         .restore_credential_version(&cred.id, 2)
         .await
@@ -247,7 +247,7 @@ async fn restore_credential_version_reverts_metadata_and_keeps_secrets() {
     assert_eq!(restored.username.as_deref(), Some("alice"));
     assert_eq!(restored.url.as_deref(), Some("https://mail.example.com"));
 
-    // 恢复到当前状态 = 无实质变化 → 不记噪声历史行
+    // Restoring to the current state = no real change -> no noisy history row
     let history = service
         .get_entity_history(EntityType::Credential, &cred.id)
         .await
@@ -286,7 +286,7 @@ async fn restore_credential_version_rejects_bad_targets() {
         .expect_err("unknown credential must fail");
     assert!(err.to_string().contains("not found"));
 
-    // 删除后的条目不可恢复（行已不在；历史仍可查但不重建秘密外壳）
+    // A deleted item cannot be restored (the row is gone; history remains queryable but the secret envelope is not rebuilt)
     service.delete_credential(&cred.id).await.unwrap();
     let err = service
         .restore_credential_version(&cred.id, 1)
@@ -295,8 +295,9 @@ async fn restore_credential_version_rejects_bad_targets() {
     assert!(err.to_string().contains("not found"));
 }
 
-/// 编辑 payload 的核心不变量：wrapped_item_key 字节不动，新 payload 走
-/// 同一 item key 重封，已挂附件仍可解密，item history 落 Updated 行。
+/// Core invariant of editing a payload: wrapped_item_key bytes stay untouched, the new
+/// payload is re-sealed with the same item key, attached attachments remain decryptable,
+/// and item history records an Updated row.
 #[tokio::test]
 async fn update_credential_data_reuses_item_key_and_keeps_attachments() {
     let (db, mut service) = unlocked_service().await;
@@ -314,7 +315,7 @@ async fn update_credential_data_reuses_item_key_and_keeps_attachments() {
     .await;
     let wrapped_before = credential.wrapped_item_key.clone().unwrap();
 
-    // 先挂一个加密附件（用当前 item key 封存）
+    // Attach one encrypted attachment first (sealed with the current item key)
     let dir = tempfile::tempdir().unwrap();
     service
         .init_attachment_storage(dir.path(), db.clone())
@@ -327,7 +328,7 @@ async fn update_credential_data_reuses_item_key_and_keeps_attachments() {
         .await
         .unwrap();
 
-    // 编辑 payload
+    // Edit the payload
     let edited = CredentialData::Password(PasswordCredentialData {
         password: "rotated-secret".to_string(),
         email: Some("edited@example.com".to_string()),
@@ -338,13 +339,13 @@ async fn update_credential_data_reuses_item_key_and_keeps_attachments() {
         .await
         .unwrap();
 
-    // wrapped key 字节不变（附件不变量的硬保障）
+    // wrapped key bytes unchanged (hard guarantee of the attachment invariant)
     assert_eq!(
         updated.wrapped_item_key.as_deref(),
         Some(&wrapped_before[..])
     );
 
-    // 新 payload 读回逐字保留
+    // The new payload reads back verbatim
     let data = service
         .get_credential_data(&credential.id)
         .await
@@ -358,14 +359,14 @@ async fn update_credential_data_reuses_item_key_and_keeps_attachments() {
         other => panic!("unexpected credential data: {other:?}"),
     }
 
-    // 附件仍可解密（同一 item key）
+    // The attachment is still decryptable (same item key)
     let plain = service
         .retrieve_attachment(&attachment_id, true)
         .await
         .unwrap();
     assert_eq!(plain, b"attachment-before-edit".to_vec());
 
-    // item history 落 Updated 行（created + updated 至少两行）
+    // item history records an Updated row (created + updated, at least two rows)
     let history = service
         .get_entity_history(EntityType::Credential, &credential.id)
         .await
@@ -373,8 +374,8 @@ async fn update_credential_data_reuses_item_key_and_keeps_attachments() {
     assert!(history.iter().any(|e| e.change_type == ChangeType::Updated));
 }
 
-/// legacy 行（wrapped_item_key NULL）编辑 payload 时升级为 per-item key：
-/// 升级后新密文走 item key 解密、行获得 wrapped key。
+/// Editing a legacy row (wrapped_item_key NULL) upgrades it to a per-item key:
+/// after the upgrade the new ciphertext decrypts via the item key and the row gains a wrapped key.
 #[tokio::test]
 async fn update_credential_data_upgrades_legacy_row_to_item_key() {
     let (db, service) = unlocked_service().await;
@@ -384,7 +385,7 @@ async fn update_credential_data_upgrades_legacy_row_to_item_key() {
         .await
         .unwrap();
 
-    // 手工构造 legacy 行（同 attach 升级测试的模式）
+    // Build the legacy row by hand (same pattern as the attach upgrade test)
     let master = service.get_master_encryption_service().unwrap();
     let plaintext = CredentialData::Password(PasswordCredentialData {
         password: "legacy-pw".to_string(),
@@ -416,7 +417,7 @@ async fn update_credential_data_upgrades_legacy_row_to_item_key() {
         .unwrap();
     assert!(updated.wrapped_item_key.is_some());
 
-    // 新密文走 item key 路径解密（legacy 分支不再命中）
+    // The new ciphertext decrypts via the item key path (legacy branch no longer hit)
     let data = service
         .get_credential_data(&credential.id)
         .await
@@ -428,7 +429,7 @@ async fn update_credential_data_upgrades_legacy_row_to_item_key() {
     }
 }
 
-/// 编辑不存在的凭据报 InvalidInput（而非静默成功）。
+/// Editing a nonexistent credential returns InvalidInput (instead of silently succeeding).
 #[tokio::test]
 async fn update_credential_data_rejects_unknown_id() {
     let (_db, service) = unlocked_service().await;
@@ -447,7 +448,7 @@ async fn update_credential_data_rejects_unknown_id() {
     assert!(err.contains("not found"), "unexpected error: {err}");
 }
 
-/// 凭据删除级联清附件：blob 元数据随行消失，不留不可解密的孤儿。
+/// Deleting a credential cascades to attachments: blob metadata disappears with the row, leaving no undecryptable orphans.
 #[tokio::test]
 async fn delete_credential_cascades_attachments() {
     let (db, mut service) = unlocked_service().await;
@@ -494,8 +495,8 @@ async fn delete_credential_cascades_attachments() {
         .is_err());
 }
 
-/// delete_credential 双分支：存在的凭据返回 true 并写 CredentialDeleted
-/// 审计；再删一次（已不存在）返回 false，不重复写审计。
+/// Both branches of delete_credential: an existing credential returns true and writes a
+/// CredentialDeleted audit; deleting again (now nonexistent) returns false without a duplicate audit.
 #[tokio::test]
 async fn delete_credential_true_then_false_with_audit() {
     let (_db, service) = unlocked_service().await;
@@ -524,9 +525,10 @@ async fn delete_credential_true_then_false_with_audit() {
     assert!(deleted[0].success);
 }
 
-/// 同步捕获缝：attach(Some) 后写凭据递 Put 给捕获实现；attach(None)
-/// 后写路径静默跳过。捕获失败/未装配不阻断主操作由类型保证——
-/// 这里验证的是装配 ↔ 捕获的接线本身。
+/// Sync capture seam: after attach(Some), credential writes hand a Put to the capture impl; after
+/// attach(None) the write path silently skips. Capture failures or missing capture never block the
+/// main operation — that is guaranteed by the type. What is verified here is the wiring between
+/// attach and capture itself.
 #[tokio::test]
 async fn attach_sync_capture_feeds_credential_puts_only_while_attached() {
     use std::sync::Mutex;
@@ -569,8 +571,8 @@ async fn attach_sync_capture_feeds_credential_puts_only_while_attached() {
     );
 }
 
-/// apply_meta_snapshot 的整份校验语义：坏快照逐字段报 InvalidInput，
-/// 且失败时凭据元数据一个字段都不落（不半套）。
+/// Whole-snapshot validation semantics of apply_meta_snapshot: a bad snapshot reports InvalidInput
+/// field by field, and on failure no credential metadata field is applied (no half-updates).
 #[test]
 fn apply_meta_snapshot_validates_before_mutating() {
     let mut cred = Credential::new(
@@ -586,7 +588,7 @@ fn apply_meta_snapshot_validates_before_mutating() {
         PersonaService::apply_meta_snapshot(cred, snapshot)
     }
 
-    // 非对象 / 缺 name / 缺 tags / tags 非字符串数组 / 缺布尔字段
+    // not an object / missing name / missing tags / tags not an array of strings / missing boolean fields
     assert!(apply(&mut cred, &serde_json::json!("nope"))
         .unwrap_err()
         .to_string()
@@ -645,10 +647,10 @@ fn apply_meta_snapshot_validates_before_mutating() {
     .to_string()
     .contains("Unknown security level"));
 
-    // 全部失败后凭据未被半套
+    // After all the failures the credential has not been half-applied
     assert_eq!(cred.name, "Original");
 
-    // 合法快照：元数据全部落上，秘密外壳字段保持原样
+    // A valid snapshot: all metadata is applied, secret envelope fields left as-is
     apply(
         &mut cred,
         &serde_json::json!({
@@ -668,8 +670,8 @@ fn apply_meta_snapshot_validates_before_mutating() {
     assert_eq!(cred.encrypted_data, b"ciphertext".to_vec());
 }
 
-/// restore 命中「版本存在但无 new_state」的 Deleted 历史行 → 报
-/// no restorable state，凭据本体不动。
+/// restore hitting a Deleted history row with "version exists but no new_state" -> reports
+/// no restorable state and leaves the credential itself untouched.
 #[tokio::test]
 async fn restore_credential_version_rejects_tombstone_history() {
     let (_db, service) = unlocked_service().await;
@@ -679,7 +681,7 @@ async fn restore_credential_version_rejects_tombstone_history() {
         .unwrap();
     let cred = seed_credential(&service, identity.id, "Target", CredentialType::Password).await;
 
-    // 记一条 Deleted 历史（new_state=None）；凭据本体仍在库中
+    // Record a Deleted history row (new_state=None); the credential body is still in the database
     service
         .record_credential_history(ChangeType::Deleted, Some(&cred), None, None)
         .await;
@@ -708,8 +710,9 @@ async fn restore_credential_version_rejects_tombstone_history() {
     assert_eq!(after.name, "Target", "failed restore must not mutate");
 }
 
-/// 历史记录的尽力而为语义：(None, None) 直通返回；底层表不可用时
-/// 只告警不阻断主写（业务事实已提交，历史是派生数据）。
+/// Best-effort semantics of history recording: (None, None) returns immediately; when the
+/// underlying table is unavailable only a warning is emitted and the main write is not blocked
+/// (the business fact is already committed, history is derived data).
 #[tokio::test]
 async fn credential_history_is_best_effort() {
     let (db, service) = unlocked_service().await;
@@ -718,12 +721,12 @@ async fn credential_history_is_best_effort() {
         .await
         .unwrap();
 
-    // (None, None) 直通：无实体可记
+    // (None, None) pass-through: no entity to record
     service
         .record_credential_history(ChangeType::Created, None, None, None)
         .await;
 
-    // 表不可用 → 记录失败仅告警，凭据创建照常成功
+    // Table unavailable -> recording failure only warns, credential creation still succeeds
     sqlx::query("DROP TABLE change_history")
         .execute(db.pool())
         .await

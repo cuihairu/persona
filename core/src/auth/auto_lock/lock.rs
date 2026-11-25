@@ -1,4 +1,5 @@
-//! 面板流转：手动上/解锁、可用性判定、敏感操作再认证门槛与会话查询。
+//! Panel flows: manual lock/unlock, validity checks, the sensitive-operation
+//! re-authentication gate, and session queries.
 
 use std::time::Duration;
 

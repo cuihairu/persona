@@ -1,11 +1,14 @@
-//! device envelope（E2EE_SYNC_DESIGN DR-1，格式 `persona-dev-env-1`）。
+//! Device envelope (E2EE_SYNC_DESIGN DR-1, format `persona-dev-env-1`).
 //!
-//! 字节布局：`ephemeral_pub(32B) ‖ AES-256-GCM 密文(含 16B tag)`，总长
-//! [`ENVELOPE_LEN`]。加密密钥与 nonce 均从 ephemeral DH 经 HKDF-SHA256
-//! 一次性展开 44B（key 32 ‖ nonce 12）：每次密封重新生成 ephemeral，
-//! 同一 `(eph, device_pub)` 对永不重复，因此派生 nonce 的复用无碰撞风险。
+//! Byte layout: `ephemeral_pub(32B) ‖ AES-256-GCM ciphertext(incl. 16B tag)`,
+//! total length [`ENVELOPE_LEN`]. Both the encryption key and the nonce are
+//! expanded in one shot from the ephemeral DH via HKDF-SHA256 into 44B
+//! (key 32 ‖ nonce 12): a fresh ephemeral is generated for every seal, the
+//! same `(eph, device_pub)` pair never repeats, so the derived nonce carries
+//! no reuse/collision risk.
 //!
-//! 服务器只存信封（每设备一个）——拆信封需要对应设备私钥，私钥永不上传。
+//! The server only stores the envelope (one per device)——opening it requires
+//! the corresponding device private key, which is never uploaded.
 
 use hkdf::Hkdf;
 use rand::RngExt;
@@ -14,21 +17,23 @@ use x25519_dalek::{PublicKey, StaticSecret};
 
 use crate::PersonaError;
 
-/// HKDF info 域分隔（DR-1 定名）。
+/// HKDF info domain separator (named by DR-1).
 pub const DEV_ENVELOPE_INFO: &[u8] = b"persona-dev-env-1";
 
 const EPH_PUB_LEN: usize = 32;
 const GROUP_KEY_LEN: usize = 32;
 const NONCE_LEN: usize = 12;
 const TAG_LEN: usize = 16;
-/// 信封总长 = eph_pub(32) + group_key(32) + tag(16)。
+/// Total envelope length = eph_pub(32) + group_key(32) + tag(16).
 pub const ENVELOPE_LEN: usize = EPH_PUB_LEN + GROUP_KEY_LEN + TAG_LEN;
 
-/// 用设备 X25519 公钥密封 group key（建组与为新设备授权时调用）。
-/// `device_public` 来自服务器登记的设备记录，属不受信输入：若它是低阶点，
-/// 共享密钥塌缩成公开常量，任何人（含恶意服务器）都能自行拆封信封、
-/// 偷换 group key——因此拒封（fail-closed，与 [`open_group_key`] 拆封侧
-/// 的同名防线对称）。
+/// Seal the group key with a device X25519 public key (called when creating a
+/// group and when authorizing a new device). `device_public` comes from the
+/// device record registered on the server and is untrusted input: if it is a
+/// low-order point, the shared secret collapses to a public constant, and
+/// anyone (including a malicious server) can open the envelope themselves and
+/// swap out the group key——so sealing is refused (fail-closed, symmetric to
+/// the same-named defense on the opening side of [`open_group_key`]).
 pub fn seal_group_key(
     group_key: &[u8; GROUP_KEY_LEN],
     device_public: &[u8; 32],
@@ -63,13 +68,17 @@ pub fn seal_group_key(
     Ok(out)
 }
 
-/// 设备用自己的私钥拆信封。失败 = 信封不是包给这把私钥的（或被篡改）——
-/// 两种成因不区分（[`PersonaError::CryptographicError`]），调用方一律按
-/// 「未授权该同步组」处理（fail-closed）。
+/// The device opens the envelope with its own private key. Failure = the
+/// envelope was not wrapped for this private key (or was tampered with)——
+/// the two causes are not distinguished
+/// ([`PersonaError::CryptographicError`]); callers treat either as
+/// "not authorized for this sync group" (fail-closed).
 ///
-/// 信封来自服务器，属不受信输入：`eph_pub` 若是低阶点（如全零），X25519
-/// 共享密钥塌缩成公开常量，攻击者可本地复算 HKDF 并自造合法信封把自选
-/// group key 注入设备——因此低阶点在 AEAD 之前显式拒绝（fail-closed）。
+/// The envelope comes from the server and is untrusted input: if `eph_pub` is
+/// a low-order point (e.g. all zeros), the X25519 shared secret collapses to
+/// a public constant, and an attacker can recompute HKDF locally and craft a
+/// "legitimate" envelope injecting a group key of their choosing——so
+/// low-order points are rejected explicitly before AEAD (fail-closed).
 pub fn open_group_key(
     envelope: &[u8],
     device_secret: &[u8; 32],
@@ -109,10 +118,13 @@ pub fn open_group_key(
     })
 }
 
-/// 显式拒绝全零公钥字节（低阶点里最常见的一枚）：早拒给出精确错误，
-/// 也为 DH 实现日后更替留一道不依赖 `was_contributory` 的防线。
-/// 全部低阶点由 `SharedSecret::was_contributory` 兜底——低阶点的 X25519
-/// 输出恒为全零 ⇒ 共享密钥非贡献性 ⇒ 对方可本地复算派生密钥。
+/// Explicitly reject all-zero public key bytes (the most common low-order
+/// point): early rejection gives a precise error and leaves the DH
+/// implementation a defense that does not depend on `was_contributory` in
+/// case it is swapped out later. All remaining low-order points are caught by
+/// `SharedSecret::was_contributory`——the X25519 output of a low-order point
+/// is always all zeros ⇒ the shared secret is non-contributory ⇒ the other
+/// side could recompute the derived key locally.
 fn reject_low_order_public(what: &str, bytes: &[u8; 32]) -> Result<(), PersonaError> {
     if *bytes == [0u8; 32] {
         return Err(PersonaError::CryptographicError(format!(
@@ -122,8 +134,8 @@ fn reject_low_order_public(what: &str, bytes: &[u8; 32]) -> Result<(), PersonaEr
     Ok(())
 }
 
-/// HKDF-SHA256：salt = None（零盐），ikm = ephemeral DH 共享密钥，
-/// info = `persona-dev-env-1`，展开 key(32) ‖ nonce(12)。
+/// HKDF-SHA256: salt = None (zero salt), ikm = the ephemeral DH shared
+/// secret, info = `persona-dev-env-1`, expanding key(32) ‖ nonce(12).
 fn derive_okm(shared: &x25519_dalek::SharedSecret) -> [u8; 32 + NONCE_LEN] {
     let hk = Hkdf::<Sha256>::new(None, shared.as_bytes());
     let mut okm = [0u8; 32 + NONCE_LEN];
@@ -186,8 +198,9 @@ mod tests {
 
     #[test]
     fn sealing_twice_produces_unlinked_envelopes() {
-        // ephemeral 每次重新生成：同一 group key 的两次密封产生不同信封
-        // （不可链接性），且各自都能被设备私钥拆开
+        // The ephemeral is regenerated each time: sealing the same group key
+        // twice produces different envelopes (unlinkability), and each can be
+        // opened with the device private key
         let device = keypair();
         let group_key = [9u8; 32];
         let a = seal_group_key(&group_key, device.public_bytes()).unwrap();
@@ -203,10 +216,13 @@ mod tests {
         );
     }
 
-    /// 回归（AUDIT-2026-11-05 P1-3）：恶意服务器把信封 `eph_pub` 换成
-    /// 低阶点（全零）后，共享密钥塌成公开常量，攻击者可本地复算密钥并
-    /// 自造「合法」信封注入自选 group key——必须在 AEAD 之前拒绝，且
-    /// 错误信息指明低阶点（而非含糊的 authentication failed）。
+    /// Regression (AUDIT-2026-11-05 P1-3): when a malicious server replaces
+    /// the envelope's `eph_pub` with a low-order point (all zeros), the
+    /// shared secret collapses to a public constant and an attacker could
+    /// recompute the key locally and craft a "legitimate" envelope injecting
+    /// a group key of their choosing——must be rejected before AEAD, and the
+    /// error must name the low-order point (rather than a vague
+    /// authentication failed).
     #[test]
     fn open_rejects_all_zero_ephemeral_public() {
         let device = keypair();
@@ -216,8 +232,10 @@ mod tests {
         assert!(err.to_string().contains("low-order"), "{err}");
     }
 
-    /// 同一防线的封口侧：服务器登记的设备公钥若是低阶点，密封出的信封
-    /// 对攻击者透明——拒封而不是产出可被拆的信封。
+    /// The sealing side of the same defense: if the device public key
+    /// registered on the server is a low-order point, the sealed envelope is
+    /// transparent to the attacker——refuse to seal rather than producing an
+    /// envelope that can be opened.
     #[test]
     fn seal_rejects_all_zero_device_public() {
         let err = seal_group_key(&[5u8; 32], &[0u8; 32]).unwrap_err();

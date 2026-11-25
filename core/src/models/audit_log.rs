@@ -3,58 +3,58 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use uuid::Uuid;
 
-/// 审计日志条目
-/// 用于记录系统中的所有安全相关操作
+/// Audit log entry
+/// Records every security-relevant operation in the system
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct AuditLog {
-    /// 唯一标识符
+    /// Unique identifier
     pub id: Uuid,
 
-    /// 用户ID (可选，某些系统操作可能没有用户)
+    /// User ID (optional; some system operations have no user)
     pub user_id: Option<String>,
 
-    /// 身份ID (可选，操作涉及的身份)
+    /// Identity ID (optional; the identity the operation touches)
     pub identity_id: Option<Uuid>,
 
-    /// 凭据ID (可选，操作涉及的凭据)
+    /// Credential ID (optional; the credential the operation touches)
     pub credential_id: Option<Uuid>,
 
-    /// 会话ID (可选，操作发生的会话)
+    /// Session ID (optional; the session the operation happened in)
     pub session_id: Option<String>,
 
-    /// 操作类型
+    /// Operation type
     pub action: AuditAction,
 
-    /// 资源类型
+    /// Resource type
     pub resource_type: ResourceType,
 
-    /// 资源ID (可选)
+    /// Resource ID (optional)
     pub resource_id: Option<String>,
 
-    /// 客户端IP地址
+    /// Client IP address
     pub ip_address: Option<String>,
 
-    /// 用户代理字符串
+    /// User agent string
     pub user_agent: Option<String>,
 
-    /// 操作是否成功
+    /// Whether the operation succeeded
     pub success: bool,
 
-    /// 错误消息 (仅在失败时)
+    /// Error message (only on failure)
     pub error_message: Option<String>,
 
-    /// 额外的元数据
+    /// Extra metadata
     pub metadata: HashMap<String, String>,
 
-    /// 时间戳
+    /// Timestamp
     pub timestamp: DateTime<Utc>,
 }
 
-/// 审计操作类型
+/// Audit operation type
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum AuditAction {
-    // 认证相关
+    // Authentication
     Login,
     Logout,
     LoginFailed,
@@ -65,14 +65,14 @@ pub enum AuditAction {
     MfaEnabled,
     MfaDisabled,
 
-    // 身份管理
+    // Identity management
     IdentityCreated,
     IdentityUpdated,
     IdentityDeleted,
     IdentityViewed,
     IdentitySwitched,
 
-    // 凭据管理
+    // Credential management
     CredentialCreated,
     CredentialUpdated,
     CredentialRestored,
@@ -81,44 +81,45 @@ pub enum AuditAction {
     CredentialDecrypted,
     CredentialExported,
 
-    // Passkey（WebAuthn）
+    // Passkey (WebAuthn)
     PasskeyCreated,
     PasskeyViewed,
     PasskeyAsserted,
     PasskeyDeleted,
     PasskeyExported,
 
-    // 工作区管理
+    // Workspace management
     WorkspaceCreated,
     WorkspaceUpdated,
     WorkspaceDeleted,
     WorkspaceEntered,
     WorkspaceLeft,
 
-    // 系统操作
+    // System operations
     DatabaseMigration,
     BackupCreated,
     BackupRestored,
     ConfigurationChanged,
 
-    // 旅行模式
+    // Travel mode
     TravelModeEntered,
     TravelModeExited,
     TravelMarkChanged,
 
-    // Connect 自动化端点（CONNECT_AUTOMATION_DESIGN；Used 走节流防刷屏）
+    // Connect automation endpoints (CONNECT_AUTOMATION_DESIGN; Used is rate
+    // limited so it does not flood the log)
     ConnectTokenCreated,
     ConnectTokenRevoked,
     ConnectTokenUsed,
 
-    // 安全事件
+    // Security events
     SecurityScanPerformed,
     UnauthorizedAccess,
     BruteForceDetected,
     SuspiciousActivity,
     DataExfiltration,
 
-    // 自定义操作
+    // Custom operations
     Custom(String),
 }
 
@@ -233,7 +234,7 @@ impl std::str::FromStr for AuditAction {
     }
 }
 
-/// 资源类型
+/// Resource type
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum ResourceType {
@@ -247,7 +248,7 @@ pub enum ResourceType {
     Database,
     Backup,
     System,
-    /// Connect 自动化端点（token 生命周期与使用审计）
+    /// Connect automation endpoints (token lifecycle and usage auditing)
     Connect,
     Unknown,
 }
@@ -295,7 +296,7 @@ impl std::str::FromStr for ResourceType {
 }
 
 impl AuditLog {
-    /// 创建新的审计日志条目
+    /// Create a new audit log entry
     pub fn new(action: AuditAction, resource_type: ResourceType, success: bool) -> Self {
         Self {
             id: Uuid::new_v4(),
@@ -315,73 +316,73 @@ impl AuditLog {
         }
     }
 
-    /// 构建器模式：设置用户ID
+    /// Builder pattern: set the user ID
     pub fn with_user_id(mut self, user_id: Option<String>) -> Self {
         self.user_id = user_id;
         self
     }
 
-    /// 构建器模式：设置身份ID
+    /// Builder pattern: set the identity ID
     pub fn with_identity_id(mut self, identity_id: Option<Uuid>) -> Self {
         self.identity_id = identity_id;
         self
     }
 
-    /// 构建器模式：设置凭据ID
+    /// Builder pattern: set the credential ID
     pub fn with_credential_id(mut self, credential_id: Option<Uuid>) -> Self {
         self.credential_id = credential_id;
         self
     }
 
-    /// 构建器模式：设置会话ID
+    /// Builder pattern: set the session ID
     pub fn with_session_id(mut self, session_id: Option<String>) -> Self {
         self.session_id = session_id;
         self
     }
 
-    /// 构建器模式：设置详细信息
+    /// Builder pattern: set the details
     pub fn with_details(mut self, details: Option<String>) -> Self {
-        self.error_message = details; // 使用error_message字段存储详细信息
+        self.error_message = details; // details are stored in the error_message field
         self
     }
 
-    /// 构建器模式：设置资源ID
+    /// Builder pattern: set the resource ID
     pub fn with_resource_id(mut self, resource_id: Option<String>) -> Self {
         self.resource_id = resource_id;
         self
     }
 
-    /// 构建器模式：设置IP地址
+    /// Builder pattern: set the IP address
     pub fn with_ip_address(mut self, ip_address: Option<String>) -> Self {
         self.ip_address = ip_address;
         self
     }
 
-    /// 构建器模式：设置用户代理
+    /// Builder pattern: set the user agent
     pub fn with_user_agent(mut self, user_agent: Option<String>) -> Self {
         self.user_agent = user_agent;
         self
     }
 
-    /// 构建器模式：设置错误消息
+    /// Builder pattern: set the error message
     pub fn with_error_message(mut self, error_message: Option<String>) -> Self {
         self.error_message = error_message;
         self
     }
 
-    /// 构建器模式：添加元数据
+    /// Builder pattern: add one metadata entry
     pub fn with_metadata(mut self, key: String, value: String) -> Self {
         self.metadata.insert(key, value);
         self
     }
 
-    /// 构建器模式：批量设置元数据
+    /// Builder pattern: set metadata in bulk
     pub fn with_metadata_map(mut self, metadata: HashMap<String, String>) -> Self {
         self.metadata.extend(metadata);
         self
     }
 
-    /// 是否是安全敏感操作
+    /// Whether this is a security-sensitive operation
     pub fn is_security_sensitive(&self) -> bool {
         matches!(
             self.action,
@@ -400,7 +401,7 @@ impl AuditLog {
         )
     }
 
-    /// 是否是失败操作
+    /// Whether this is a failed operation
     pub fn is_failure(&self) -> bool {
         !self.success
             || matches!(
@@ -756,15 +757,16 @@ mod tests {
         assert!(failure.is_failure());
     }
 
-    // Connect 变体（Connect 自动化批次加入）也要走 Display/parse 往返。
+    // The Connect variant (added with the Connect automation batch) also goes
+    // through a Display/parse roundtrip.
     #[test]
     fn test_resource_type_connect_display_and_parse() {
         let text = ResourceType::Connect.to_string();
         assert_eq!(text.parse::<ResourceType>().unwrap(), ResourceType::Connect);
     }
 
-    // 构建器链的其余 with_* 槽位（首次 builder 测试只碰了 user/identity/
-    // metadata 三槽）逐一落值。
+    // The remaining with_* slots of the builder chain (the first builder test
+    // only touched the user/identity/metadata slots) get values one by one.
     #[test]
     fn test_audit_log_builder_full_chain() {
         let credential_id = Uuid::new_v4();
@@ -783,7 +785,8 @@ mod tests {
 
         assert_eq!(log.credential_id, Some(credential_id));
         assert_eq!(log.session_id.as_deref(), Some("sess-1"));
-        // with_details 与 with_error_message 写同一存储槽，链尾的 details 覆盖前者
+        // with_details and with_error_message share the same storage slot; the
+        // details at the end of the chain overwrites the former
         assert_eq!(log.error_message.as_deref(), Some("full vault"));
         assert_eq!(log.resource_id.as_deref(), Some("bkp-9"));
         assert_eq!(log.ip_address.as_deref(), Some("127.0.0.1"));

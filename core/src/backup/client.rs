@@ -1,17 +1,21 @@
-//! persona-server 备份保管端点的客户端（`/api/v1/backups`，契约见
-//! server/src/api/backups.rs）。仿 [`crate::events::ServerEventSink`]：
-//! token 由宿主注入（core 不读环境变量、不落盘）、尾斜杠容错。
+//! Client for the persona-server backup vault endpoints
+//! (`/api/v1/backups`; contract in server/src/api/backups.rs). Modelled on
+//! [`crate::events::ServerEventSink`]: the token is injected by the host (core
+//! reads no environment variables and never persists it), with trailing-slash
+//! tolerance.
 //!
-//! 大库传输：超时 300s（默认 reqwest 无超时不可用；备份以十 MB 计，
-//! 事件上报的 10s 量级不适用）。下载后本地复算 sha256 与服务器 ETag
-//! 比对——传输完整性自检，非新鲜度/防回滚保证（THREAT_MODEL 已明示）。
+//! Large-database transfer: 300s timeout (the default reqwest timeout of none
+//! is unusable; backups are tens of MB, so the 10s magnitude of event reporting
+//! does not apply). After a download the local sha256 is recomputed and compared
+//! against the server ETag — a transport integrity self-check, not a freshness
+//! or anti-rollback guarantee (spelled out in THREAT_MODEL).
 
 use anyhow::{anyhow, Result};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::time::Duration;
 
-/// 服务器侧备份元数据（列表/推送响应的镜像）。
+/// Server-side backup metadata (a mirror of the list/push response).
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 pub struct BackupMeta {
     pub id: String,
@@ -21,14 +25,14 @@ pub struct BackupMeta {
     pub created_at: String,
 }
 
-/// 列表响应镜像。
+/// List response mirror.
 #[derive(Debug, Deserialize)]
 pub struct BackupPage {
     pub backups: Vec<BackupMeta>,
     pub next_cursor: Option<String>,
 }
 
-/// 推送响应镜像（201 新版本 / 200 去重）。
+/// Push response mirror (201 for a new version / 200 for a deduplicated one).
 #[derive(Debug, Deserialize)]
 pub struct PushResult {
     pub id: String,
@@ -39,7 +43,7 @@ pub struct PushResult {
     pub deduplicated: bool,
 }
 
-/// 下载产物：密文字节 + 本地复算的摘要。
+/// Download product: the ciphertext bytes plus a locally recomputed digest.
 #[derive(Debug)]
 pub struct DownloadedBackup {
     pub bytes: Vec<u8>,
@@ -53,7 +57,8 @@ pub struct BackupClient {
 }
 
 impl BackupClient {
-    /// `base_url` 形如 `http://127.0.0.1:3000`（尾斜杠容错，可带反代前缀）。
+    /// `base_url` looks like `http://127.0.0.1:3000` (trailing-slash tolerant;
+    /// a reverse-proxy prefix is fine).
     pub fn new(base_url: &str, token: impl Into<String>) -> Result<Self> {
         let http = reqwest::Client::builder()
             .timeout(Duration::from_secs(300))
@@ -66,7 +71,8 @@ impl BackupClient {
         })
     }
 
-    /// 推送加密备份字节（201 新版本；同设备最新版本 sha256 相同则 200 去重）。
+    /// Push encrypted backup bytes (201 for a new version; 200 deduplicated
+    /// when the newest version on this device has the same sha256).
     pub async fn push(&self, bytes: &[u8]) -> Result<PushResult> {
         let response = self
             .http
@@ -83,7 +89,7 @@ impl BackupClient {
         Ok(response.json().await?)
     }
 
-    /// 列出备份版本（倒序：新→旧）。
+    /// List backup versions (descending: newest → oldest).
     pub async fn list(&self, limit: u32, cursor: Option<&str>) -> Result<BackupPage> {
         let mut url = format!("{}/api/v1/backups?limit={limit}", self.base);
         if let Some(cursor) = cursor {
@@ -97,7 +103,8 @@ impl BackupClient {
         Ok(response.json().await?)
     }
 
-    /// 下载备份密文，本地复算 sha256 并与服务器 ETag 比对。
+    /// Download the backup ciphertext, recomputing the sha256 locally and
+    /// comparing it against the server ETag.
     pub async fn download(&self, id: &str) -> Result<DownloadedBackup> {
         let response = self
             .http
@@ -138,7 +145,8 @@ impl BackupClient {
         })
     }
 
-    /// 删除服务器上的备份版本（幂等：已删除时 404 视为成功）。
+    /// Delete a backup version from the server (idempotent: a 404 for an
+    /// already-deleted one counts as success).
     pub async fn delete(&self, id: &str) -> Result<()> {
         let response = self
             .http
@@ -155,7 +163,8 @@ impl BackupClient {
     }
 }
 
-/// 统一错误形状 `{"error":{code,message}}` 的提取；body 非 JSON 时给状态码。
+/// Extract the unified error shape `{"error":{code,message}}`; fall back to the
+/// status code when the body is not JSON.
 async fn server_error(
     action: &str,
     status: reqwest::StatusCode,
@@ -170,8 +179,9 @@ async fn server_error(
     anyhow!("{action} failed: {status}")
 }
 
-/// 游标是 base64url（无 padding），仅 `/`/`+`/`=`/`+` 需转义；保守做
-/// 百分号编码（除未保留字符外全转），不引 urlencoding 依赖。
+/// The cursor is base64url (no padding), so only `/`, `+` and `=` need
+/// escaping; be conservative and percent-encode everything but unreserved
+/// characters, avoiding a urlencoding dependency.
 fn urlencoding(input: &str) -> String {
     let mut out = String::with_capacity(input.len());
     for byte in input.bytes() {
@@ -204,7 +214,8 @@ mod tests {
         out
     }
 
-    /// 请求是否已收满（headers + Content-Length 的 body）。
+    /// Whether the request has been received in full (headers plus the
+    /// Content-Length-sized body).
     fn request_complete(buf: &[u8]) -> bool {
         let Some(head_end) = find_subsequence(buf, b"\r\n\r\n") else {
             return false;
@@ -223,9 +234,10 @@ mod tests {
         haystack.windows(needle.len()).position(|w| w == needle)
     }
 
-    /// 与 events::server_sink 测试同型：手写 TCP 假服务器（core 不引
-    /// axum 测试依赖）。四端点最小契约，`/api/v1/backups/b-1` 的上传
-    /// 内容与删除状态留在共享状态里供断言。
+    /// Same shape as the events::server_sink tests: a hand-written TCP fake
+    /// server (core does not pull in an axum test dependency). A minimal
+    /// four-endpoint contract, with the uploaded content and delete state for
+    /// `/api/v1/backups/b-1` kept in shared state for assertions.
     #[derive(Default)]
     struct Shared {
         uploaded: Option<Vec<u8>>,
@@ -383,13 +395,15 @@ mod tests {
         assert_eq!(downloaded.sha256, sha256_hex(payload));
 
         client.delete("b-1").await.unwrap();
-        // 幂等：已删除（404）视为成功；下载也随之 404
+        // Idempotent: an already-deleted one (404) counts as success, and the
+        // download 404s as well
         client.delete("b-1").await.unwrap();
         let err = client.download("b-1").await.unwrap_err();
         assert!(err.to_string().contains("404"), "{err}");
     }
 
-    /// 单响应小服务器（固定状态行 + 头 + 体），供负路径用。
+    /// A single-response mini server (fixed status line + headers + body), for
+    /// exercising the negative paths.
     async fn spawn_raw_server(
         status: &'static str,
         headers: &'static str,

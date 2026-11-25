@@ -2,20 +2,24 @@ use std::path::PathBuf;
 
 use super::git::discover_git_repo;
 
-/// 客户端采集的上下文信号（设计 §3 v1 行）。
+/// Context signals collected on the client side (design §3, v1 line).
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ContextSignals {
-    /// 终端当前目录。
+    /// The terminal's current directory.
     pub cwd: PathBuf,
-    /// 上溯 `.git` 读 remote origin 归一化出的 forge 身份
-    /// （`github.com/owner/repo`）；无 Git 信号为 None。
+    /// Forge identity normalized from the remote origin found by walking
+    /// up to `.git` (`github.com/owner/repo`); None when there is no Git
+    /// signal.
     pub repo: Option<String>,
-    /// 主机名（`PERSONA_HOST` 覆盖 / gethostname）；不可得为 None。
+    /// Hostname (`PERSONA_HOST` override / gethostname); None when
+    /// unavailable.
     pub host: Option<String>,
 }
 
 impl ContextSignals {
-    /// 从进程环境采集信号（CLI 直用；测试请构造字面量，决策函数不依赖环境）。
+    /// Collect signals from the process environment (used directly by the
+    /// CLI; tests should construct literals instead — the decision
+    /// function does not depend on the environment).
     pub fn collect() -> ContextSignals {
         let cwd = std::env::current_dir().unwrap_or_default();
         let repo = discover_git_repo(&cwd);
@@ -27,7 +31,8 @@ impl ContextSignals {
     }
 }
 
-/// 当前主机名：`PERSONA_HOST` 覆盖优先（空值视为未设），否则 gethostname。
+/// Current hostname: `PERSONA_HOST` override takes precedence (an empty
+/// value counts as unset), otherwise gethostname.
 pub fn current_host() -> Option<String> {
     if let Ok(host) = std::env::var("PERSONA_HOST") {
         let host = host.trim().to_string();

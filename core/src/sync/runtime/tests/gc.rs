@@ -1,11 +1,14 @@
-//! oplog GC 域测试（谓词矩阵注释与 retention_days/pending_after_resolve
-//! 域内 helper 随组）。
+//! oplog GC domain tests (the predicate matrix comment and the
+//! retention_days/pending_after_resolve in-domain helpers live with this
+//! group).
 
 use super::*;
 
-// ---- oplog GC（E2EE_SYNC_DESIGN §11 开放问题 3 的客户端半边）----
-// 谓词矩阵：pending 保护 / acked 旧版本可清 / 真冲突副本保护 /
-// 主位 put 永不清理 / tombstone 保留窗口（timestamp None 保守不清）。
+// ---- oplog GC (the client half of E2EE_SYNC_DESIGN section 11 open
+// question 3) ----
+// Predicate matrix: pending is protected / acked old versions are prunable /
+// genuine-conflict copies are protected / master-position puts are never
+// pruned / tombstone retention window (timestamp None is conservatively kept).
 
 fn retention_days(days: i64) -> chrono::Duration {
     chrono::Duration::try_days(days).unwrap()
@@ -17,7 +20,8 @@ async fn gc_prunes_consumed_versions_and_keeps_protection_set() {
     let group = GroupKey::generate().unwrap();
     let sync_repo = SyncRepository::new(db.clone());
 
-    // 已收敛条目：v1 旧版本（acked）+ v2 主位（acked）→ 只清 v1
+    // Converged entry: old v1 (acked) + v2 master position (acked) -> only
+    // v1 is pruned
     let lived = Uuid::new_v4();
     let v1 = conflict_put_op(
         lived,
@@ -36,13 +40,15 @@ async fn gc_prunes_consumed_versions_and_keeps_protection_set() {
     sync_repo.record_remote_op(&v1).await.unwrap();
     sync_repo.record_remote_op(&v2).await.unwrap();
 
-    // 真冲突条目：同 lamport 异设备 → 副本未裁决，双双保护
+    // Genuine conflict entry: same lamport, different devices -> the copy is
+    // unresolved, both are protected
     let conflicted = Uuid::new_v4();
     let (p, c) = seeded_conflict(conflicted, &group, identity.id);
     sync_repo.record_remote_op(&p).await.unwrap();
     sync_repo.record_remote_op(&c).await.unwrap();
 
-    // 未 ack 条目：本机主位 pending 保护；同 item 的 acked 旧版本可清
+    // Unacked entry: the local master position is pending and protected; the
+    // acked old version of the same item is prunable
     let pending_item = Uuid::new_v4();
     let stale = conflict_put_op(
         pending_item,
@@ -75,12 +81,13 @@ async fn gc_prunes_consumed_versions_and_keeps_protection_set() {
     assert!(!sync_repo.has_op(v1.op_id).await.unwrap());
     assert!(!sync_repo.has_op(stale.op_id).await.unwrap());
 
-    // 保护集全数存活
+    // Every entry in the protection set survives
     for kept in [v2.op_id, p.op_id, c.op_id, fresh.op_id] {
         assert!(sync_repo.has_op(kept).await.unwrap());
     }
 
-    // GC 前后主位/副本视图逐字节不变（被清的都是推导上不可见的版本）
+    // The primary/copy view is byte-identical before and after GC (what gets
+    // pruned is by derivation not visible)
     let after_lived = primary_of(&sync_repo.item_ops(lived).await.unwrap());
     assert_eq!(after_lived, before_lived);
     let after_conflict = item_view(sync_repo.item_ops(conflicted).await.unwrap());
@@ -100,8 +107,9 @@ async fn gc_tombstone_window_and_missing_timestamp() {
     let sync_repo = SyncRepository::new(db.clone());
     let now = TestUtc::now();
 
-    // 过窗 acked 墓碑 → 清；窗内 / 无 timestamp（保守）→ 不清；
-    // 过窗但仍在 push 队列 → pending 保护优先，不清
+    // Out-of-window acked tombstone -> pruned; in-window / no timestamp
+    // (conservative) -> kept; out-of-window but still in the push queue ->
+    // pending protection wins, kept
     let mut expired = conflict_delete_op(Uuid::new_v4(), Uuid::new_v4(), 5);
     expired.timestamp = Some(now - retention_days(31));
     let mut in_window = conflict_delete_op(Uuid::new_v4(), Uuid::new_v4(), 5);
@@ -142,9 +150,11 @@ async fn gc_after_resolve_prunes_losing_copies_once_acked() {
         .await
         .unwrap();
 
-    // 裁决采纳即以更大 lamport 重新入账：败方在采纳那一刻就落出副本集
-    // （可清），与采纳 op 是否已推出去无关；pending 保护的只有采纳
-    // op 自身。清理后重放安全：败方重拉回来 lamport 落后，不影响视图。
+    // Adoption re-logs with a larger lamport: the loser drops out of the copy
+    // set (becomes prunable) the moment it is adopted, regardless of whether
+    // the adopt op has been pushed yet; only the adopt op itself is pending
+    // and protected. Replay after pruning is safe: if the loser is pulled
+    // back its lamport lags behind and the view is unaffected.
     let report = session
         .gc_oplog(default_tombstone_retention())
         .await
@@ -154,7 +164,7 @@ async fn gc_after_resolve_prunes_losing_copies_once_acked() {
     assert_eq!(rest.len(), 1);
     assert_eq!(rest[0].op_id, pending_after_resolve(&sync_repo, item).await);
 
-    // ack 后再跑一轮：队列空，无可清
+    // Run another round after ack: the queue is empty, nothing to prune
     let pending = sync_repo.pending_ops(100).await.unwrap();
     assert_eq!(pending.len(), 1);
     sync_repo.mark_acked(&[pending[0].op_id]).await.unwrap();
@@ -164,7 +174,7 @@ async fn gc_after_resolve_prunes_losing_copies_once_acked() {
         .unwrap();
     assert_eq!(report.removed_ops, 0);
 
-    // 视图收敛到被采纳副本，冲突区清空
+    // The view converges on the adopted copy and the conflict area is empty
     let view = item_view(sync_repo.item_ops(item).await.unwrap());
     let new_primary = view.primary.unwrap();
     assert_eq!(new_primary.op_id, pending[0].op_id);
@@ -172,7 +182,8 @@ async fn gc_after_resolve_prunes_losing_copies_once_acked() {
     assert!(view.conflicts.is_empty());
 }
 
-/// 裁决采纳后 push 队列里那条采纳 op 的 op_id（断言辅助）。
+/// op_id of the adopt op in the push queue after a resolution
+/// (an assertion helper).
 async fn pending_after_resolve(sync_repo: &SyncRepository, item: Uuid) -> Uuid {
     let pending = sync_repo.pending_ops(100).await.unwrap();
     assert_eq!(pending.len(), 1);

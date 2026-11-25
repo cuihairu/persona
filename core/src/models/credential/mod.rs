@@ -1,9 +1,11 @@
-//! 凭据主实体：`Credential` 行模型与结构化自定义字段附属类型。
+//! Credential main entity: the `Credential` row model and its structured
+//! custom-field accessory types.
 //!
-//! # 模块布局
+//! # Module layout
 //!
-//! 枚举与字符串解析在 [`types`]，多类型 payload 与脱敏 Debug、bincode
-//! 编解码在 [`payloads`]；此处只留主实体。
+//! The enums and string parsing live in [`types`]; the multi-type payloads,
+//! redacted Debug impls and bincode codec live in [`payloads`]. Only the main
+//! entity stays here.
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};

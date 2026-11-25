@@ -1,4 +1,5 @@
-//! 交易域（LAY-022 拆分）：交易请求、签名交易、统计与行→模型映射。
+//! Transaction domain (LAY-022 split): transaction requests, signed
+//! transactions, stats and the row -> model mapping.
 
 use super::*;
 
@@ -42,11 +43,13 @@ impl CryptoWalletRepository {
 
     /// Create signed transaction
     ///
-    /// 同一事务内写入签名结果并把原请求标记为已签（2026-11-13 codex 深审
-    /// Major 修复）：此前只插 signed_transactions、不动
-    /// transaction_requests.signed_at，待签查询（`signed_at IS NULL`）
-    /// 会把已签请求永远再列出来，可重复触发签名。请求不存在时报 NotFound
-    /// 并回滚插入。
+    /// Writes the signed result and marks the original request as signed within a
+    /// single transaction (2026-11-13 codex deep audit, Major fix): this used
+    /// to insert into signed_transactions only, leaving
+    /// transaction_requests.signed_at untouched, so the pending query
+    /// (`signed_at IS NULL`) kept listing already-signed requests forever and
+    /// could re-trigger signing. A missing request reports NotFound and the
+    /// insert is rolled back.
     pub async fn create_signed_transaction(
         &self,
         signed_tx: &SignedTransaction,

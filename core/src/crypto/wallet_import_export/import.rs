@@ -1,5 +1,6 @@
-//! 钱包导入实现（LAY-018 拆分）：mnemonic/private key/WIF/JSON 导入与
-//! HD/Solana 地址派生、签名密钥解析。`parse_network_name`、`WalletExport` 自枢纽引入。
+//! Wallet import implementation (LAY-018 split): mnemonic / private key / WIF /
+//! JSON import plus HD and Solana address derivation and signing-key
+//! resolution. `parse_network_name` and `WalletExport` come from the hub.
 
 use super::{parse_network_name, WalletExport};
 use crate::crypto::address_generator::{
@@ -158,9 +159,10 @@ pub fn signing_key_for_address(
     if wallet.network == BlockchainNetwork::Solana {
         let root_material = decrypt_private_key(&encrypted_key, password)?;
 
-        // 单密钥钱包存原始 32 字节 Ed25519 种子，直接签名（2026-11-13
-        // 深审 Major 修复：此前这里无条件按 64 字节 SLIP-0010 根节点解析，
-        // 单密钥 Solana 钱包导入成功却永远无法签名）。
+        // Single-key wallets store the raw 32-byte Ed25519 seed and sign directly
+        // (2026-11-13 deep audit, Major fix: this used to unconditionally parse
+        // a 64-byte SLIP-0010 root node, so single-key Solana wallets imported
+        // fine but could never sign).
         if matches!(wallet.wallet_type, WalletType::SingleAddress) {
             let secret: [u8; 32] = root_material.as_slice().try_into().map_err(|_| {
                 PersonaError::CryptographicError("Invalid Solana key material length".to_string())
@@ -169,8 +171,8 @@ pub fn signing_key_for_address(
             return Ok(WalletSigningKey::Ed25519(key));
         }
 
-        // HD 钱包存 64 字节 SLIP-0010 根节点（secret+chain code），按地址
-        // 派生路径签名。
+        // HD wallets store the 64-byte SLIP-0010 root node (secret + chain code) and
+        // sign along each address's derivation path.
         let secret: [u8; 32] = root_material
             .get(..32)
             .and_then(|s| s.try_into().ok())
@@ -256,9 +258,9 @@ pub fn import_from_private_key(
                         .to_string(),
                 ));
             }
-            // WIF 便捷入口与 import_from_wif 同一合同：拒收 testnet 与
-            // 非压缩格式（2026-11-13 深审 Major 修复：此前经这里绕过了
-            // 两道检查）。
+            // The WIF fallback honors the same contract as import_from_wif: reject
+            // testnet and uncompressed formats (2026-11-13 deep audit, Major
+            // fix: this path used to bypass both checks).
             let parsed = parse_wif(private_key_hex)?;
             if parsed.testnet {
                 return Err(PersonaError::InvalidInput(

@@ -1,6 +1,8 @@
-//! 钱包导入/导出（LAY-018 拆分）：`ImportFormat`/`ExportFormat`/`WalletExport`
-//! 公共类型、格式字符串解析与网络名解析留在枢纽；导入/导出实现分别在
-//! import/export 子模块，经 `pub use` 保持原外部路径零改动。
+//! Wallet import/export (LAY-018 split): the public types
+//! `ImportFormat`/`ExportFormat`/`WalletExport`, format-string parsing and
+//! network-name parsing stay in the hub; the import/export implementations live
+//! in the import/export submodules, re-exported via `pub use` so existing
+//! external paths need no changes.
 
 use crate::models::wallet::BlockchainNetwork;
 use crate::{PersonaError, PersonaResult};

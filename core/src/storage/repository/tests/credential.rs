@@ -90,7 +90,7 @@ async fn credential_repository_crud_and_queries() {
 
     let hits = repo.search_by_fields("Renamed").await.unwrap();
     assert_eq!(hits.len(), 1);
-    // username / url 子串同样命中（NULL 列不参与匹配）
+    // username / url substrings also match (NULL columns do not participate in matching)
     assert_eq!(
         repo.search_by_fields("alice-search").await.unwrap().len(),
         1

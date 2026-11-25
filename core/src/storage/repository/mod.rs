@@ -1,10 +1,10 @@
-//! 仓储模块（LAY-017 拆分）：identity/credential/workspace/audit 四个仓储各自
-//! 独立成子模块，通用 `Repository<T>` trait 与再导出留在枢纽。
+//! Repository module (LAY-017 split): the identity/credential/workspace/audit repositories each
+//! become their own submodule, while the generic `Repository<T>` trait and the re-exports stay in the hub.
 //!
-//! 外部路径零改动：`storage::repository::{IdentityRepository, CredentialRepository,
+//! External paths are unchanged: `storage::repository::{IdentityRepository, CredentialRepository,
 //! WorkspaceRepository, AuditLogRepository, AuditLogStatistics,
-//! SECURITY_SENSITIVE_AUDIT_ACTIONS, Repository}` 均经 `pub use` 保持原路径，
-//! `storage::*`（storage/mod.rs 的 `pub use repository::*`）亦不变。
+//! SECURITY_SENSITIVE_AUDIT_ACTIONS, Repository}` all keep their original paths via `pub use`,
+//! and `storage::*` (storage/mod.rs's `pub use repository::*`) is unaffected as well.
 
 use crate::Result;
 use async_trait::async_trait;

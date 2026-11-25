@@ -39,13 +39,14 @@ impl PersonaService {
         self.user_auth_repo.has_any().await
     }
 
-    /// Opt-in master-password expiry policy（`WorkspaceSettings
-    /// .password_expiry_days`），lazy 求值：解锁时对比
-    /// `password_updated_at`，超期则置位 `password_change_required`，
-    /// 随后 `authenticate_password` 按既有语义返回 `PasswordChangeRequired`。
+    /// Opt-in master-password expiry policy (`WorkspaceSettings
+    /// .password_expiry_days`), evaluated lazily: at unlock the age of
+    /// `password_updated_at` is compared, and on expiry `password_change_required` is set, after
+    /// which `authenticate_password` returns `PasswordChangeRequired` per its existing semantics.
     ///
-    /// fail-open：设置读取失败只 warn 跳过，绝不因策略读取出错锁死解锁；
-    /// 时间戳缺失同样跳过（迁移已回填，防御性兜底）。
+    /// Fail-open: a settings read failure only warns and is skipped — a policy read error must
+    /// never lock the user out of unlocking; a missing timestamp is likewise skipped (migrations
+    /// backfill it, so this is defensive).
     pub(crate) async fn enforce_password_expiry(&self, user_auth: &mut UserAuth) -> Result<()> {
         let Some(days) = self.load_password_expiry_days().await? else {
             return Ok(());
@@ -66,7 +67,7 @@ impl PersonaService {
         Ok(())
     }
 
-    /// 读取主密码过期天数；读不到或读取失败一律返回 None（fail-open）。
+    /// Read the master-password expiry in days; returning None when there is no value or the read fails (fail-open).
     pub(crate) async fn load_password_expiry_days(&self) -> Result<Option<u32>> {
         match Repository::find_all(&self.workspace_repo).await {
             Ok(workspaces) => Ok(workspaces
@@ -81,10 +82,11 @@ impl PersonaService {
         }
     }
 
-    /// 旅行模式是否激活。消费方：改密拦截（旅行模式下改密会让 sidecar
-    /// 里的 wrapped key 变砖，settings 读不出来时宁可拒绝改密也不冒险
-    /// 放行，fail-closed）与 sync_now 的 travel 闸采样。只读 settings
-    /// 布尔，不依赖 travel 模块本体，故不挂 feature 门控。
+    /// Whether travel mode is active. Consumers: the password-change block (changing the password
+    /// during travel mode bricks the wrapped key in the sidecar; when settings cannot be read,
+    /// refusing the change is preferred to taking the risk, fail-closed) and sampling the travel
+    /// gate in sync_now. Reads only a settings boolean and does not depend on the travel module
+    /// itself, so it carries no feature gate.
     pub async fn travel_mode_active(&self) -> Result<bool> {
         let workspaces = Repository::find_all(&self.workspace_repo).await?;
         Ok(workspaces
@@ -184,14 +186,15 @@ impl PersonaService {
             self.current_user = Some(user_auth.user_id);
             self.touch_activity();
 
-            // Create and register session for auto-lock management. 之前只有
-            // 底层 authenticate 原语建 session，而生产登录全部走本方法——
-            // session 从未建立，auto-lock 监控与 Locked 事件强制落锁对
-            // 正常登录路径完全失效。
+            // Create and register a session for auto-lock management. Previously only the
+            // low-level authenticate primitive created sessions, while every production login went
+            // through this method — no session was ever established, so auto-lock monitoring and
+            // the Locked event's forced lock were completely inert on the normal login path.
             let mut session = Session::new(user_auth.user_id.to_string(), self.auto_lock_timeout);
-            // 登录/再认证本身就是一次敏感验证：记录敏感活动，否则打开
-            // require_reauth_sensitive 后，刚登录的用户连第一个敏感操作都
-            // 会被闸——而敏感计时器只能由成功的敏感操作刷新，形成死锁。
+            // Login/re-auth is itself a sensitive verification: record sensitive activity. Otherwise,
+            // once require_reauth_sensitive is on, a freshly logged-in user is gated on the very
+            // first sensitive operation — and the sensitive timer can only be refreshed by a
+            // successful sensitive operation, so this deadlocks.
             session.touch_sensitive();
             let session_id = session.id.clone();
             *self.current_session_id.write().await = Some(session_id.clone());
@@ -227,20 +230,22 @@ impl PersonaService {
         Ok(auth_result)
     }
 
-    /// 低层原语：直接用主密钥建立会话加密服务（跳过密码派生）。
+    /// Low-level primitive: establish the session encryption service directly from a master key
+    /// (skipping password derivation).
     ///
-    /// 消费方：硬件绑定的生物识别解锁（`biometric_wrap` 模块解出主密钥
-    /// 后走此路径）。生产代码不要拿它当密码解锁的旁路——调用方必须
-    /// 自己保证密钥来源经过了认证（硬件 ceremony / 密码派生）。
+    /// Consumer: hardware-bound biometric unlock (the `biometric_wrap` module recovers the master
+    /// key and then takes this path). Production code must not use this as a bypass around
+    /// password unlock — the caller is responsible for guaranteeing the key came from an
+    /// authenticated source (hardware ceremony / password derivation).
     pub fn unlock_with_master_key(&mut self, master_key: &[u8; 32]) -> Result<()> {
         self.master_encryption = Some(crate::crypto::EncryptionService::new(master_key));
         *self.last_activity.lock().unwrap() = Some(std::time::Instant::now());
         Ok(())
     }
 
-    /// 派生当前用户的主密钥（供硬件绑定的 biometric enable 在密码刚
-    /// 验证过后重导出密钥交给包裹层）。密码不对会派生出错误密钥——
-    /// 调用方必须先走 `authenticate_user`。
+    /// Derive the current user's master key (for hardware-bound biometric enable to re-export the
+    /// key and hand it to the wrapping layer right after the password was verified). A wrong
+    /// password derives a wrong key — the caller must go through `authenticate_user` first.
     pub async fn derive_master_key_for_wrap(&self, master_password: &str) -> Result<[u8; 32]> {
         let Some(user_auth) = self.user_auth_repo.get_first().await? else {
             return Err(crate::PersonaError::NotFound("no user initialized".to_string()).into());
@@ -255,13 +260,14 @@ impl PersonaService {
         ))
     }
 
-    /// 用主密钥认证（硬件绑定生物识别解锁的服务层入口）。
+    /// Authenticate with a master key (the service-layer entry for hardware-bound biometric unlock).
     ///
-    /// 与 [`Self::authenticate_user`] 语义对齐，只把"密码验证"一步换成
-    /// "调用方已完成硬件认证"：锁户仍然拒绝（生物识别不越过 5 次失败
-    /// 锁户）、`password_change_required` 强制改密旗标仍然短路、失败计数
-    /// 复位、session 创建 + `touch_sensitive`、审计 Login（details 记
-    /// `source`，桌面传 "biometric-wrap"）。
+    /// Semantically aligned with [`Self::authenticate_user`], except the "password verification"
+    /// step becomes "the caller has already completed hardware authentication": a locked account
+    /// is still refused (biometrics do not bypass the 5-failure lockout), the
+    /// `password_change_required` forced-rotation flag still short-circuits, failed attempts are
+    /// reset, a session is created + `touch_sensitive` is called, and Login is audited (details
+    /// carry `source`; desktop passes "biometric-wrap").
     pub async fn authenticate_with_master_key(
         &mut self,
         master_key: &[u8; 32],
@@ -271,7 +277,7 @@ impl PersonaService {
             return Ok(AuthResult::InvalidCredentials);
         };
 
-        // 过期策略先行 + 旗标短路：与 authenticate_password 同序同语义
+        // Expiry policy first, then the flag short-circuits: same order and semantics as authenticate_password
         self.enforce_password_expiry(&mut user_auth).await?;
         if user_auth.is_locked() {
             return Ok(AuthResult::AccountLocked);
@@ -330,10 +336,11 @@ impl PersonaService {
         old_password: &str,
         new_password: &str,
     ) -> Result<()> {
-        // 旅行模式开启期间拒绝改密：sidecar 里被移除身份的 wrapped_item_key
-        // 由旧主密钥包裹，改密只重包库内存活行 → 恢复后数据变砖。
-        // PersonaService 不知道 db 路径，现读 workspaces 首行 settings
-        //（与 user_auth_repo.get_first() 的"首行即真相"先例一致）。
+        // Refuse a password change while travel mode is active: the wrapped_item_key of identities
+        // removed into the sidecar is wrapped by the old master key, and a change only re-wraps the
+        // live rows in the database -> the data bricks on restore.
+        // PersonaService does not know the db path, so read the first workspaces row's settings
+        // right now (consistent with the "first row is the truth" precedent of user_auth_repo.get_first()).
         #[cfg(feature = "backup")]
         if self.travel_mode_active().await? {
             return Err(PersonaError::TravelModeActive(

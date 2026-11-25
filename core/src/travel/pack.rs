@@ -1,5 +1,5 @@
-//! 跨库读取聚合：把被标记身份关联的全部行与附件字节打包成
-//! `TravelPack`。
+//! Cross-database read aggregation: pack all rows tied to the marked
+//! identities plus attachment bytes into a `TravelPack`.
 
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
@@ -13,12 +13,12 @@ use super::model::{TravelBlobFile, TravelPack};
 use super::{sha256_hex, FORMAT_NAME, FORMAT_VERSION};
 use crate::{PersonaError, PersonaResult};
 
-/// 逗号分隔的 `?` 占位符串（IN 子句用）。
+/// Comma-separated string of `?` placeholders (for IN clauses).
 pub(super) fn placeholders(count: usize) -> String {
     vec!["?"; count].join(", ")
 }
 
-/// 读一行集：`SELECT * FROM {table} WHERE {key} IN (...)`。
+/// Read one row set: `SELECT * FROM {table} WHERE {key} IN (...)`.
 async fn select_rows_by_ids(
     pool: &SqlitePool,
     table: &str,
@@ -43,10 +43,12 @@ async fn select_rows_by_ids(
     rows.iter().map(row_to_json).collect()
 }
 
-/// 读被标记身份的全部数据行 + 附件文件字节。
+/// Read all data rows of the marked identities + attachment file bytes.
 ///
-/// `attachments_root`：附件根目录（`AttachmentManager::storage_root()`）；
-/// 被标记身份有附件行但为 None 时报错（调用方 service 保证传入）。
+/// `attachments_root`: the attachment root directory
+/// (`AttachmentManager::storage_root()`); error out when the marked
+/// identities have attachment rows but this is None (the caller service
+/// guarantees it is passed).
 pub(crate) async fn build_pack(
     pool: &SqlitePool,
     attachments_root: Option<&Path>,
@@ -59,7 +61,8 @@ pub(crate) async fn build_pack(
     }
     let in_identities = placeholders(marked.len());
 
-    // 展开凭据/附件/钱包 id（attachment_chunks、钱包子表按父 id 收集）
+    // Expand credential/attachment/wallet ids (attachment_chunks and the
+    // wallet child tables are collected by parent id)
     let credential_ids: Vec<String> = {
         let sql = format!("SELECT id FROM credentials WHERE identity_id IN ({in_identities})");
         let mut query = sqlx::query(AssertSqlSafe(sql.as_str()));
@@ -109,7 +112,8 @@ pub(crate) async fn build_pack(
             .map_err(|e| PersonaError::Database(e.to_string()))?
     };
 
-    // change_history 的 entity_id 全集：身份 ∪ 凭据 ∪ 附件（UUID 互斥）
+    // Full entity_id set for change_history: identities ∪ credentials ∪
+    // attachments (mutually exclusive UUIDs)
     let mut history_ids = marked.to_vec();
     history_ids.extend(credential_ids.iter().cloned());
     history_ids.extend(attachment_ids.iter().cloned());
@@ -164,8 +168,9 @@ pub(crate) async fn build_pack(
         select_rows_by_ids(pool, "change_history", "entity_id", &history_ids).await?,
     );
 
-    // 附件 blob 文件（行数 = 文件数：单文件型一行一文件；分块型
-    // chunk 行各一个文件）。storage_path 为相对 attachments 根的路径。
+    // Attachment blob files (row count == file count: single-file rows are
+    // one file each; chunked attachments have one file per chunk row).
+    // storage_path is relative to the attachments root.
     let mut attachment_files = Vec::new();
     let file_rows: Vec<(String, String)> = tables
         .get("attachments")
@@ -216,7 +221,8 @@ pub(crate) async fn build_pack(
         }
     }
 
-    // workspace 的 active 指针若指向被移除身份则记入 pack（exit 还原）
+    // If the workspace active pointer targets a removed identity, record it
+    // in the pack (restored on exit)
     let active_identity_id: Option<String> = {
         let row: Option<(Option<String>, String)> = sqlx::query_as(
             "SELECT active_identity_id, settings FROM workspaces ORDER BY rowid LIMIT 1",

@@ -1,21 +1,22 @@
-//! wire 形状：server Events API 的客户端镜像与发送前预校验。
+//! Wire shapes: the client-side mirror of the server Events API plus pre-send validation.
 //!
-//! [`limits`] 与 `server/src/api/events.rs` 的校验上限逐项保持同步
-//! （server 是权威；core 不能反向依赖 server，只能注释锚定——那边
-//! 改了必须两边一起改）。
+//! [`limits`] stays in item-by-item sync with the validation ceilings in
+//! `server/src/api/events.rs` (the server is authoritative; core cannot
+//! depend on server in reverse, so the link is anchored only by comments —
+//! a change over there must land in both places).
 
 use crate::models::AuditLog;
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 use std::collections::HashMap;
 
-/// server 校验上限镜像（字节口径，与 server 端 `str::len()` 一致）。
+/// Mirror of the server's validation ceilings (in bytes, consistent with the server's `str::len()`).
 pub mod limits {
-    /// server 单批上限（server/src/api/events.rs `MAX_BATCH_SIZE`）；
-    /// `EmitterConfig::batch_size` 不得超过此值。
+    /// The server's per-batch cap (server/src/api/events.rs `MAX_BATCH_SIZE`);
+    /// `EmitterConfig::batch_size` must not exceed this value.
     pub const MAX_BATCH_SIZE: usize = 500;
     pub const MAX_ACTION_LEN: usize = 128;
-    /// id / resource_id / user_id / session_id 共用。
+    /// Shared by id / resource_id / user_id / session_id.
     pub const MAX_ID_LEN: usize = 256;
     pub const MAX_IP_LEN: usize = 64;
     pub const MAX_UA_LEN: usize = 512;
@@ -25,8 +26,9 @@ pub mod limits {
     pub const MAX_METADATA_VALUE_LEN: usize = 512;
 }
 
-/// server `IngestEvent` 的客户端镜像。`id` 是幂等键（AuditLog 的 UUID），
-/// server 据此去重；Option 字段全部跳过序列化，省带宽并对齐 server 语义。
+/// Client-side mirror of the server `IngestEvent`. `id` is the idempotency key
+/// (the AuditLog UUID), which the server deduplicates on; every Option field
+/// is skipped during serialization to save bandwidth and match server semantics.
 #[derive(Debug, Clone, Serialize)]
 pub struct WireEvent {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -55,7 +57,7 @@ pub struct WireEvent {
     pub timestamp: DateTime<Utc>,
 }
 
-/// 单条事件的预校验失败原因（`field` 为静态字段名，对齐 server ErrorItem）。
+/// A pre-validation failure reason for a single event (`field` is a static field name, aligned with the server's ErrorItem).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WireIssue {
     pub field: &'static str,
@@ -71,13 +73,15 @@ impl WireIssue {
     }
 }
 
-/// `AuditLog` → wire。逐条按 server 上限做**字节**长度预校验——server 是
-/// 全有或全无校验，一条毒丸会拖垮整批；不合法返回全部原因，调用方丢弃
-/// 并 warn。长度一律 `str::len()`（字节），与 server 口径一致。
+/// `AuditLog` → wire. Each entry is pre-validated against the server ceilings by
+/// **byte** length — the server validates all-or-nothing, so one poison pill
+/// sinks the whole batch; all reasons for an invalid entry are returned and the
+/// caller discards it with a warning. Lengths are always `str::len()` (bytes),
+/// matching the server's convention.
 ///
-/// action/resource_type 用 `Display` 而非 serde：`AuditAction` 的 serde 是
-/// externally-tagged（`Custom` 序列化为 `{"custom":"x"}` 对象），server
-/// 期望纯字符串。
+/// action/resource_type use `Display` rather than serde: `AuditAction`'s serde
+/// representation is externally-tagged (`Custom` serializes to a
+/// `{"custom":"x"}` object), while the server expects a plain string.
 pub fn to_wire(log: &AuditLog) -> Result<WireEvent, Vec<WireIssue>> {
     let mut issues = Vec::new();
 
@@ -177,7 +181,7 @@ pub fn to_wire(log: &AuditLog) -> Result<WireEvent, Vec<WireIssue>> {
     })
 }
 
-/// 批量转换：返回（合法批, (输入下标, 原因) 列表），顺序保持。
+/// Batch conversion: returns (valid batch, list of (input index, reasons)), preserving order.
 pub fn build_batch(logs: &[AuditLog]) -> (Vec<WireEvent>, Vec<(usize, Vec<WireIssue>)>) {
     let mut events = Vec::with_capacity(logs.len());
     let mut rejected = Vec::new();
@@ -219,7 +223,7 @@ mod tests {
         assert_eq!(event.action, "login");
         assert_eq!(event.resource_type, "user");
         assert!(event.success);
-        // id 是幂等键：AuditLog 的 UUID 字符串
+        // id is the idempotency key: the AuditLog UUID string
         assert_eq!(event.id.as_deref(), Some(log.id.to_string().as_str()));
     }
 
@@ -265,8 +269,9 @@ mod tests {
 
     #[test]
     fn each_limit_rejects_oversized_value_in_bytes() {
-        // 按字节校验：43 个 CJK 字符 = 129 字节 > 128，字符数 43 却 ≤ 128——
-        // 若按字符数校验此用例会放行毒丸。
+        // Byte-based validation: 43 CJK characters = 129 bytes > 128, though the
+        // character count of 43 is ≤ 128 — validating by character count would let
+        // this poison pill through.
         let cjk129: String = "审".repeat(43);
         assert_eq!(cjk129.len(), 129);
 
@@ -285,7 +290,7 @@ mod tests {
             assert!(!issues.is_empty());
         }
 
-        // metadata 条数上限
+        // metadata entry-count ceiling
         let map: HashMap<String, String> = (0..33).map(|i| (format!("k{i}"), "v".into())).collect();
         assert!(!to_wire(&sample_log().with_metadata_map(map)).is_ok());
     }

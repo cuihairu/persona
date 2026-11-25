@@ -27,74 +27,91 @@ pub struct Workspace {
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
 
-/// 高级功能开关（1Password 式默认关闭、用户 opt-in）。
+/// Advanced feature flags (1Password-style: off by default, user opt-in).
 ///
-/// 主航道功能（凭据/统计/Watchtower）恒开，不在此列。
+/// Mainline features (credentials/stats/Watchtower) are always on and not
+/// listed here.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct FeatureFlags {
-    /// SSH agent（浏览器/终端经 socket 取钥签名）
+    /// SSH agent (browsers/terminals fetch keys over the socket to sign)
     pub ssh_agent: bool,
-    /// 钱包面板
+    /// Wallet panel
     pub wallet: bool,
-    /// Passkey 管理与审批服务端
+    /// Passkey management and approval server
     pub passkeys: bool,
-    /// 站点 favicon 按需抓取与展示（隐私红线：唯一外联入口是详情面板
-    /// "Fetch icon" 按钮，开 = 显示按钮与缓存图标，关 = 无网络行为）
+    /// On-demand fetching and display of site favicons (privacy red line: the
+    /// only outbound entry point is the "Fetch icon" button in the detail
+    /// panel; on = show the button and cached icons, off = no network behavior)
     pub fetch_favicons: bool,
 }
 
-/// 可选同步服务器（persona-server Events API）的客户端配置。
+/// Client configuration for the optional sync server (persona-server Events
+/// API).
 ///
-/// `server_token` 为上报用的共享 Bearer 令牌。desktop 宿主把它存 OS
-/// keyring（键为 vault db_path），本结构在 vault settings JSON 里恒写
-/// 空串占位；读到非空值即 keyring 批次之前的 legacy 数据，宿主首次
-/// 运行时一次性迁移进 keyring（THREAT_MODEL 已登记）。
+/// `server_token` is the shared Bearer token used for reporting. The desktop
+/// host stores it in the OS keyring (keyed by the vault db_path); this struct
+/// always writes an empty-string placeholder in the vault settings JSON. A
+/// non-empty value read back is legacy data predating the keyring batch,
+/// migrated into the keyring once on the host's first run (registered in
+/// THREAT_MODEL).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SyncConfig {
-    /// 是否把本地审计事件上报到 persona-server
+    /// Whether local audit events are reported to persona-server
     pub enabled: bool,
-    /// 服务器 base_url（形如 `http://127.0.0.1:3000`，可带反代前缀）
+    /// Server base_url (e.g. `http://127.0.0.1:3000`; may carry a reverse
+    /// proxy prefix)
     pub server_url: String,
-    /// 共享 Bearer 令牌；desktop 宿主恒写空串（真值在 OS keyring），
-    /// CLI 不落盘（env-only）；提交空串 = 保留旧值
+    /// Shared Bearer token; the desktop host always writes an empty string
+    /// (the real value lives in the OS keyring), the CLI never writes it to
+    /// disk (env-only); submitting an empty string = keep the old value
     pub server_token: String,
-    /// 云盘传输（Phase 2）的同步文件夹本机路径（iCloud Drive/Dropbox/
-    /// Google Drive 的本地同步目录）。非 secret → 存 JSON 字段；None =
-    /// 未配置云盘同步。仅 `sync_transport = cloud` 时有意义。
+    /// Local path of the sync folder for the cloud-drive transport (Phase 2;
+    /// the local sync directory of iCloud Drive/Dropbox/Google Drive). Not a
+    /// secret, so it is stored as a JSON field; None = no cloud-drive sync
+    /// configured. Only meaningful when `sync_transport = cloud`.
     #[serde(default)]
     pub cloud_drive_dir: Option<String>,
-    /// 同步指令流走哪条传输（Phase 2 云盘 + server 双轨，2026-11-23
-    /// 用户令「一起设计」）。默认 Server——既有行为不变。
+    /// Which transport the sync command stream uses (Phase 2 cloud-drive +
+    /// server dual rail, per the 2026-11-23 user directive "design them
+    /// together"). Defaults to Server — existing behavior unchanged.
     #[serde(default)]
     pub sync_transport: SyncTransport,
 }
 
-/// 同步指令流的传输选择（Phase 2 云盘双轨）。默认 Server（既有行为）；
-/// `cloud` = 指令流经云盘目录文件交换（同 [`SyncConfig::cloud_drive_dir`]）。
+/// Transport choice for the sync command stream (Phase 2 cloud-drive dual
+/// rail). Defaults to Server (existing behavior); `cloud` = the command
+/// stream is exchanged through files in the cloud-drive directory (same as
+/// [`SyncConfig::cloud_drive_dir`]).
 ///
-/// 与 `settings.sync_methods`（设置页方式开关）独立：`sync_methods` 控
-/// 设置页入口可用性（跨设备/账号），`sync_transport` 控引擎用哪条传输。
+/// Independent of `settings.sync_methods` (the settings-page method switches):
+/// `sync_methods` controls the availability of the settings-page entries
+/// (cross-device/account), while `sync_transport` controls which transport the
+/// engine uses.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SyncTransport {
-    /// persona-server HTTP（既有传输，默认）
+    /// persona-server HTTP (the existing transport, default)
     #[default]
     Server,
-    /// 云盘目录文件传输（Phase 2）
+    /// Cloud-drive directory file transport (Phase 2)
     Cloud,
 }
 
-/// 同步方式开关（设置页「同步方式」区块，各自独立；2026-11-23 用户令
-/// 「设置页面中需要对应的设置选项，同步的方式哪些开启」）。
+/// Sync method switches (the settings page's "sync methods" section, each
+/// independent; per the 2026-11-23 user directive "the settings page needs
+/// the corresponding setting options, which sync methods are enabled").
 ///
-/// **与 `SyncConfig.enabled`（审计事件上报）是两套独立语义，绝不合并。**
-/// 派生态（实际是否入组/已加入）是运行时的 keyring 事实，不由本字段
-/// 决定——本字段只控设置页入口的可用性（关 = 停用入口，不离开同步组、
-/// 不删 keyring、不触发网络）。
+/// **These are two separate semantics from `SyncConfig.enabled` (audit event
+/// reporting); never merge them.** The derived state (whether the user is
+/// actually grouped/joined) is a runtime keyring fact, not decided by these
+/// fields — they only control whether the settings-page entries are available
+/// (off = disable the entry: it does not leave the sync group, delete the
+/// keyring or trigger any network activity).
 ///
-/// 默认：跨设备同步**开**（默认同步方式），账号同步**关**（须显式开启，
-/// 见 `docs/sync-group-mode.md` §1 的显式开启口径）。
+/// Defaults: cross-device sync is **on** (the default sync method), account
+/// sync is **off** (requires an explicit opt-in; see the explicit opt-in rule
+/// in `docs/sync-group-mode.md` §1).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SyncMethods {
     pub cross_device_sync: bool,
@@ -110,32 +127,38 @@ impl Default for SyncMethods {
     }
 }
 
-/// 账号域绑定（本 vault 关联的账号身份）。非敏感标识存盘：account_id
-/// 是登录唯一标识（persona-server 无 username→account_id 解析端点，登录
-/// 仪式按 account_id 作用域发起）；username/device_name 仅供展示。令牌
-/// 真值**不在盘上**——desktop 在 OS keyring（ACCOUNT_SERVICE），与 sync
-/// 配置的 token 同纪律。
+/// Account-domain binding (the account identity associated with this vault).
+/// Non-sensitive identifiers are persisted: account_id is the unique login
+/// identifier (persona-server has no username→account_id resolution endpoint, so
+/// the login ritual is scoped by account_id); username/device_name are for
+/// display only. The real token value is **never on disk** — desktop keeps it
+/// in the OS keyring (ACCOUNT_SERVICE), under the same discipline as the sync
+/// config's token.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct AccountBinding {
     pub account_id: String,
     pub username: String,
-    /// 本机 SRP 凭证的设备名（SRP identity + 多设备管理里的展示位）
+    /// Device name of the local SRP credential (the display slot in SRP
+    /// identity and multi-device management)
     #[serde(default)]
     pub device_name: Option<String>,
 }
 
-/// 一次整库加密备份的导出记录（S5 自救口，非敏感元数据）。
+/// Export record for a full-database encrypted backup (the S5 self-rescue
+/// path; non-sensitive metadata).
 ///
-/// 口令本身**永不落盘**（与主密码同纪律）；只记时刻/目标/尺寸，供
-/// 「设备全丢=库全丢」常驻警示（设计稿 §6.5）把「已导出过备份」作为
-/// 解除证据之一。
+/// The passphrase itself is **never written to disk** (same discipline as the
+/// master password); only the time/destination/size are recorded, so that the
+/// persistent "lose every device = lose the vault" warning (design doc §6.5)
+/// can treat "a backup has been exported" as one piece of clearing evidence.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct BackupEvidence {
-    /// 导出时刻（RFC3339）。
+    /// Export time (RFC3339).
     pub exported_at: String,
-    /// 目标类型："file"（本地文件）/ "server"（服务器密文仓，后续批）。
+    /// Destination type: "file" (local file) / "server" (server ciphertext
+    /// vault, later batch).
     pub destination: String,
-    /// 密文字节数。
+    /// Number of ciphertext bytes.
     pub size_bytes: u64,
 }
 
@@ -160,75 +183,93 @@ pub struct WorkspaceSettings {
     /// Default identity type for new identities
     pub default_identity_type: String,
 
-    /// 高级功能开关（旧 JSON 缺键时回退全关）
+    /// Advanced feature flags (all off when an old JSON lacks the key)
     #[serde(default)]
     pub features: FeatureFlags,
 
-    /// 可选同步服务器配置（旧 JSON 缺键时为 None）
+    /// Optional sync server configuration (None when an old JSON lacks the key)
     #[serde(default)]
     pub sync: Option<SyncConfig>,
 
-    /// 同步方式开关（跨设备同步默认开、账号同步默认关；旧 JSON 缺键回退
-    /// 默认）。见 [`SyncMethods`]。
+    /// Sync method switches (cross-device sync on by default, account sync
+    /// off by default; missing keys in old JSON fall back to the defaults).
+    /// See [`SyncMethods`].
     #[serde(default)]
     pub sync_methods: SyncMethods,
 
-    /// 主密码有效期（天）；None = 不过期（默认，NIST 取向：仅在用户
-    /// 显式选择后强制轮换）。Some(days) 且超期时，解锁返回
-    /// `AuthResult::PasswordChangeRequired` 引导改密（旧 JSON 缺键时为 None）
+    /// Master password lifetime (days); None = never expires (the default,
+    /// NIST-aligned: rotation is enforced only after the user explicitly
+    /// opts in). Some(days) past its term makes unlock return
+    /// `AuthResult::PasswordChangeRequired` to walk the user through a change
+    /// (None when an old JSON lacks the key)
     #[serde(default)]
     pub password_expiry_days: Option<u32>,
 
-    /// 界面语言（"zh-CN" / "en"；None = 客户端默认基准语言 zh-CN）
+    /// UI language ("zh-CN" / "en"; None = the client's default baseline
+    /// language zh-CN)
     #[serde(default)]
     pub locale: Option<String>,
 
-    /// 旅行模式进行中。与 sidecar 文件存在性互为共真值：sidecar 是数据
-    /// 权威，此标志驱动 UI 状态、改密拦截与崩溃恢复语义（见 core/src/travel.rs
-    /// 模块注释的崩溃窗口表；旧 JSON 缺键时回退 false）
+    /// Travel mode in progress. Mutually true with the sidecar file's
+    /// existence: the sidecar is the data authority, while this flag drives
+    /// UI state, password-change interception and crash-recovery semantics
+    /// (see the crash-window table in core/src/travel.rs's module comment;
+    /// falls back to false when an old JSON lacks the key)
     #[serde(default)]
     pub travel_mode: bool,
 
-    /// 进入旅行模式的时刻（RFC3339）。仅供 status 展示（读它不需要 travel
-    /// 口令）；enter 写入、exit 清空
+    /// When travel mode was entered (RFC3339). Only for status display
+    /// (reading it does not need the travel passphrase); written by enter,
+    /// cleared by exit
     #[serde(default)]
     pub travel_entered_at: Option<String>,
 
-    /// Quick Access（OS 级全局热键唤出的浮窗，对标 1Password Quick
-    /// Access）是否启用。关 = 桌面端不注册任何全局热键、托盘入口仍在。
-    /// 默认**关**（2026-09-28 用户决策）：全局热键会抢占 OS 级组合键，
-    /// 与云备份同口径"不主动开"——要用的用户在设置里显式打开并看到
-    /// 当前组合键与冲突状态。**显式存储的既有配置不受影响**（存储了
-    /// true 就保持开）；仅缺键的旧 JSON / 新装回退关
+    /// Whether Quick Access (an OS-level global-hotkey popup, modeled on
+    /// 1Password Quick Access) is enabled. Off = the desktop registers no
+    /// global hotkeys at all; the tray entry remains. Defaults to **off**
+    /// (2026-09-28 user decision): global hotkeys preempt OS-level
+    /// key combinations, and by the same rule as cloud backups we "don't turn
+    /// it on proactively" — users who want it switch it on in settings and
+    /// see the current combination and its conflict status. **Explicitly
+    /// stored existing configuration is unaffected** (a stored true stays
+    /// on); only old JSON missing the key / fresh installs fall back to off
     #[serde(default)]
     pub quick_access_enabled: bool,
 
-    /// Quick Access 全局热键的加速键串（tauri global-shortcut 语法，如
-    /// `"CommandOrControl+Shift+Space"`）。None = 由桌面端按平台取默认
-    /// 绑定——core 是平台无关层，不内置具体键位
+    /// Accelerator string for the Quick Access global hotkey (tauri
+    /// global-shortcut syntax, e.g. `"CommandOrControl+Shift+Space"`).
+    /// None = the desktop picks the platform-default binding — core is a
+    /// platform-agnostic layer and does not hardcode specific keys
     #[serde(default)]
     pub quick_access_hotkey: Option<String>,
 
-    /// 密码生成器全局热键（gap #9 余项：OS 级任意应用内呼出生成器浮窗）。
-    /// 开关语义与 [`Self::quick_access_enabled`] 同口径：默认**关**（全局
-    /// 热键抢占 OS 组合键，不主动开），设置页显式打开。旧 JSON 缺键回退关
+    /// Global hotkey for the password generator (gap #9 leftover: summon the
+    /// generator popup inside any OS-level application). The switch semantics
+    /// match [`Self::quick_access_enabled`]: defaults to **off** (global
+    /// hotkeys preempt OS key combinations, not turned on proactively),
+    /// enabled explicitly in settings. Old JSON missing the key falls back
+    /// to off
     #[serde(default)]
     pub generator_panel_enabled: bool,
 
-    /// 生成器热键的加速键串（同 [`Self::quick_access_hotkey`] 语法）。
-    /// None = 桌面端按平台取默认绑定
+    /// Accelerator string for the generator hotkey (same syntax as
+    /// [`Self::quick_access_hotkey`]). None = the desktop picks the
+    /// platform-default binding
     #[serde(default)]
     pub generator_panel_hotkey: Option<String>,
 
-    /// 账号域绑定（旧 JSON 缺键时为 None = 未绑定任何账号；隐私红线：
-    /// 账号功能默认关闭，绑定由用户在设置页显式完成）
+    /// Account-domain binding (None when an old JSON lacks the key = not
+    /// bound to any account; privacy red line: account features are off by
+    /// default, binding is done explicitly by the user in the settings page)
     #[serde(default)]
     pub account: Option<AccountBinding>,
 
-    /// 自救口备份凭证（S5，旧 JSON 缺键时为 None = 从未在本机导出过）。
-    /// 只存非敏感元数据：时刻/目标/尺寸。备份口令永不落盘（与主密码
-    /// 同纪律）；「设备全丢=库全丢」的常驻警示（设计稿 §6.5）以本字段
-    /// 为「已导出过备份」的解除证据之一。
+    /// Self-rescue backup evidence (S5; None when an old JSON lacks the key =
+    /// never exported on this machine). Only non-sensitive metadata is stored:
+    /// time/destination/size. The backup passphrase is never written to disk
+    /// (same discipline as the master password); the persistent "lose every
+    /// device = lose the vault" warning (design doc §6.5) treats this field as
+    /// one piece of clearing evidence for "a backup has been exported".
     #[serde(default)]
     pub backup: Option<BackupEvidence>,
 }
@@ -383,7 +424,8 @@ mod tests {
 
     #[test]
     fn test_settings_without_features_key_falls_back_to_defaults() {
-        // 旧版本持久化的 settings JSON 没有 features 键：反序列化应静默回退
+        // Settings JSON persisted by older versions has no features key:
+        // deserialization should fall back silently
         let legacy = r#"{
             "encryption_enabled": true,
             "auto_backup_hours": 24,
@@ -395,20 +437,23 @@ mod tests {
         let settings: WorkspaceSettings = serde_json::from_str(legacy).unwrap();
         assert_eq!(settings.features, FeatureFlags::default());
         assert!(settings.sync.is_none());
-        // 旅行模式字段（013 批次）同样缺键回退
+        // The travel-mode fields (batch 013) also fall back on a missing key
         assert!(!settings.travel_mode);
         assert_eq!(settings.travel_entered_at, None);
-        // Quick Access（014 批次；2026-09-28 起默认关）：enabled 缺键回退
-        // false（全局热键抢占 OS 组合键，不主动开），hotkey 缺键回退
-        // None = 桌面端按平台取默认绑定
+        // Quick Access (batch 014; default off since 2026-09-28): a missing
+        // enabled key falls back to false (global hotkeys preempt OS key
+        // combinations, not turned on proactively), and a missing hotkey key
+        // falls back to None = the desktop picks the platform-default binding
         assert!(!settings.quick_access_enabled);
         assert_eq!(settings.quick_access_hotkey, None);
-        // 账号域绑定缺键回退未绑定（M2 批次；默认关闭红线）
+        // A missing account-domain binding key falls back to unbound (M2 batch;
+        // off-by-default red line)
         assert_eq!(settings.account, None);
-        // 备份导出凭证缺键回退从未导出过（S5 批次）
+        // A missing backup evidence key falls back to never-exported (S5 batch)
         assert_eq!(settings.backup, None);
-        // 同步方式开关缺键回退默认：跨设备同步开（默认同步方式）、
-        // 账号同步关（须显式开启）（交付物 4）
+        // Missing sync-method switch keys fall back to the defaults:
+        // cross-device sync on (the default sync method), account sync off
+        // (requires an explicit opt-in) (deliverable 4)
         assert_eq!(
             settings.sync_methods,
             SyncMethods {
@@ -420,7 +465,8 @@ mod tests {
 
     #[test]
     fn test_sync_methods_round_trip_preserves_explicit_false() {
-        // 显式存储的开关不受默认值覆盖（显式 false/true 原样往返）
+        // Explicitly stored switches are not overridden by defaults (explicit
+        // false/true round-trip unchanged)
         let mut ws = Workspace::new("/tmp/persona", "main".to_string());
         ws.settings.sync_methods = SyncMethods {
             cross_device_sync: false,
@@ -435,7 +481,7 @@ mod tests {
     #[test]
     fn test_backup_evidence_round_trip() {
         let mut ws = Workspace::new("/tmp/persona", "main".to_string());
-        // 默认：从未在本机导出过
+        // Default: never exported on this machine
         assert_eq!(ws.settings.backup, None);
 
         ws.settings.backup = Some(BackupEvidence {
@@ -453,14 +499,16 @@ mod tests {
                 size_bytes: 20480,
             })
         );
-        // 字节里只有元数据：口令不存在于此结构，round-trip 后也不应出现
+        // The bytes contain only metadata: the passphrase does not exist in
+        // this struct, so it must not appear after a round-trip either
         assert!(!json.contains("passphrase"));
     }
 
     #[test]
     fn test_account_binding_round_trip_and_legacy_default() {
         let mut ws = Workspace::new("/tmp/persona", "main".to_string());
-        // 默认：未绑定（账号功能默认关闭，绑定是显式动作）
+        // Default: unbound (account features are off by default; binding is an
+        // explicit action)
         assert_eq!(ws.settings.account, None);
 
         ws.settings.account = Some(AccountBinding {
@@ -479,7 +527,7 @@ mod tests {
             })
         );
 
-        // device_name 缺键（旧绑定 JSON）回退 None
+        // A missing device_name key (old binding JSON) falls back to None
         let minimal = r#"{"account_id":"acct-1","username":"alice@example.com"}"#;
         let binding: AccountBinding = serde_json::from_str(minimal).unwrap();
         assert_eq!(binding.device_name, None);
@@ -488,11 +536,13 @@ mod tests {
     #[test]
     fn test_quick_access_hotkey_round_trip() {
         let mut ws = Workspace::new("/tmp/persona", "main".to_string());
-        // 默认：关（显式开关在设置页）+ 用平台默认绑定
+        // Default: off (explicit switch lives in the settings page) + use the
+        // platform-default binding
         assert!(!ws.settings.quick_access_enabled);
         assert!(ws.settings.quick_access_hotkey.is_none());
 
-        // 显式存储的既有配置尊重：存储了 true 就保持开，升级不静默关闭
+        // Explicitly stored existing config is respected: a stored true stays
+        // on, upgrades never silently turn it off
         ws.settings.quick_access_enabled = true;
         ws.settings.quick_access_hotkey = Some("CommandOrControl+Shift+Space".to_string());
         let json = serde_json::to_string(&ws).unwrap();
@@ -517,7 +567,8 @@ mod tests {
     #[test]
     fn test_generator_panel_hotkey_round_trip() {
         let mut ws = Workspace::new("/tmp/persona", "main".to_string());
-        // 默认：关（与 Quick Access 同口径——热键抢占 OS 组合键，不主动开）
+        // Default: off (same standard as Quick Access — hotkeys preempt OS
+        // key combinations, not turned on proactively)
         assert!(!ws.settings.generator_panel_enabled);
         assert!(ws.settings.generator_panel_hotkey.is_none());
 
@@ -531,8 +582,9 @@ mod tests {
             Some("CommandOrControl+Shift+G")
         );
 
-        // 旧 JSON（缺两个键）回退默认关：以当前默认序列化后剥掉生成器键，
-        // 模拟字段加入前的存量 settings
+        // Old JSON missing both keys falls back to the default off: serialize
+        // the current defaults, then strip the generator keys to simulate
+        // settings persisted before the fields existed
         let mut legacy = serde_json::to_value(WorkspaceSettings::default()).unwrap();
         legacy
             .as_object_mut()

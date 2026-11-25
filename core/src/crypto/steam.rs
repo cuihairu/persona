@@ -1,13 +1,17 @@
-//! Steam Guard 令牌算法（Valve 协议的公开社区实现）。
+//! Steam Guard token algorithm (Valve's protocol per the public community implementations).
 //!
-//! 与 RFC TOTP 的差别：secret 是标准 base64（Steam 手机验证器的
-//! `shared_secret`，通常 20 字节）而非 base32；周期固定 30 秒、BE64
-//! 计数器做 HMAC-SHA1；动态截断与 RFC 4226 同构，但结果不是数字码，
-//! 而是从 26 字符字母表 "23456789BCDFGHJKMNPQRTVWXY" 连续取模 5 次
-//! 得到 5 位码。实现与 steamguard-cli / SteamAuth / ValvePython-steam
-//! 等开源实现一致。Valve 未发布官方测试向量；回归靠三层钉死：钉死
-//! 向量（由独立 Python 参照实现 `scripts/steam_guard_verify.py` 产出）、
-//! 进程内 ipad/opad 手工 HMAC 参照交叉验证、结构断言。
+//! Differences from RFC TOTP: the secret is standard base64 (the Steam mobile
+//! authenticator's `shared_secret`, usually 20 bytes) rather than base32; the
+//! period is fixed at 30 seconds with a BE64 counter fed to HMAC-SHA1; the
+//! dynamic truncation is isomorphic to RFC 4226, but the result is not a
+//! numeric code — instead five successive mod-26 reductions over the
+//! 26-character alphabet "23456789BCDFGHJKMNPQRTVWXY" yield a 5-character
+//! code. The implementation matches open-source implementations such as
+//! steamguard-cli / SteamAuth / ValvePython-steam. Valve has published no
+//! official test vectors; regression is pinned in three layers: pinned vectors
+//! (produced by the independent Python reference implementation
+//! `scripts/steam_guard_verify.py`), in-process cross-validation against a
+//! hand-rolled ipad/opad HMAC reference, and structural assertions.
 
 use crate::models::credential::GameTokenData;
 use anyhow::{bail, Result};
@@ -16,23 +20,23 @@ use hmac::{Hmac, KeyInit, Mac};
 use serde::Serialize;
 use sha1::Sha1;
 
-/// Steam Guard 码字符表（26 字符，刻意剔除易混淆的 0/1/8/9 与元音）
+/// Steam Guard code alphabet (26 characters, deliberately excluding the confusable 0/1/8/9 and vowels)
 pub const STEAM_CHARS: &[u8; 26] = b"23456789BCDFGHJKMNPQRTVWXY";
 
-/// Steam Guard 固定周期（秒）
+/// Fixed Steam Guard period (seconds)
 pub const STEAM_GUARD_PERIOD_SECS: u64 = 30;
 
-/// Steam Guard 固定码长
+/// Fixed Steam Guard code length
 pub const STEAM_GUARD_DIGITS: usize = 5;
 
-/// Steam Guard 生成的码及剩余有效秒数
+/// A generated Steam Guard code plus its remaining valid seconds
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct SteamGuardCode {
     pub code: String,
     pub remaining_seconds: u32,
 }
 
-/// 解码 Steam `shared_secret`（标准 base64，容忍空白与 padding 缺省）
+/// Decode a Steam `shared_secret` (standard base64; tolerates whitespace and missing padding)
 pub fn decode_steam_secret(secret: &str) -> Result<Vec<u8>> {
     let normalized: String = secret.chars().filter(|c| !c.is_whitespace()).collect();
     if normalized.is_empty() {
@@ -44,7 +48,7 @@ pub fn decode_steam_secret(secret: &str) -> Result<Vec<u8>> {
         .map_err(|e| anyhow::anyhow!("Invalid Steam shared_secret: {}", e))
 }
 
-/// Steam Guard 核心算法：由解码后的 `shared_secret` 与时间计数器生成 5 位码
+/// Steam Guard core algorithm: derive the 5-character code from the decoded `shared_secret` and a time counter
 pub fn steam_guard_from_counter(secret: &[u8], counter: u64) -> Result<String> {
     if secret.is_empty() {
         bail!("Invalid Steam shared_secret: empty");
@@ -54,7 +58,7 @@ pub fn steam_guard_from_counter(secret: &[u8], counter: u64) -> Result<String> {
     mac.update(&counter.to_be_bytes());
     let hash = mac.finalize().into_bytes();
 
-    // 动态截断与 RFC 4226 同构：末字节低 4 位定偏移，取 4 字节并清符号位
+    // Dynamic truncation is isomorphic to RFC 4226: the last byte's low 4 bits pick the offset, then take 4 bytes and clear the sign bit
     let start = (hash.last().copied().unwrap_or(0) & 0x0f) as usize;
     if start + 4 > hash.len() {
         bail!("Invalid HMAC output");
@@ -70,7 +74,7 @@ pub fn steam_guard_from_counter(secret: &[u8], counter: u64) -> Result<String> {
     Ok(code)
 }
 
-/// 在指定时刻按 Steam Guard 参数生成码
+/// Generate a code at the given time using Steam Guard parameters
 pub fn steam_guard_at(
     data: &GameTokenData,
     at: chrono::DateTime<chrono::Utc>,
@@ -86,7 +90,7 @@ pub fn steam_guard_at(
     })
 }
 
-/// 当前时刻生成 Steam Guard 码
+/// Generate a Steam Guard code at the current time
 pub fn steam_guard_now(data: &GameTokenData) -> Result<SteamGuardCode> {
     steam_guard_at(data, chrono::Utc::now())
 }
@@ -95,7 +99,7 @@ pub fn steam_guard_now(data: &GameTokenData) -> Result<SteamGuardCode> {
 mod tests {
     use super::*;
 
-    /// 20 字节样例 shared_secret 的标准 base64（Steam 实际格式）
+    /// Standard base64 of a 20-byte sample shared_secret (Steam's actual format)
     fn sample_secret_b64() -> String {
         BASE64.encode(b"0123456789abcdefghij")
     }
@@ -112,10 +116,12 @@ mod tests {
         }
     }
 
-    /// `scripts/steam_guard_verify.py --vectors` 产出的钉死向量：与主实现
-    /// 完全独立的 Python stdlib 参照（语义对齐 ValvePython/steam guard.py）
-    /// 在固定 (shared_secret, counter) 上的出码。Valve 无官方向量，任何
-    /// 一侧公式漂移都会在此红灯。改动向量须同步重跑脚本核对。
+    /// Pinned vectors produced by `scripts/steam_guard_verify.py --vectors`: the
+    /// output of a Python-stdlib reference entirely independent of the main
+    /// implementation (semantics aligned with ValvePython/steam guard.py) at
+    /// fixed (shared_secret, counter) pairs. Valve has no official vectors, so
+    /// any formula drift on either side shows up as a red here. Any vector
+    /// change must be re-verified by re-running the script in sync.
     #[test]
     fn code_matches_independent_python_reference_vectors() {
         const VECTORS: &[(&str, u64, &str)] = &[
@@ -139,8 +145,9 @@ mod tests {
         }
     }
 
-    /// 独立参照实现：手工 ipad/opad 构造 HMAC-SHA1（不经 hmac crate），
-    /// 交叉验证主实现的整体公式链（HMAC → 截断 → 取模编码）。
+    /// Independent reference implementation: hand-constructed ipad/opad HMAC-SHA1
+    /// (bypassing the hmac crate) to cross-validate the main implementation's
+    /// full formula chain (HMAC → truncation → mod-encoded output).
     fn reference_steam_code(secret: &[u8], counter: u64) -> String {
         use sha1::Digest;
         let mut key = [0u8; 64];
@@ -185,7 +192,7 @@ mod tests {
             "code {first} outside Steam alphabet"
         );
         assert_eq!(steam_guard_from_counter(&secret, 42).unwrap(), first);
-        // 不同计数器产生不同码（示例密钥下必然成立）
+        // Different counters produce different codes (guaranteed with the sample key)
         assert_ne!(steam_guard_from_counter(&secret, 43).unwrap(), first);
     }
 
@@ -205,13 +212,13 @@ mod tests {
     #[test]
     fn same_period_window_yields_same_code() {
         let data = sample_data();
-        // 对齐窗口起点，避免 +29s 跨入下一个周期
+        // Align to the window start so +29s does not spill into the next period
         let t0 = chrono::DateTime::from_timestamp(999_999_990, 0).unwrap(); // % 30 == 0
         let a = steam_guard_at(&data, t0).unwrap();
         let b = steam_guard_at(&data, t0 + chrono::Duration::seconds(29)).unwrap();
         assert_eq!(a.code, b.code);
         assert_eq!(a.remaining_seconds, b.remaining_seconds + 29);
-        // 跨过窗口后码必须更换
+        // Once past the window the code must change
         let c = steam_guard_at(&data, t0 + chrono::Duration::seconds(30)).unwrap();
         assert_eq!(c.remaining_seconds, STEAM_GUARD_PERIOD_SECS as u32);
     }

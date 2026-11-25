@@ -1,21 +1,28 @@
-//! SRP 设备认证的 HTTP 客户端编排（feature `remote-auth`）：把 [`super::srp`]
-//! 的 SRP-6a 数学接到 persona-server 的 `/api/v1/auth/*` 三端点。wire 契约的
-//! 权威定义在 `server/src/api/auth.rs`：base64 STANDARD、错误包络
-//! `{"error":{"code","message",…}}`、锁户 423。
+//! HTTP client orchestration for SRP device authentication (feature `remote-auth`):
+//! wires the SRP-6a math from [`super::srp`] to the three
+//! `/api/v1/auth/*` endpoints of persona-server. The authoritative wire
+//! contract is defined in `server/src/api/auth.rs`: base64 STANDARD, the
+//! error envelope `{"error":{"code","message",...}}`, and the 423 locked
+//! account status.
 //!
-//! 与 [`super::remote`] 的 mock trait（UI seam）分工：mock 的两步形状
-//! （begin/finalize 收发 proof 字符串）装不下真实 SRP 的状态流——M1 的计算
-//! 需要口令，且 `a_priv` 必须由单一持有者从生成 A 贯穿到 M2 核验，中途不能
-//! 经 trait 边界拆散。真实客户端因此是独立类型：登录会话状态由
-//! [`PendingRemoteLogin`] 显式持有（含传输句柄），`finish` 消耗它。未来
-//! OPAQUE 迁移（E2EE_SYNC_DESIGN DR-2）替换的正是这个文件的编排；数学层
-//! 与调用方语义不动。
+//! Division of labor with the mock trait in [`super::remote`] (the UI seam):
+//! the mock's two-step shape (begin/finalize exchanging proof strings) cannot
+//! carry real SRP's state flow — computing M1 needs the password, and `a_priv`
+//! must stay with a single holder from A generation through M2 verification
+//! without being split apart at a trait boundary. The real client is
+//! therefore its own type: the login session state is held explicitly by
+//! [`PendingRemoteLogin`] (including the transport handle), which `finish`
+//! consumes. A future OPAQUE migration (E2EE_SYNC_DESIGN DR-2) replaces exactly
+//! this file's orchestration; the math layer and caller semantics stay put.
 //!
-//! fail-closed 口径：非 2xx 一律 [`PersonaError::AuthenticationFailed`]，
-//! 消息只带 HTTP 状态与服务器 error 摘要——未注册设备与握手失败在服务器
-//! 侧已同形 401，客户端不叠加猜测；423（锁户）单独点名，便于上层决定是否
-//! 提示等待。服务器证明 M2 未通过核验时**不**向上层交付 token（先核验后
-//! 使用，server VerifyResponse 字段注释的客户端侧对应实现）。
+//! fail-closed posture: any non-2xx becomes
+//! [`PersonaError::AuthenticationFailed`], carrying only the HTTP status and a
+//! server error digest — unregistered devices and failed handshakes are already
+//! the same 401 on the server side, so the client layers on no guesses; 423
+//! (locked account) is called out separately so the upper layer can decide
+//! whether to suggest waiting. When the server proof M2 fails verification, the
+//! token is **not** delivered upward (verify before use; the client-side
+//! counterpart of the server VerifyResponse field comments).
 
 use base64::engine::general_purpose::STANDARD as B64;
 use base64::Engine as _;
@@ -26,7 +33,7 @@ use crate::{PersonaError, Result};
 
 use super::srp::{register_verifier, SrpClientLogin, SrpClientProof};
 
-/// POST /api/v1/auth/challenge 响应（只取所需字段）。
+/// POST /api/v1/auth/challenge response (only the needed fields).
 #[derive(serde::Deserialize)]
 struct ChallengeWire {
     session_id: String,
@@ -34,7 +41,7 @@ struct ChallengeWire {
     server_public: String,
 }
 
-/// POST /api/v1/auth/verify 响应。
+/// POST /api/v1/auth/verify response.
 #[derive(serde::Deserialize)]
 struct VerifyWire {
     server_proof: String,
@@ -42,8 +49,9 @@ struct VerifyWire {
     expires_in_secs: u64,
 }
 
-/// 对 persona-server `/api/v1/auth/*` 的 SRP 客户端。无内部可变状态：
-/// 登录会话状态在 [`PendingRemoteLogin`] 里，token 由调用方持有。
+/// SRP client for the persona-server `/api/v1/auth/*` endpoints. No internal
+/// mutable state: the login session state lives in [`PendingRemoteLogin`], and
+/// the caller holds the token.
 #[derive(Clone, Debug)]
 pub struct HttpRemoteAuthProvider {
     base_url: String,
@@ -51,9 +59,10 @@ pub struct HttpRemoteAuthProvider {
 }
 
 impl HttpRemoteAuthProvider {
-    /// `base_url` 形如 `http://127.0.0.1:8080`（尾部 `/` 容忍）。
-    /// 请求超时 30s：握手含 Argon2id 预 hash（19 MiB），远小于备份链的
-    /// 300s，但要覆盖慢速服务器往返。
+    /// `base_url` looks like `http://127.0.0.1:8080` (a trailing `/` is
+    /// tolerated). Request timeout is 30s: the handshake includes the Argon2id
+    /// pre-hash (19 MiB), far below the backup chain's 300s, but it still has
+    /// to cover slow server round trips.
     pub fn new(base_url: impl Into<String>) -> Result<Self> {
         let http = reqwest::Client::builder()
             .timeout(Duration::from_secs(30))
@@ -67,9 +76,10 @@ impl HttpRemoteAuthProvider {
         })
     }
 
-    /// 引导注册：生成 salt/verifier 并 `POST /auth/register`。要求既有
-    /// Bearer（引导链的 token）——服务器侧注册是认证体系的引导入口，
-    /// 不是免认证操作。
+    /// Bootstrap registration: generates salt/verifier and
+    /// `POST /auth/register`. Requires an existing Bearer (the bootstrap
+    /// chain token) — server-side registration is the bootstrap entry into the
+    /// authentication system, not an unauthenticated operation.
     pub async fn register_device(
         &self,
         bearer: &str,
@@ -92,9 +102,11 @@ impl HttpRemoteAuthProvider {
         ensure_success(resp, "register").await.map(|_| ())
     }
 
-    /// 登录第一步：本地生成临时密钥对，带公开值 `A` 请求 challenge，
-    /// 服务器回盐与 `B`。服务器侧握手缓存 120s 且一次性——返回的
-    /// [`PendingRemoteLogin`] 绑定该 session，`finish` 必须在窗口内完成。
+    /// Login step one: generates the ephemeral key pair locally, requests the
+    /// challenge with public value `A`, and the server replies with salt and
+    /// `B`. The server-side handshake cache lasts 120s and is one-shot — the
+    /// returned [`PendingRemoteLogin`] is bound to that session, so `finish`
+    /// must complete within the window.
     pub async fn begin_login(&self, device_name: &str) -> Result<PendingRemoteLogin> {
         let login = SrpClientLogin::new()?;
         let resp = self
@@ -123,7 +135,7 @@ impl HttpRemoteAuthProvider {
         })
     }
 
-    /// 统一请求构造（路径挂在 `/api/v1` 下；`bearer` 仅注册步有）。
+    /// Unified request construction (path hangs off `/api/v1`; `bearer` is only set on the register step).
     fn post(&self, path: &str, bearer: Option<&str>) -> reqwest::RequestBuilder {
         let builder = self.http.post(format!("{}/api/v1{}", self.base_url, path));
         match bearer {
@@ -133,8 +145,9 @@ impl HttpRemoteAuthProvider {
     }
 }
 
-/// 进行中的 SRP 登录会话：`finish` 消耗自身（`SrpClientLogin` 一次性），
-/// 成功后状态清零；超时/失败后丢弃重建即可（服务器侧握手缓存一并过期）。
+/// In-progress SRP login session: `finish` consumes self (`SrpClientLogin` is
+/// one-shot), state is cleared on success; on timeout or failure just drop and
+/// rebuild (the server-side handshake cache expires along with it).
 #[derive(Debug)]
 pub struct PendingRemoteLogin {
     provider: HttpRemoteAuthProvider,
@@ -146,9 +159,10 @@ pub struct PendingRemoteLogin {
 }
 
 impl PendingRemoteLogin {
-    /// 登录完成步：口令 → SRP 私钥 x（Argon2id 预 hash）→ M1 →
-    /// `POST /verify` → 核验服务器证明 M2 → 交付短期 token 与会话密钥。
-    /// 顺序不可交换：token 只有在 M2 核验通过后才算可信。
+    /// Login completion step: password -> SRP private key x (Argon2id
+    /// pre-hash) -> M1 -> `POST /verify` -> verify the server proof M2 ->
+    /// deliver the short-lived token and session key. The order cannot be
+    /// swapped: the token is trustworthy only after M2 verification passes.
     pub async fn finish(self, password: &str) -> Result<RemoteLoginOutcome> {
         let salt = B64
             .decode(&self.salt_b64)
@@ -179,7 +193,7 @@ impl PendingRemoteLogin {
         let server_proof = B64
             .decode(&wire.server_proof)
             .map_err(|_| malformed_wire("server_proof"))?;
-        // M2 核验失败（MITM/服务器错乱）——premaster 拿不到，token 不交付
+        // M2 verification failed (MITM / server confusion) — premaster is out of reach, token not delivered
         let session_key = proof.verify_server(&server_proof)?;
         let fingerprint = hex::encode(Sha256::digest(&session_key));
         Ok(RemoteLoginOutcome {
@@ -191,24 +205,29 @@ impl PendingRemoteLogin {
     }
 }
 
-/// 登录成功产物：短期 Bearer token + 双方各自可推导的会话指纹。
+/// Login success artifacts: a short-lived Bearer token plus a session fingerprint each side can derive.
 #[derive(Debug)]
 pub struct RemoteLoginOutcome {
-    /// 短期 Bearer token（服务器 TTL 15min），调用方持有并在过期前重登。
+    /// Short-lived Bearer token (server TTL 15min); the caller holds it and re-logs in before expiry.
     pub token: String,
-    /// token 剩余有效期（秒），来自服务器响应。
+    /// Remaining validity of the token in seconds, from the server response.
     pub expires_in_secs: u64,
-    /// SHA-256(premaster) hex——客户端与服务器对同一 premaster 独立计算，
-    /// 可作会话绑定校验（mock trait `session_key_fingerprint` 语义的实化）。
+    /// SHA-256(premaster) hex — client and server independently compute it
+    /// over the same premaster, so it works as a session binding check (the
+    /// concrete realization of the mock trait's `session_key_fingerprint`
+    /// semantics).
     pub session_key_fingerprint: String,
-    /// premaster 原始字节（4096-bit group = 512B），上层需要会话密钥时用；
-    /// 不需要就丢弃，指纹足够。
+    /// Raw premaster bytes (4096-bit group = 512B); use when the upper layer
+    /// needs the session key. If not needed, discard it — the fingerprint is
+    /// enough.
     pub session_key: Vec<u8>,
 }
 
-/// 非 2xx 统一转 [`PersonaError::AuthenticationFailed`]：423 点名锁户，
-/// 其余带状态码与服务器 error.message 摘要（无则省略）。成功时原样归还
-/// Response 供调用方继续解码 JSON。
+/// Any non-2xx is uniformly converted to
+/// [`PersonaError::AuthenticationFailed`]: 423 calls out the locked account
+/// explicitly, the others carry the status code and a digest of the server's
+/// error.message (omitted when absent). On success the Response is returned
+/// unchanged so the caller can continue decoding JSON.
 async fn ensure_success(resp: reqwest::Response, step: &str) -> Result<reqwest::Response> {
     if resp.status().is_success() {
         return Ok(resp);
@@ -255,26 +274,29 @@ mod tests {
 
     use super::super::srp::{server_challenge, server_verify, SRP_SALT_LEN};
 
-    /// mock 服务器收到的一次请求（路径 + 原始头 + JSON body）。
+    /// One request received by the mock server (path + raw headers + JSON body).
     struct CapturedRequest {
         path: String,
         headers: String,
         body: serde_json::Value,
     }
 
-    /// 手写 HTTP mock：真 TCP 上回放固定编排。core 的 dev-deps 没有现成
-    /// HTTP mock（wiremock 等），而 reqwest 对手写 TCP 响应完全够用——
-    /// 每连接读一个请求、按 handler 回一个 `Connection: close` 响应。
-    /// handler 返回 (HTTP 状态码, JSON body 字符串)；状态码 0 = 不回包
-    /// 直接断开（模拟服务器在请求中途失联）。
+    /// Hand-written HTTP mock: replays a fixed script over real TCP. core's
+    /// dev-deps have no ready-made HTTP mock (wiremock and friends), and reqwest
+    /// is entirely adequate against hand-written TCP responses — one request per
+    /// connection, then a `Connection: close` reply per handler. The handler
+    /// returns (HTTP status code, JSON body string); status 0 = no reply, just
+    /// disconnect (simulating a server that drops the connection mid-request).
     type Handler = Arc<dyn Fn(CapturedRequest) -> (u16, String) + Send + Sync>;
 
-    /// challenge ↔ verify 之间 mock 服务器持有的 SRP 会话：(b_priv, a_pub)。
+    /// The SRP session held by the mock server between challenge and verify: (b_priv, a_pub).
     type SrpServerState = Arc<Mutex<Option<(Vec<u8>, Vec<u8>)>>>;
 
-    /// 起本地 mock 服务器，返回 base_url（`http://127.0.0.1:<port>`）。
-    /// accept loop 挂在 multi_thread runtime 的后台 task 上，测试结束
-    /// 时随 runtime 一起丢弃（listener 未显式关闭，端口由 OS 回收）。
+    /// Starts a local mock server and returns the base_url
+    /// (`http://127.0.0.1:<port>`). The accept loop rides on a background task
+    /// of the multi_thread runtime and is discarded together with the runtime
+    /// when the test ends (the listener is never explicitly closed; the OS
+    /// reclaims the port).
     async fn spawn_mock(handler: Handler) -> String {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
@@ -287,7 +309,7 @@ mod tests {
                 tokio::spawn(async move {
                     if let Some(req) = read_request(&mut stream).await {
                         let (status, body) = handler(req);
-                        // 约定 status 0：不给响应直接断开（请求发送失败路径）
+                        // Convention: status 0 — no response, just disconnect (request-send failure path)
                         if status == 0 {
                             return;
                         }
@@ -309,8 +331,8 @@ mod tests {
         format!("http://{addr}")
     }
 
-    /// 读一个完整 HTTP 请求（头 + Content-Length 定长的 body）。
-    /// reqwest 每个 `Connection: close` 请求一条连接，单请求即够。
+    /// Read one complete HTTP request (headers + Content-Length-delimited body).
+    /// reqwest uses one connection per `Connection: close` request, so a single request suffices.
     async fn read_request(stream: &mut TcpStream) -> Option<CapturedRequest> {
         let mut buf = Vec::new();
         let mut tmp = [0u8; 4096];
@@ -349,7 +371,7 @@ mod tests {
         })
     }
 
-    /// 已注册设备的 (salt, verifier)，供 mock 服务器扮演 SRP 侧。
+    /// (salt, verifier) of a registered device, for the mock server to play the SRP side.
     fn fixture_verifier(password: &str) -> (Vec<u8>, Vec<u8>) {
         let reg = register_verifier("laptop", password).unwrap();
         (reg.salt, reg.verifier)
@@ -359,7 +381,7 @@ mod tests {
     async fn register_posts_verifier_with_bearer_and_tolerates_trailing_slash() {
         let captured: std::sync::Arc<Mutex<Vec<CapturedRequest>>> = Default::default();
         let sink = captured.clone();
-        // base_url 尾部 `/` 容忍：mock 地址故意带斜杠
+        // base_url trailing `/` tolerance: the mock address deliberately carries a slash
         let base = format!(
             "{}/",
             spawn_mock(Arc::new(move |req| {
@@ -378,7 +400,7 @@ mod tests {
         let reqs = captured.lock().unwrap();
         assert_eq!(reqs.len(), 1);
         let req = &reqs[0];
-        // 引导注册必须带既有 Bearer（注册是认证体系的入口，不是免认证操作）
+        // Bootstrap registration must carry an existing Bearer (registration is the entry into the authentication system, not an unauthenticated operation)
         assert!(
             req.headers.contains("authorization: Bearer bootstrap-tok"),
             "missing bearer: {}",
@@ -386,7 +408,7 @@ mod tests {
         );
         assert_eq!(req.path, "/api/v1/auth/register");
         assert_eq!(req.body["device_name"], "laptop");
-        // salt/verifier 都是 base64 STANDARD 编码的原始字节
+        // salt/verifier are both raw bytes encoded as base64 STANDARD
         assert_eq!(
             B64.decode(req.body["salt"].as_str().unwrap())
                 .unwrap()
@@ -399,8 +421,9 @@ mod tests {
             .is_empty());
     }
 
-    /// 非 2xx 统一转 AuthenticationFailed，并带上步骤名、状态码与服务器
-    /// error.message 摘要（wire 契约的客户端侧口径）。
+    /// Any non-2xx is uniformly converted to AuthenticationFailed, with the
+    /// step name, status code, and a digest of the server's error.message
+    /// (the client-side view of the wire contract).
     #[tokio::test(flavor = "multi_thread")]
     async fn http_error_surfaces_step_status_and_server_message() {
         let base = spawn_mock(Arc::new(|_req| {
@@ -422,7 +445,7 @@ mod tests {
         assert!(msg.contains("no such device"), "{msg}");
     }
 
-    /// 423（锁户）单独点名，供上层决定是否提示等待——不透传服务器消息。
+    /// 423 (locked account) is called out separately for the upper layer to decide whether to suggest waiting — the server message is not passed through.
     #[tokio::test(flavor = "multi_thread")]
     async fn device_lock_is_called_out_on_423() {
         let base = spawn_mock(Arc::new(|_req| {
@@ -437,11 +460,11 @@ mod tests {
             .unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("device locked (HTTP 423)"), "{msg}");
-        // 点名锁户的固定文案不掺服务器摘要
+        // The fixed locked-account wording does not mix in the server digest
         assert!(!msg.contains("locked\""), "{msg}");
     }
 
-    /// 服务器响应不是 JSON 包络（如反代 502 HTML）时省略摘要，只留状态。
+    /// When the server response is not a JSON envelope (e.g. a reverse-proxy 502 HTML page), the digest is omitted and only the status remains.
     #[tokio::test(flavor = "multi_thread")]
     async fn non_json_error_body_omits_detail() {
         let base = spawn_mock(Arc::new(|_req| {
@@ -459,7 +482,7 @@ mod tests {
         assert!(!msg.contains("bad gateway"), "{msg}");
     }
 
-    /// challenge 响应缺字段/坏 JSON：fail-closed，不进入 finish。
+    /// Challenge response missing fields / bad JSON: fail-closed, never enters finish.
     #[tokio::test(flavor = "multi_thread")]
     async fn malformed_challenge_response_is_rejected() {
         let base = spawn_mock(Arc::new(|_req| {
@@ -472,8 +495,9 @@ mod tests {
         assert!(err.to_string().contains("malformed wire field"), "{err}");
     }
 
-    /// B 非法（合法 base64，但 B mod N = 0——srp 层唯一拒绝的形态）：
-    /// 编排层原样透传为 AuthenticationFailed（防恶意服务器降级）。
+    /// Illegal B (valid base64, but B mod N = 0 — the only shape the SRP layer
+    /// rejects): the orchestration layer passes it through unchanged as
+    /// AuthenticationFailed (guards against a malicious server downgrade).
     #[tokio::test(flavor = "multi_thread")]
     async fn illegal_server_public_value_is_rejected() {
         let (salt, _verifier) = fixture_verifier("pw");
@@ -500,15 +524,16 @@ mod tests {
         );
     }
 
-    /// 全流程（mock 服务器真跑 SRP 服务器侧）：token 交付 + 指纹 =
-    /// sha256(session_key) hex + premaster 512B（4096-bit group）。
+    /// Full flow (the mock server actually runs the SRP server side): token
+    /// delivery + fingerprint = sha256(session_key) hex + premaster 512B
+    /// (4096-bit group).
     #[tokio::test(flavor = "multi_thread")]
     async fn full_login_delivers_token_with_matching_fingerprint() {
         use sha2::Digest as _;
 
         let password = "correct horse battery staple";
         let (salt, verifier) = fixture_verifier(password);
-        // challenge 与 verify 之间的服务器会话：(b_priv, a_pub)
+        // Server session between challenge and verify: (b_priv, a_pub)
         let state: SrpServerState = Default::default();
         let srv = state.clone();
         let base = spawn_mock(Arc::new(move |req| {
@@ -575,7 +600,7 @@ mod tests {
         );
     }
 
-    /// M2 被篡改（MITM/服务器错乱）：核心安全语义——token 不交付。
+    /// Tampered M2 (MITM / server confusion): the core security semantics — token not delivered.
     #[tokio::test(flavor = "multi_thread")]
     async fn tampered_server_proof_withholds_token() {
         let password = "another stable passphrase";
@@ -607,7 +632,7 @@ mod tests {
                         .decode(req.body["client_proof"].as_str().unwrap())
                         .unwrap();
                     let mut out = server_verify(&b_priv, &verifier, &a, &m1).unwrap();
-                    out.server_proof[0] ^= 0xFF; // 单字节翻转即核验失败
+                    out.server_proof[0] ^= 0xFF; // A single byte flip fails verification
                     (
                         200,
                         serde_json::json!({
@@ -629,7 +654,7 @@ mod tests {
         assert!(err.to_string().contains("server proof mismatch"), "{err}");
     }
 
-    /// challenge 下发的 salt 不是合法 base64：finish 侧 fail-closed。
+    /// The salt issued by the challenge is not valid base64: fail-closed on the finish side.
     #[tokio::test(flavor = "multi_thread")]
     async fn malformed_salt_b64_is_rejected() {
         let base = spawn_mock(Arc::new(|_req| {
@@ -654,12 +679,14 @@ mod tests {
         );
     }
 
-    /// 连接被拒：三步各自的 send 失败都带步骤名的 AuthenticationFailed
-    /// （fail-closed，错误不吞）。register 与 challenge 指向未监听端口，
-    /// verify 用"challenge 正常回、verify 时断连"的 mock 触发。
+    /// Connection refused: each step's send failure carries an
+    /// AuthenticationFailed with the step name (fail-closed, errors are never
+    /// swallowed). register and challenge point at an unlistened port; verify
+    /// is triggered by the "challenge replies normally, verify drops the
+    /// connection" mock.
     #[tokio::test(flavor = "multi_thread")]
     async fn connection_failures_surface_with_step_names() {
-        // 未监听端口：bind 后立即 drop，端口必然无服务
+        // Unlistened port: dropped right after bind, so there is necessarily no service on the port
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let dead_addr = listener.local_addr().unwrap();
         drop(listener);
@@ -677,7 +704,7 @@ mod tests {
             "{err}"
         );
 
-        // verify 步：challenge 正常，verify 连接被服务器直接断开
+        // verify step: challenge replies normally, the verify connection is dropped by the server outright
         let password = "pw-verify-drop";
         let (salt, verifier) = fixture_verifier(password);
         let base = spawn_mock(Arc::new(move |req| match req.path.as_str() {
@@ -699,7 +726,7 @@ mod tests {
         assert!(err.to_string().contains("verify request failed"), "{err}");
     }
 
-    /// verify 响应缺字段：M1 都发出去了也拿不到 token（fail-closed）。
+    /// Verify response missing fields: M1 is already sent out and the token still cannot be obtained (fail-closed).
     #[tokio::test(flavor = "multi_thread")]
     async fn malformed_verify_response_is_rejected() {
         let password = "pw-for-wire";
@@ -725,7 +752,7 @@ mod tests {
                         .to_string(),
                     )
                 }
-                // M1 合法但响应缺 server_proof/token 字段
+                // M1 is legal but the response is missing the server_proof/token fields
                 "/api/v1/auth/verify" => (200, "{}".to_string()),
                 other => panic!("unexpected path {other}"),
             }

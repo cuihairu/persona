@@ -150,8 +150,9 @@ async fn test_stop_background_monitoring_without_start_is_noop() {
     manager.stop_background_monitoring().await;
 }
 
-/// update_base_config 原地翻转敏感操作再认证闸门（服务层
-/// configure_auto_lock 的传递路径），无需重建管理器。
+/// `update_base_config` flips the sensitive-operation re-authentication gate
+/// in place (the propagation path from the service layer's
+/// configure_auto_lock), without rebuilding the manager.
 #[tokio::test]
 async fn update_base_config_toggles_sensitive_reauth_gate_in_place() {
     let manager = AutoLockManager::with_basic_config(AutoLockConfig::default());
@@ -159,10 +160,11 @@ async fn update_base_config_toggles_sensitive_reauth_gate_in_place() {
     let session_id = session.id.clone();
     manager.add_session(session).await.unwrap();
 
-    // 默认配置不设闸。
+    // The default config leaves the gate off.
     assert!(!manager.requires_sensitive_auth(&session_id).await);
 
-    // 原地开闸：无敏感历史的 session 立即被要求再认证。
+    // Turn the gate on in place: a session with no sensitive history is
+    // immediately required to re-authenticate.
     manager.update_base_config(AutoLockConfig {
         require_reauth_sensitive: true,
         sensitive_operation_timeout_secs: 0,
@@ -170,14 +172,16 @@ async fn update_base_config_toggles_sensitive_reauth_gate_in_place() {
     });
     assert!(manager.requires_sensitive_auth(&session_id).await);
 
-    // timeout 为 0 → 刚记录的敏感活动也视为过期（elapsed > 0 恒真）。
+    // timeout = 0 → even freshly recorded sensitive activity counts as
+    // expired (elapsed > 0 is always true).
     manager
         .update_sensitive_activity(&session_id)
         .await
         .unwrap();
     assert!(manager.requires_sensitive_auth(&session_id).await);
 
-    // 关闭闸门同样原地生效，session 依然在管。
+    // Turning the gate back off also takes effect in place, and the session
+    // is still tracked.
     manager.update_base_config(AutoLockConfig::default());
     assert!(!manager.requires_sensitive_auth(&session_id).await);
     assert!(manager.get_session(&session_id).await.is_some());

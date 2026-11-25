@@ -34,21 +34,21 @@ pub struct SrpChallengeResponse {
 #[derive(Debug, Serialize)]
 pub struct SrpVerifyRequest {
     pub session_id: String,
-    /// base64 的 M1
+    /// M1 in base64
     pub client_proof: String,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct SrpVerifyResponse {
     pub server_proof: String,
-    /// 15 分钟账号登录令牌（可作 Bearer 或换 24h 会话）
+    /// The 15-minute account login token (usable as a Bearer or redeemable for a 24h session)
     pub token: String,
     pub expires_in_secs: u64,
 }
 
 impl AccountsApi {
-    /// POST /accounts/{id}/srp/register（Bearer）。登记账号内设备的 SRP
-    /// salt+verifier（密码登录的兜底凭据）。
+    /// POST /accounts/{id}/srp/register (Bearer). Registers the SRP salt+verifier for a
+    /// device inside the account (the fallback credential for password login).
     pub async fn srp_register(
         &self,
         account_id: &str,
@@ -68,7 +68,7 @@ impl AccountsApi {
         Ok(value)
     }
 
-    /// POST /accounts/{id}/srp/challenge（公开，登录握手第一步）。
+    /// POST /accounts/{id}/srp/challenge (public; the first step of the login handshake).
     pub async fn srp_challenge(
         &self,
         account_id: &str,
@@ -88,8 +88,9 @@ impl AccountsApi {
         Ok(value)
     }
 
-    /// POST /accounts/{id}/srp/verify（公开，登录握手完成）。返回 15 分钟
-    /// 账号登录令牌（可作 Bearer，或交 sessions 端点兑换 24h 会话）。
+    /// POST /accounts/{id}/srp/verify (public; completes the login handshake). Returns the
+    /// 15-minute account login token (usable as a Bearer, or redeemable at the sessions
+    /// endpoint for a 24h session).
     pub async fn srp_verify(
         &self,
         account_id: &str,

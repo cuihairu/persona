@@ -22,7 +22,7 @@ fn password_of<'a>(plan: &'a ImportPlan, name: &'a str) -> &'a PlannedCredential
         .unwrap_or_else(|| panic!("no password credential named {name}"))
 }
 
-// -- 格式嗅探 ------------------------------------------------------------
+// -- Format sniffing ------------------------------------------------------
 
 #[test]
 fn detect_format_distinguishes_json_from_csv() {
@@ -41,7 +41,7 @@ fn detect_format_distinguishes_json_from_csv() {
     );
 }
 
-// -- CSV 列形 ------------------------------------------------------------
+// -- CSV column shapes ----------------------------------------------------
 
 #[test]
 fn bitwarden_csv_full_shape_with_totp_folder_and_type_splits() {
@@ -164,7 +164,8 @@ fn quoted_multiline_notes_and_empty_rows() {
         other => panic!("unexpected: {other:?}"),
     }
     assert_eq!(multi.notes.as_deref(), Some("line1\nline2"));
-    // "Bare" 行只有标题，也导入（密码为空）；空行忽略不进报告。
+    // The "Bare" row only has a title, yet it is still imported (empty password);
+    // empty rows are ignored and do not reach the report.
     assert!(password_of(&plan, "Bare").username.is_none());
     assert_eq!(plan.credentials.len(), 2);
     assert!(plan.skipped.is_empty());
@@ -179,8 +180,9 @@ fn unrecognized_headers_report_columns() {
 
 #[test]
 fn broken_otpauth_totp_goes_to_skipped_without_the_secret() {
-    // 与 1PUX 相同的宽容口径：非 otpauth 的裸值按 base32 密钥原样保留；
-    // otpauth 形但 host 既非 totp 也非 hotp 才解析失败 → skipped，且原因不带密值。
+    // Same lenient policy as 1PUX: a bare value that is not otpauth is kept
+    // verbatim as the base32 secret; only an otpauth-shaped URI whose host is neither totp
+    // nor hotp fails to parse → skipped, and the reason carries no secret values.
     let plan = plan_csv_str(
         "name,username,password,totp\nX,u,p,otpauth://foo/x?secret=TOPSECRET\n",
         "badtotp",
@@ -200,8 +202,8 @@ fn broken_otpauth_totp_goes_to_skipped_without_the_secret() {
 
 #[test]
 fn hotp_otpauth_value_imports_as_counter_based_entry() {
-    // otpauth://hotp/ 与 totp 同为合法 URI：导入后落 hotp 标记与起始
-    // 计数器，不再是 skipped。
+    // otpauth://hotp/ is a legal URI like totp: after import it carries the hotp flag and
+    // the initial counter, and is no longer skipped.
     let plan = plan_csv_str(
             "name,username,password,totp\nX,u,p,otpauth://hotp/Ex:acct?secret=JBSWY3DPEHPK3PXP&counter=5\n",
             "hotp",

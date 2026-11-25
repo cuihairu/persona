@@ -12,14 +12,15 @@ fn sidecar_path_sits_next_to_db() {
     );
 }
 
-/// 「能解密但内容坏」的 sidecar 分路报错：gzip 流损坏报
-/// decompression failed，gzip 但非 TravelPack JSON 报 not a valid
-/// pack——都不与口令错误混淆。
+/// The "decryptable but content broken" sidecar error branches: a corrupted
+/// gzip stream reports decompression failed, and gzipped data that is not
+/// TravelPack JSON reports not a valid pack -- neither is confused with a
+/// passphrase error.
 #[test]
 fn open_pack_distinguishes_decompression_from_deserialization_failures() {
     let pw = "travel-pw";
 
-    // gzip magic 开头但内容损坏（CRC/deflate 层失败）
+    // gzip magic at the start but corrupted content (CRC/deflate layer failure)
     let mut corrupt = gzip_bytes(b"legit pack bytes".to_vec());
     let last = corrupt.len() - 1;
     corrupt[last] ^= 0xff;
@@ -57,14 +58,15 @@ async fn pack_rows_and_round_trips_through_seal_open() {
     let err = open_pack(&sealed, "wrong").unwrap_err();
     assert!(err.to_string().contains("passphrase is wrong"), "{err}");
 
-    // 坏 magic：非 PERSENC1 字节直接拒绝
+    // Bad magic: non-PERSENC1 bytes are rejected outright
     let err = open_pack(b"not encrypted at all", "travel-pw").unwrap_err();
     assert!(
         err.to_string().contains("not a Persona encrypted file"),
         "{err}"
     );
 
-    // format 校验（TravelPack 字段全 pub，直接构造坏格式）
+    // Format validation (TravelPack fields are all pub, so build a bad
+    // format directly)
     let mut bad = build_pack(db.pool(), None, &marked).await.unwrap();
     bad.format_name = "other".into();
     let sealed_bad = seal_pack(&bad, "travel-pw", Some(fast_kdf())).unwrap();
@@ -83,7 +85,7 @@ async fn write_sidecar_atomic_places_file_with_content() {
     write_sidecar_atomic(&path, b"sealed").unwrap();
     assert_eq!(std::fs::read(&path).unwrap(), b"sealed");
 
-    // 覆盖写也走 tmp+rename（无 .tmp 残留）
+    // Overwrites also go through tmp+rename (no .tmp leftovers)
     write_sidecar_atomic(&path, b"sealed2").unwrap();
     assert_eq!(std::fs::read(&path).unwrap(), b"sealed2");
     let leftovers: Vec<_> = std::fs::read_dir(dir.path())
@@ -94,10 +96,12 @@ async fn write_sidecar_atomic_places_file_with_content() {
     assert!(leftovers.is_empty(), "tmp files must be renamed away");
 }
 
-/// build_pack 的附件收集防御臂：空 marked 拒绝；BLOB 脏类型的
-/// storage_path 行被静默跳过（NOT NULL 挡不住 BLOB——TEXT 亲和性
-/// 不转换 BLOB）；合法行 + chunk 行成对进 attachment_files；缺
-/// attachments_root、盘上 hash 不符、路径逃逸分路报错。
+/// The attachment-collection defense arms of build_pack: empty marked is
+/// rejected; storage_path rows with a dirty BLOB type are silently skipped
+/// (NOT NULL does not stop BLOBs -- TEXT affinity does not convert BLOBs);
+/// a valid row plus its chunk row land in attachment_files as a pair; a
+/// missing attachments_root, an on-disk hash mismatch, and a path escape
+/// each hit their own error branch.
 #[tokio::test]
 async fn build_pack_attachment_edges_and_guards() {
     let (dir, db) = seeded_db().await;
@@ -119,7 +123,7 @@ async fn build_pack_attachment_edges_and_guards() {
     put("dir/plain.bin", file_bytes);
     put("dir/chunk-0.bin", file_bytes);
 
-    // 脏行：storage_path 存 BLOB（类型错）；合法行 + chunk 行
+    // Dirty row: storage_path stored as BLOB (wrong type); valid row + chunk row
     sqlx::query(
             "INSERT INTO attachments (id, credential_id, filename, mime_type, size, storage_path, content_hash, created_at, updated_at)
              VALUES (?, ?, 'dirty', 'application/octet-stream', 1, X'2F2F', 'whatever', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
@@ -154,7 +158,8 @@ async fn build_pack_attachment_edges_and_guards() {
         .await
         .unwrap();
 
-    // 合法行 + chunk 行入 pack；BLOB 脏行被 filter_map 跳过
+    // Valid row + chunk row make it into the pack; the BLOB dirty row is
+    // skipped by filter_map
     let pack = build_pack(pool, Some(&root), std::slice::from_ref(&ident))
         .await
         .unwrap();
@@ -166,7 +171,8 @@ async fn build_pack_attachment_edges_and_guards() {
     packed_paths.sort_unstable();
     assert_eq!(packed_paths, vec!["dir/chunk-0.bin", "dir/plain.bin"]);
 
-    // 有附件行但调用方没传附件根 → 配置错（fail-closed，不静默丢文件）
+    // Attachment rows but no attachment root from the caller -> configuration
+    // error (fail-closed, never silently drop files)
     let err = build_pack(pool, None, std::slice::from_ref(&ident))
         .await
         .unwrap_err();
@@ -176,7 +182,8 @@ async fn build_pack_attachment_edges_and_guards() {
         "{err}"
     );
 
-    // 盘上字节与行内 hash 不符 → 拒绝打包（中继保真的 enter 侧一半）
+    // On-disk bytes do not match the row hash -> refuse to pack (the enter
+    // side of relay fidelity)
     sqlx::query("UPDATE attachments SET content_hash = 'deadbeef' WHERE id = ?")
         .bind(&att)
         .execute(pool)
@@ -187,7 +194,8 @@ async fn build_pack_attachment_edges_and_guards() {
         .unwrap_err();
     assert!(err.to_string().contains("content hash mismatch"), "{err}");
 
-    // storage_path 逃逸出附件根 → 拒绝（历史脏数据防御）
+    // storage_path escapes the attachment root -> refuse (defense against
+    // historical dirty data)
     sqlx::query(
         "UPDATE attachments SET storage_path = '../escape.bin', content_hash = ? WHERE id = ?",
     )

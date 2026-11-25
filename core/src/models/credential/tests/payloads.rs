@@ -127,16 +127,18 @@ fn credential_data_from_bytes_rejects_garbage() {
     assert!(CredentialData::from_bytes(b"not bincode").is_err());
 }
 
-/// 既有变体的 bincode 编码必须逐字节稳定（变体索引 = 枚举序号），
-/// 新变体只能追加在末尾——否则旧密文全部变砖。
+/// The bincode encoding of existing variants must be byte-for-byte stable
+/// (variant index = enum ordinal); new variants may only be appended at the
+/// end — otherwise every old ciphertext is bricked.
 #[test]
 fn credential_data_bincode_variant_indices_are_stable() {
-    // Raw 是追加 GameToken 之前的最后一个变体（索引 7；Vec 带 u64 长度前缀）
+    // Raw is the last variant before GameToken was appended (index 7; the Vec
+    // carries a u64 length prefix)
     assert_eq!(
         CredentialData::Raw(vec![1, 2, 3]).to_bytes().unwrap(),
         vec![7, 0, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0, 1, 2, 3]
     );
-    // GameToken 追加在末尾，索引 8
+    // GameToken appended at the end, index 8
     let game = CredentialData::GameToken(GameTokenData {
         provider: "steam_guard".to_string(),
         secret_key: "s".to_string(),
@@ -151,7 +153,7 @@ fn credential_data_bincode_variant_indices_are_stable() {
     assert_eq!(&game[..4], &[8, 0, 0, 0]);
     let decoded = CredentialData::from_bytes(&game).unwrap();
     assert!(matches!(decoded, CredentialData::GameToken(_)));
-    // SecureNote 追加在末尾，索引 9（String 带 u64 长度前缀）
+    // SecureNote appended at the end, index 9 (String has a u64 length prefix)
     let note = CredentialData::SecureNote(SecureNoteData {
         note: "abc".to_string(),
     })
@@ -160,7 +162,7 @@ fn credential_data_bincode_variant_indices_are_stable() {
     assert_eq!(&note[..4], &[9, 0, 0, 0]);
     let decoded = CredentialData::from_bytes(&note).unwrap();
     assert!(matches!(decoded, CredentialData::SecureNote(_)));
-    // Identity 追加在末尾，索引 10
+    // Identity appended at the end, index 10
     let identity = CredentialData::Identity(IdentityData {
         first_name: "a".to_string(),
         last_name: "b".to_string(),
@@ -181,7 +183,7 @@ fn credential_data_bincode_variant_indices_are_stable() {
     assert_eq!(&identity[..4], &[10, 0, 0, 0]);
     let decoded = CredentialData::from_bytes(&identity).unwrap();
     assert!(matches!(decoded, CredentialData::Identity(_)));
-    // SoftwareLicense 追加在末尾，索引 11
+    // SoftwareLicense appended at the end, index 11
     let license = CredentialData::SoftwareLicense(SoftwareLicenseData {
         license_key: "k".to_string(),
         version: None,
@@ -200,8 +202,9 @@ fn credential_data_bincode_variant_indices_are_stable() {
     assert!(matches!(decoded, CredentialData::SoftwareLicense(_)));
 }
 
-/// 追加 identity_secret/device_id 之前写入的 GameToken 密文（五字段
-/// 负载）必须可读，新增字段映射为 None，业务字段原样保留。
+/// A GameToken ciphertext (five-field payload) written before
+/// identity_secret/device_id were appended must stay readable, with the new
+/// fields mapping to None and the business fields preserved as-is.
 #[test]
 fn legacy_game_token_payload_reads_with_none_new_fields() {
     let legacy = LegacyGameTokenData {
@@ -222,12 +225,14 @@ fn legacy_game_token_payload_reads_with_none_new_fields() {
     })
     .to_bytes()
     .unwrap();
-    // 截掉新增的两个 Option 字段（bincode 的 Option::None 各占 1 字节
-    // 标志位，见序列化探针；变体索引才是 u32），再造旧负载
+    // Chop off the two new Option fields (each Option::None costs 1 marker byte
+    // in bincode, see the serialization probe; only the variant index is u32),
+    // to rebuild the legacy payload
     payload.truncate(payload.len() - 2);
 
     let decoded = CredentialData::from_bytes(&payload).unwrap();
-    // 重加密走新形状（旧负载不回写，避免反复走 legacy 分支）
+    // Re-encryption uses the new shape (legacy payloads are never written back,
+    // which would keep re-entering the legacy branch)
     let rewritten = decoded.to_bytes().unwrap();
     assert_ne!(rewritten, payload);
     match decoded {
@@ -244,8 +249,9 @@ fn legacy_game_token_payload_reads_with_none_new_fields() {
     }
 }
 
-/// 追加 hotp/initial_counter 之前写入的 TwoFactor 密文（六字段负载）
-/// 必须可读，新增字段映射为 None（旧条目仍是时间型 TOTP）。
+/// A TwoFactor ciphertext (six-field payload) written before
+/// hotp/initial_counter were appended must stay readable, with the new fields
+/// mapping to None (such entries are still time-based TOTP).
 #[test]
 fn legacy_two_factor_payload_reads_with_none_new_fields() {
     let legacy = LegacyTwoFactorData {
@@ -268,8 +274,8 @@ fn legacy_two_factor_payload_reads_with_none_new_fields() {
     })
     .to_bytes()
     .unwrap();
-    // 截掉新增的两个 Option 字段（bincode 的 Option::None 各占 1 字节
-    // 标志位）再造旧负载
+    // Chop off the two new Option fields (each Option::None costs 1 marker byte
+    // in bincode) to rebuild the legacy payload
     payload.truncate(payload.len() - 2);
 
     let decoded = CredentialData::from_bytes(&payload).unwrap();
@@ -290,8 +296,8 @@ fn legacy_two_factor_payload_reads_with_none_new_fields() {
     }
 }
 
-/// 新形状（hotp=Some(true) + initial_counter=Some(3)）密文直接按当前
-/// 结构往返，不经 legacy 分支。
+/// A ciphertext in the new shape (hotp=Some(true) + initial_counter=Some(3))
+/// round-trips straight through the current struct, without the legacy branch.
 #[test]
 fn two_factor_hotp_payload_round_trips_directly() {
     let payload = CredentialData::TwoFactor(TwoFactorData {
@@ -316,39 +322,40 @@ fn two_factor_hotp_payload_round_trips_directly() {
     }
 }
 
-/// legacy TwoFactor 分支的 tag 守卫：tag 6 + 截断的字符串负载必须
-/// 保留反序列化错误，不能被误判成 TOTP。
+/// Tag guard for the legacy TwoFactor branch: tag 6 + a truncated string
+/// payload must keep its deserialization error, not get mistaken for TOTP.
 #[test]
 fn legacy_two_factor_tolerance_rejects_truncated_payloads() {
     let mut truncated = 6u32.to_le_bytes().to_vec();
-    truncated.extend_from_slice(&13u64.to_le_bytes()); // secret_key 长度前缀
-    truncated.extend_from_slice(b"abc"); // 长度声称 13，实际只有 3 字节
+    truncated.extend_from_slice(&13u64.to_le_bytes()); // secret_key length prefix
+    truncated.extend_from_slice(b"abc"); // length claims 13, only 3 bytes present
     assert!(CredentialData::from_bytes(&truncated).is_err());
 }
 
-/// legacy 分支只在"整个负载恰好是旧形状"时接受：以 0x08000000 开头
-/// 的截断/垃圾数据必须保留反序列化错误，不能被误判成令牌。
+/// The legacy branch only accepts when "the whole payload is exactly the old
+/// shape": truncated/garbage data starting with 0x08000000 must keep its
+/// deserialization error, not get mistaken for a token.
 #[test]
 fn legacy_tolerance_rejects_truncated_and_garbage_payloads() {
-    // tag 8 + 五字段结构的开头，但在字符串长度处截断
+    // tag 8 + the start of the five-field struct, truncated at the string length
     let mut truncated = 8u32.to_le_bytes().to_vec();
-    truncated.extend_from_slice(&13u64.to_le_bytes()); // provider 长度前缀
-    truncated.extend_from_slice(b"steam"); // 长度声称 13，实际只有 5 字节
+    truncated.extend_from_slice(&13u64.to_le_bytes()); // provider length prefix
+    truncated.extend_from_slice(b"steam"); // length claims 13, only 5 bytes present
     assert!(CredentialData::from_bytes(&truncated).is_err());
 
-    // tag 8 + 纯垃圾字节（连 provider 的 u64 长度前缀都凑不齐）
+    // tag 8 + pure garbage bytes (doesn't even cover provider's u64 length prefix)
     let mut garbage = 8u32.to_le_bytes().to_vec();
     garbage.extend_from_slice(&[0xff, 0x00, 0xde, 0xad, 0xbe, 0xef, 0x42]);
     assert!(CredentialData::from_bytes(&garbage).is_err());
 
-    // 非 GameToken tag 的垃圾同样报错（走不到 legacy 分支）
+    // Garbage with a non-GameToken tag errors too (never reaches the legacy branch)
     let mut wrong_tag = 99u32.to_le_bytes().to_vec();
     wrong_tag.extend_from_slice(b"irrelevant");
     assert!(CredentialData::from_bytes(&wrong_tag).is_err());
 }
 
-/// JSON 面（export 文件）向后兼容：缺新增字段的 GameTokenData 反序列化
-/// 时 Option 字段取 None。
+/// JSON surface (export files) stays backward compatible: a GameTokenData
+/// missing the new fields deserializes with the Option fields as None.
 #[test]
 fn game_token_json_without_new_fields_deserializes() {
     let json = r#"{
@@ -384,8 +391,9 @@ fn bank_card_data_serde_roundtrip() {
     assert_eq!(decoded.card_type, card.card_type);
 }
 
-// Legacy 镜像结构是私有类型，集成 canary（core/tests/secret_canary.rs）
-// 触达不了，只能模块内覆盖：口径一致——秘密 → [redacted]，诊断字段保留。
+// The legacy mirror structs are private types the integration canary
+// (core/tests/secret_canary.rs) can't reach, so only module-local coverage
+// works: same standard — secrets → [redacted], diagnostic fields kept.
 
 #[test]
 fn legacy_debug_impls_redact_secrets() {

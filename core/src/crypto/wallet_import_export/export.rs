@@ -1,5 +1,6 @@
-//! 钱包导出实现（LAY-018 拆分）：mnemonic/private key/keystore/WIF/xpub/JSON 导出
-//! 与 HD 地址私钥批量导出。`double_sha256`、`WalletExport` 自枢纽引入。
+//! Wallet export implementation (LAY-018 split): mnemonic / private key /
+//! keystore / WIF / xpub / JSON export plus batch export of HD address private
+//! keys. `double_sha256` and `WalletExport` come from the hub.
 
 use super::{double_sha256, WalletExport};
 use crate::crypto::wallet_crypto::Ed25519Key;
@@ -166,10 +167,11 @@ fn export_private_keys(
         PersonaError::CryptographicError(format!("Deserialization error: {}", e))
     })?;
 
-    // Solana HD 钱包存的是 64 字节 SLIP-0010 根节点（secret+chain code，
-    // 经 encrypt_private_key 加密），不能按 secp256k1 XPrv 解析——逐地址
-    // 沿派生路径重派生后导出子密钥（2026-11-13 深审 Major 修复：此前
-    // Solana HD 导出私钥必然报错）。
+    // Solana HD wallets store the 64-byte SLIP-0010 root node (secret + chain
+    // code, encrypted via encrypt_private_key), so it cannot be parsed as a
+    // secp256k1 XPrv — re-derive along each address's path and export the
+    // child key (2026-11-13 deep audit, Major fix: Solana HD private-key
+    // export used to always error out).
     if wallet.network == BlockchainNetwork::Solana
         && matches!(
             wallet.wallet_type,

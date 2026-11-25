@@ -43,9 +43,9 @@ impl PersonaService {
         .await;
         self.record_credential_history(ChangeType::Created, None, Some(&created), None)
             .await;
-        // 同步载荷 = 完整条目快照（元数据 + CredentialData）的密封——与
-        // 主库 `encrypted_data` 同一把 item key、两份不同密文（见
-        // `sync::snapshot` 模块文档）。密封失败只跳过捕获，不影响主库写入。
+        // Sync payload = a sealed full item snapshot (metadata + CredentialData) — same item key
+        // as the primary's `encrypted_data`, two different ciphertexts (see the `sync::snapshot`
+        // module docs). A seal failure only skips the capture and never affects the primary write.
         match SyncItemSnapshot::from_credential(&created, credential_data).seal(&item_key) {
             Ok(sealed) => {
                 self.capture_sync(
@@ -83,11 +83,12 @@ impl PersonaService {
         self.credential_repo.find_by_id(id).await
     }
 
-    /// 按需抓取凭据 URL 对应站点的 favicon 并入缓存（`favicon` feature）。
+    /// On-demand fetch of the favicon for the site in a credential's URL, cached (`favicon` feature).
     ///
-    /// 唯一的外联触发点：由用户在详情面板点击 "Fetch icon" 经命令层调用，
-    /// 绝不自动批量抓取。缓存按 host 命中即返，不重复外联。
-    /// 不做 audit log——favicon 是公开数据，日志只记 host。
+    /// The only outbound-call trigger point: called through the command layer when the user clicks
+    /// "Fetch icon" in the detail panel, never an automatic bulk fetch. A cache hit by host
+    /// returns immediately without another outbound call.
+    /// No audit log — favicons are public data; the log records only the host.
     #[cfg(feature = "favicon")]
     pub async fn fetch_favicon_for_credential(
         &self,
@@ -116,7 +117,7 @@ impl PersonaService {
 
         let host = extract_favicon_host(url)?;
 
-        // 缓存命中即返：缓存 miss 是抓取的必要条件
+        // Return on a cache hit: a cache miss is a precondition for fetching
         if let Some(entry) = self.favicon_repo.get(&host).await? {
             return Ok(entry);
         }
@@ -134,10 +135,10 @@ impl PersonaService {
         Ok(entry)
     }
 
-    /// 批量读取已缓存的 favicon（纯本地读，绝不外联）。
+    /// Batch-read cached favicons (pure local reads, never outbound).
     ///
-    /// hosts 大小写不敏感去重后逐 host 点查；只返回命中项，调用方以
-    /// "缺席 = 无缓存"处理，本方法永远不会触发抓取。
+    /// Hosts are deduplicated case-insensitively, then looked up one by one; only hits are
+    /// returned, and the caller treats "absent = not cached". This method never triggers a fetch.
     pub async fn get_cached_favicons(&self, hosts: &[String]) -> Result<Vec<FaviconCacheEntry>> {
         self.ensure_unlocked()?;
         self.touch_activity();
@@ -232,7 +233,7 @@ impl PersonaService {
     pub async fn update_credential(&self, credential: &Credential) -> Result<Credential> {
         self.ensure_unlocked()?;
         self.touch_activity();
-        // Item history 需要变更前快照做字段级 diff
+        // Item history needs the pre-change snapshot for the field-level diff
         let existing = self.credential_repo.find_by_id(&credential.id).await?;
         let updated = self.credential_repo.update(credential).await?;
         if let Some(old) = existing.as_ref() {
@@ -248,8 +249,8 @@ impl PersonaService {
             None,
         )
         .await;
-        // 元数据编辑同样进同步（快照含元数据全字段）；legacy 行由 helper
-        // 判定跳过。
+        // Metadata edits also go into sync (the snapshot covers all metadata fields); legacy rows
+        // are detected by the helper and skipped.
         if let Some((sealed, item_key)) = self.sync_put_payload_for(&updated).await {
             self.capture_sync(
                 updated.id,
@@ -300,14 +301,15 @@ impl PersonaService {
         let (new_ciphertext, new_wrapped_key, sync_item_key) =
             match credential.wrapped_item_key.as_ref() {
                 Some(wrapped) => {
-                    // 复用原 item key 重封；wrapped key 字节不动（附件不变量）。
+                    // Re-seal with the existing item key; the wrapped key bytes stay put (the attachment invariant).
                     let item_key = hierarchy.unwrap_item_key(wrapped)?;
                     let ciphertext = hierarchy.encrypt_with_item_key(&item_key, &plaintext)?;
                     (ciphertext, None, Zeroizing::new(item_key))
                 }
                 None => {
-                    // legacy 行（payload 直接用主密钥封存）：编辑时升级为 per-item
-                    // key，与附件封存路径同一模式，改密轮换后不再依赖 legacy 解密。
+                    // Legacy row (payload sealed directly with the master key): upgrade to a
+                    // per-item key on edit, the same pattern as the attachment sealing path, so it
+                    // no longer depends on legacy decryption after a password rotation.
                     let (envelope, item_key) =
                         hierarchy.encrypt_with_new_item_key_revealed(&plaintext)?;
                     (envelope.ciphertext, Some(envelope.wrapped_key), item_key)
@@ -323,7 +325,7 @@ impl PersonaService {
         let updated = self.credential_repo.update(&credential).await?;
         self.record_credential_history(ChangeType::Updated, Some(&existing), Some(&updated), None)
             .await;
-        // 同步载荷 = 完整条目快照的密封（与 create 同款；同一把 item key）。
+        // Sync payload = a sealed full item snapshot (same as create; the same item key).
         match SyncItemSnapshot::from_credential(&updated, credential_data).seal(&sync_item_key) {
             Ok(sealed) => {
                 self.capture_sync(
@@ -462,7 +464,7 @@ impl PersonaService {
             None,
         )
         .await;
-        // 元数据回滚同样改变快照语义字段，进同步（同款 legacy 跳过）。
+        // A metadata rollback also changes the snapshot's semantic fields, so it goes into sync (legacy rows skipped as before).
         if let Some((sealed, item_key)) = self.sync_put_payload_for(&updated).await {
             self.capture_sync(
                 updated.id,
@@ -564,8 +566,9 @@ impl PersonaService {
         self.update_credential(&credential).await
     }
 
-    /// Item history（1Password 对齐）：凭据变更快照，只含明文元数据字段。
-    /// `encrypted_data` / `wrapped_item_key` 绝不进快照。
+    /// Item history (1Password parity): credential change snapshot, containing only plaintext
+    /// metadata fields.
+    /// `encrypted_data` / `wrapped_item_key` never enter a snapshot.
     pub(crate) fn credential_meta_snapshot(credential: &Credential) -> serde_json::Value {
         serde_json::json!({
             "name": credential.name,
@@ -580,9 +583,10 @@ impl PersonaService {
         })
     }
 
-    /// 把 [`Self::credential_meta_snapshot`] 写出的快照套回凭据元数据
-    /// （restore-to-version 用）。整份校验通过后才落字段，坏快照不半套；
-    /// 秘密字段（`encrypted_data` / `wrapped_item_key`）不在快照里，保持原样。
+    /// Apply a snapshot written by [`Self::credential_meta_snapshot`] back onto the credential's
+    /// metadata (for restore-to-version). Fields are set only after the whole snapshot validates,
+    /// so a bad snapshot is never half-applied; secret fields (`encrypted_data` /
+    /// `wrapped_item_key`) are not in the snapshot and stay as they are.
     pub(crate) fn apply_meta_snapshot(
         credential: &mut Credential,
         snapshot: &serde_json::Value,
@@ -654,8 +658,9 @@ impl PersonaService {
         Ok(())
     }
 
-    /// 元数据字段级 diff；密文变化只记占位标记（历史里可见「密码已轮换」
-    /// 这一事实，但永远看不到内容——与 1Password 的历史展示一致）。
+    /// Field-level metadata diff; a ciphertext change records only a placeholder marker (history
+    /// shows the fact "the password was rotated" but never the content — matching 1Password's
+    /// history display).
     pub(crate) fn diff_credential_metadata(
         old: &Credential,
         new: &Credential,

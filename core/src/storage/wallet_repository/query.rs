@@ -1,5 +1,5 @@
-//! 钱包查询域（LAY-022 拆分）：全量/按身份/网络/安全级别/名称/前缀查询，
-//! 及查询共用的行→模型映射 helper。
+//! Wallet query domain (LAY-022 split): all/by-identity/network/security-level/name/prefix queries,
+//! plus the row-to-model mapping helpers shared by the queries.
 
 use super::*;
 

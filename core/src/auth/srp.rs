@@ -1,26 +1,39 @@
-//! 真实 SRP-6a 设备认证（RFC 5054）——E2EE 同步轨道阶段 1 的产品路径。
+//! Real SRP-6a device authentication (RFC 5054) — the product path for phase 1
+//! of the E2EE sync track.
 //!
-//! 与 [`super::remote`] 的 mock（`RemoteAuthProvider` UI seam）互补：那边
-//! 保持协议无关的离线占位，本模块提供跨端（CLI/desktop ↔ server）可用的
-//! 完整握手原语。客户端与服务器两侧逻辑都在这里，server crate 复用
-//! [`server_challenge`] / [`server_verify`]（persona-server 依赖 persona-core）。
+//! Complements the mock in [`super::remote`] (the `RemoteAuthProvider` UI
+//! seam): that one stays a protocol-agnostic offline placeholder, while this
+//! module provides usable cross-platform (CLI/desktop <-> server) handshake
+//! primitives. Both client- and server-side logic live here; the server crate
+//! reuses [`server_challenge`] / [`server_verify`] (persona-server depends on
+//! persona-core).
 //!
-//! 安全设计：
-//! - **Argon2id 预 hash**（[`derive_srp_secret`]）：进入 SRP 的「password」
-//!   是 `Argon2id(主密码, domain ‖ salt)` 的派生值——服务器只存 SRP verifier，
-//!   verifier 泄露后的离线爆破成本 ≈ Argon2 成本（设计稿 E2EE_SYNC_DESIGN
-//!   DR-2）。域分隔前缀把它与本地库解锁、备份加密的 KDF 互为不同协议域。
-//! - **RFC 5054 4096-bit group**（[`srp_group()`]）；SHA-256 作为握手哈希。
-//! - 数学实现内联在本模块：`srp` crate 停在 digest 0.10 生态，其 0.7-rc
-//!   系列随依赖漂移编不过，无法跟齐 digest 0.11 迁移，故按其 0.6 公式
-//!   （u/k/x/premaster/M1/M2，`to_bytes_be` 最小字节序）逐行复刻并内联。
-//!   公开 API 与漂移前保持形状不变；正确性由 RFC 5054 附录 B 官方测试向量
-//!   （SHA-1/1024-bit interop 向量）与本模块 round-trip 测试共同锁定——
-//!   换实现时向量测试即回归闸。
-//! - 权衡：`num-bigint` 的 modpow 非常数时间；进入模幂的临时指数在
-//!   同机高精度计时下有侧信道面。进入 SRP 的口令已是 Argon2id 派生值
-//!   （见上），verifier 泄露不回推主密码；后续如需收紧可换常数时间
-//!   大整数库重做模幂（接口不变）。
+//! Security design:
+//! - **Argon2id pre-hash** ([`derive_srp_secret`]): the "password" fed into
+//!   SRP is the derived value `Argon2id(master password, domain || salt)` —
+//!   the server only stores the SRP verifier, so offline cracking of a leaked
+//!   verifier costs roughly the Argon2 cost (design doc E2EE_SYNC_DESIGN
+//!   DR-2). The domain-separation prefix keeps it in a distinct protocol
+//!   domain from the local vault unlock and backup encryption KDFs.
+//! - **RFC 5054 4096-bit group** ([`srp_group()`]); SHA-256 as the handshake
+//!   hash.
+//! - The math implementation is inlined in this module: the `srp` crate is
+//!   stuck in the digest 0.10 ecosystem, and its 0.7-rc series stopped
+//!   compiling as dependencies drifted, so it could not follow the digest
+//!   0.11 migration; the formulas of its 0.6 version (u/k/x/premaster/M1/M2,
+//!   `to_bytes_be` minimal big-endian) were therefore replicated line by line
+//!   and inlined. The public API keeps the same shape as before the drift;
+//!   correctness is pinned by the official RFC 5054 Appendix B test vectors
+//!   (SHA-1/1024-bit interop vectors) together with this module's round-trip
+//!   tests — the vector tests are the regression gate when swapping
+//!   implementations.
+//! - Trade-off: `num-bigint`'s modpow is not constant-time; the temporary
+//!   exponents entering the modular exponentiation expose a side channel
+//!   under same-host high-precision timing. The password entering SRP is
+//!   already an Argon2id-derived value (see above), so a leaked verifier does
+//!   not lead back to the master password; tightening later means switching
+//!   to a constant-time big-integer library and redoing the modpow (with an
+//!   unchanged interface).
 
 use std::marker::PhantomData;
 use std::sync::LazyLock;
@@ -33,26 +46,28 @@ use subtle::ConstantTimeEq;
 
 use crate::{PersonaError, PersonaResult};
 
-/// SRP group 参数（N 为大素数，g 为生成元）。字段公开：
-/// 调用方（remote_http 的对拍测试）直接读 `n` 做字节级断言。
+/// SRP group parameters (N is a large prime, g a generator). Fields are
+/// public: callers (the remote_http comparison tests) read `n` directly for
+/// byte-level assertions.
 pub struct SrpGroup {
     pub n: BigUint,
     pub g: BigUint,
 }
 
-/// RFC 5054 附录 A 1024-bit group（仅供向量测试与旧版兼容），g = 2。
+/// RFC 5054 Appendix A 1024-bit group (for vector tests and legacy
+/// compatibility only), g = 2.
 pub static G_1024: LazyLock<SrpGroup> = LazyLock::new(|| SrpGroup {
     n: BigUint::from_bytes_be(&hex_1024()),
     g: BigUint::from_bytes_be(&[2]),
 });
 
-/// 生产用 group：RFC 5054 4096-bit prime，g = 5（登记于设计稿 DR-2）。
+/// Production group: RFC 5054 4096-bit prime, g = 5 (as recorded in design doc DR-2).
 static G_4096: LazyLock<SrpGroup> = LazyLock::new(|| SrpGroup {
     n: BigUint::from_bytes_be(&hex_4096()),
     g: BigUint::from_bytes_be(&[5]),
 });
 
-/// 运行时取生产 group 引用。
+/// Runtime accessor for the production group.
 pub fn srp_group() -> &'static SrpGroup {
     &G_4096
 }
@@ -94,23 +109,26 @@ fn hex_4096() -> Vec<u8> {
     )
 }
 
-/// 客户端临时私钥字节数（原 srp crate 文档建议 64 字节）。
+/// Length in bytes of the client's ephemeral private key (the srp crate docs suggest 64 bytes).
 const CLIENT_EPHEMERAL_LEN: usize = 64;
 
-/// 服务器临时私钥字节数。
+/// Length in bytes of the server's ephemeral private key.
 const SERVER_EPHEMERAL_LEN: usize = 32;
 
-/// SRP salt 字节数（原 srp crate 文档建议约 32 字节）。
+/// SRP salt length in bytes (the srp crate docs suggest roughly 32 bytes).
 pub const SRP_SALT_LEN: usize = 32;
 
-/// SRP 私钥派生的域分隔前缀。
+/// Domain-separation prefix for SRP private key derivation.
 const SRP_KDF_DOMAIN: &[u8] = b"persona-srp-v1";
 
-/// Argon2id 预 hash：从主密码派生进入 SRP 协议的「password」字节串。
+/// Argon2id pre-hash: derives the "password" byte string fed into the SRP
+/// protocol from the master password.
 ///
-/// 盐 = `persona-srp-v1 ‖ 服务器下发 salt`，参数与本地密码验证同族
-/// （argon2 crate 默认：Argon2id v19，m=19 MiB，t=2，p=1）。同一
-/// （password, salt）必然得到同一派生值——注册与登录两侧都经由此函数。
+/// Salt = `persona-srp-v1 || server-issued salt`, with parameters in the same
+/// family as local password verification (argon2 crate defaults: Argon2id
+/// v19, m=19 MiB, t=2, p=1). The same (password, salt) pair always yields the
+/// same derived value — both registration and login go through this
+/// function.
 pub fn derive_srp_secret(password: &str, salt: &[u8]) -> PersonaResult<[u8; 32]> {
     let mut domain_salt = Vec::with_capacity(SRP_KDF_DOMAIN.len() + salt.len());
     domain_salt.extend_from_slice(SRP_KDF_DOMAIN);
@@ -122,17 +140,18 @@ pub fn derive_srp_secret(password: &str, salt: &[u8]) -> PersonaResult<[u8; 32]>
     Ok(out)
 }
 
-/// 注册产物：上传服务器持久化的 (salt, verifier)。服务器**永不**接触
-/// 主密码或 Argon2 派生值。
+/// Registration artifact: the (salt, verifier) uploaded to and persisted by
+/// the server. The server **never** sees the master password or the Argon2
+/// derived value.
 #[derive(Debug, Clone)]
 pub struct SrpRegistration {
     pub salt: Vec<u8>,
     pub verifier: Vec<u8>,
 }
 
-// --- SRP-6a 数学核心（公式与 srp 0.6 逐行一致） ---
+// --- SRP-6a math core (formulas identical line-for-line to srp 0.6) ---
 
-/// u = H(A ‖ B)，双方字节均为最小无符号表示。
+/// u = H(A || B), with both sides' bytes in minimal unsigned representation.
 fn compute_u<D: Digest>(a_pub: &[u8], b_pub: &[u8]) -> BigUint {
     let mut u = D::new();
     u.update(a_pub);
@@ -140,7 +159,7 @@ fn compute_u<D: Digest>(a_pub: &[u8], b_pub: &[u8]) -> BigUint {
     BigUint::from_bytes_be(&u.finalize())
 }
 
-/// k = H(N ‖ pad_N(g))——g 左填零到 N 的字节长度。
+/// k = H(N || pad_N(g)) — g is left-padded with zeros to N's byte length.
 fn compute_k<D: Digest>(params: &SrpGroup) -> BigUint {
     let n = params.n.to_bytes_be();
     let g_bytes = params.g.to_bytes_be();
@@ -154,9 +173,11 @@ fn compute_k<D: Digest>(params: &SrpGroup) -> BigUint {
     BigUint::from_bytes_be(&d.finalize())
 }
 
-/// premaster 左填零到 group 模数字节数（RFC 5054：S 以 N 的全宽参与
-/// M1/M2 派生）。不补零时 `to_bytes_be` 会剥掉前导零，使会话密钥长度
-/// 在 511/512 间漂移（~1/256 概率），违反「长度 = 模数字节数」契约。
+/// The premaster is left-padded with zeros to the group modulus byte length
+/// (RFC 5054: S participates in M1/M2 derivation at N's full width). Without
+/// the padding, `to_bytes_be` strips leading zeros, making the session key
+/// length drift between 511/512 (~1/256 of the time) and violating the
+/// "length = modulus byte count" contract.
 fn padded_premaster(params: &SrpGroup, key: &BigUint) -> Vec<u8> {
     let len = params.n.bits().div_ceil(8) as usize;
     let raw = key.to_bytes_be();
@@ -183,7 +204,7 @@ fn compute_m2<D: Digest>(a_pub: &[u8], m1: &[u8], key: &[u8]) -> Vec<u8> {
     d.finalize().to_vec()
 }
 
-/// x = H(salt ‖ H(I ‖ ":" ‖ P))。
+/// x = H(salt || H(I || ":" || P)).
 fn compute_identity_hash<D: Digest>(username: &[u8], password: &[u8]) -> Vec<u8> {
     let mut d = D::new();
     d.update(username);
@@ -199,13 +220,13 @@ fn compute_x<D: Digest>(identity_hash: &[u8], salt: &[u8]) -> BigUint {
     BigUint::from_bytes_be(&x.finalize())
 }
 
-/// 客户端 SRP-6a 握手（`D` 为握手哈希；生产用 [`Sha256`]）。
+/// Client-side SRP-6a handshake (`D` is the handshake hash; production uses [`Sha256`]).
 pub struct SrpClient<'a, D: Digest> {
     params: &'a SrpGroup,
     _d: PhantomData<D>,
 }
 
-/// 客户端证明状态：M1/M2 已就绪，会话密钥持有至对端核验完成。
+/// Client proof state: M1/M2 are ready, and the session key is held until peer verification completes.
 pub struct SrpClientVerifier<D: Digest> {
     m1: Vec<u8>,
     m2: Vec<u8>,
@@ -214,18 +235,19 @@ pub struct SrpClientVerifier<D: Digest> {
 }
 
 impl<D: Digest> SrpClientVerifier<D> {
-    /// 客户端证明 M1。
+    /// The client proof M1.
     pub fn proof(&self) -> &[u8] {
         &self.m1
     }
 
-    /// 会话密钥（premaster 左填零到 group 模数字节数，4096-bit group
-    /// 下恒为 512B；用作密钥材料前应再经 KDF）。
+    /// Session key (the premaster left-padded to the group modulus byte
+    /// length; always 512B under the 4096-bit group. Should be re-derived
+    /// through a KDF before use as key material).
     pub fn key(&self) -> &[u8] {
         &self.key
     }
 
-    /// 核验服务器证明 M2；不匹配即中间人/降级。
+    /// Verify the server proof M2; a mismatch means man-in-the-middle or downgrade.
     pub fn verify_server(&self, server_proof: &[u8]) -> Result<(), String> {
         if self.m2.ct_eq(server_proof).unwrap_u8() != 1 {
             Err("server proof mismatch".to_string())
@@ -261,20 +283,20 @@ impl<'a, D: Digest> SrpClient<'a, D> {
         base.modpow(&exp, &self.params.n)
     }
 
-    /// v = g^x mod N（注册 verifier）。
+    /// v = g^x mod N (registration verifier).
     pub fn compute_verifier(&self, username: &[u8], password: &[u8], salt: &[u8]) -> Vec<u8> {
         let identity_hash = compute_identity_hash::<D>(username, password);
         let x = compute_x::<D>(&identity_hash, salt);
         self.compute_a_pub(&x).to_bytes_be()
     }
 
-    /// A = g^a mod N。
+    /// A = g^a mod N.
     pub fn compute_public_ephemeral(&self, a: &[u8]) -> Vec<u8> {
         self.compute_a_pub(&BigUint::from_bytes_be(a)).to_bytes_be()
     }
 
-    /// 处理服务器 (B)：派生 premaster 与双侧证明。
-    /// B ≡ 0 (mod N)（非法公开值）时拒绝。
+    /// Process the server's (B): derive the premaster and both proofs.
+    /// Rejects B == 0 (mod N) (an illegal public value).
     pub fn process_reply(
         &self,
         a: &[u8],
@@ -311,13 +333,13 @@ impl<'a, D: Digest> SrpClient<'a, D> {
     }
 }
 
-/// 服务器 SRP-6a 握手（`D` 为握手哈希；生产用 [`Sha256`]）。
+/// Server-side SRP-6a handshake (`D` is the handshake hash; production uses [`Sha256`]).
 pub struct SrpServer<'a, D: Digest> {
     params: &'a SrpGroup,
     _d: PhantomData<D>,
 }
 
-/// 服务器验证状态：M1 核验通过后下发 M2 与会话密钥。
+/// Server verification state: after M1 checks out, M2 and the session key are issued.
 pub struct SrpServerVerifier<D: Digest> {
     m1: Vec<u8>,
     m2: Vec<u8>,
@@ -326,18 +348,18 @@ pub struct SrpServerVerifier<D: Digest> {
 }
 
 impl<D: Digest> SrpServerVerifier<D> {
-    /// 会话密钥（与客户端 `verify_server` 返回值一致，长度 = group
-    /// 模数字节数）。
+    /// Session key (identical to what the client's `verify_server` returns;
+    /// length = group modulus byte count).
     pub fn key(&self) -> &[u8] {
         &self.key
     }
 
-    /// 服务器证明 M2。
+    /// The server proof M2.
     pub fn proof(&self) -> &[u8] {
         &self.m2
     }
 
-    /// 核验客户端证明 M1（常数时间比较）；不匹配即口令错误或伪造。
+    /// Verify the client proof M1 (constant-time comparison); a mismatch means a wrong password or a forgery.
     pub fn verify_client(&self, reply: &[u8]) -> Result<(), String> {
         if self.m1.ct_eq(reply).unwrap_u8() != 1 {
             Err("client proof mismatch".to_string())
@@ -365,7 +387,7 @@ impl<'a, D: Digest> SrpServer<'a, D> {
         base.modpow(b, &self.params.n)
     }
 
-    /// B = (k·v + g^b) mod N。
+    /// B = (k*v + g^b) mod N.
     pub fn compute_public_ephemeral(&self, b: &[u8], v: &[u8]) -> Vec<u8> {
         self.compute_b_pub(
             &BigUint::from_bytes_be(b),
@@ -375,8 +397,8 @@ impl<'a, D: Digest> SrpServer<'a, D> {
         .to_bytes_be()
     }
 
-    /// 处理客户端 A：派生 premaster 与双侧证明。
-    /// A ≡ 0 (mod N)（非法公开值）时拒绝。
+    /// Process the client's A: derive the premaster and both proofs.
+    /// Rejects A == 0 (mod N) (an illegal public value).
     pub fn process_reply(
         &self,
         b: &[u8],
@@ -410,9 +432,9 @@ impl<'a, D: Digest> SrpServer<'a, D> {
     }
 }
 
-// --- 产品封装层（与漂移前对外 API 保持不变） ---
+// --- Product wrapper layer (public API unchanged from before the drift) ---
 
-/// 生成注册材料：随机 salt + SRP verifier（v = g^x mod N）。
+/// Generate registration material: random salt + SRP verifier (v = g^x mod N).
 pub fn register_verifier(username: &str, password: &str) -> PersonaResult<SrpRegistration> {
     let mut salt = vec![0u8; SRP_SALT_LEN];
     rand::rng().fill(&mut salt);
@@ -425,7 +447,7 @@ pub fn register_verifier(username: &str, password: &str) -> PersonaResult<SrpReg
     Ok(SrpRegistration { salt, verifier })
 }
 
-/// 登录客户端第一侧：生成临时密钥对，公开值随 challenge 请求发出。
+/// Login, client side one: generates the ephemeral key pair; the public value goes out with the challenge request.
 #[derive(Debug)]
 pub struct SrpClientLogin {
     a_priv: Vec<u8>,
@@ -433,7 +455,7 @@ pub struct SrpClientLogin {
 }
 
 impl SrpClientLogin {
-    /// 新建一次登录：随机客户端临时私钥。
+    /// Start a new login: random client ephemeral private key.
     pub fn new() -> PersonaResult<Self> {
         let mut a_priv = vec![0u8; CLIENT_EPHEMERAL_LEN];
         rand::rng().fill(&mut a_priv);
@@ -441,15 +463,16 @@ impl SrpClientLogin {
         Ok(Self { a_priv, a_pub })
     }
 
-    /// 客户端公开值 `A`（hex 编码由传输层负责）。
+    /// The client's public value `A` (hex encoding is the transport layer's job).
     pub fn public_ephemeral(&self) -> &[u8] {
         &self.a_pub
     }
 
-    /// 处理 challenge 响应 (salt, B)：派生 SRP 私钥并计算客户端证明 M1。
+    /// Process the challenge response (salt, B): derive the SRP private key
+    /// and compute the client proof M1.
     ///
-    /// `server_public` 为恶意值（如与 group 冲突）时返回
-    /// [`PersonaError::AuthenticationFailed`]。
+    /// Returns [`PersonaError::AuthenticationFailed`] if `server_public` is a
+    /// malicious value (e.g. inconsistent with the group).
     pub fn process(
         self,
         username: &str,
@@ -471,7 +494,7 @@ impl SrpClientLogin {
                     "SRP handshake rejected server public value".to_string(),
                 )
             })?;
-        // proof 先取（verifier 随后 move 进返回结构）
+        // Take the proof first (the verifier is then moved into the returned struct)
         let client_proof = verifier.proof().to_vec();
         Ok(SrpClientProof {
             verifier,
@@ -480,22 +503,24 @@ impl SrpClientLogin {
     }
 }
 
-/// 客户端证明与对端校验状态：M1 已就绪，M2 待服务器响应后核验。
+/// Client proof and peer-verification state: M1 is ready; M2 is verified once the server responds.
 pub struct SrpClientProof {
     verifier: SrpClientVerifier<Sha256>,
     client_proof: Vec<u8>,
 }
 
 impl SrpClientProof {
-    /// 客户端证明 `M1`（发给 /auth/verify）。
+    /// The client proof `M1` (sent to /auth/verify).
     pub fn client_proof(&self) -> &[u8] {
         &self.client_proof
     }
 
-    /// 核验服务器证明 `M2`；通过即完成双向认证，返回会话密钥
-    /// （SRP-6a premaster 的原始字节，长度 = group 模数字节数，
-    /// 4096-bit group 下为 512B——用作密钥材料前应再经 KDF 派生）。
-    /// M2 不匹配 = 中间人/服务器降级，返回 [`PersonaError::AuthenticationFailed`]。
+    /// Verify the server proof `M2`; on success mutual authentication is
+    /// complete and the session key is returned (the raw SRP-6a premaster
+    /// bytes; length = group modulus byte count, 512B under the 4096-bit
+    /// group — re-derive through a KDF before using as key material). An M2
+    /// mismatch = man-in-the-middle / server downgrade; returns
+    /// [`PersonaError::AuthenticationFailed`].
     pub fn verify_server(self, server_proof: &[u8]) -> PersonaResult<Vec<u8>> {
         self.verifier
             .verify_server(server_proof)
@@ -504,14 +529,14 @@ impl SrpClientProof {
     }
 }
 
-/// 服务器 challenge 产物：临时私钥留在服务器会话缓存，公开值下发。
+/// Server challenge artifact: the ephemeral private key stays in the server's session cache; the public value is sent down.
 #[derive(Debug)]
 pub struct SrpServerChallenge {
     pub b_priv: Vec<u8>,
     pub b_pub: Vec<u8>,
 }
 
-/// 以存储的 verifier 发起 challenge：生成服务器临时密钥对。
+/// Issue a challenge from the stored verifier: generates the server's ephemeral key pair.
 pub fn server_challenge(verifier: &[u8]) -> PersonaResult<SrpServerChallenge> {
     let mut b_priv = vec![0u8; SERVER_EPHEMERAL_LEN];
     rand::rng().fill(&mut b_priv);
@@ -519,16 +544,18 @@ pub fn server_challenge(verifier: &[u8]) -> PersonaResult<SrpServerChallenge> {
     Ok(SrpServerChallenge { b_priv, b_pub })
 }
 
-/// 服务器验证结果：M2 下发 + 会话密钥（与客户端 [`SrpClientProof::verify_server`]
-/// 返回值一致）。
+/// Server verification result: M2 to send down plus the session key
+/// (identical to what the client's [`SrpClientProof::verify_server`]
+/// returns).
 #[derive(Debug)]
 pub struct SrpServerOutcome {
     pub server_proof: Vec<u8>,
     pub session_key: Vec<u8>,
 }
 
-/// 核验客户端证明 M1：匹配则产出服务器证明与会话密钥。
-/// M1 不匹配 = 口令错误或伪造，返回 [`PersonaError::AuthenticationFailed`]。
+/// Verify the client proof M1: on a match, produces the server proof and the
+/// session key. An M1 mismatch = wrong password or forgery; returns
+/// [`PersonaError::AuthenticationFailed`].
 pub fn server_verify(
     b_priv: &[u8],
     verifier: &[u8],
@@ -554,8 +581,9 @@ pub fn server_verify(
 mod tests {
     use super::*;
 
-    /// RFC 5054 附录 B interop 向量（1024-bit group，SHA-1）。
-    /// 固定 a/b/盐，对拍 A、B 与 premaster S——换 SRP 实现时的回归闸。
+    /// RFC 5054 Appendix B interop vector (1024-bit group, SHA-1).
+    /// Fixed a/b/salt, cross-checking A, B, and the premaster S — the
+    /// regression gate when swapping SRP implementations.
     #[test]
     fn rfc5054_appendix_b_interop_vector() {
         use sha1::Sha1;
@@ -591,7 +619,7 @@ mod tests {
             .unwrap();
         let server_v = server.process_reply(&b_priv, &v, &a_pub).unwrap();
 
-        // 两侧证明互验 + premaster 相等（RFC 向量 S）
+        // Both proofs verify against each other + premaster equality (RFC vector S)
         server_v.verify_client(client_v.proof()).unwrap();
         client_v.verify_server(server_v.proof()).unwrap();
         assert_eq!(
@@ -601,8 +629,9 @@ mod tests {
         assert_eq!(client_v.key().to_vec(), server_v.key().to_vec());
     }
 
-    /// 产品路径全流程：注册 → challenge → 客户端证明 → 服务器验证 →
-    /// 双向核验完成，两侧会话密钥一致（生产 group + SHA-256 + Argon2 预 hash）。
+    /// Full product-path flow: register -> challenge -> client proof ->
+    /// server verification -> mutual verification complete, with both session
+    /// keys matching (production group + SHA-256 + Argon2 pre-hash).
     #[test]
     fn product_flow_round_trip_yields_matching_session_keys() {
         let username = "laptop";
@@ -612,7 +641,7 @@ mod tests {
         assert_eq!(registration.salt.len(), SRP_SALT_LEN);
 
         let client_login = SrpClientLogin::new().unwrap();
-        // A 必须在 process 消耗登录状态前取出（server_verify 需要）
+        // A must be taken out before process consumes the login state (server_verify needs it)
         let a_pub = client_login.public_ephemeral().to_vec();
         let challenge = server_challenge(&registration.verifier).unwrap();
 
@@ -629,12 +658,12 @@ mod tests {
 
         let client_key = proof.verify_server(&outcome.server_proof).unwrap();
         assert_eq!(client_key, outcome.session_key);
-        // 契约：premaster 恒为 group 模数字节数（4096-bit group = 512B）
+        // Contract: the premaster is always the group modulus byte count (4096-bit group = 512B)
         assert_eq!(client_key.len(), 512);
     }
 
-    /// 错误口令：客户端能算出 M1（SRP 数学上无「客户端侧失败」），
-    /// 但服务器 verify_client 必拒绝。
+    /// Wrong password: the client can still compute M1 (SRP math has no
+    /// "client-side failure"), but the server's verify_client must reject.
     #[test]
     fn product_flow_rejects_wrong_password() {
         let registration = register_verifier("laptop", "right-password").unwrap();
@@ -660,7 +689,7 @@ mod tests {
         assert!(err.to_string().contains("client proof mismatch"));
     }
 
-    /// 服务器证明被篡改：客户端 verify_server 必拒（防恶意服务器/中间人）。
+    /// Tampered server proof: the client's verify_server must reject (guards against a malicious server / man-in-the-middle).
     #[test]
     fn product_flow_rejects_tampered_server_proof() {
         let registration = register_verifier("laptop", "some-password").unwrap();
@@ -689,7 +718,7 @@ mod tests {
         assert!(err.to_string().contains("server proof mismatch"));
     }
 
-    /// Argon2id 预 hash：确定性 + 域分隔（同盐同输出、异盐异输出）。
+    /// Argon2id pre-hash: determinism + domain separation (same salt, same output; different salt, different output).
     #[test]
     fn derive_srp_secret_is_deterministic_and_domain_separated() {
         let a = derive_srp_secret("pw", b"salt-1").unwrap();

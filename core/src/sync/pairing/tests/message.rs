@@ -2,7 +2,8 @@ use super::*;
 
 #[test]
 fn wire_messages_round_trip_through_relay_payloads() {
-    // 消息经 serde JSON 序列化（中转只搬 bytes），双端按序消费
+    // Messages go through serde JSON (the relay only moves bytes); both sides
+    // consume them in order
     let (mut host, invite) = PairingHost::new_invite().unwrap();
     let (mut guest, offer) = PairingGuest::start(&invite.code, &invite.salt).unwrap();
 
@@ -54,27 +55,28 @@ fn message_driver_rejects_wrong_direction_and_completes_pairing() {
     let (mut host, invite) = PairingHost::new_invite().unwrap();
     let (mut guest, guest_msg) = PairingGuest::start_message(&invite.code, &invite.salt).unwrap();
 
-    // guest 首条消息误投回自己：拒绝
+    // The guest's first message sent back to itself: rejected
     assert!(guest.handle_message(guest_msg.clone()).is_err());
 
     let group_key: [u8; 32] = rand::random();
-    // host 收首条 → ServerOffer
+    // host takes the first message → ServerOffer
     let Some(reply) = host.handle_message(guest_msg, &group_key).unwrap() else {
         panic!("host 应答 ServerOffer");
     };
-    // guest 收 ServerOffer → ClientProof
+    // guest takes ServerOffer → ClientProof
     let Some(reply) = guest.handle_message(reply).unwrap() else {
         panic!("guest 应答 ClientProof");
     };
-    // host 收 ClientProof → Handoff
+    // host takes ClientProof → Handoff
     let Some(reply) = host.handle_message(reply, &group_key).unwrap() else {
         panic!("host 应答 Handoff");
     };
-    // guest 收 Handoff → None（完成），组密钥落袋
+    // guest takes Handoff → None (complete); the group key is captured
     assert!(guest.handle_message(reply).unwrap().is_none());
     assert_eq!(guest.group_key(), Some(&group_key));
 
-    // 完成后 host 再收任何消息：握手已消耗，拒绝
+    // Any further message to the host after completion: the handshake is
+    // consumed, so it is rejected
     let (guest2, msg2) = PairingGuest::start_message(&invite.code, &invite.salt).unwrap();
     drop(guest2);
     assert!(host.handle_message(msg2, &group_key).is_err());
@@ -84,7 +86,7 @@ fn message_driver_rejects_wrong_direction_and_completes_pairing() {
 fn protocol_rejects_wrong_direction_messages() {
     let group_key: [u8; 32] = rand::random();
 
-    // host 侧只收 ClientPublic/ClientProof：Handoff 拒收
+    // The host side only accepts ClientPublic/ClientProof: Handoff is rejected
     let (mut host, invite) = PairingHost::new_invite().unwrap();
     let err = host
         .handle_message(
@@ -97,7 +99,7 @@ fn protocol_rejects_wrong_direction_messages() {
         .unwrap_err();
     assert!(matches!(err, PersonaError::InvalidInput(_)));
 
-    // guest 侧只收 ServerOffer/Handoff：ClientProof 拒收
+    // The guest side only accepts ServerOffer/Handoff: ClientProof is rejected
     let (mut guest, _offer) = PairingGuest::start(&invite.code, &invite.salt).unwrap();
     let err = guest
         .handle_message(PairingMessage::ClientProof {
@@ -109,10 +111,10 @@ fn protocol_rejects_wrong_direction_messages() {
 
 #[test]
 fn invite_link_decode_rejects_bad_version() {
-    // 版本前缀不支持
+    // Unsupported version prefix
     let err = PairingInviteLink::decode("persona-pair-0.eyJhIjoxfQ").unwrap_err();
     assert!(matches!(err, PersonaError::InvalidInput(_)));
-    // 缺版本段
+    // Missing version segment
     let err = PairingInviteLink::decode("no-dot-here").unwrap_err();
     assert!(matches!(err, PersonaError::InvalidInput(_)));
 }

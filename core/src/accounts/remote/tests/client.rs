@@ -28,8 +28,8 @@ async fn http_error_surfaces_status_and_server_message() {
 
 #[tokio::test]
 async fn non_json_error_body_omits_detail() {
-    // 状态行自带规范原因短语（含 "Bad Gateway"），断言应针对 body——
-    // body 非 JSON 时不得出现在错误消息里。
+    // The status line carries its own canonical reason phrase (including "Bad Gateway"); the
+    // assertion should target the body — a non-JSON body must not appear in the error message.
     let url = spawn_mock(|_| (502, "upstream exploded".to_string()));
     let client = AccountsApi::new(url).unwrap();
     let err = client

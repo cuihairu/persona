@@ -11,11 +11,12 @@
 //! credential with the TOTP split out, API Credential, SSH Key); everything
 //! else is reported as skipped instead of being forced into a lossy shape.
 //!
-//! # 模块布局
+//! # Module layout
 //!
-//! 类型（1PUX schema、`OnePasswordExport`、plan 类型、`ItemShell`、
-//! `TotpParams`）集中在本枢纽——它们的私有字段要被三个子模块与测试共读；
-//! 函数体按域拆到子模块。
+//! Types (the 1PUX schema, `OnePasswordExport`, the plan types, `ItemShell`,
+//! `TotpParams`) live in this hub — their private fields need to be shared with
+//! the three submodules and the tests; function bodies are split into
+//! submodules by domain.
 
 use std::collections::HashMap;
 
@@ -245,8 +246,9 @@ pub(crate) struct TotpParams {
     algorithm: Option<String>,
     digits: Option<u8>,
     period: Option<u32>,
-    /// Some(true) = HOTP（计数器型，RFC 4226）；None/false = TOTP。
+    /// Some(true) = HOTP (counter-based, RFC 4226); None/false = TOTP.
     hotp: Option<bool>,
-    /// otpauth://hotp/ URI 的 `counter` 参数，入库作缺省起点。
+    /// The `counter` parameter of an otpauth://hotp/ URI, stored as the default
+    /// starting point.
     counter: Option<u64>,
 }

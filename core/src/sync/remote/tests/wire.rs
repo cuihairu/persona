@@ -22,23 +22,23 @@ fn unknown_kind_survives_wire_as_unknown() {
     let back = wire_to_op(op_to_wire(&op)).unwrap();
     assert_eq!(back.kind, ItemKind::Unknown);
 
-    // 前向兼容主场景：未来客户端的新 kind 字符串 → Unknown，不跳过
+    // The main forward-compatibility case: a new kind string from a future client -> Unknown, never skipped
     assert_eq!(kind_from_wire("totp_seed_v9"), ItemKind::Unknown);
 }
 
 #[test]
 fn corrupt_entries_are_skipped_not_fatal() {
-    // 坏 UUID
+    // A bad UUID
     let mut wire = op_to_wire(&sample_put());
     wire.op_id = "not-a-uuid".to_string();
     assert!(op_from_wire(to_in(wire)).is_none());
 
-    // 坏 base64 载荷
+    // A payload with bad base64
     let mut wire = op_to_wire(&sample_put());
     wire.payload.as_mut().unwrap().ciphertext = "!!!".to_string();
     assert!(op_from_wire(to_in(wire)).is_none());
 
-    // put 无载荷 / delete 带载荷：形状矛盾
+    // A put without a payload / a delete with one: a shape contradiction
     let mut wire = op_to_wire(&sample_put());
     wire.payload = None;
     assert!(op_from_wire(to_in(wire)).is_none());
@@ -49,7 +49,7 @@ fn corrupt_entries_are_skipped_not_fatal() {
     });
     assert!(op_from_wire(to_in(wire)).is_none());
 
-    // 未知 op 类型字符串
+    // An unknown op type string
     let mut wire = op_to_wire(&sample_put());
     wire.op = "merge".to_string();
     assert!(op_from_wire(to_in(wire)).is_none());

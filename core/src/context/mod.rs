@@ -1,16 +1,22 @@
-//! Context-aware identity suggestion（设计 docs/CONTEXT_AWARE_DESIGN.md 阶段 1）。
+//! Context-aware identity suggestion (design phase 1 in
+//! docs/CONTEXT_AWARE_DESIGN.md).
 //!
-//! 铁律（与 concepts/context.md 一致）：**Context 只建议，不授权**。建议结果
-//! 永远不会绕过策略放行动作；未被确认的建议不改变 `active_identity_id`，
-//! 只改变「默认候选」。打分是确定性纯函数（无随机/ML），决策在 core、
-//! 客户端只采集信号。
+//! Iron rule (consistent with concepts/context.md): **context only
+//! suggests, it never authorizes**. Suggestion results never bypass
+//! policy to approve actions; an unconfirmed suggestion does not change
+//! `active_identity_id`, only the "default candidate". Scoring is a
+//! deterministic pure function (no randomness/ML); decisions live in
+//! core, clients only collect signals.
 //!
-//! 信号（v1）：`cwd`（上溯 `.git` 读 `remote origin` → forge 归一化）、
-//! `host`（`PERSONA_HOST` 覆盖 / gethostname）。映射表 `~/.persona/context.toml`
-//! （全局）+ `$repo/.persona/context.toml`（仓库内，链上位高）；覆盖链
-//! （高优先在上）：`PERSONA_CONTEXT_OVERRIDE` > 仓库内映射 > 全局映射 >
-//! active identity。隐私：信号全部本地计算，永不外发；审计只记用户确认
-//! （复用 switch 审计），不记信号本身。
+//! Signals (v1): `cwd` (walk up to `.git`, read `remote origin` →
+//! normalize into a forge identity), `host` (`PERSONA_HOST` override /
+//! gethostname). Mapping tables: `~/.persona/context.toml` (global) +
+//! `$repo/.persona/context.toml` (repo-local, higher on the chain);
+//! override chain (highest priority on top): `PERSONA_CONTEXT_OVERRIDE`
+//! > repo-local mappings > global mappings > active identity. Privacy:
+//! signals are computed entirely locally and never sent out; the audit
+//! log records only user confirmation (reusing the switch audit), never
+//! the signals themselves.
 
 mod git;
 mod map;
@@ -24,13 +30,16 @@ pub use map::{ContextMapFile, IdentityEntry};
 pub use signals::{current_host, ContextSignals};
 pub use suggest::{cwd_hash, suggest, SuggestResult, Suggestion};
 
-/// 候选入选阈值：score < MIN_SUGGEST 不进候选（设计 §4）。
+/// Candidate selection threshold: score < MIN_SUGGEST does not become a
+/// candidate (design §4).
 pub const MIN_SUGGEST: f64 = 0.6;
-/// 项目映射命中权重（设计示例：score 1.0）。
+/// Weight for a project-mapping hit (design example: score 1.0).
 pub const PROJECT_WEIGHT: f64 = 1.0;
-/// 主机正则命中权重（低于项目命中，高于阈值）。
+/// Weight for a host-regex hit (below a project hit, above the threshold).
 pub const HOST_WEIGHT: f64 = 0.8;
-/// 历史学习候选权重（设计 §4.1 示例：score 0.7，低于任何映射命中）。
+/// Weight for a historical learning candidate (design §4.1 example:
+/// score 0.7, below any mapping hit).
 pub const LEARN_WEIGHT: f64 = 0.7;
-/// 学习计数窗口（设计示例「最近 30 天」）：窗口外记录不计入。
+/// Learning count window (design example: "last 30 days"): records
+/// outside the window are not counted.
 pub const LEARN_WINDOW_DAYS: i64 = 30;

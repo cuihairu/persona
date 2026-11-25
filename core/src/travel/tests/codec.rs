@@ -1,7 +1,8 @@
 use super::*;
 
-/// 行恢复入口的防御面：坏 base64、无 b64 键的对象、不支持的 JSON
-/// 类型、非法列名、空行逐类拒绝；Bool 落表为 INTEGER 1/0。
+/// The defense surface of the row-restore entry point: bad base64, objects
+/// without a b64 key, unsupported JSON types, illegal column names, and
+/// empty rows are each rejected; Bool lands in the table as INTEGER 1/0.
 #[tokio::test]
 async fn insert_rows_rejects_malformed_cells_and_column_names() {
     let (_dir, db) = seeded_db().await;
@@ -17,37 +18,38 @@ async fn insert_rows_rejects_malformed_cells_and_column_names() {
         vec![row]
     };
 
-    // 标记对象但 base64 非法
+    // Marked object but illegal base64
     let err = insert_rows(&mut conn, "probe", &row_with("blob", json!({"b64": "!!"})))
         .await
         .unwrap_err();
     assert!(err.to_string().contains("bad base64"), "{err}");
 
-    // 对象缺 b64 键
+    // Object missing the b64 key
     let err = insert_rows(&mut conn, "probe", &row_with("blob", json!({"other": 1})))
         .await
         .unwrap_err();
     assert!(err.to_string().contains("unexpected object cell"), "{err}");
 
-    // 不支持的 JSON 值（数组）
+    // Unsupported JSON value (array)
     let err = insert_rows(&mut conn, "probe", &row_with("blob", json!([1, 2])))
         .await
         .unwrap_err();
     assert!(err.to_string().contains("unsupported JSON value"), "{err}");
 
-    // 非法列名（连字符不在白名单）
+    // Illegal column name (hyphen is not in the whitelist)
     let err = insert_rows(&mut conn, "probe", &row_with("bad-name", json!(1)))
         .await
         .unwrap_err();
     assert!(err.to_string().contains("illegal column name"), "{err}");
 
-    // 空行
+    // Empty row
     let err = insert_rows(&mut conn, "probe", &[Map::new()])
         .await
         .unwrap_err();
     assert!(err.to_string().contains("empty row"), "{err}");
 
-    // Bool 走 Int 通道落表；非整数 float 走 Real 通道保真
+    // Bool goes through the Int channel into the table; non-integer floats
+    // keep fidelity via the Real channel
     insert_rows(&mut conn, "probe", &row_with("flag", Value::Bool(true)))
         .await
         .unwrap();
@@ -66,8 +68,9 @@ async fn insert_rows_rejects_malformed_cells_and_column_names() {
     assert!((num - 24.805).abs() < 1e-9, "{num}");
 }
 
-/// SQLite REAL 可存 Inf（`9e999` 字面量溢出）；JSON 表示不了非有限数，
-/// row_to_json 对此 fail-closed 而不是静默丢列或写 null。
+/// SQLite REAL can store Inf (the `9e999` literal overflows); JSON cannot
+/// represent non-finite numbers, so row_to_json fails closed on them instead
+/// of silently dropping the column or writing null.
 #[tokio::test]
 async fn row_to_json_rejects_non_finite_float() {
     let (_dir, db) = seeded_db().await;
@@ -87,8 +90,9 @@ async fn row_to_json_rejects_non_finite_float() {
     assert!(err.to_string().contains("non-finite float"), "{err}");
 }
 
-/// 表名白名单拒绝臂：恢复面只认 12 张打包表（表名来自常量表，此臂
-/// 防手改 pack 注入任意表名）。
+/// Table-name whitelist rejection arm: the restore surface only accepts the
+/// 12 packed tables (table names come from the constant list; this arm
+/// blocks hand-edited packs from injecting arbitrary table names).
 #[test]
 fn table_name_whitelist_rejects_unknown_table() {
     let err = check_table_name("audit_logs").unwrap_err();

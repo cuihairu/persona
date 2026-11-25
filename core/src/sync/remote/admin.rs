@@ -1,6 +1,6 @@
-//! 设备与组密钥信封管理面：[`SyncAdminApi`] 接 `/devices` +
-//! `/group-keys`（§6 设备生命周期），`SyncDevice`/`SyncGroupKeyEntry` 为
-//! server 行的客户端视图。
+//! Device and group key envelope management plane: [`SyncAdminApi`] talks to `/devices` +
+//! `/group-keys` (§6 device lifecycle); `SyncDevice`/`SyncGroupKeyEntry` are client-side
+//! views of the server rows.
 
 use base64::engine::general_purpose::STANDARD as B64;
 use base64::Engine as _;
@@ -9,20 +9,20 @@ use uuid::Uuid;
 use super::http::SyncHttp;
 use crate::{PersonaError, Result};
 
-/// 已登记设备（server `sync_devices` 行的客户端视图）。`public_key` 已解
-/// base64——坏值让本层报错，不让调用方处理编码。
+/// A registered device (client-side view of the server `sync_devices` row). `public_key` is already
+/// base64-decoded — a bad value makes this layer error out rather than handing the caller a decoding problem.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SyncDevice {
     pub id: Uuid,
     pub device_name: String,
     pub public_key: [u8; 32],
     pub created_at: String,
-    /// 设备主人的自由备注（S4）：只有设备本人能写，全员可读。
+    /// The device owner's free-form remark (S4): only the device itself can write it; everyone can read it.
     pub remark: String,
 }
 
-/// group key 信封条目（server `sync_group_keys` 行的客户端视图）。
-/// 信封字节保持原样（`envelope::open_group_key` 的输入）。
+/// A group key envelope entry (client-side view of the server `sync_group_keys` row).
+/// Envelope bytes are kept verbatim (the input to `envelope::open_group_key`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SyncGroupKeyEntry {
     pub device_id: Uuid,
@@ -37,7 +37,7 @@ struct WireDeviceInfo {
     device_name: String,
     public_key: String,
     created_at: String,
-    /// remark 列是后来加的（0011 迁移）——老服务器不下发，default 补空串。
+    /// The remark column was added later (migration 0011) — old servers do not send it, so serde default fills an empty string.
     #[serde(default)]
     remark: String,
 }
@@ -94,7 +94,7 @@ struct WirePutRemark<'a> {
     remark: &'a str,
 }
 
-/// 服务器还回显 device_name（恒等于令牌归属名，调用方已知），不取。
+/// The server also echoes device_name (always equal to the token's owning name, already known to the caller); not taken.
 #[derive(Debug, serde::Deserialize)]
 struct WireRemarkResponse {
     remark: String,
@@ -110,9 +110,10 @@ fn decode_b32(s: &str, what: &str) -> Result<[u8; 32]> {
     Ok(key)
 }
 
-/// `/api/v1/sync/devices` + `/api/v1/sync/group-keys` 的管理客户端——
-/// 注册/列出/吊销设备、收发 group key 信封（DR-1/DR-3）。授权流在调用方
-/// 组装：拆自己可开的信封得 group key → 用新设备公钥包新信封上传。
+/// Management client for `/api/v1/sync/devices` + `/api/v1/sync/group-keys` —
+/// register/list/revoke devices and exchange group key envelopes (DR-1/DR-3). The authorization flow is
+/// assembled by the caller: unwrap the envelope only this device can open to get the group key → wrap a
+/// new envelope with the new device's public key and upload it.
 #[derive(Clone)]
 pub struct SyncAdminApi {
     http: SyncHttp,
@@ -125,8 +126,8 @@ impl SyncAdminApi {
         })
     }
 
-    /// 登记设备（公钥 + 设备名），返回服务器分配的 device_id。
-    /// 重名 409（公钥不可被静默替换）——错误串含服务器 message。
+    /// Registers a device (public key + device name) and returns the server-assigned device_id.
+    /// A duplicate name is 409 (a public key must not be silently replaced) — the error string includes the server's message.
     pub async fn register_device(&self, device_name: &str, public_key: &[u8; 32]) -> Result<Uuid> {
         let resp = self
             .http
@@ -149,7 +150,7 @@ impl SyncAdminApi {
         Ok(device_id)
     }
 
-    /// 列出全部已登记设备（含待授权的——信封未上传的设备）。
+    /// Lists all registered devices (including pending-authorization ones — devices whose envelope has not been uploaded).
     pub async fn list_devices(&self) -> Result<Vec<SyncDevice>> {
         let resp = self
             .http
@@ -179,8 +180,8 @@ impl SyncAdminApi {
         Ok(devices)
     }
 
-    /// 吊销设备（删登记与其信封；幂等，204）。已知的 group key 不可追溯
-    /// 撤销（DR-3 诚实边界）——提示文案归调用方。
+    /// Revokes a device (removes its registration and envelope; idempotent, 204). A known group key cannot be
+    /// retroactively revoked (DR-3's honest boundary) — the notice text belongs to the caller.
     pub async fn delete_device(&self, device_id: Uuid) -> Result<()> {
         let resp = self
             .http
@@ -192,9 +193,9 @@ impl SyncAdminApi {
         Ok(())
     }
 
-    /// 设置**本设备**的自由备注（S4：令牌归属即设备身份，无跨设备路径；
-    /// 服务端按令牌归属的 device_name 定位行）。空串/纯空白 = 清除。
-    /// 返回服务端规整后的备注（trim 过）。
+    /// Sets **this device's** free-form remark (S4: token ownership is the device identity, with no cross-device
+    /// path; the server locates the row by the token-owning device_name). An empty/whitespace-only string clears it.
+    /// Returns the remark as normalized by the server (trimmed).
     pub async fn set_device_remark(&self, remark: &str) -> Result<String> {
         let resp = self
             .http
@@ -211,15 +212,15 @@ impl SyncAdminApi {
         Ok(body.remark)
     }
 
-    /// 取全部设备信封。调用方只认自己 device_id 的那条；未授权设备拿到
-    /// 别人的信封也拆不开（fail-closed）。
+    /// Fetches all device envelopes. The caller recognizes only the entry with its own device_id; an
+    /// unauthorized device that fetches someone else's envelope cannot unwrap it anyway (fail-closed).
     pub async fn group_keys(&self) -> Result<Vec<SyncGroupKeyEntry>> {
         Ok(self.group_keys_with_epoch().await?.0)
     }
 
-    /// [`Self::group_keys`] + 全组轮换代数（rotate-begin 乐观锁的基线）。
-    /// 老服务器无 epoch 字段时 serde default 到 0——与「从未轮换过」一致，
-    /// begin 时若服务器实际有表则自然 409 提示重读，方向安全。
+    /// [`Self::group_keys`] plus the group-wide rotation epoch (the baseline of the rotate-begin optimistic lock).
+    /// When an old server has no epoch field, serde defaults to 0 — consistent with "never rotated"; if the
+    /// server actually has a table, begin then naturally 409s and prompts a re-read, which is the safe direction.
     pub async fn group_keys_with_epoch(&self) -> Result<(Vec<SyncGroupKeyEntry>, u64)> {
         let resp = self
             .http
@@ -250,10 +251,10 @@ impl SyncAdminApi {
         Ok((keys, body.epoch))
     }
 
-    /// 轮换互斥点（E2EE_SYNC_DESIGN §11 开放问题 2）：epoch 乐观锁抢占。
-    /// 返回抢占后的新代数；另一台设备已并发轮换时 409 →
-    /// [`PersonaError::ConcurrentConflict`]（调用方 fail-closed 中止，
-    /// 未写任何信封、未重包，重读状态后可重试）。
+    /// The rotation mutex point (E2EE_SYNC_DESIGN §11 open question 2): an epoch optimistic lock claim.
+    /// Returns the new epoch after the claim; if another device rotated concurrently, a 409 →
+    /// [`PersonaError::ConcurrentConflict`] (the caller aborts fail-closed — no envelopes written, no
+    /// rewrapping — and can retry after re-reading the state).
     pub async fn begin_group_rotation(&self, if_epoch: u64) -> Result<u64> {
         let resp = self
             .http
@@ -278,17 +279,19 @@ impl SyncAdminApi {
         Ok(body.epoch)
     }
 
-    /// 首设备自举（空组建组）：服务器上尚无任何 group key 信封时，本机生成
-    /// group key 并用自己的公钥封唯一信封上传。全新服务器上不存在「既有
-    /// 设备」可代为授权——令牌持有者本来就能读到全部密文，首台设备自建组
-    /// 不放大信任面。返回 `true` = 本机完成自举（即已授权）；`false` = 组
-    /// 非空，走既有流程等他机授权。
+    /// First-device bootstrap (creating a group from an empty one): when the server holds no group key
+    /// envelopes at all, this device generates a group key, seals the single envelope with its own public key,
+    /// and uploads it. A brand-new server has no "existing device" to authorize on its behalf — the token
+    /// holder can already read all ciphertext anyway, so the first device forming the group does not enlarge
+    /// the trust surface. Returns `true` = this device completed the bootstrap (i.e. is authorized);
+    /// `false` = the group is non-empty and the existing flow (waiting for another device to authorize) applies.
     ///
-    /// 已知边界：两台设备在彼此可见前先后见到空组会各自建组（并发自举），
-    /// 各自只能拆开自己的信封、对方条目解不开按容错跳过——事后在重复的
-    /// 一侧 leave 重走即可。全员离开后组回到空态，下一个加入者自举出
-    /// **新**组密钥：服务器残留的旧组密文解不开、按容错逐条跳过（不废
-    /// 整轮），不回读旧数据。
+    /// Known edge: two devices that each see an empty group before they can see each other will each form a
+    /// group (concurrent bootstrap); each can only unwrap its own envelope, and the other's entries fail to
+    /// open and are skipped under the tolerance policy — afterwards, leave from the duplicated side and redo
+    /// the flow. Once every member leaves, the group returns to an empty state and the next joiner bootstraps
+    /// a **new** group key: leftover old ciphertext on the server cannot be opened and is skipped entry by
+    /// entry under the tolerance policy (without aborting the round); old data is never read back.
     pub async fn bootstrap_group_if_empty(
         &self,
         device_id: Uuid,
@@ -303,8 +306,9 @@ impl SyncAdminApi {
         Ok(true)
     }
 
-    /// 为设备上传 group key 信封（授权动作）。信封必须已登记设备的公钥封出
-    /// （服务器校验 80 字节 + 设备存在；挂幽灵设备 fail-closed）。
+    /// Uploads a group key envelope for a device (an authorized action). The envelope must be sealed with the
+    /// registered device's public key (the server validates 80 bytes + device existence; attaching to a ghost
+    /// device fails closed).
     pub async fn put_group_key(&self, device_id: Uuid, envelope: &[u8]) -> Result<()> {
         let resp = self
             .http

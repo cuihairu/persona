@@ -1,21 +1,30 @@
-//! 冲突裁决数据面（E2EE_SYNC_DESIGN §7 / 阶段 3c）——把 oplog 冲突区
-//! 变成宿主 UI 可消费的形态。
+//! Conflict-resolution data plane (E2EE_SYNC_DESIGN §7 / phase 3c)——turns
+//! the oplog conflict zone into a form the host UI can consume.
 //!
-//! 分层口径与会话装配一致：类型与纯逻辑（解密、校验）在本模块，
-//! [`super::runtime::SyncSession`] 的 `list_conflicts` / `resolve_conflict`
-//! 方法挂在 runtime（需要访问会话私有字段）。裁决语义：
+//! The layering matches the session assembly: types and pure logic
+//! (decryption, validation) live in this module, while the
+//! `list_conflicts` / `resolve_conflict` methods of
+//! [`super::runtime::SyncSession`] hang off the runtime (they need access to
+//! private session fields). Resolution semantics:
 //!
-//! - **展示**：每个冲突条目给出主位与全部副本的可对比快照（group key 拆
-//!   item key → 开快照；tombstone 版本标 `deleted`）。凭据是原子整体
-//!   （DR-4 拍板：否决字段级合并），UI 只做取舍不做合并。
-//! - **采纳**：把选中的副本以本机新 lamport 重新入账（put 复用副本
-//!   payload 字节——快照与 wrapped item key 都是 group 域的，设备无关；
-//!   tombstone 复用空 payload）并按其内容写主库。新 lamport 严格大于
-//!   冲突双方 → LWW 自然赢回主位，其余版本全部淘汰出视图（oplog
-//!   append-only，数据不丢，只是不再出现在裁决视图）。
-//! - **写序**：先主库后 oplog。主库写失败即报错，oplog 未动，重试安全
-//!   （重写主库幂等）；oplog 记账失败可重试（主库已是目标内容，重跑
-//!   幂等补 op）——两个方向都不产生主库与 oplog 的静默分叉。
+//! - **Display**: each conflicting entry exposes comparable snapshots of the
+//!   primary position and every copy (group key unwraps the item key → open
+//!   the snapshot; tombstone versions are flagged `deleted`). A credential is
+//!   an atomic whole (DR-4 ruling: field-level merging is rejected), so the
+//!   UI only chooses between versions, never merges them.
+//! - **Adopt**: the chosen copy is re-booked with a fresh local lamport (a
+//!   put reuses the copy's payload bytes——the snapshot and the wrapped item
+//!   key are both in the group domain, device-independent; a tombstone reuses
+//!   the empty payload) and the main DB is written with its content. The new
+//!   lamport is strictly greater than both sides of the conflict → LWW
+//!   naturally wins back the primary position, and all other versions are
+//!   retired out of the view (the oplog is append-only, no data is lost; the
+//!   versions simply stop appearing in the resolution view).
+//! - **Write order**: main DB first, then oplog. A main-DB write failure
+//!   errors out with the oplog untouched, safe to retry (rewriting the main
+//!   DB is idempotent); an oplog bookkeeping failure is retryable (the main
+//!   DB already holds the target content; re-running idempotently adds the
+//!   op)——neither direction can silently fork the main DB from the oplog.
 
 use chrono::{DateTime, Utc};
 use uuid::Uuid;
@@ -24,20 +33,21 @@ use crate::sync::keys::{unwrap_item_key_with_group, GroupKey};
 use crate::sync::oplog::{item_view, ItemKind, SyncOp};
 use crate::sync::snapshot::SyncItemSnapshot;
 
-/// 冲突中一个版本的可展示形态。
+/// The displayable form of one version in a conflict.
 #[derive(Debug, Clone)]
 pub struct ConflictVersion {
     pub op_id: Uuid,
     pub device_id: Uuid,
     pub lamport: u64,
     pub timestamp: Option<DateTime<Utc>>,
-    /// tombstone 版本：无快照，`deleted == true`（采纳 = 删除该条目）。
+    /// Tombstone version: no snapshot, `deleted == true` (adopting it = delete
+    /// the entry).
     pub deleted: bool,
-    /// put 版本的解密快照。
+    /// The decrypted snapshot of a put version.
     pub snapshot: Option<SyncItemSnapshot>,
 }
 
-/// 一个条目的冲突视图：主位 + 待裁决副本。
+/// The conflict view of one entry: the primary position + pending copies.
 #[derive(Debug, Clone)]
 pub struct ConflictEntry {
     pub item_id: Uuid,
@@ -45,13 +55,14 @@ pub struct ConflictEntry {
     pub copies: Vec<ConflictVersion>,
 }
 
-/// 把一条 op 变成可展示版本。put 快照解不开（group 信封坏/密文坏）返回
-/// `None`——调用方跳过该条目（损坏副本不可裁决，留驻 oplog），tombstone
-/// 恒 `Some`。
+/// Turn one op into a displayable version. Returns `None` when the put
+/// snapshot cannot be opened (bad group envelope / bad ciphertext)——the
+/// caller skips that entry (a corrupted copy cannot be adjudicated and stays
+/// in the oplog); tombstones are always `Some`.
 pub fn decrypt_version(op: &SyncOp, group: &GroupKey) -> Option<ConflictVersion> {
     let snapshot = match op.payload.as_ref() {
         None if op.is_tombstone() => None,
-        None => return None, // put 无 payload：协议不变量违反，不可展示
+        None => return None, // put without payload: protocol invariant violated, not displayable
         Some(payload) => {
             let item_key = unwrap_item_key_with_group(&payload.wrapped_item_key, group).ok()?;
             Some(SyncItemSnapshot::open(&payload.ciphertext, &item_key).ok()?)
@@ -67,8 +78,10 @@ pub fn decrypt_version(op: &SyncOp, group: &GroupKey) -> Option<ConflictVersion>
     })
 }
 
-/// 从 op 集合提取冲突条目；任一版本不可解密 → `None`（整条跳过）。
-/// 非 Credential 条目的冲突不在裁决范围（捕获/物化都不支持，防御臂）。
+/// Extract the conflicting entry from a set of ops; if any version cannot be
+/// decrypted → `None` (skip the entry entirely). Conflicts on non-Credential
+/// entries are out of scope for adjudication (neither capture nor
+/// materialization supports them; a defensive arm).
 pub fn conflict_entry(item_id: Uuid, ops: &[SyncOp], group: &GroupKey) -> Option<ConflictEntry> {
     let view = item_view(ops.to_vec());
     if view.conflicts.is_empty() {
@@ -183,7 +196,7 @@ mod tests {
     fn decrypt_version_rejects_broken_payload_and_payloadless_put() {
         let g = group();
         let item = Uuid::new_v4();
-        // 密文坏：unwrap 通过但快照打不开
+        // Bad ciphertext: unwrap succeeds but the snapshot fails to open
         let broken = SyncOp {
             payload: Some(SyncPayload {
                 ciphertext: vec![7; 64],
@@ -196,7 +209,7 @@ mod tests {
         };
         assert!(decrypt_version(&broken, &g).is_none());
 
-        // put 无 payload：协议不变量违反
+        // put without payload: protocol invariant violated
         let payloadless = SyncOp {
             payload: None,
             ..put_op(item, Uuid::new_v4(), 1, &snapshot("x"), &g)
@@ -213,17 +226,17 @@ mod tests {
         let win_op = put_op(item, winner, 5, &snapshot("win"), &g);
         let lose_op = put_op(item, loser, 5, &snapshot("lose"), &g);
 
-        // 真冲突（同 lamport 异设备）：主位 + 1 副本
+        // Real conflict (same lamport, different devices): primary + 1 copy
         let entry = conflict_entry(item, &[win_op.clone(), lose_op.clone()], &g).unwrap();
         assert_eq!(entry.primary.op_id, win_op.op_id);
         assert_eq!(entry.copies.len(), 1);
         assert_eq!(entry.copies[0].op_id, lose_op.op_id);
 
-        // 单版本（无冲突）→ None
+        // Single version (no conflict) → None
         let lone = put_op(item, Uuid::new_v4(), 1, &snapshot("lone"), &g);
         assert!(conflict_entry(item, &[lone], &g).is_none());
 
-        // 任一版本损坏 → 整条跳过
+        // Any version corrupted → skip the entry entirely
         let broken = SyncOp {
             payload: Some(SyncPayload {
                 ciphertext: vec![7; 64],
@@ -252,7 +265,8 @@ mod tests {
             timestamp: None,
             payload: None,
         };
-        // put 无 payload 本就不可解密，但 kind 校验先行：非 Credential 冲突不进裁决
+        // A put without payload cannot be decrypted anyway, but the kind check
+        // runs first: non-Credential conflicts do not enter adjudication
         assert!(conflict_entry(
             item,
             &[mk(a, 5, ItemKind::Identity), mk(b, 5, ItemKind::Identity)],

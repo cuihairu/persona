@@ -17,7 +17,7 @@ mod codec;
 mod pack;
 mod tx;
 
-/// 测试 KDF：8 MiB（解密侧恒 3/1，iterations 不能动）。
+/// Test KDF: 8 MiB (decryption is always 3/1; iterations must not change).
 fn fast_kdf() -> KdfParams {
     KdfParams {
         mem_kib: 8 * 1024,
@@ -32,8 +32,9 @@ async fn seeded_db() -> (tempfile::TempDir, Database) {
         .await
         .unwrap();
     db.migrate().await.unwrap();
-    // enter/exit 都要读写 workspaces 首行 settings；migrate 不建行，
-    // 与生产 `persona init` 对齐由这里显式建。
+    // enter/exit both read and write the settings of the first workspaces
+    // row; migrate does not create that row, so create it explicitly here to
+    // match production `persona init`.
     use crate::models::Workspace;
     use crate::storage::WorkspaceRepository;
     let ws_repo = WorkspaceRepository::new(db.clone());
@@ -50,11 +51,12 @@ async fn seeded_db() -> (tempfile::TempDir, Database) {
     (dir, db)
 }
 
-// ---- 防御臂补齐轮（2026-09-29 覆盖率）：值级编解码 / 附件收集 /
-// blob IO / 坏库 settings / favicon 清理 ----
+// ---- Defense-arm completion round (2026-09-29 coverage): value-level
+// codec / attachment collection / blob IO / bad settings / favicon pruning ----
 
-/// 最小可用 pack：apply_enter_tx 只消费 identity_ids 与 credentials 表，
-/// 手工构造（字段全 pub）直达被测分支。
+/// Minimal usable pack: apply_enter_tx only consumes identity_ids and the
+/// credentials table, so build it by hand (all fields pub) to reach the
+/// branch under test.
 fn minimal_pack(identity_ids: Vec<String>) -> TravelPack {
     TravelPack {
         format_name: FORMAT_NAME.to_string(),
@@ -68,7 +70,8 @@ fn minimal_pack(identity_ids: Vec<String>) -> TravelPack {
     }
 }
 
-/// 直插一条凭据行（url 可空——favicon 清理按 Option 采集）。
+/// Insert one credential row directly (url may be NULL -- the favicon
+/// pruning collects it as an Option).
 async fn insert_credential(pool: &SqlitePool, identity_id: &str, url: Option<&str>) -> String {
     let id = uuid::Uuid::new_v4().to_string();
     sqlx::query(

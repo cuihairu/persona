@@ -1,16 +1,23 @@
-//! Connect 本机自动化令牌（CONNECT_AUTOMATION_DESIGN 阶段 1；迁移 015）。
+//! Connect local-automation tokens (phase 1 of CONNECT_AUTOMATION_DESIGN;
+//! migration 015).
 //!
-//! 职责边界：本模块只持有 scope 类型、token 生成/哈希纯函数与判定逻辑；
-//! 表访问在 [`crate::storage::ConnectTokenRepository`]，解锁态编排（创建/
-//! 认证/数据面 scope 过滤）在 [`crate::PersonaService`] 的 `connect_*` 方法。
-//! HTTP 面（Host/Origin 三防线、限额、响应包络）是宿主层（desktop axum /
-//! CLI serve）的职责，不属于本模块——框架无关。
+//! Responsibility boundary: this module only holds the scope types, the
+//! token generation/hashing pure functions, and the decision logic; table
+//! access lives in [`crate::storage::ConnectTokenRepository`], and the
+//! unlocked-state orchestration (creation/authentication/data-plane scope
+//! filtering) lives in the `connect_*` methods of
+//! [`crate::PersonaService`]. The HTTP surface (the three Host/Origin
+//! lines of defense, rate limits, response envelope) is the job of the
+//! host layer (desktop axum / CLI serve) and is not part of this module —
+//! framework-agnostic.
 //!
-//! 安全不变式（由 service 层测试锁定）：
-//! - token 明文只在创建时返回一次，库里只有 SHA-256 哈希 + 指纹；
-//! - 无效/吊销/不存在的 token 一律 `None`（404/403 同形由端点层落实）；
-//! - scope 恒排除敏感类型（SSH key / crypto wallet / 自定义），
-//!   verbs 起步只有 `read`。
+//! Security invariants (locked in by service-layer tests):
+//! - the plaintext token is returned exactly once, at creation time; the
+//!   database keeps only the SHA-256 hash + fingerprint;
+//! - invalid/revoked/nonexistent tokens all yield `None` (making 404/403
+//!   indistinguishable is enforced by the endpoint layer);
+//! - scopes always exclude sensitive types (SSH key / crypto wallet /
+//!   custom), and the verbs start with only `read`.
 
 pub mod token;
 

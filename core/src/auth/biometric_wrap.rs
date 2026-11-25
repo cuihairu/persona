@@ -1,15 +1,19 @@
-//! 硬件绑定的密钥包裹层（biometric key wrapping）。
+//! Hardware-bound key wrapping layer (biometric key wrapping).
 //!
-//! 设计全文见 `docs/biometric-unlock-design.md`。与 [`super::biometric`]
-//! 的门禁层（OS 弹框 + keyring 托管主密码）不同，本层把 vault 主密钥
-//! 用平台硬件密钥（Secure Enclave / TPM / Android Keystore）**加密包裹**
-//! ——生物识别在"解密那一刻"由硬件强制弹出，私钥永不导出；keyring 里
-//! 只落打不开的包裹 blob。
+//! See `docs/biometric-unlock-design.md` for the full design. Unlike the gate
+//! layer in [`super::biometric`] (OS prompt + keyring-managed master
+//! password), this layer **encrypts and wraps** the vault master key with a
+//! platform hardware key (Secure Enclave / TPM / Android Keystore) —
+//! biometrics are enforced by the hardware at the moment of decryption, the
+//! private key is never exported, and the keyring only stores an unwrappable
+//! wrapped blob.
 //!
-//! 平台无关部分（信封编解码、enrollment 指纹比对、trait 契约）在 core，
-//! 平台私有密文（payload）完全交给 [`BiometricKeyWrapper`] 实现方；
-//! 中间值一律 `Zeroizing` 包裹。未实现平台返回 [`BiometricWrapError::Unsupported`]
-//! 而非 panic。
+//! The platform-independent parts (envelope encoding/decoding, enrollment
+//! fingerprint comparison, trait contract) live in core; the platform-private
+//! ciphertext (payload) is entirely up to the [`BiometricKeyWrapper`]
+//! implementation, and intermediate values are always wrapped in `Zeroizing`.
+//! Unimplemented platforms return [`BiometricWrapError::Unsupported`] instead
+//! of panicking.
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -18,23 +22,23 @@ use zeroize::Zeroizing;
 
 use crate::PersonaError;
 
-/// 包裹信封 magic + 版本（BIOWRAP1；格式变更换 magic 尾数字）
+/// Wrap envelope magic + version (BIOWRAP1; bump the trailing digit when the format changes)
 const WRAP_MAGIC: &[u8; 8] = b"BIOWRAP1";
 
-/// 定长头部长度：`magic(8) | platform_tag(1) | enrollment_fp(32) | payload_len(4)`
+/// Fixed header length: `magic(8) | platform_tag(1) | enrollment_fp(32) | payload_len(4)`
 const WRAP_HEADER_LEN: usize = 8 + 1 + 32 + 4;
 
-/// 平台标识（信封头字段；解包时 tag 不匹配 = blob 不是本平台产出）
+/// Platform identifier (envelope header field; a tag mismatch on unwrap = the blob was not produced on this platform)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[repr(u8)]
 pub enum WrapPlatform {
-    /// 测试/CI mock
+    /// Test/CI mock
     Mock = 0,
-    /// macOS Secure Enclave（路线 B'，见设计文档 §5）
+    /// macOS Secure Enclave (route B', see design doc §5)
     MacSecureEnclave = 1,
-    /// Windows TPM / Passport Key（规划中，设计文档 §6）
+    /// Windows TPM / Passport Key (planned, design doc §6)
     WindowsTpm = 2,
-    /// Linux（保留——当前定格 OsGateOnly 档，设计文档 §7.1）
+    /// Linux (reserved — currently pinned to the OsGateOnly tier, design doc §7.1)
     Linux = 3,
 }
 
@@ -49,42 +53,42 @@ impl WrapPlatform {
         }
     }
 
-    /// 信封里的 `u8` 编码（`from_u8` 的逆运算；枚举值即线格式）
+    /// `u8` encoding used in the envelope (inverse of `from_u8`; the enum value is the wire format)
     fn as_u8(self) -> u8 {
         self as u8
     }
 }
 
-/// 生物识别解锁的能力档位（三档，设计文档 §1）
+/// Capability tiers for biometric unlock (three tiers, design doc §1)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum BiometricWrapCapability {
-    /// 硬件绑定：私钥不可导出，解密由硬件强制用户认证
+    /// Hardware-bound: the private key cannot be exported and decryption forces user authentication in hardware
     HardwareBound,
-    /// 仅系统门禁：keyring 托管 + OS 弹框（Linux 现状 / 硬件层未启用的平台）
+    /// OS gate only: keyring-managed + OS prompt (Linux today / platforms without the hardware layer enabled)
     OsGateOnly,
-    /// 无生物硬件或系统认证栈，功能整体隐藏
+    /// No biometric hardware or system authentication stack; the feature is hidden entirely
     Unsupported,
 }
 
-/// 包裹层的结构化错误（桌面按此分流回退链，设计文档 §3.4）
+/// Structured errors of the wrap layer (the desktop branches its fallback chain on these, design doc §3.4)
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BiometricWrapError {
-    /// 平台/硬件不支持硬件绑定档
+    /// The platform/hardware does not support the hardware-bound tier
     Unsupported,
-    /// 硬件或生物注册当前不可用
+    /// Hardware or biometric enrollment is currently unavailable
     NotAvailable,
-    /// 用户取消系统弹框（静默回解锁屏）
+    /// The user cancelled the OS prompt (silently return to the unlock screen)
     UserCancelled,
-    /// 生物注册集已变化（换指纹等），包裹永久失效 → 自动降级主密码
+    /// The biometric enrollment set has changed (a different fingerprint, etc.), permanently invalidating the wrap -> fall back to the master password automatically
     EnrollmentChanged,
-    /// 包裹 blob 损坏/被替换/非本平台产出
+    /// The wrap blob is corrupted / was replaced / was not produced on this platform
     WrapInvalid,
-    /// 平台实现报错（OSStatus / HRESULT 等原文进字符串）
+    /// Platform implementation error (OSStatus / HRESULT and the like go into the string verbatim)
     Platform(String),
 }
 
 impl BiometricWrapError {
-    /// 映射进 PersonaError（服务层签名统一走 crate::Result）
+    /// Map into PersonaError (service-layer signatures uniformly use crate::Result)
     pub fn to_persona_error(&self) -> PersonaError {
         PersonaError::AuthenticationFailed(self.to_string())
     }
@@ -109,49 +113,58 @@ impl std::fmt::Display for BiometricWrapError {
     }
 }
 
-/// 平台硬件包裹器（平台实现 payload 密文；信封与指纹比对在 core）。
+/// Platform hardware wrapper (platforms implement the payload ciphertext;
+/// the envelope and fingerprint comparison live in core).
 ///
-/// 实现方约定：
-/// - `wrap_payload`/`unwrap_payload` 是仅有的两个接触明文密钥的方法，
-///   平台应在硬件认证通过后原位加解密，私钥不落内存之外的任何地方；
-/// - `enrollment_fingerprint` 返回当前生物注册集的稳定指纹
-///   （硬件已强制 biometryCurrentSet 的平台可返回固定占位值）；
-/// - 不支持的平台实现 [`MockKeyWrapper`] 同款：capability 报
-///   `Unsupported`，方法返回 [`BiometricWrapError::Unsupported`]。
+/// Implementor contract:
+/// - `wrap_payload`/`unwrap_payload` are the only two methods that touch the
+///   plaintext key; the platform should encrypt/decrypt in place after
+///   hardware authentication succeeds, and the private key never leaves
+///   memory anywhere else;
+/// - `enrollment_fingerprint` returns a stable fingerprint of the current
+///   biometric enrollment set (platforms where the hardware already enforces
+///   biometryCurrentSet may return a fixed placeholder value);
+/// - unsupported platforms implement the same as [`MockKeyWrapper`]:
+///   capability reports `Unsupported`, and methods return
+///   [`BiometricWrapError::Unsupported`].
 pub trait BiometricKeyWrapper: Send + Sync {
     fn capability(&self) -> BiometricWrapCapability;
 
-    /// 硬件/生物注册当前是否可用（探测失败 fail-closed 为 false）
+    /// Whether hardware/biometric enrollment is currently available (probe failure fail-closes to false)
     fn is_available(&self) -> bool;
 
     fn platform(&self) -> WrapPlatform;
 
     fn enrollment_fingerprint(&self) -> std::result::Result<[u8; 32], BiometricWrapError>;
 
-    /// 包裹主密钥（payload 密文；core 负责加信封头）
+    /// Wrap the master key (the payload ciphertext; core adds the envelope header)
     fn wrap_payload(
         &self,
         master_key: &[u8; 32],
         prompt: &str,
     ) -> std::result::Result<Vec<u8>, BiometricWrapError>;
 
-    /// 解开 payload（硬件此刻强制生物识别；返回 Zeroizing 包裹的密钥）
+    /// Unwrap the payload (the hardware enforces biometrics at this moment; returns the key wrapped in Zeroizing)
     fn unwrap_payload(
         &self,
         payload: &[u8],
         prompt: &str,
     ) -> std::result::Result<Zeroizing<[u8; 32]>, BiometricWrapError>;
 
-    /// 删除硬件侧持久化的密钥/凭据（禁用与失效自愈时调用；尽力而为，
-    /// 平台无持久化时返回 Ok）
+    /// Delete the key/credential persisted on the hardware side (called when
+    /// disabling and during invalidation self-healing; best-effort, return Ok
+    /// when the platform has nothing persisted)
     fn delete_wrap_payload(&self, payload: &[u8]) -> std::result::Result<(), BiometricWrapError>;
 }
 
-/// 组装完整包裹信封（`BIOWRAP1 | tag | enrollment_fp | payload_len | payload`）。
+/// Assemble the complete wrap envelope
+/// (`BIOWRAP1 | tag | enrollment_fp | payload_len | payload`).
 ///
-/// 供宿主在 enable 时调用：capability 探测 → 指纹 → payload → 信封。
-/// 非 HardwareBound 的 wrapper 一律 `Unsupported`（配置操作不允许静默
-/// 降级到弱档——降级与否是用户可见的显式决策，见设计文档 §4）。
+/// Called by the host on enable: capability probe -> fingerprint -> payload
+/// -> envelope. Any wrapper that is not HardwareBound returns `Unsupported`
+/// (configuration operations must not silently downgrade to a weaker tier —
+/// whether to downgrade is a user-visible explicit decision, see design doc
+/// §4).
 pub fn wrap_master_key(
     wrapper: &dyn BiometricKeyWrapper,
     master_key: &[u8; 32],
@@ -175,9 +188,11 @@ pub fn wrap_master_key(
     Ok(out)
 }
 
-/// payload 字节数 → 信封里的 `u32` 长度字段。超过 `u32::MAX` 的 payload
-/// 无法编码进定长头，视为平台实现错误（报 `Platform` 让宿主显式失败，
-/// 绝不静默截断长度——截断会让解包侧读到越界密文）。
+/// Payload byte count -> the `u32` length field in the envelope. A payload
+/// larger than `u32::MAX` cannot be encoded into the fixed header and is
+/// treated as a platform implementation error (report `Platform` so the host
+/// fails explicitly; never silently truncate the length — truncation would
+/// make the unwrapping side read out-of-bounds ciphertext).
 fn envelope_payload_len(len: usize) -> std::result::Result<u32, BiometricWrapError> {
     u32::try_from(len).map_err(|_| {
         BiometricWrapError::Platform(format!(
@@ -186,13 +201,15 @@ fn envelope_payload_len(len: usize) -> std::result::Result<u32, BiometricWrapErr
     })
 }
 
-/// 解开完整包裹信封：校验 magic/平台 → 比对 enrollment 指纹 → 交平台
-/// 解 payload（硬件在此刻弹生物识别）。
+/// Unwrap the complete wrap envelope: verify magic/platform -> compare the
+/// enrollment fingerprint -> hand the payload to the platform to unwrap (the
+/// hardware pops the biometric prompt at this moment).
 ///
-/// 指纹比对是纵深防御第二道：即使平台层漏拦注册集漂移
-/// （`biometryCurrentSet` 语义缺失），这里也会以
-/// [`BiometricWrapError::EnrollmentChanged`] 拒绝，宿主据此自动删除
-/// blob 并回退主密码。
+/// The fingerprint comparison is the second defense-in-depth line: even if
+/// the platform layer fails to intercept enrollment drift (missing
+/// `biometryCurrentSet` semantics), this still rejects with
+/// [`BiometricWrapError::EnrollmentChanged`], on which the host deletes the
+/// blob automatically and falls back to the master password.
 pub fn unwrap_master_key(
     wrapper: &dyn BiometricKeyWrapper,
     envelope: &[u8],
@@ -214,12 +231,13 @@ pub fn unwrap_master_key(
     wrapper.unwrap_payload(payload, prompt)
 }
 
-/// 解析信封头，返回（平台，指纹，payload 切片）。任何形状不符都是
-/// [`BiometricWrapError::WrapInvalid`]。
+/// Parse the envelope header and return (platform, fingerprint, payload
+/// slice). Any shape mismatch is [`BiometricWrapError::WrapInvalid`].
 ///
-/// `payload_len` 与实际剩余字节必须**精确相等**：不等即意味着 blob 被
-/// 截断或被追加了尾随垃圾，两种情况都拒绝——平台 payload 密文后面多出
-/// 任何字节都属于被改写的证据。
+/// `payload_len` and the actual remaining bytes must be **exactly equal**: a
+/// mismatch means the blob was truncated or has trailing garbage appended,
+/// and both are rejected — any bytes after the platform payload ciphertext
+/// are evidence of tampering.
 pub fn parse_wrap_envelope(
     envelope: &[u8],
 ) -> std::result::Result<(WrapPlatform, [u8; 32], &[u8]), BiometricWrapError> {
@@ -248,11 +266,12 @@ pub fn parse_wrap_envelope(
 }
 
 // ---------------------------------------------------------------------------
-// Mock 实现（CI / 测试 / 非 HardwareBound 平台的占位行为基准）
+// Mock implementation (CI / tests / the placeholder behavior baseline for non-HardwareBound platforms)
 // ---------------------------------------------------------------------------
 
-/// 内存 mock：payload = 16 字节随机 id，包裹表存进程内存。
-/// 失败注入位覆盖回退链全部分支（设计文档 §3.4）。
+/// In-memory mock: payload = 16 random bytes as an id, with the wrap table
+/// held in process memory. The failure-injection toggles cover every branch
+/// of the fallback chain (design doc §3.4).
 #[derive(Default)]
 struct MockInner {
     available: bool,
@@ -264,8 +283,8 @@ struct MockInner {
     wraps: HashMap<[u8; 16], Zeroizing<[u8; 32]>>,
 }
 
-/// 硬件绑定的 mock wrapper（core/service 测试与 CI 用；生产平台实现
-/// 各自的后端）。
+/// Hardware-bound mock wrapper (used by core/service tests and CI; production
+/// platforms implement their own backends).
 pub struct MockKeyWrapper {
     inner: Mutex<MockInner>,
 }
@@ -285,18 +304,18 @@ impl Default for MockKeyWrapper {
 }
 
 impl MockKeyWrapper {
-    /// 模拟用户在生物注册里删除/新增指纹：旧包裹全部失效
+    /// Simulate the user deleting/adding a fingerprint in biometric enrollment: all existing wraps become invalid
     pub fn rotate_enrollment(&self) {
         let mut inner = self.inner.lock().unwrap();
         getrandom::fill(&mut inner.enrollment).expect("failed to rotate mock enrollment");
     }
 
-    /// 模拟用户在系统弹框点了取消
+    /// Simulate the user tapping cancel on the OS prompt
     pub fn set_user_cancelled(&self, cancelled: bool) {
         self.inner.lock().unwrap().user_cancelled = cancelled;
     }
 
-    /// 注入硬件错误（wrap / unwrap / delete 三个方向）
+    /// Inject hardware errors (in the wrap / unwrap / delete directions)
     pub fn set_fail(&self, target: MockFailTarget, fail: bool) {
         let mut inner = self.inner.lock().unwrap();
         match target {
@@ -306,19 +325,19 @@ impl MockKeyWrapper {
         }
     }
 
-    /// 模拟硬件不可用（无 SE 的旧 Mac / 生物注册清空）
+    /// Simulate hardware being unavailable (an old Mac without a SE / a wiped biometric enrollment)
     pub fn set_available(&self, available: bool) {
         self.inner.lock().unwrap().available = available;
     }
 
-    /// 破坏一个包裹 payload 的完整性（模拟 blob 被改写/换平台）
+    /// Break the integrity of a wrap payload (simulate the blob being tampered with or moved to another platform)
     pub fn corrupt(&self, envelope: &mut [u8]) {
         let last = envelope.len() - 1;
         envelope[last] = envelope[last].wrapping_add(1);
     }
 }
 
-/// [`MockKeyWrapper::set_fail`] 的注入方向
+/// Injection direction for [`MockKeyWrapper::set_fail`]
 #[derive(Debug, Clone, Copy)]
 pub enum MockFailTarget {
     Wrap,
@@ -423,9 +442,9 @@ mod tests {
         assert_eq!(envelope.len(), WRAP_HEADER_LEN + 16);
         assert_eq!(&envelope[..8], b"BIOWRAP1");
         assert_eq!(envelope[8], 0);
-        // payload_len 以 u32le 写在 fp 之后
+        // payload_len is written as u32le after the fp
         assert_eq!(&envelope[41..45], &16u32.to_le_bytes());
-        // 头部长度与设计文档 §3.3 的字段表一致
+        // Header length matches the field table in design doc §3.3
         assert_eq!(WRAP_HEADER_LEN, 8 + 1 + 32 + 4);
     }
 
@@ -434,7 +453,7 @@ mod tests {
         let wrapper = MockKeyWrapper::default();
         let envelope = wrap_master_key(&wrapper, &key(9), "enable").unwrap();
 
-        // 截断：实际 payload 比声明短
+        // Truncated: the actual payload is shorter than declared
         let mut truncated = envelope.clone();
         truncated.truncate(truncated.len() - 1);
         assert_eq!(
@@ -442,7 +461,7 @@ mod tests {
             BiometricWrapError::WrapInvalid
         );
 
-        // 尾随垃圾：实际 payload 比声明长
+        // Trailing garbage: the actual payload is longer than declared
         let mut extended = envelope.clone();
         extended.push(0xAB);
         assert_eq!(
@@ -450,7 +469,7 @@ mod tests {
             BiometricWrapError::WrapInvalid
         );
 
-        // 声明长度为零
+        // Declared length is zero
         let mut zero_len = envelope.clone();
         zero_len[41..45].copy_from_slice(&0u32.to_le_bytes());
         assert_eq!(
@@ -458,7 +477,7 @@ mod tests {
             BiometricWrapError::WrapInvalid
         );
 
-        // 声明长度溢出（u32::MAX，实际 16 字节）
+        // Declared length overflows (u32::MAX, actual 16 bytes)
         let mut overflow = envelope.clone();
         overflow[41..45].copy_from_slice(&u32::MAX.to_le_bytes());
         assert_eq!(
@@ -466,31 +485,31 @@ mod tests {
             BiometricWrapError::WrapInvalid
         );
 
-        // 未改动的信封仍然可解（确认上面的构造没有误伤）
+        // An untouched envelope still unwraps (confirming the constructions above did not cause collateral damage)
         assert!(parse_wrap_envelope(&envelope).is_ok());
     }
 
     #[test]
     fn parse_rejects_malformed_envelopes() {
-        // 过短
+        // Too short
         assert_eq!(
             parse_wrap_envelope(&[0u8; 10]).unwrap_err(),
             BiometricWrapError::WrapInvalid
         );
-        // 魔数错误
+        // Wrong magic number
         let mut bad = vec![b'X'; 8 + 1 + 32 + 4];
         assert_eq!(
             parse_wrap_envelope(&bad).unwrap_err(),
             BiometricWrapError::WrapInvalid
         );
-        // 未知平台 tag
+        // Unknown platform tag
         bad[..8].copy_from_slice(WRAP_MAGIC);
         bad[8] = 99;
         assert_eq!(
             parse_wrap_envelope(&bad).unwrap_err(),
             BiometricWrapError::WrapInvalid
         );
-        // 空 payload：头部长度齐全但 payload_len = 0
+        // Empty payload: the header is complete but payload_len = 0
         let mut empty_payload = vec![0u8; WRAP_HEADER_LEN];
         empty_payload[..8].copy_from_slice(WRAP_MAGIC);
         empty_payload[8] = 0;
@@ -540,7 +559,7 @@ mod tests {
         }
 
         let gate = GateOnly;
-        // 配置面：非 HardwareBound 显式 Unsupported（不静默降档）
+        // Configuration surface: non-HardwareBound reports Unsupported explicitly (no silent downgrade)
         assert_eq!(
             wrap_master_key(&gate, &key(1), "enable").unwrap_err(),
             BiometricWrapError::Unsupported
@@ -549,14 +568,16 @@ mod tests {
             unwrap_master_key(&gate, &[0u8; 64], "unlock").unwrap_err(),
             BiometricWrapError::Unsupported
         );
-        // 门禁档的元信息照常可读（前端要显示"当前档位"），只是没有任何
-        // 硬件能力可言
+        // The gate tier's metadata remains readable (the front end needs to
+        // display the "current tier"), it just has no hardware capability to
+        // speak of
         assert_eq!(gate.capability(), BiometricWrapCapability::OsGateOnly);
         assert!(gate.is_available(), "gate-only stubs report their own axis");
         assert_eq!(gate.platform(), WrapPlatform::Linux);
         assert_eq!(gate.enrollment_fingerprint().unwrap(), [0u8; 32]);
-        // 门禁档 wrapper 的每个原语本身也都是 Unsupported——宿主若绕过
-        // capability 检查直接调，一样拿不到密钥（fail-closed 到方法级）
+        // Every primitive of a gate-tier wrapper is itself Unsupported — if
+        // the host bypasses the capability check and calls directly, it still
+        // gets no key (fail-closed down to the method level)
         assert_eq!(
             gate.wrap_payload(&key(1), "p").unwrap_err(),
             BiometricWrapError::Unsupported
@@ -571,8 +592,10 @@ mod tests {
         );
     }
 
-    /// 信封头的长度字段是 `u32`：超过 `u32::MAX` 的 payload 无法编码，
-    /// 必须显式报错（而不是截断——截断会让解包侧读到越界密文）。
+    /// The envelope header's length field is a `u32`: a payload larger than
+    /// `u32::MAX` cannot be encoded and must error explicitly (rather than
+    /// truncate — truncation would make the unwrapping side read out-of-bounds
+    /// ciphertext).
     #[test]
     fn oversized_payload_is_rejected_before_encoding() {
         assert_eq!(envelope_payload_len(0).unwrap(), 0);
@@ -584,8 +607,9 @@ mod tests {
         );
     }
 
-    /// 每个平台 tag 都能被 `parse_wrap_envelope` 认回（线格式 round-trip：
-    /// 枚举值即 tag，`from_u8`/`as_u8` 不能漂移）。
+    /// Every platform tag is recognized back by `parse_wrap_envelope` (wire
+    /// format round-trip: the enum value is the tag, so `from_u8`/`as_u8` must
+    /// not drift).
     #[test]
     fn platform_tags_round_trip() {
         for (tag, expected) in [
@@ -605,8 +629,9 @@ mod tests {
         }
     }
 
-    /// Mock 后端的 `unwrap_payload` 自身也要挡长度不符的 payload（即便
-    /// 信封头声称长度正确——平台后端是最后一道，不做假设）。
+    /// The mock backend's own `unwrap_payload` must also reject payloads whose
+    /// length does not match (even when the envelope header claims a correct
+    /// length — the platform backend is the last line and makes no assumptions).
     #[test]
     fn mock_unwrap_rejects_wrong_length_payload() {
         let wrapper = MockKeyWrapper::default();
@@ -620,8 +645,9 @@ mod tests {
         );
     }
 
-    /// `delete_wrap_payload` 幂等：payload 形状不对时也不报错（禁用操作
-    /// 必须永远能成功，形状不匹配只是"没有可删的东西"）。
+    /// `delete_wrap_payload` is idempotent: a misshapen payload does not error
+    /// either (disable operations must always succeed; a shape mismatch merely
+    /// means "there is nothing to delete").
     #[test]
     fn mock_delete_ignores_unparsable_payload() {
         let wrapper = MockKeyWrapper::default();
@@ -663,7 +689,7 @@ mod tests {
     fn platform_tag_mismatch_is_wrap_invalid() {
         let wrapper = MockKeyWrapper::default();
         let mut envelope = wrap_master_key(&wrapper, &key(3), "enable").unwrap();
-        envelope[8] = WrapPlatform::MacSecureEnclave as u8; // 冒充别的平台产出
+        envelope[8] = WrapPlatform::MacSecureEnclave as u8; // Impersonate output from another platform
         assert_eq!(
             unwrap_master_key(&wrapper, &envelope, "unlock").unwrap_err(),
             BiometricWrapError::WrapInvalid
@@ -689,7 +715,7 @@ mod tests {
             wrap_master_key(&wrapper, &key(1), "enable").unwrap_err(),
             BiometricWrapError::UserCancelled
         );
-        // 解包方向的取消：先关掉 enable 方向的取消注入，拿到合法信封
+        // Cancel on the unwrap direction: first turn off the enable-direction cancel injection and obtain a valid envelope
         wrapper.set_user_cancelled(false);
         let envelope = wrap_master_key(&wrapper, &key(1), "enable").unwrap();
         wrapper.set_user_cancelled(true);
@@ -723,7 +749,7 @@ mod tests {
         assert_matches_platform(&wrapper.delete_wrap_payload(payload), "mock delete failure");
         wrapper.set_fail(MockFailTarget::Delete, false);
         assert!(wrapper.delete_wrap_payload(payload).is_ok());
-        // 删除后再解包 → WrapInvalid
+        // Unwrap after deletion -> WrapInvalid
         assert_eq!(
             unwrap_master_key(&wrapper, &envelope, "unlock").unwrap_err(),
             BiometricWrapError::WrapInvalid
@@ -742,8 +768,9 @@ mod tests {
 
     #[test]
     fn error_display_and_persona_conversion() {
-        // 每个变体都要有可读文案（错误直接进前端提示），且都映射成
-        // AuthenticationFailed（服务层签名统一走 crate::Result）
+        // Every variant needs human-readable text (errors surface directly in
+        // front-end prompts), and all of them map to AuthenticationFailed
+        // (service-layer signatures uniformly use crate::Result)
         for (err, needle) in [
             (BiometricWrapError::Unsupported, "not supported"),
             (BiometricWrapError::NotAvailable, "not currently available"),
@@ -765,8 +792,8 @@ mod tests {
         }
     }
 
-    /// `assert_matches_platform` 这类断言助手自身也要被断言：给它一个
-    /// 非 Platform 错误必须 panic 而不是悄悄放过。
+    /// Assertion helpers like `assert_matches_platform` need asserting too:
+    /// feeding them a non-Platform error must panic rather than pass silently.
     #[test]
     #[should_panic(expected = "expected Platform error")]
     fn assert_matches_platform_rejects_other_variants() {

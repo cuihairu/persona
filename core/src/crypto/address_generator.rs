@@ -131,8 +131,9 @@ pub fn tweak_pubkey_taproot(pubkey: &[u8; 33]) -> PersonaResult<[u8; 32]> {
     // BIP-341: the tweak is reduced mod n; a value >= n is astronomically
     // unlikely for a hash output, but rejecting it matches the spec's "fail"
     // condition without silently wrapping.
-    // k256 0.14 移除了 ScalarPrimitive：Scalar::from_slice 直接做 canonical
-    // 检查（t >= n 时返回 None），语义与 BIP-341 的 fail 条件一致。
+    // k256 0.14 removed ScalarPrimitive: Scalar::from_slice performs the
+    // canonical check directly (returns None when t >= n), matching the
+    // semantics of BIP-341's fail condition.
     let tweak_scalar = <Scalar as k256::elliptic_curve::PrimeField>::from_repr(tweak.into())
         .into_option()
         .ok_or_else(|| {

@@ -19,7 +19,7 @@ pub struct RegisterAccountResponse {
 }
 
 impl AccountsApi {
-    /// POST /accounts/register（公开）。201 返回账号基本信息。
+    /// POST /accounts/register (public). A 201 returns the account's basic information.
     pub async fn register_account(
         &self,
         req: &RegisterAccountRequest,

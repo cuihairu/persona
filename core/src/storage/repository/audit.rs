@@ -1,6 +1,6 @@
-//! Audit log 仓储：`SECURITY_SENSITIVE_AUDIT_ACTIONS`、`AuditLogRepository`、
-//! `Repository<AuditLog>` 与 `AuditLogStatistics`。原 repository.rs 拆分
-//! （LAY-017）：audit 段原样迁出（含统计类型）。
+//! Audit log repository: `SECURITY_SENSITIVE_AUDIT_ACTIONS`, `AuditLogRepository`,
+//! `Repository<AuditLog>`, and `AuditLogStatistics`. Split out of the original
+//! repository.rs (LAY-017): the audit section was migrated verbatim (including the statistics types).
 
 use super::Repository;
 use crate::models::{AuditAction, AuditLog, ResourceType};
@@ -12,8 +12,8 @@ use sqlx::Row;
 use std::collections::HashMap;
 use uuid::Uuid;
 
-/// 安全敏感的审计动作列表（与 `AuditLogRepository::find_security_sensitive` 保持一致，
-/// 供服务层做内存过滤）。
+/// List of security-sensitive audit actions (kept in sync with
+/// `AuditLogRepository::find_security_sensitive` for in-memory filtering in the service layer).
 pub const SECURITY_SENSITIVE_AUDIT_ACTIONS: [&str; 9] = [
     "login",
     "login_failed",
@@ -423,8 +423,8 @@ impl Repository<AuditLog> for AuditLogRepository {
     }
 
     async fn update(&self, log: &AuditLog) -> Result<AuditLog> {
-        // 审计日志通常不允许更新，为了数据完整性
-        // 但这里提供实现以满足 Repository trait 要求
+        // Audit logs normally disallow updates, for data integrity
+        // but this implementation is provided to satisfy the Repository trait requirement
         let metadata_json = serde_json::to_string(&log.metadata)
             .map_err(|e| PersonaError::Database(format!("Failed to serialize metadata: {}", e)))?;
 
@@ -458,8 +458,8 @@ impl Repository<AuditLog> for AuditLogRepository {
     }
 
     async fn delete(&self, id: &Uuid) -> Result<bool> {
-        // 审计日志通常不允许删除，为了数据完整性
-        // 但这里提供实现以满足 Repository trait 要求
+        // Audit logs normally disallow deletion, for data integrity
+        // but this implementation is provided to satisfy the Repository trait requirement
         let result = sqlx::query("DELETE FROM audit_logs WHERE id = ?")
             .bind(id.to_string())
             .execute(self.db.pool())

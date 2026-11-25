@@ -1,4 +1,4 @@
-//! 凭据类型枚举与字符串解析：`Display` / `FromStr` 与存储层字符串往返。
+//! Credential type enums and string parsing: `Display` / `FromStr` round-trip with the storage-layer strings.
 
 use serde::{Deserialize, Serialize};
 
@@ -56,8 +56,8 @@ impl std::fmt::Display for CredentialType {
 impl std::str::FromStr for CredentialType {
     type Err = String;
 
-    /// 与 [`Display`](std::fmt::Display) / 存储层字符串往返对齐：未知字符串
-    /// 归入 `Custom`（与 `row_to_credential` 同一策略）。
+    /// Aligned with [`Display`](std::fmt::Display) / storage-layer string round-trip: unknown
+    /// strings fall into `Custom` (same strategy as `row_to_credential`).
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Ok(match s {
             "Password" => CredentialType::Password,

@@ -1,4 +1,5 @@
-//! 损坏 uuid 行与越界时间戳的错形透传测试（钱包/交易两侧都验）。
+//! Tests for bad-shaped pass-through of corrupt uuid rows and out-of-range
+//! timestamps (checked on both the wallet and the transaction sides).
 
 use super::*;
 

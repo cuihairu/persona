@@ -1,11 +1,11 @@
 use super::*;
 
 impl PersonaService {
-    /// 把一次条目级写变更交给同步捕获缝（未装配即零开销跳过）。
+    /// Hand a single item-level write change to the sync capture seam (a zero-cost skip when not wired).
     ///
-    /// 容错语义与 [`Self::record_credential_history`] 一致：捕获是尽力而为
-    /// 的旁路（trait 方法返回 `()`，实现方自行 log），service 侧不做任何
-    /// 可失败的准备——主库才是第一事实源。
+    /// Fault tolerance matches [`Self::record_credential_history`]: capture is a best-effort side
+    /// channel (the trait method returns `()`, and the implementor logs on its own), so the service
+    /// side performs no fallible preparation — the primary database is the source of truth.
     pub(crate) async fn capture_sync(
         &self,
         item_id: Uuid,
@@ -22,10 +22,11 @@ impl PersonaService {
         }
     }
 
-    /// 为元数据级写变更（[`Self::update_credential`] / restore）构建同步
-    /// put 载荷：解密现 payload 组装完整条目快照再密封。legacy 行（无
-    /// per-item key）返回 `None`——它还不能与同步信封共享 item key，跳过
-    /// 捕获；首次 [`Self::update_credential_data`] 会把它升级，此后恢复捕获。
+    /// Build the sync put payload for a metadata-level write change ([`Self::update_credential`] /
+    /// restore): decrypt the current payload, assemble a full item snapshot, then seal it. Legacy
+    /// rows (no per-item key) return `None` — they cannot yet share an item key with the sync
+    /// envelope, so capture is skipped; the first [`Self::update_credential_data`] upgrades them,
+    /// after which capture resumes.
     pub(crate) async fn sync_put_payload_for(
         &self,
         credential: &Credential,
@@ -48,14 +49,15 @@ impl PersonaService {
         }
     }
 
-    /// 记一条凭据历史行（created/updated/deleted/restored 由 change_type 区分）。
+    /// Record a credential history row (created/updated/deleted/restored is distinguished by change_type).
     ///
-    /// - Updated 且无实质字段变化时不记（CLI/桌面 create 后紧跟的元数据
-    ///   补写不产生噪声行）
-    /// - version 取该实体当前最大版本 +1
-    /// - `reason` 可选（restore 用来标注目标版本）
-    /// - 记录失败仅告警不阻断主操作（与 log_audit 的尽力而为一致）：
-    ///   主写已提交，历史是派生数据，不能让历史失败回滚业务事实
+    /// - An Updated change with no substantive field change is not recorded (the metadata
+    ///   follow-up write right after CLI/desktop create produces no noise rows)
+    /// - version takes the entity's current maximum version + 1
+    /// - `reason` is optional (restore uses it to note the target version)
+    /// - A recording failure only warns and does not block the primary operation (consistent with
+    ///   log_audit's best-effort stance): the primary write is already committed, history is derived
+    ///   data, and a history failure must not roll back a business fact
     pub(crate) async fn record_credential_history(
         &self,
         change_type: ChangeType,

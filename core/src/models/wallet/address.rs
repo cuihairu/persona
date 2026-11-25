@@ -1,4 +1,5 @@
-//! 派生地址与钱包元数据：地址条目、地址类型、标签/备注元数据。
+//! Derived addresses and wallet metadata: address entries, address types,
+//! label/notes metadata.
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};

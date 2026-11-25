@@ -1,5 +1,6 @@
-//! 会话生命周期与活动计时：入管/出管、活动与敏感活动刷新、
-//! 敏感超时 force-lock、宽限期。
+//! Session lifecycle and activity timing: session intake and removal,
+//! activity and sensitive-activity refresh, sensitive-timeout force-lock,
+//! and the grace period.
 
 use std::time::{Duration, SystemTime};
 
@@ -91,26 +92,32 @@ impl AutoLockManager {
         }
     }
 
-    /// 刷新敏感活动与活动计时，并解除敏感超时造成的会话锁
-    /// （**不做 force-lock 判定**）。
+    /// Refresh sensitive activity and activity timing, and clear a session
+    /// lock caused by the sensitive timeout (**without doing any force-lock
+    /// evaluation**).
     ///
-    /// 仅供 token 鉴权面（Connect 中间件每请求调用）：scoped token 即
-    /// 再认证（可撤销、有到期、审计在案），桌面端「敏感操作超时 → 锁会话
-    /// 要求再认证」的 `force_lock_sensitive` 语义对 token 面不适用——否则
-    /// 无人值守 serve 在登录 5 分钟后的首个读密文请求永久 500 且无再认证
-    /// 入口（实测：fleet-apply --check 撞 `update_sensitive_activity`）。
+    /// Intended for the token authentication surface only (called per-request
+    /// by the Connect middleware): presenting a scoped token counts as
+    /// re-authentication (revocable, expiring, audited), so the desktop
+    /// semantics of `force_lock_sensitive` — "sensitive operation timeout →
+    /// lock the session and demand re-authentication" — do not apply to the
+    /// token surface. Otherwise an unattended serve would get a permanent 500
+    /// on its first ciphertext read 5 minutes after login, with no
+    /// re-authentication path (observed: `fleet-apply --check` hit
+    /// `update_sensitive_activity`).
     pub async fn refresh_sensitive(&self, session_id: &str) -> Result<(), String> {
         let mut sessions = self.sessions.write().await;
         if let Some(session_info) = sessions.get_mut(session_id) {
             session_info.session.touch_sensitive();
-            session_info.session.unlock(); // 解除敏感超时锁 + 刷活动计时
+            session_info.session.unlock(); // Clear sensitive-timeout lock + refresh activity
             Ok(())
         } else {
             Err("Session not found".to_string())
         }
     }
 
-    /// 测试用：把会话的敏感活动时间拨到 `ago` 之前（同 crate 单测可见）。
+    /// Test helper: backdate the session's sensitive activity time to before
+    /// `ago` (visible to same-crate unit tests only).
     #[cfg(test)]
     pub(crate) async fn backdate_sensitive_for_test(&self, session_id: &str, ago: Duration) {
         let mut sessions = self.sessions.write().await;

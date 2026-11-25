@@ -1,22 +1,27 @@
-//! SSHSIG（`ssh-keygen -Y`）签名：git commit 签名的 wire 格式与装甲。
+//! SSHSIG (`ssh-keygen -Y`) signatures: the wire format and armor used for
+//! git commit signing.
 //!
-//! 契约 = OpenSSH PROTOCOL.sshsig（openssh-portable 仓库）。签名密钥只支持
-//! ssh-ed25519——与本仓其余 SSH 面（`ssh generate`、agents/ssh-agent）一致；
-//! RSA/ECDSA 待密钥层扩展后再补。
+//! The contract is OpenSSH PROTOCOL.sshsig (openssh-portable repository). Only
+//! ssh-ed25519 signing keys are supported, to stay consistent with the rest of
+//! this repo's SSH surface (`ssh generate`, agents/ssh-agent); RSA/ECDSA come
+//! later once the key layer is extended.
 //!
-//! 关键性质：RFC 8032 纯 ed25519 是**确定性**签名——同一 seed + namespace +
-//! 消息必须产出与 `ssh-keygen -Y sign` 逐字节相同的结果。
-//! [`sshsig_signs_byte_identical_to_openssh`] 把真 ssh-keygen 的输出钉成参照
-//! 向量（生成方式：`ssh-keygen -t ed25519 -N ""` → 解析 OpenSSH 私钥容器取
-//! seed → `ssh-keygen -Y sign -n git` → 全文照抄进测试）。
+//! Key property: pure RFC 8032 ed25519 is **deterministic** — the same seed +
+//! namespace + message must yield output byte-identical to
+//! `ssh-keygen -Y sign`. [`sshsig_signs_byte_identical_to_openssh`] pins real
+//! ssh-keygen output as the reference vector (how it was produced:
+//! `ssh-keygen -t ed25519 -N ""` -> parse the OpenSSH private-key container to
+//! get the seed -> `ssh-keygen -Y sign -n git` -> copy the full text verbatim
+//! into the test).
 //!
-//! wire 布局（大端）：`magic "SSHSIG" | version u32=1 | string pubkey_blob |
-//! string namespace | string reserved="" | string hash_algo="sha512" |
-//! string signature_blob`。`string` = SSH wire string（u32 长度 + 字节）。
-//! **被签载荷**：`magic || namespace || reserved || hash_algo ||
-//! sha512(message)`——version 不参与签名。
-//! 装甲：BEGIN/END SSH SIGNATURE 之间 base64，70 字符换行（与 ssh-keygen
-//! 一致）；解析端宽容处理任意换行/空白。
+//! Wire layout (big-endian): `magic "SSHSIG" | version u32=1 | string
+//! pubkey_blob | string namespace | string reserved="" |
+//! string hash_algo="sha512" | string signature_blob`. `string` = an SSH wire
+//! string (u32 length + bytes). **Signed payload**:
+//! `magic || namespace || reserved || hash_algo || sha512(message)` —
+//! version does not participate in the signature.
+//! Armor: base64 between BEGIN/END SSH SIGNATURE, wrapped at 70 characters
+//! (matching ssh-keygen); the parser tolerates any line breaks and whitespace.
 
 use anyhow::{bail, Context, Result};
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier};
@@ -49,14 +54,16 @@ fn take_wire_string(bytes: &[u8]) -> Result<(&[u8], &[u8])> {
     Ok((&rest[..len], &rest[len..]))
 }
 
-/// OpenSSH wire 格式的公钥 blob（string 算法名 + string 32 字节公钥）。
+/// Public-key blob in OpenSSH wire format (string algorithm name + string
+/// 32-byte public key).
 pub fn ed25519_pubkey_blob(public: &[u8; 32]) -> Vec<u8> {
     let mut out = wire_string(ALGO);
     out.extend_from_slice(&wire_string(public));
     out
 }
 
-/// authorized_keys 行（与 `-f` 传入的公钥字面量/文件比对用）。
+/// The authorized_keys line (for comparing against the public-key literal or
+/// file passed to `-f`).
 pub fn ed25519_authorized_line(public: &[u8; 32], comment: Option<&str>) -> String {
     use base64::engine::general_purpose::STANDARD as BASE64;
     use base64::Engine as _;
@@ -68,7 +75,7 @@ pub fn ed25519_authorized_line(public: &[u8; 32], comment: Option<&str>) -> Stri
 }
 
 fn signed_payload(namespace: &str, message: &[u8]) -> Vec<u8> {
-    // PROTOCOL.sshsig：被签载荷的每个字段都带 u32 长度前缀
+    // PROTOCOL.sshsig: every field of the signed payload carries a u32 length prefix
     let mut payload = MAGIC.to_vec();
     payload.extend_from_slice(&wire_string(namespace.as_bytes()));
     payload.extend_from_slice(&wire_string(b""));
@@ -77,7 +84,8 @@ fn signed_payload(namespace: &str, message: &[u8]) -> Vec<u8> {
     payload
 }
 
-/// 对 message 产生 SSHSIG 签名 blob（未装甲；接 [`armor`] 出文件内容）。
+/// Produce the SSHSIG signature blob for `message` (unarmored; feed it to
+/// [`armor`] for the file contents).
 pub fn sign(seed: &[u8; 32], namespace: &str, message: &[u8]) -> Vec<u8> {
     let signing = SigningKey::from_bytes(seed);
     let public = signing.verifying_key().to_bytes();
@@ -95,9 +103,10 @@ pub fn sign(seed: &[u8; 32], namespace: &str, message: &[u8]) -> Vec<u8> {
     blob
 }
 
-/// 解析 SSHSIG blob 并验证；成功返回签名里的公钥 blob。
-/// namespace 必须与签名一致（namespace 绑定是 SSHSIG 的防跨协议重放设计，
-/// ssh-keygen -Y verify 同样强制）。
+/// Parse an SSHSIG blob and verify it; on success returns the public-key blob
+/// carried by the signature. The namespace must match the signature (namespace
+/// binding is SSHSIG's defense against cross-protocol replay, and
+/// `ssh-keygen -Y verify` enforces it too).
 pub fn verify(blob: &[u8], namespace: &str, message: &[u8]) -> Result<Vec<u8>> {
     if blob.len() < MAGIC.len() + 4 {
         bail!("signature is too short to be an SSHSIG blob");
@@ -106,7 +115,7 @@ pub fn verify(blob: &[u8], namespace: &str, message: &[u8]) -> Result<Vec<u8>> {
         bail!("missing SSHSIG magic");
     }
     let mut rest = &blob[MAGIC.len()..];
-    // version 是裸 u32，不是 wire string
+    // version is a bare u32, not a wire string
     let version = u32::from_be_bytes([rest[0], rest[1], rest[2], rest[3]]);
     rest = &rest[4..];
     if version != VERSION {
@@ -170,7 +179,8 @@ pub fn verify(blob: &[u8], namespace: &str, message: &[u8]) -> Result<Vec<u8>> {
     Ok(public_key_blob.to_vec())
 }
 
-/// 装甲化（BEGIN/END 之间 base64，70 字符换行 + 尾换行，与 ssh-keygen 一致）。
+/// Armor the blob (base64 between BEGIN/END, wrapped at 70 characters plus a
+/// trailing newline, matching ssh-keygen).
 pub fn armor(blob: &[u8]) -> String {
     use base64::Engine as _;
     let encoded = base64::engine::general_purpose::STANDARD.encode(blob);
@@ -186,7 +196,8 @@ pub fn armor(blob: &[u8]) -> String {
     out
 }
 
-/// 解析装甲：剥掉 BEGIN/END 标记与所有空白后解码（不限行结构）。
+/// Parse armor: strip the BEGIN/END markers and all whitespace, then decode
+/// (no restriction on the line structure).
 pub fn disarmor(text: &str) -> Result<Vec<u8>> {
     use base64::Engine as _;
     if !text.contains(BEGIN) || !text.contains(END) {
@@ -210,9 +221,10 @@ pub fn disarmor(text: &str) -> Result<Vec<u8>> {
 mod tests {
     use super::*;
 
-    /// 真 ssh-keygen 参照向量（见模块注释的生成方式）。ed25519 确定性签名
-    /// 意味着我们实现正确 ⇔ 这些字节完全一致；任何格式偏差（wire、哈希、
-    /// 载荷拼装）都会让向量对不上。
+    /// Real ssh-keygen reference vectors (see the module comment for how they were
+    /// produced). Ed25519 signatures are deterministic, so our implementation
+    /// is correct iff these bytes match exactly; any formatting deviation
+    /// (wire, hashing, payload assembly) would break the vectors.
     const REF_SEED: [u8; 32] = [
         0x59, 0xd9, 0x98, 0xd6, 0xdb, 0x19, 0xcc, 0x8f, 0x7f, 0xe2, 0x45, 0xfa, 0x8a, 0x04, 0xe6,
         0x10, 0xd8, 0x84, 0x5d, 0xff, 0x80, 0xdb, 0xec, 0x8d, 0xfc, 0x88, 0x15, 0xe1, 0x8e, 0xa0,
@@ -253,10 +265,11 @@ mod tests {
     #[test]
     fn verify_binds_namespace_and_detects_tampering() {
         let blob = disarmor(REF_ARMOR).unwrap();
-        // namespace 绑定：换 namespace 必须拒（防跨协议重放）
+        // Namespace binding: a different namespace must be rejected (defense against
+        // cross-protocol replay)
         let err = verify(&blob, "file", REF_MESSAGE).unwrap_err().to_string();
         assert!(err.contains("namespace"), "{err}");
-        // 消息被改一字节必须拒
+        // A single byte of message tampering must be rejected
         let tampered = b"hello persona\nsecond line!\n";
         let err = verify(&blob, "git", tampered).unwrap_err().to_string();
         assert!(err.contains("verification failed"), "{err}");
@@ -264,16 +277,18 @@ mod tests {
 
     #[test]
     fn signatures_from_a_different_seed_carry_a_different_public_key() {
-        // verify() 只校验 blob 内嵌公钥的自洽性（对应 ssh-keygen -Y verify 的
-        // allowed_signers 之前的步骤）；密钥归属由调用方比对返回的公钥 blob——
-        // CLI 层正是拿它和保险库里的 key 比对。
+        // verify() only checks the self-consistency of the public key embedded in the
+        // blob (the step in `ssh-keygen -Y verify` that precedes
+        // allowed_signers); key ownership is established by the caller
+        // comparing the returned public-key blob — the CLI layer is exactly
+        // what compares it against the key in the vault.
         let mut other_seed = REF_SEED;
         other_seed[0] ^= 1;
         let blob = sign(&other_seed, "git", REF_MESSAGE);
         let other_key = verify(&blob, "git", REF_MESSAGE).unwrap();
         let reference_key = verify(&disarmor(REF_ARMOR).unwrap(), "git", REF_MESSAGE).unwrap();
         assert_ne!(other_key, reference_key);
-        // 换回参照密钥即对不上
+        // And it does not match the reference key's hex
         assert_ne!(hex::encode(&other_key), REF_PUBLIC_HEX);
     }
 
@@ -281,7 +296,7 @@ mod tests {
     fn armor_round_trips_and_parses_lenient_whitespace() {
         let blob = disarmor(REF_ARMOR).unwrap();
         assert_eq!(armor(&blob), REF_ARMOR);
-        // CRLF、缺尾换行、行间空白都要能解析
+        // CRLF, a missing trailing newline and inter-line whitespace must all parse
         let crlf = REF_ARMOR.replace('\n', "\r\n");
         assert_eq!(disarmor(&crlf).unwrap(), blob);
         let single_line = REF_ARMOR.replace('\n', " ");

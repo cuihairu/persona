@@ -7,7 +7,8 @@ use super::map::{ContextMapFile, IdentityEntry};
 use super::signals::ContextSignals;
 use super::{HOST_WEIGHT, LEARN_WEIGHT, MIN_SUGGEST, PROJECT_WEIGHT};
 
-/// 一条建议：分身名、得分与命中原因（人类可读，进 CLI 输出）。
+/// A single suggestion: identity name, score, and the reason it matched
+/// (human-readable, shown in CLI output).
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Suggestion {
     pub identity: String,
@@ -15,8 +16,10 @@ pub struct Suggestion {
     pub reason: String,
 }
 
-/// 建议结果：阈值过滤后的候选（已排序）+ 告警（跳过的无效项）+
-/// 当前 active（供无候选时兜底——行为与今日完全一致，设计 §4/§7）。
+/// Suggestion result: threshold-filtered candidates (already sorted) +
+/// warnings (skipped invalid entries) + the currently active identity
+/// (fallback for when there are no candidates — behavior is exactly the
+/// same as today, design §4/§7).
 #[derive(Debug, Clone, Default, PartialEq, Serialize)]
 pub struct SuggestResult {
     pub candidates: Vec<Suggestion>,
@@ -24,7 +27,8 @@ pub struct SuggestResult {
     pub active: Option<String>,
 }
 
-/// 目录哈希：学习记录只存 cwd 的 SHA-256，不存路径原文（设计 §4.1）。
+/// Directory hash: learning records store only the SHA-256 of the cwd,
+/// never the raw path (design §4.1).
 pub fn cwd_hash(path: &Path) -> String {
     use sha2::{Digest, Sha256};
     let mut hasher = Sha256::new();
@@ -32,19 +36,26 @@ pub fn cwd_hash(path: &Path) -> String {
     hex::encode(hasher.finalize())
 }
 
-/// 纯决策函数（设计 §4 算法 v1 + §4.1 学习层）：
+/// Pure decision function (design §4 algorithm v1 + §4.1 learning layer):
 ///
-/// - `PERSONA_CONTEXT_OVERRIDE` 命中有效分身 → 它就是唯一候选；
-/// - 项目映射精确匹配归一化 repo；主机映射逐条正则匹配 host；
-/// - 同一信号仓库内映射遮蔽全局映射同键条目；多信号命中同一分身则
-///   得分累加、原因合并；
-/// - `learn_counts`（同目录 30 天窗口计数，次数降序/名字升序）给出
-///   历史学习候选，权重 [`LEARN_WEIGHT`]，排在任何映射命中之下
-///   （覆盖链：override > 仓库内映射 > 全局映射 > 历史学习 > active）；
-/// - 名字不在 `valid_names` 的候选跳过并告警（与 switch 同源校验）；
-/// - 排序：得分降序 → 平局 active 优先 → 分身名升序；
-/// - score < `MIN_SUGGEST` 不入选；全空则 `candidates` 为空、调用方
-///   兜底显示 `active`。
+/// - `PERSONA_CONTEXT_OVERRIDE` matching a valid identity → it is the
+///   only candidate;
+/// - project mappings match the normalized repo exactly; host mappings
+///   regex-match the host pattern by pattern;
+/// - for the same signal, a repo-local mapping shadows the global
+///   mapping entry with the same key; when several signals hit the same
+///   identity, scores accumulate and reasons are merged;
+/// - `learn_counts` (counted over a 30-day window for the same
+///   directory, count descending / name ascending) yields a historical
+///   learning candidate with weight [`LEARN_WEIGHT`], ranked below any
+///   mapping hit (override chain: override > repo-local mapping > global
+///   mapping > historical learning > active);
+/// - candidates whose name is not in `valid_names` are skipped with a
+///   warning (same validation as switch);
+/// - sorting: score descending → ties prefer active → identity name
+///   ascending;
+/// - score < `MIN_SUGGEST` is not selected; if everything is empty then
+///   `candidates` is empty and the caller falls back to showing `active`.
 pub fn suggest(
     signals: &ContextSignals,
     repo_local: Option<&ContextMapFile>,
@@ -60,7 +71,8 @@ pub fn suggest(
         ..SuggestResult::default()
     };
 
-    // 覆盖链顶端：环境变量覆盖（仅是「建议层」覆盖，不扩大任何授权）。
+    // Top of the override chain: the environment variable override (a
+    // "suggestion layer" override only, it grants no additional authority).
     if let Some(name) = env_override.map(str::trim).filter(|n| !n.is_empty()) {
         if valid_names.contains(name) {
             result.candidates.push(Suggestion {
@@ -79,7 +91,8 @@ pub fn suggest(
     let local = repo_local.unwrap_or(&empty);
     let global = global.unwrap_or(&empty);
 
-    // 项目映射：精确匹配归一化 repo；仓库内遮蔽全局同键。
+    // Project mappings: exact match on the normalized repo; repo-local
+    // shadows global entries with the same key.
     if let Some(repo) = &signals.repo {
         let entry = local
             .projects
@@ -97,7 +110,8 @@ pub fn suggest(
         }
     }
 
-    // 主机映射：两侧全部模式求值（同模式仓库内遮蔽全局）。
+    // Host mappings: evaluate every pattern on both sides (repo-local
+    // shadows global for the same pattern).
     if let Some(host) = &signals.host {
         let mut patterns: BTreeMap<&str, (&IdentityEntry, &str)> = BTreeMap::new();
         for (pattern, entry) in &global.hosts {
@@ -107,7 +121,8 @@ pub fn suggest(
             patterns.insert(pattern.as_str(), (entry, "repo"));
         }
         for (pattern, (entry, source)) in &patterns {
-            // 无效正则按「该条目不命中」处理（设计 §10：损坏层忽略），不致命。
+            // An invalid regex is treated as "this entry does not match" (design
+            // §10: corrupted layers are ignored), not fatal.
             let matched = regex::Regex::new(pattern)
                 .ok()
                 .is_some_and(|re| re.is_match(host));
@@ -124,8 +139,9 @@ pub fn suggest(
         }
     }
 
-    // 历史学习：同目录计数之首出一个学习候选（计数已由仓库层按
-    // 次数降序/名字升序排好，取首个即确定性）。
+    // Historical learning: emit one learning candidate from the top of the
+    // same-directory counts (already sorted by the repo layer, count
+    // descending / name ascending, so taking the first is deterministic).
     if let Some(counts) = learn_counts {
         if let Some((identity, count)) = counts.first() {
             if *count > 0 {
@@ -146,7 +162,8 @@ pub fn suggest(
         }
     }
 
-    // 阈值过滤 + 排序（得分降序 → active 优先 → 名字升序）。
+    // Threshold filtering + sorting (score descending → active preferred →
+    // name ascending).
     result.warnings = warnings;
     result.candidates.retain(|c| c.score >= MIN_SUGGEST);
     result.candidates.sort_by(|a, b| {
@@ -163,7 +180,8 @@ pub fn suggest(
     result
 }
 
-/// 聚合一条命中：无效名跳过告警；同分身重复命中得分累加、原因合并。
+/// Aggregate one hit: invalid names are skipped with a warning; repeat
+/// hits on the same identity accumulate score and merge reasons.
 fn push_candidate(
     result: &mut SuggestResult,
     identity: &str,

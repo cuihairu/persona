@@ -1,25 +1,33 @@
-//! 地址投毒（address poisoning）启发式检测——后端签名入口的强制检查。
+//! Heuristic detection of address poisoning — an enforced check at the backend
+//! signing entry points.
 //!
-//! 常见攻击：攻击者发送 0 转账/粉尘交易，让历史记录里出现一个「前缀+尾缀
-//! 与用户常用地址几乎相同」的伪造地址，诱导用户从交易历史复制错误地址。
+//! The usual attack: the attacker sends a zero-value / dust transaction so that
+//! the transaction history contains a forged address whose prefix and suffix
+//! almost match an address the user uses, luring the user into copying the wrong
+//! address from the history.
 //!
-//! 检测规则（与桌面 `utils/addressPoisoning.ts` 保持一致口径）：与任一已知
-//! 地址 **前 6 个字符和后 6 个字符完全相同但中段不同** 即视为疑似投毒。
-//! 比较统一转小写（EVM hex 地址无歧义；对 base58 会偏保守——宁可误报也不
-//! 放过）。命中即拒绝签名，除非调用方显式确认（CLI `--confirm-poisoning-check`
-//! / 桌面二次确认），与 WALLET_DESIGN.md §5 第 3 条不变量一致。
+//! Detection rule (kept consistent with the desktop
+//! `utils/addressPoisoning.ts`): a candidate is treated as a suspected spoof
+//! when it matches any known address in **the first 6 and last 6 characters
+//! exactly, but differs in the middle**. Comparisons are lowercased
+//! (unambiguous for EVM hex addresses; conservative for base58 — a false
+//! positive is preferable to a miss). A hit refuses to sign unless the caller
+//! explicitly confirms (CLI `--confirm-poisoning-check` / desktop second
+//! confirmation), per invariant #3 in WALLET_DESIGN.md §5.
 
 use crate::{PersonaError, PersonaResult};
 
 pub const POISON_HEAD_CHARS: usize = 6;
 pub const POISON_TAIL_CHARS: usize = 6;
 
-/// 检测 `candidate` 是否模仿了 `known` 中的任一地址。
+/// Detect whether `candidate` mimics any address in `known`.
 ///
-/// 返回被模仿的那个已知地址（便于错误提示用户去核对）；无嫌疑返回 `None`。
-/// `candidate` 与 `known` 逐项比较（已知地址自身不构成模仿）。字符数按
-/// Unicode 计，纯 ASCII 地址即字符数=字节数；非 ASCII 输入按字符切分，
-/// 永不 panic。
+/// Returns the mimicked known address (so the error can tell the user which
+/// one to double-check); returns `None` when nothing looks suspicious.
+/// `candidate` is compared against each entry in `known` (an address does not
+/// count as mimicking itself). Lengths are counted in Unicode characters, so
+/// for pure ASCII addresses characters == bytes; non-ASCII input is split by
+/// character and can never panic.
 pub fn detect_address_poisoning(candidate: &str, known: &[String]) -> Option<String> {
     let t = candidate.trim().to_lowercase();
     let t_chars: Vec<char> = t.chars().collect();
@@ -32,7 +40,7 @@ pub fn detect_address_poisoning(candidate: &str, known: &[String]) -> Option<Str
     for k in known {
         let kx = k.trim().to_lowercase();
         if kx == t {
-            continue; // 同一地址不构成模仿
+            continue; // an identical address is not a mimicry
         }
         let k_chars: Vec<char> = kx.chars().collect();
         if k_chars.len() < POISON_HEAD_CHARS + POISON_TAIL_CHARS {
@@ -47,10 +55,12 @@ pub fn detect_address_poisoning(candidate: &str, known: &[String]) -> Option<Str
     None
 }
 
-/// 后端签名入口的强制检查：命中投毒启发式且未确认即拒绝。
+/// Enforced check for the backend signing entry points: refuse when the
+/// poisoning heuristic fires and nothing has been confirmed.
 ///
-/// `confirmed` = 调用方已显式确认（CLI `--confirm-poisoning-check` 或桌面
-/// 二次确认后写入 metadata 的 ack）。
+/// `confirmed` = the caller explicitly acknowledged it (the CLI
+/// `--confirm-poisoning-check` flag, or the desktop second confirmation whose
+/// ack is written into metadata).
 pub fn enforce_poisoning_check(
     to_address: &str,
     known_addresses: &[String],
@@ -71,9 +81,11 @@ pub fn enforce_poisoning_check(
 mod tests {
     use super::*;
 
-    /// 基准已知地址：前 6 字符 `0x1234`、后 6 字符 `345678`。
+    /// Baseline known address: first 6 characters `0x1234`, last 6 characters
+    /// `345678`.
     const KNOWN: &str = "0x1234567890abcdef1234567890abcdef12345678";
-    /// 中段全零的仿冒地址：与 KNOWN 头尾相同、中段不同。
+    /// A spoof address with an all-zero middle: same head and tail as KNOWN, a
+    /// different middle.
     const SPOOF: &str = "0x1234000000000000000000000000000000345678";
 
     #[test]

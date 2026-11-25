@@ -1,36 +1,40 @@
-//! travel pack 的数据模型：pack 载荷、附件文件、数量报告与状态快照。
+//! Data model for the travel pack: pack payload, attachment files, count
+//! report, and status snapshot.
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
-/// 附件 blob 文件（磁盘原始字节，保持密封态——恢复时行原样插回，
-/// 文件也必须原样归位，任何解密/再加密都会破坏与行的对应关系）。
+/// Attachment blob file (raw bytes from disk, kept in sealed form -- on
+/// restore the rows are re-inserted verbatim, so the files must go back
+/// verbatim too; any decrypt/re-encrypt would break their pairing with the
+/// rows).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TravelBlobFile {
     pub storage_path: String,
-    /// 内容 hex sha256（来自 attachments/attachment_chunks 行的
-    /// content_hash 列，读入时复核）。
+    /// Hex sha256 of the content (from the content_hash column of the
+    /// attachments/attachment_chunks rows, re-verified on read).
     pub sha256: String,
     pub data_b64: String,
 }
 
-/// 打包数据（gzip 前的明文 JSON）。
+/// The packed data (plaintext JSON, before gzip).
 #[derive(Debug, Serialize, Deserialize)]
 pub struct TravelPack {
     pub format_name: String,
     pub format_version: u32,
     pub created_at: String,
     pub app_version: String,
-    /// enter 前 workspace 指向被移除身份时的原指针（exit 时还原；否则为 None）。
+    /// Original workspace active pointer when it referenced a removed identity
+    /// at enter time (restored on exit; None otherwise).
     pub active_identity_id: Option<String>,
-    /// 冗余索引：被移除身份 id 集。
+    /// Redundant index: the set of removed identity ids.
     pub identity_ids: Vec<String>,
-    /// 表名 → 原始行（BLOB 单元格为 `{"b64": "..."}`）。
+    /// Table name -> raw rows (BLOB cells as `{"b64": "..."}`).
     pub tables: std::collections::BTreeMap<String, Vec<Map<String, Value>>>,
     pub attachment_files: Vec<TravelBlobFile>,
 }
 
-/// enter/exit 的数量报告（审计 metadata 与 UI 反馈）。
+/// Count report for enter/exit (audit metadata and UI feedback).
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct TravelCounts {
     pub identities: u32,
@@ -57,16 +61,19 @@ impl TravelCounts {
     }
 }
 
-/// 旅行模式状态（读取不需要 travel 口令；给 UI/CLI 展示用）。
+/// Travel mode status (reading it requires no travel passphrase; used for
+/// UI/CLI display).
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct TravelStatus {
-    /// settings 里的 travel_mode 旗标。
+    /// The travel_mode flag in settings.
     pub active: bool,
-    /// 进入时刻（RFC3339；enter 写入、exit 清空）。
+    /// When travel mode was entered (RFC3339; written by enter, cleared by
+    /// exit).
     pub entered_at: Option<String>,
-    /// sidecar 文件是否存在于 `<db dir>/travel.persenc`。
+    /// Whether the sidecar file exists at `<db dir>/travel.persenc`.
     pub sidecar_exists: bool,
-    /// `active && !sidecar_exists`：旗标说在旅行模式，但数据容器没了
-    /// （被手删或损毁）——数据已丢失，诚实呈现而非假装可恢复。
+    /// `active && !sidecar_exists`: the flag claims travel mode is on, but the
+    /// data container is gone (hand-deleted or corrupted) -- the data is lost;
+    /// report it honestly instead of pretending it is recoverable.
     pub inconsistent: bool,
 }

@@ -1,5 +1,6 @@
-//! 多类型凭据 payload：各类型的明文数据结构、AUDIT-021 手写脱敏 Debug、
-//! `CredentialData` 外部标签枚举与 bincode 编解码（含 legacy 容忍读）。
+//! Multi-type credential payloads: the plaintext data structures for each
+//! type, the AUDIT-021 handwritten redacted Debug impls, the `CredentialData`
+//! externally-tagged enum and its bincode codec (with legacy-tolerant reads).
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -28,15 +29,19 @@ pub struct CryptoWalletData {
     pub public_key: String,
     pub address: String,
     pub network: String,
-    /// BIP-39 第 25 个词（可选）；与助记词分离存储，同为高敏字段
+    /// BIP-39 25th word (optional); stored separately from the mnemonic, and
+    /// equally high-sensitivity
     #[serde(default)]
     pub bip39_passphrase: Option<String>,
-    /// 条目级独立密码的 Argon2id PHC hash（可选）：揭示种子材料
-    /// （助记词/私钥/第 25 词）时需额外比对——防解锁态顺手窥探的
-    /// 第二因子。hash 随条目密文存储，不改变加密封套与同步格式。
+    /// Argon2id PHC hash of an item-level independent password (optional):
+    /// revealing seed material (mnemonic/private key/25th word) requires an
+    /// extra comparison — a second factor against prying while unlocked. The
+    /// hash is stored with the item ciphertext and does not change the
+    /// encryption envelope or the sync format.
     #[serde(default)]
     pub item_password_hash: Option<String>,
-    /// 条目密码提示（明文，低敏——帮助回忆，不承载安全强度）
+    /// Item password hint (plaintext, low sensitivity — a recall aid, carries
+    /// no security strength)
     #[serde(default)]
     pub item_password_hint: Option<String>,
 }
@@ -88,15 +93,17 @@ pub struct TwoFactorData {
     pub algorithm: String, // SHA1, SHA256, etc.
     pub digits: u8,
     pub period: u32,
-    /// HOTP（RFC 4226）开关：None/false = 时间型 TOTP（RFC 6238），
-    /// Some(true) = 计数器型 HOTP。字段追加规则见 GameTokenData 上方
-    /// 注释——只能以 `#[serde(default)] Option` 追加在末尾，旧六字段
-    /// 密文经 `CredentialData::from_bytes` 的 legacy 容忍读回迁。
+    /// HOTP (RFC 4226) switch: None/false = time-based TOTP (RFC 6238),
+    /// Some(true) = counter-based HOTP. For the field-addition rule see the
+    /// comment above GameTokenData — new fields may only be appended at the
+    /// end as `#[serde(default)] Option`; legacy six-field ciphertexts are
+    /// migrated back via `CredentialData::from_bytes`'s legacy-tolerant read.
     #[serde(default)]
     pub hotp: Option<bool>,
-    /// HOTP 起始计数器（otpauth://hotp/ URI 的 `counter` 参数）。出码时由
-    /// 调用方按服务侧当前窗口传显式计数器（CLI：`--counter`），本字段只
-    /// 作缺省起点；计数器递增不落库。
+    /// HOTP initial counter (the `counter` parameter of the otpauth://hotp/
+    /// URI). When generating codes the caller passes an explicit counter for
+    /// the server's current window (CLI: `--counter`); this field is only the
+    /// default starting point, and counter increments are not persisted.
     #[serde(default)]
     pub initial_counter: Option<u64>,
 }
@@ -104,8 +111,9 @@ pub struct TwoFactorData {
 /// Game token data for vendor algorithms outside RFC 4226/6238
 /// (e.g. Steam Guard; providers are dispatched in `core::crypto::game_token`)
 ///
-/// 字段追加规则与枚举变体同理：新字段只能以 `#[serde(default)] Option`
-/// 追加在末尾，旧负载经 `CredentialData::from_bytes` 的 legacy 容忍读回迁。
+/// The field-addition rule mirrors the enum variants: new fields may only be
+/// appended at the end as `#[serde(default)] Option`, and legacy payloads are
+/// migrated back via `CredentialData::from_bytes`'s legacy-tolerant read.
 #[derive(Clone, Serialize, Deserialize)]
 pub struct GameTokenData {
     /// Vendor identifier (`core::crypto::game_token::PROVIDER_*`, e.g. "steam_guard")
@@ -116,21 +124,23 @@ pub struct GameTokenData {
     pub account_name: String,
     /// Associated service origin (optional)
     pub url: Option<String>,
-    /// Steam trade-confirmation HMAC key（SDA maFile 的 `identity_secret`，
-    /// 标准 base64）。登录出码不需要它；移动端交易确认才用。非 Steam
-    /// provider 恒为 None。
+    /// Steam trade-confirmation HMAC key (SDA maFile `identity_secret`,
+    /// standard base64). Not needed for login code generation; only mobile
+    /// trade confirmations use it. Always None for non-Steam providers.
     #[serde(default)]
     pub identity_secret: Option<String>,
-    /// SDA 设备标识（maFile 的 `device_id`，形如 "mobile1234567"）
+    /// SDA device identifier (maFile `device_id`, e.g. "mobile1234567")
     #[serde(default)]
     pub device_id: Option<String>,
 }
 
-/// 追加 `identity_secret`/`device_id` 之前的 GameTokenData 形状（五字段）。
+/// The GameTokenData shape (five fields) from before `identity_secret` and
+/// `device_id` were appended.
 ///
-/// 私有镜像结构，仅供 `CredentialData::from_bytes` 的 legacy 容忍读使用：
-/// bincode 不支持缺省字段，旧密文反序列化新结构会在尾部 EOF 失败，需要按
-/// 旧形状手动解析后再映射（见 `from_bytes`）。
+/// Private mirror struct used only by `CredentialData::from_bytes`'s
+/// legacy-tolerant read: bincode has no default fields, so deserializing old
+/// ciphertext into the new struct fails with an EOF at the tail — it must be
+/// parsed against the old shape and then mapped (see `from_bytes`).
 #[derive(Clone, Serialize, Deserialize)]
 pub(super) struct LegacyGameTokenData {
     pub(super) provider: String,
@@ -140,8 +150,9 @@ pub(super) struct LegacyGameTokenData {
     pub(super) url: Option<String>,
 }
 
-/// TwoFactorData 追加 hotp/initial_counter 之前的旧六字段形状。私有镜像
-/// 结构，仅供 legacy 容忍读使用（口径同 LegacyGameTokenData）。
+/// The old six-field TwoFactorData shape from before hotp/initial_counter were
+/// appended. Private mirror struct used only by the legacy-tolerant read (same
+/// standard as LegacyGameTokenData).
 #[derive(Clone, Serialize, Deserialize)]
 pub(super) struct LegacyTwoFactorData {
     pub(super) secret_key: String,
@@ -152,12 +163,15 @@ pub(super) struct LegacyTwoFactorData {
     pub(super) period: u32,
 }
 
-// AUDIT-021：以下含密 data 结构一律**手写 Debug 并脱敏**——不派生 Debug，
-// 防止任何 `{:?}`/dbg!/错误链把主密码、SSH 私钥、TOTP/HOTP seed、API key、
-// 卡号/CVV、钱包助记词/私钥/xprv、同步/Bearer token 等秘密打进日志、toast、
-// 崩溃报告或测试快照。非密字段保留以便诊断。顶层 Credential 只存
-// `encrypted_data: Vec<u8>`（不落明文），此处保护的是「解密后在内存里被
-// 格式化」的瞬间。合成 canary 回归测试见 core/tests/secret_canary.rs。
+// AUDIT-021: every secret-bearing data struct below gets a **handwritten,
+// redacted Debug** — Debug must not be derived, so that no `{:?}`/dbg!/error
+// chain can leak master passwords, SSH private keys, TOTP/HOTP seeds, API
+// keys, card numbers/CVV, wallet mnemonics/private keys/xprv, sync/Bearer
+// tokens or other secrets into logs, toasts, crash reports or test snapshots.
+// Non-secret fields stay visible for diagnostics. The top-level Credential
+// only stores `encrypted_data: Vec<u8>` (no plaintext), so what is protected
+// here is the instant "after decryption, while formatted in memory". The
+// synthetic canary regression test lives in core/tests/secret_canary.rs.
 
 impl std::fmt::Debug for PasswordCredentialData {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -311,20 +325,22 @@ impl std::fmt::Debug for LegacyGameTokenData {
     }
 }
 
-/// 1Password「Secure Note」对齐：全文加密的笔记条目。
+/// Aligned with 1Password's "Secure Note": a note entry encrypted as a whole.
 ///
-/// 与 `Credential.notes` 字段（credentials 表**明文列**，001 迁移）不同，
-/// 本类型的内容随 `encrypted_data` 走 per-item key 加密，静态存储不可读。
+/// Unlike the `Credential.notes` field (a **plaintext column** in the
+/// credentials table, migration 001), this type's content is encrypted with a
+/// per-item key via `encrypted_data`, unreadable at rest.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SecureNoteData {
-    /// 笔记正文（纯文本，MVP 不做富文本分节）
+    /// Note body (plain text; no rich-text sections in the MVP)
     pub note: String,
 }
 
-/// 1Password「Identity」对齐：个人身份信息条目。
+/// Aligned with 1Password's "Identity": a personal identity information entry.
 ///
-/// 证件号等敏感字段随 `encrypted_data` 走 per-item key 加密；
-/// 日期类字段沿用自由格式文本（与 1Password 的文本字段一致，不做解析）。
+/// Sensitive fields such as ID numbers are encrypted with a per-item key via
+/// `encrypted_data`; date-like fields stay free-form text (matching
+/// 1Password's text fields, no parsing).
 #[derive(Clone, Serialize, Deserialize)]
 pub struct IdentityData {
     pub first_name: String,
@@ -332,11 +348,11 @@ pub struct IdentityData {
     pub username: Option<String>,
     pub email: Option<String>,
     pub phone: Option<String>,
-    /// 生日（自由格式，如 1990-01-31）
+    /// Birthday (free-form, e.g. 1990-01-31)
     pub birthday: Option<String>,
-    /// 多行邮寄地址
+    /// Multi-line mailing address
     pub address: Option<String>,
-    /// 证件号（身份证 / SSN 等）
+    /// ID number (national ID / SSN etc.)
     pub id_number: Option<String>,
     pub passport_number: Option<String>,
     pub driver_license: Option<String>,
@@ -345,22 +361,23 @@ pub struct IdentityData {
     pub job_title: Option<String>,
 }
 
-/// 1Password「Software License」对齐：软件许可证条目。
+/// Aligned with 1Password's "Software License": a software license entry.
 ///
-/// `license_key` 是核心敏感字段，随 `encrypted_data` 走 per-item key 加密。
+/// `license_key` is the core sensitive field, encrypted with a per-item key
+/// via `encrypted_data`.
 #[derive(Clone, Serialize, Deserialize)]
 pub struct SoftwareLicenseData {
     pub license_key: String,
     pub version: Option<String>,
     pub publisher: Option<String>,
-    /// 购买日期（自由格式）
+    /// Purchase date (free-form)
     pub purchase_date: Option<String>,
     pub order_number: Option<String>,
     pub support_email: Option<String>,
     pub download_url: Option<String>,
-    /// 授权席位数
+    /// Number of licensed seats
     pub seats: Option<u32>,
-    /// 许可有效期（自由格式）
+    /// License validity period (free-form)
     pub valid_until: Option<String>,
 }
 
@@ -408,8 +425,9 @@ impl std::fmt::Debug for SoftwareLicenseData {
 
 /// Helper enum for strongly-typed credential data
 ///
-/// bincode 外部标签枚举：新变体只能追加在末尾，既有变体索引不可变，
-/// 否则旧密文将无法反序列化。
+/// bincode externally-tagged enum: new variants may only be appended at the
+/// end, and existing variant indices are immutable — otherwise old ciphertexts
+/// could no longer be deserialized.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum CredentialData {
     Password(PasswordCredentialData),
@@ -434,10 +452,12 @@ impl CredentialData {
 
     /// Deserialize credential data from bytes after decryption.
     ///
-    /// 当前形状反序列化失败时，回退到 legacy 容忍读（见
-    /// [`Self::from_bytes_legacy_game_token`] 与
-    /// [`Self::from_bytes_legacy_two_factor`]）；两条 legacy 路都失败
-    /// 则返回原错误，保证损坏负载不会被静默"修复"。
+    /// When deserialization against the current shape fails, it falls back to
+    /// the legacy-tolerant reads (see
+    /// [`Self::from_bytes_legacy_game_token`] and
+    /// [`Self::from_bytes_legacy_two_factor`]); if both legacy paths fail the
+    /// original error is returned, so a corrupted payload is never silently
+    /// "repaired".
     pub fn from_bytes(data: &[u8]) -> Result<Self, bincode::Error> {
         match bincode::deserialize(data) {
             Ok(parsed) => Ok(parsed),
@@ -447,13 +467,17 @@ impl CredentialData {
         }
     }
 
-    /// GameTokenData 追加 `identity_secret`/`device_id` 之前的旧密文容忍读。
+    /// Legacy-tolerant read for ciphertext written before GameTokenData gained
+    /// `identity_secret`/`device_id`.
     ///
-    /// bincode 外部标签枚举里 GameToken 的变体索引是 8（u32 LE 前缀）；
-    /// 旧负载 = 4 字节 tag + 五字段 `LegacyGameTokenData`。识别后先按旧
-    /// 形状解析，再把解析结果**重序列化并与原字节逐位比对**——只有整个
-    /// 负载恰好是旧形状时才接受，避免把碰巧以 0x08000000 开头的损坏数据
-    /// 误判成令牌。映射时新增字段置 None（导入 Steam maFile 后才有值）。
+    /// In the bincode externally-tagged enum, GameToken's variant index is 8
+    /// (a u32 LE prefix); an old payload = 4 tag bytes + a five-field
+    /// `LegacyGameTokenData`. Once recognized, it is first parsed against the
+    /// old shape, and the parsed result is then **re-serialized and compared
+    /// bit-for-bit with the original bytes** — accepted only when the whole
+    /// payload is exactly the old shape, so corrupted data that merely begins
+    /// with 0x08000000 is not mistaken for a token. When mapping, the new
+    /// fields are set to None (they only get values after a Steam maFile import).
     fn from_bytes_legacy_game_token(data: &[u8]) -> Option<Self> {
         const GAME_TOKEN_VARIANT: u32 = 8;
         if data.len() < 4 || u32::from_le_bytes(data[..4].try_into().ok()?) != GAME_TOKEN_VARIANT {
@@ -474,13 +498,16 @@ impl CredentialData {
         }))
     }
 
-    /// TwoFactorData 追加 `hotp`/`initial_counter` 之前的旧密文容忍读。
+    /// Legacy-tolerant read for ciphertext written before TwoFactorData gained
+    /// `hotp`/`initial_counter`.
     ///
-    /// bincode 外部标签枚举里 TwoFactor 的变体索引是 6（u32 LE 前缀）；
-    /// 旧负载 = 4 字节 tag + 六字段 `LegacyTwoFactorData`。与 GameToken
-    /// 同一口径：先按旧形状解析，再重序列化并逐位比对——只有整个负载
-    /// 恰好是旧形状时才接受，避免把碰巧以 0x06000000 开头的损坏数据
-    /// 误判成 TOTP。映射时新增字段置 None（即旧条目仍是时间型 TOTP）。
+    /// In the bincode externally-tagged enum, TwoFactor's variant index is 6
+    /// (a u32 LE prefix); an old payload = 4 tag bytes + a six-field
+    /// `LegacyTwoFactorData`. Same standard as GameToken: parse against the old
+    /// shape first, then re-serialize and compare bit-for-bit — accepted only
+    /// when the whole payload is exactly the old shape, so corrupted data that
+    /// merely begins with 0x06000000 is not mistaken for TOTP. When mapping,
+    /// the new fields are set to None (i.e. old entries are still time-based TOTP).
     fn from_bytes_legacy_two_factor(data: &[u8]) -> Option<Self> {
         const TWO_FACTOR_VARIANT: u32 = 6;
         if data.len() < 4 || u32::from_le_bytes(data[..4].try_into().ok()?) != TWO_FACTOR_VARIANT {

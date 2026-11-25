@@ -10,7 +10,7 @@ fn pairing_code_shape_and_normalization() {
             "非法字形: {code}"
         );
     }
-    // 易混字形映射 + 分隔符剔除
+    // Confusable-glyph mapping + separator stripping
     assert_eq!(normalize_pairing_code("o i l-u"), "011V");
     assert_eq!(normalize_pairing_code("abcd-efgh"), "ABCDEFGH");
     assert_eq!(

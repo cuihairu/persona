@@ -1,38 +1,43 @@
-//! Steam Desktop Authenticator（SDA）`.maFile` 导入解析。
+//! Steam Desktop Authenticator (SDA) `.maFile` import parsing.
 //!
-//! maFile 是 SDA 导出的明文 JSON：出码密钥（`shared_secret`）、交易确认
-//! 密钥（`identity_secret`）、设备标识（`device_id`）、账号名与一堆**高危
-//! 会话凭据**（`Session` 对象里的 OAuthToken / SteamLoginSecure / WebCookie、
-//! 新版导出的 `access_token` 等）混在一个文件里。本模块只挑选验证器所需
-//! 字段；会话字段一律拒绝入库并在结果里显式列出，防止随导入静默落库。
-//! 出码算法与库兼容性见 [`crate::crypto::steam`]。
+//! A maFile is the plain-text JSON exported by SDA: the OTP secret
+//! (`shared_secret`), the trade-confirmation secret (`identity_secret`),
+//! the device ID (`device_id`), the account name, and a pile of
+//! **high-risk session credentials** (OAuthToken / SteamLoginSecure /
+//! WebCookie in the `Session` object, plus `access_token` from newer
+//! exports) all in one file. This module only picks the fields the
+//! authenticator needs; session fields are always rejected from storage
+//! and explicitly listed in the result, so they cannot silently land in
+//! the vault via import. See [`crate::crypto::steam`] for the OTP
+//! algorithm and library compatibility.
 
 use crate::crypto::steam::decode_steam_secret;
 use anyhow::{bail, Context, Result};
 use serde_json::Value;
 
-/// 一次 maFile 解析的结果：入库字段 + 显式忽略清单。
+/// Result of one maFile parse: fields to store + explicit ignore list.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MaFileImport {
-    /// maFile 的 `account_name`（Steam 账号登录名，作标签）
+    /// The maFile `account_name` (Steam login name, used as the label)
     pub account_name: String,
-    /// 出码密钥（标准 base64，已验证可解码）
+    /// OTP secret (standard base64, verified decodable)
     pub shared_secret: String,
-    /// 交易确认 HMAC 密钥（标准 base64）；旧 maFile 可能缺省
+    /// Trade-confirmation HMAC secret (standard base64); may be absent in old maFiles
     pub identity_secret: Option<String>,
-    /// SDA 设备标识（形如 "mobile1234567"）；旧 maFile 可能缺省
+    /// SDA device ID (e.g. "mobile1234567"); may be absent in old maFiles
     pub device_id: Option<String>,
-    /// 已忽略的会话/高危字段名——永不入库，导入时必须向用户展示
+    /// Ignored session/high-risk field names — never stored, must be shown to the user on import
     pub ignored_session_fields: Vec<String>,
-    /// 既不入库也非会话凭据的其余字段（revocation_code、steamid 等）
+    /// Remaining fields that are neither stored nor session credentials (revocation_code, steamid, etc.)
     pub ignored_other_fields: Vec<String>,
 }
 
-/// 识别为会话凭据的 maFile 字段名（大小写不敏感）。
+/// maFile field names recognized as session credentials (case-insensitive).
 ///
-/// `session` 覆盖 SDA 整个 Session 对象（内含 OAuthToken、
-/// SteamLoginSecure、WebCookie——拿到即等于接管会话）；其余是各版本
-/// SDA / steamguard-cli 导出里出现过的会话令牌字段。
+/// `session` covers SDA's whole Session object (containing OAuthToken,
+/// SteamLoginSecure, WebCookie — holding it means taking over the
+/// session); the rest are session-token fields seen in SDA /
+/// steamguard-cli exports across versions.
 const SESSION_FIELD_NAMES: &[&str] = &[
     "session",
     "sessionid",
@@ -51,10 +56,11 @@ fn is_session_field(key: &str) -> bool {
     SESSION_FIELD_NAMES.iter().any(|name| *name == lowered)
 }
 
-/// 解析 SDA `.maFile` 字节。
+/// Parse the bytes of an SDA `.maFile`.
 ///
-/// 拒绝路径：坏 JSON、顶层非对象、缺 `shared_secret`/`account_name`
-/// （"缺字段"即不认账——不猜默认值）、密钥 base64 不可解码。
+/// Rejection paths: malformed JSON, non-object top level, missing
+/// `shared_secret`/`account_name` (a missing field is simply not
+/// accepted — no guessing defaults), undecodable secret base64.
 pub fn parse_ma_file(bytes: &[u8]) -> Result<MaFileImport> {
     let value: Value = serde_json::from_slice(bytes)
         .context("File is not valid JSON — not an SDA .maFile export")?;
@@ -71,7 +77,7 @@ pub fn parse_ma_file(bytes: &[u8]) -> Result<MaFileImport> {
     };
 
     let shared_secret = take_required("shared_secret")?;
-    // 出码密钥必须可解码：坏 base64 不该等到第一次取码时才炸
+    // The OTP secret must decode: bad base64 should not blow up only at first code generation
     decode_steam_secret(&shared_secret).context("maFile `shared_secret` is not valid base64")?;
     let account_name = take_required("account_name")?;
 
@@ -114,7 +120,7 @@ pub fn parse_ma_file(bytes: &[u8]) -> Result<MaFileImport> {
             ignored_other_fields.push(key.clone());
         }
     }
-    // 显式排序：不依赖 JSON 反序列化的键序，导入确认清单的展示顺序确定
+    // Sort explicitly: do not rely on JSON deserialization key order, so the import confirmation list renders deterministically
     ignored_session_fields.sort();
     ignored_other_fields.sort();
 
@@ -132,7 +138,7 @@ pub fn parse_ma_file(bytes: &[u8]) -> Result<MaFileImport> {
 mod tests {
     use super::*;
 
-    /// SDA 实际导出的形状：验证器字段 + Session 会话对象 + 杂项字段。
+    /// The shape SDA actually exports: authenticator fields + the Session object + miscellaneous fields.
     fn sample_mafile() -> Vec<u8> {
         br#"{
             "account_name": "alice_steam",
@@ -168,7 +174,7 @@ mod tests {
         assert_eq!(parsed.device_id.as_deref(), Some("mobile1234567"));
 
         assert_eq!(parsed.ignored_session_fields, vec!["Session".to_string()]);
-        // 其余字段按字典序列出（解析器显式排序），供导入确认时展示
+        // The remaining fields are listed in lexicographic order (explicitly sorted by the parser) for display at import confirmation
         assert_eq!(
             parsed.ignored_other_fields,
             vec![
@@ -181,8 +187,9 @@ mod tests {
         );
     }
 
-    /// 会话字段绝不入库：解析结果里任何入库字段都不得包含 Session 对象
-    /// 的内容（OAuthToken / SteamLoginSecure / WebCookie 片段）。
+    /// Session fields never reach storage: no stored field in the parse result may
+    /// contain content of the Session object (OAuthToken / SteamLoginSecure /
+    /// WebCookie fragments).
     #[test]
     fn session_content_never_reaches_imported_fields() {
         let parsed = parse_ma_file(&sample_mafile()).unwrap();
@@ -203,17 +210,17 @@ mod tests {
 
     #[test]
     fn missing_required_fields_are_rejected() {
-        // 缺 shared_secret：不能"猜"成普通 JSON 然后静默导入
+        // Missing shared_secret: must not be "guessed" as plain JSON and silently imported
         let missing_secret = br#"{"account_name": "alice"}"#;
         let err = parse_ma_file(missing_secret).unwrap_err();
         assert!(err.to_string().contains("shared_secret"), "got: {err}");
 
-        // 缺 account_name：没有标签无法入库
+        // Missing account_name: without a label nothing can be stored
         let missing_account = br#"{"shared_secret": "MDAxMjM0NTY3ODlhYmNkZWZnaGo="}"#;
         let err = parse_ma_file(missing_account).unwrap_err();
         assert!(err.to_string().contains("account_name"), "got: {err}");
 
-        // 字段存在但为空串同样拒绝
+        // A field that is present but an empty string is also rejected
         let empty_secret = br#"{"shared_secret": "  ", "account_name": "alice"}"#;
         assert!(parse_ma_file(empty_secret).is_err());
     }
@@ -222,10 +229,10 @@ mod tests {
     fn bad_json_and_non_mafile_documents_are_rejected() {
         assert!(parse_ma_file(b"not json at all").is_err());
         assert!(parse_ma_file(b"[1, 2, 3]").is_err());
-        // 合法 JSON 但不是 maFile（没有 shared_secret）
+        // Valid JSON but not a maFile (no shared_secret)
         let err = parse_ma_file(br#"{"foo": {"bar": 1}}"#).unwrap_err();
         assert!(err.to_string().contains("shared_secret"), "got: {err}");
-        // 字段类型不对（shared_secret 是数字）
+        // Wrong field type (shared_secret is a number)
         let wrong_type = br#"{"shared_secret": 42, "account_name": "alice"}"#;
         let err = parse_ma_file(wrong_type).unwrap_err();
         assert!(err.to_string().contains("non-empty string"), "got: {err}");
@@ -237,7 +244,7 @@ mod tests {
         let err = parse_ma_file(bad_secret).unwrap_err();
         assert!(err.to_string().contains("base64"), "got: {err}");
 
-        // identity_secret 存在但坏 base64：同样拒绝，不静默丢字段
+        // identity_secret present but bad base64: likewise rejected, no silently dropping the field
         let bad_identity = br#"{
             "shared_secret": "MDAxMjM0NTY3ODlhYmNkZWZnaGo=",
             "account_name": "alice",
@@ -249,7 +256,7 @@ mod tests {
 
     #[test]
     fn session_field_names_match_case_insensitively() {
-        // 新版导出工具用 camelCase / 小写变体（accessToken、sessionid）
+        // Newer export tools use camelCase / lowercase variants (accessToken, sessionid)
         let payload = br#"{
             "account_name": "alice",
             "shared_secret": "MDAxMjM0NTY3ODlhYmNkZWZnaGo=",

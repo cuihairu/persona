@@ -1,10 +1,12 @@
-//! 钱包主实体：`CryptoWallet` 行模型与领域方法（构造、地址管理、
-//! 安全分、校验、推导路径）。
+//! Wallet main entity: the `CryptoWallet` row model and its domain methods
+//! (construction, address management, security score, validation, derivation
+//! paths).
 //!
-//! # 模块布局
+//! # Module layout
 //!
-//! 链/钱包类型枚举在 [`network`]，地址与元数据在 [`address`]，备份与
-//! 安全设置在 [`security`]，交易模型在 [`transaction`]；此处只留主实体。
+//! The chain/wallet type enums live in [`network`]; addresses and metadata in
+//! [`address`]; backup and security settings in [`security`]; transaction models
+//! in [`transaction`]. Only the main entity stays here.
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};

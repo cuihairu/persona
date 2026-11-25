@@ -1,8 +1,10 @@
-//! RFC 4226 (HOTP) / RFC 6238 (TOTP) 共享实现。
+//! Shared implementation of RFC 4226 (HOTP) / RFC 6238 (TOTP).
 //!
-//! CLI 与桌面端此前各自维护一份协议逻辑（cli/src/commands/totp.rs 与
-//! desktop/src-tauri/src/commands.rs），本模块将其下沉到 core 统一维护，
-//! 双端只做调用。数学部分以 RFC 4226/6238 为准，官方测试向量保留作回归。
+//! The CLI and the desktop app each used to maintain their own copy of the
+//! protocol logic (cli/src/commands/totp.rs and
+//! desktop/src-tauri/src/commands.rs); this module sunk it into core for
+//! unified maintenance, with both ends only calling in. The math follows
+//! RFC 4226/6238, and the official test vectors are kept as regressions.
 
 use crate::models::credential::TwoFactorData;
 use anyhow::{bail, Result};
@@ -12,14 +14,14 @@ use serde::Serialize;
 use sha1::Sha1;
 use sha2::{Sha256, Sha512};
 
-/// 一次性算出的 TOTP 码及其剩余有效秒数
+/// A TOTP code computed in one shot, plus its remaining valid seconds
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct TotpCode {
     pub code: String,
     pub remaining_seconds: u32,
 }
 
-/// 解码 base32 编码的 TOTP secret（容忍空白、大小写与 padding）
+/// Decode a base32-encoded TOTP secret (tolerates whitespace, casing, and padding)
 pub fn decode_base32_secret(secret: &str) -> Result<Vec<u8>> {
     let normalized: String = secret
         .chars()
@@ -37,7 +39,7 @@ pub fn decode_base32_secret(secret: &str) -> Result<Vec<u8>> {
         .map_err(|e| anyhow::anyhow!("Invalid base32 secret: {}", e))
 }
 
-/// RFC 4226 HOTP：返回动态截断后的 32 位二进制值（未对位数取模）
+/// RFC 4226 HOTP: returns the dynamically truncated 32-bit binary value (not yet reduced modulo the digit count)
 pub fn hotp(secret: &[u8], counter: u64, algorithm: &str) -> Result<u32> {
     type HmacSha1 = Hmac<Sha1>;
     type HmacSha256 = Hmac<Sha256>;
@@ -73,9 +75,10 @@ pub fn hotp(secret: &[u8], counter: u64, algorithm: &str) -> Result<u32> {
     Ok(binary)
 }
 
-/// 在指定计数器上按 `TwoFactorData` 的参数（算法/位数）计算 HOTP 码
-/// （RFC 4226）。TOTP 与 HOTP 共享同一 HMAC 原语，差别只在计数器来源：
-/// TOTP 用时间窗，HOTP 用显式计数。
+/// Compute the HOTP code at the given counter using `TwoFactorData`'s
+/// parameters (algorithm / digits) per RFC 4226. TOTP and HOTP share the same
+/// HMAC primitive; the only difference is the counter source: TOTP uses a
+/// time window, HOTP an explicit counter.
 pub fn code_at_counter(data: &TwoFactorData, counter: u64) -> Result<String> {
     let secret_bytes = decode_base32_secret(&data.secret_key)?;
     let digits = data.digits.clamp(4, 10) as u32;
@@ -86,12 +89,12 @@ pub fn code_at_counter(data: &TwoFactorData, counter: u64) -> Result<String> {
     Ok(format!("{:0width$}", value, width = digits as usize))
 }
 
-/// 在指定计数器上计算 HOTP 码（`hotp: Some(true)` 的 TwoFactor 条目）
+/// Compute the HOTP code at the given counter (for TwoFactor entries with `hotp: Some(true)`)
 pub fn hotp_code(data: &TwoFactorData, counter: u64) -> Result<String> {
     code_at_counter(data, counter)
 }
 
-/// 在指定时刻按 `TwoFactorData` 的参数（算法/位数/周期）计算 TOTP
+/// Compute the TOTP at the given time using `TwoFactorData`'s parameters (algorithm / digits / period)
 pub fn totp_at(data: &TwoFactorData, at: chrono::DateTime<chrono::Utc>) -> Result<TotpCode> {
     let period = data.period.max(1) as u64;
     let timestamp = at.timestamp().max(0) as u64;
@@ -104,7 +107,7 @@ pub fn totp_at(data: &TwoFactorData, at: chrono::DateTime<chrono::Utc>) -> Resul
     })
 }
 
-/// 当前时刻计算 TOTP
+/// Compute the TOTP at the current time
 pub fn totp_now(data: &TwoFactorData) -> Result<TotpCode> {
     totp_at(data, chrono::Utc::now())
 }
@@ -127,18 +130,18 @@ mod tests {
     }
 
     fn rfc6238_sha1_secret() -> String {
-        // RFC 6238 附录 B 的 ASCII secret "12345678901234567890"（20 字节 = 32 字符）
+        // The RFC 6238 Appendix B ASCII secret "12345678901234567890" (20 bytes = 32 chars)
         "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ".to_string()
     }
 
     fn rfc6238_sha256_secret() -> String {
-        // ASCII "12345678901234567890123456789012"（32 字节 = 52 字符）
+        // ASCII "12345678901234567890123456789012" (32 bytes = 52 chars)
         "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQGEZA".to_string()
     }
 
     fn rfc6238_sha512_secret() -> String {
         // ASCII "1234567890123456789012345678901234567890123456789012345678901234"
-        // （64 字节 = 103 字符）
+        // (64 bytes = 103 chars)
         "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQGEZDGNA".to_string()
     }
 
@@ -211,13 +214,14 @@ mod tests {
         assert_eq!(totp_at(&data, at).unwrap().code.len(), 10);
     }
 
-    /// RFC 4226 附录 D 官方测试向量（SHA1、6 位、ASCII secret
-    /// "12345678901234567890"，计数器 0-9）。HOTP 与 TOTP 共享 HMAC 原语，
-    /// 这组向量锁定 `hotp_code` 的正确性；计数器是入参而不是时间推导。
+    /// The official RFC 4226 Appendix D test vectors (SHA1, 6 digits, ASCII
+    /// secret "12345678901234567890", counters 0-9). HOTP and TOTP share the
+    /// HMAC primitive; this vector set locks in `hotp_code` correctness, with
+    /// the counter passed in rather than derived from time.
     #[test]
     fn rfc4226_official_hotp_vectors() {
         let data = two_factor("GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ", "SHA1", 6, 30);
-        // 把同一个数据标成 hotp 也无关紧要：hotp_code 只看计数器入参。
+        // Flagging the same data as hotp makes no difference: hotp_code only looks at the counter argument.
         let mut hotp_data = data.clone();
         hotp_data.hotp = Some(true);
         let expected = [
@@ -233,22 +237,22 @@ mod tests {
         }
     }
 
-    /// HOTP 码只依赖计数器入参：同一计数器上任意时刻算出同一码（与
-    /// TOTP 的时间窗行为相反）。
+    /// The HOTP code depends only on the counter argument: at the same counter
+    /// any moment yields the same code (opposite of TOTP's time-window behavior).
     #[test]
     fn hotp_code_is_counter_driven_not_time_driven() {
         let data = two_factor("GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ", "SHA1", 6, 30);
         let t0 = chrono::DateTime::from_timestamp(0, 0).unwrap();
         let t1 = chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap();
         let c0 = code_at_counter(&data, 1).unwrap();
-        assert_eq!(totp_at(&data, t0).unwrap().code, "755224"); // t=0 → 计数器 0
+        assert_eq!(totp_at(&data, t0).unwrap().code, "755224"); // t=0 → counter 0
         assert_eq!(totp_at(&data, t1).unwrap().code.len(), 6);
         assert_eq!(c0, "287082");
-        // 换计数器必须换码
+        // A different counter must produce a different code
         assert_ne!(code_at_counter(&data, 2).unwrap(), c0);
     }
 
-    /// 位数钳制对 HOTP 同样生效（4/10 位上下限）。
+    /// Digit clamping applies to HOTP too (a floor of 4 and a ceiling of 10 digits).
     #[test]
     fn hotp_code_clamps_digits() {
         let data = two_factor("GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ", "SHA1", 2, 30);
@@ -299,7 +303,7 @@ mod tests {
         let now = chrono::Utc::now();
         let direct = totp_at(&data, now).unwrap();
         let _ = totp_now(&data).unwrap();
-        // 同一周期内值一致（跨周期边界时仅剩余秒数不同）
+        // Values match within the same period (across a period boundary only the remaining seconds differ)
         let rerun = totp_at(&data, now).unwrap();
         assert_eq!(direct, rerun);
     }

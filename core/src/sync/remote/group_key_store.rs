@@ -1,10 +1,11 @@
-//! 组密钥信封交换的传输抽象（E2EE_SYNC_DESIGN §6 设备生命周期）。
+//! Transport abstraction for group key envelope exchange (E2EE_SYNC_DESIGN §6 device lifecycle).
 //!
-//! [`SyncSession`] 装配需要「取全部信封 → 拆本机那份得 group key」。HTTP
-//! 传输经 [`SyncAdminApi`]（服务器 `/group-keys`），云盘传输经
-//! [`super::cloud::CloudGroupKeyStore`]（云盘目录 `env-<device>.bin`）。
-//! 把信封交换抽成 trait，让会话装配不依赖具体传输——指令流（oplog）与
-//! 库级快照走 [`SyncRemote`]，这里只管「设备登记 + 信封收发」。
+//! Assembling a [`SyncSession`] requires "fetch all envelopes → unwrap the local one to get the group key".
+//! The HTTP transport goes through [`SyncAdminApi`] (server `/group-keys`); the cloud-drive transport goes
+//! through [`super::cloud::CloudGroupKeyStore`] (cloud-drive directory `env-<device>.bin`).
+//! Extracting envelope exchange into a trait keeps session assembly independent of the concrete transport —
+//! the instruction stream (oplog) and vault-level snapshots travel via [`SyncRemote`], and this trait only
+//! handles "device registration + envelope send/receive".
 
 use async_trait::async_trait;
 use uuid::Uuid;
@@ -13,23 +14,24 @@ use super::admin::SyncGroupKeyEntry;
 use crate::sync::device::DeviceIdentity;
 use crate::Result;
 
-/// 组密钥信封交换的最小接口。实现方决定信封存哪（服务器行 / 云盘文件），
-/// 但语义与 [`SyncAdminApi`] 完全一致：登记设备、上传单设备信封、列出
-/// 全部信封、空组时自举。
+/// Minimal interface for group key envelope exchange. The implementation decides where envelopes are stored
+/// (server rows / cloud-drive files), but the semantics match [`SyncAdminApi`] exactly: register a device,
+/// upload a per-device envelope, list all envelopes, and bootstrap an empty group.
 ///
-/// 与 [`SyncRemote`] 的分工：指令流与快照走 `SyncRemote`（传输层），
-/// 设备登记与信封交换走本 trait（管理面）——两种传输（HTTP/云盘）都要
-/// 管理面才能让设备拿到 group key，指令流与信封是两个正交的传输面。
+/// Division of labor with [`SyncRemote`]: the instruction stream and snapshots travel via `SyncRemote`
+/// (the transport plane), while device registration and envelope exchange go through this trait (the
+/// management plane) — both transports (HTTP/cloud drive) need the management plane for a device to
+/// obtain the group key; the instruction stream and the envelopes are two orthogonal transport planes.
 #[async_trait]
 pub trait GroupKeyStore: Send + Sync {
-    /// 登记设备（公钥 + 设备名）。幂等性由实现决定（HTTP 重名 409，
-    /// 云盘同 device_id 去重）。
+    /// Registers a device (public key + device name). Idempotency is decided by the implementation
+    /// (HTTP returns 409 on duplicate name, the cloud drive dedupes by device_id).
     async fn register_device(&self, identity: &DeviceIdentity) -> Result<()>;
-    /// 上传单设备信封（授权动作）。设备必须已登记，未登记失败（fail-closed）。
+    /// Uploads a per-device envelope (an authorized action). The device must already be registered; otherwise the call fails (fail-closed).
     async fn put_group_key(&self, device_id: Uuid, envelope: &[u8]) -> Result<()>;
-    /// 列出全部已上传信封。
+    /// Lists all uploaded envelopes.
     async fn group_keys(&self) -> Result<Vec<SyncGroupKeyEntry>>;
-    /// 空组时自举出新组密钥并密封给自己，返回是否发生了自举。
+    /// Bootstraps a new group key for an empty group and seals it to itself; returns whether a bootstrap occurred.
     async fn bootstrap_group_if_empty(
         &self,
         device_id: Uuid,
@@ -37,8 +39,8 @@ pub trait GroupKeyStore: Send + Sync {
     ) -> Result<bool>;
 }
 
-/// HTTP 传输的信封交换：包装 [`SyncAdminApi`]，零行为变化（只改调用面，
-/// 服务器路由/协议不动）。
+/// Envelope exchange over the HTTP transport: wraps [`SyncAdminApi`] with zero behavior change (only the call
+/// surface changes; server routes/protocol untouched).
 pub struct HttpGroupKeyStore {
     admin: super::SyncAdminApi,
 }

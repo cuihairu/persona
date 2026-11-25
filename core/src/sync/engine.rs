@@ -1,18 +1,25 @@
-//! 同步引擎编排（E2EE_SYNC_DESIGN 阶段 2 批 4）：push/pull 循环、Lamport
-//! 时钟维护、travel 闸。
+//! Sync engine orchestration (E2EE_SYNC_DESIGN phase 2, batch 4): push/pull
+//! cycles, Lamport clock maintenance, and the travel gate.
 //!
-//! 引擎只依赖 [`SyncRemote`]（远端中继的最小接口）与 [`SyncRepository`]：
-//! HTTP 细节在 [`super::remote`]（cfg remote-auth），测试用内存实现。
+//! The engine depends only on [`SyncRemote`] (the minimal interface of the
+//! remote relay) and [`SyncRepository`]: HTTP details live in
+//! [`super::remote`] (cfg remote-auth), and tests use an in-memory
+//! implementation.
 //!
-//! **travel 闸**（设计稿 §8）：travel 激活期间 `push_cycle`/`pull_cycle`
-//! 双停——enter 的批量删除若推上去会把 tombstone 灌到其他设备毁库，pull
-//! 则可能把被移出身份写回主库。`record_local_change` **不设闸**（travel
-//! 期间本地普通写照常入队，退出后随 push 周期补推；travel enter 自身的
-//! 批量删除走 travel.rs，不经过普通写捕获点——阶段 3 接线时保持此约定）。
+//! **Travel gate** (design doc §8): while travel is active,
+//! `push_cycle`/`pull_cycle` both stop — pushing the bulk deletions made on
+//! enter would flood tombstones onto other devices and wreck their libraries,
+//! and pulling could write an evicted identity back into the primary
+//! database. `record_local_change` is **ungated** (ordinary local writes
+//! queue up as usual during travel and are pushed with a later push cycle;
+//! the travel enter's own bulk deletions go through travel.rs and bypass the
+//! ordinary write capture point — keep this convention when wiring phase 3).
 //!
-//! **主密码零耦合**（§4 密钥层级）：引擎全链路只接触 oplog 密文与
-//! `(lamport, device_id)`，从不接触主密码派生材料——换主密码不影响同步
-//! 状态（local_lamport/游标/oplog 全在库），宿主重建 engine 实例即续用。
+//! **No coupling to the master password** (§4 key hierarchy): the engine
+//! touches only oplog ciphertext and `(lamport, device_id)` along its whole
+//! path, never master-password derivation material — changing the master
+//! password does not affect sync state (local_lamport/cursor/oplog all live
+//! in the database), so the host can rebuild the engine instance and resume.
 
 use chrono::Utc;
 use uuid::Uuid;
@@ -21,44 +28,58 @@ use crate::storage::sync_repository::SyncRepository;
 use crate::sync::oplog::{ItemKind, OpType, SyncOp, SyncPayload};
 use crate::{PersonaError, Result};
 
-/// 单轮 pull 的页大小（与 server PULL_DEFAULT_LIMIT 对齐）。
+/// Page size of one pull round (aligned with the server's PULL_DEFAULT_LIMIT).
 pub const PULL_PAGE: u32 = 200;
 
-/// 快照续拉游标的哨兵 op_id（S2）：op_id 是 UUID 串（hex 字符集），字典
-/// 序恒大于 `"0"`。游标 `(快照 seq, "0")` 经服务器的 `(seq, op_id) >`
-/// 复合比较精确表达「恢复位点 = 快照覆盖位点」——seq ≤ S 的行已被快照
-/// 上传压缩删除，语义无差；好处是水位（cursor 解回 seq）直读快照位点。
+/// Sentinel op_id for the snapshot resume cursor (S2): an op_id is a UUID
+/// string (hex alphabet), so lexicographically it is always greater than
+/// `"0"`. The cursor `(snapshot seq, "0")` expresses "resume position =
+/// snapshot coverage position" exactly through the server's composite
+/// `(seq, op_id) >` comparison — rows with seq ≤ S have already been
+/// compacted away by the snapshot upload, which is semantically a no-op; the
+/// bonus is that the watermark (cursor decoded back to seq) reads the
+/// snapshot position directly.
 pub const SNAPSHOT_RESUME_OP_ID: &str = "0";
 
-/// 远端中继的最小接口。返回的 op 已是 [`SyncOp`] 形态（wire 解析在实现
-/// 内完成；未知 kind → [`ItemKind::Unknown`]，条目级损坏 → 跳过该条）。
+/// The minimal interface of the remote relay. Returned ops are already in
+/// [`SyncOp`] form (wire parsing happens inside the implementation; unknown
+/// kind → [`ItemKind::Unknown`], entry-level corruption → skip that entry).
 #[async_trait::async_trait]
 pub trait SyncRemote: Send + Sync {
-    /// push 一段 op；服务器按 op_id 幂等，返回 (accepted, duplicates)。
+    /// Push a batch of ops; the server is idempotent by op_id and returns
+    /// (accepted, duplicates).
     async fn push_ops(&self, ops: &[SyncOp]) -> Result<(u64, u64)>;
-    /// pull 一页增量：返回 (ops, next_cursor)。`since`/next_cursor 是服务
-    /// 器 seq 游标，原样透传给 [`SyncRepository::set_last_pull_cursor`]。
+    /// Pull one page of increments: returns (ops, next_cursor). `since`/
+    /// next_cursor are server seq cursors, passed through verbatim to
+    /// [`SyncRepository::set_last_pull_cursor`].
     async fn pull_ops(
         &self,
         since: Option<&str>,
         limit: u32,
     ) -> Result<(Vec<SyncOp>, Option<String>)>;
-    /// 组当前指令流水位（sync-group-mode §二.5.5「组最新版本号」）——服务
-    /// 器 oplog 最大 seq；空组为 0。
+    /// The group's current op sequence position (sync-group-mode §2.5.5
+    /// "latest group version") — the maximum seq of the server oplog; 0 for
+    /// an empty group.
     async fn head_seq(&self) -> Result<i64>;
-    /// 上传库级快照（S2，E2EE_SYNC_DESIGN §5）：group key 整包密文 +
-    /// 覆盖位点 seq。服务器单快照 upsert 并在同事务删 `seq ≤ S` 的 ops，
-    /// 返回被压缩的 op 条数（仅展示）。失败必须报错——覆盖区间可能已被
-    /// 压缩，静默丢快照 = 空库新设备无事实源可补的真数据洞。
+    /// Upload a library-level snapshot (S2, E2EE_SYNC_DESIGN §5): the whole
+    /// group key package ciphertext plus the coverage position seq. The
+    /// server upserts a single snapshot and deletes ops with `seq ≤ S` in the
+    /// same transaction, returning the number of ops compacted (display
+    /// only). Failure must be reported as an error — the covered range may
+    /// already be compacted, so silently dropping a snapshot is a real data
+    /// hole: a fresh device with an empty library would have no source of
+    /// truth to backfill from.
     async fn put_library_snapshot(
         &self,
         seq: i64,
         device_id: &str,
         ciphertext: &[u8],
     ) -> Result<u64>;
-    /// 取库级快照：`Ok(None)` = 服务器无快照可取（新服务器尚未上传过、
-    /// 或老服务器没有这条路由），两个成因在客户端行为上收敛——都退回
-    /// 全量重放。返回 (覆盖位点 seq, group key 密文)。
+    /// Fetch the library-level snapshot: `Ok(None)` = no snapshot available
+    /// on the server (a new server has not uploaded one yet, or an old server
+    /// lacks the route); both causes converge to the same client behavior —
+    /// fall back to full replay. Returns (coverage position seq, group key
+    /// ciphertext).
     async fn get_library_snapshot(&self) -> Result<Option<(i64, Vec<u8>)>>;
 }
 
@@ -70,7 +91,7 @@ pub struct PushCycleReport {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PullCycleReport {
-    /// 新落库的远端 op 条数（去重后）。
+    /// Number of remote ops newly persisted (after dedup).
     pub applied: usize,
     pub skipped_travel: bool,
 }
@@ -78,9 +99,11 @@ pub struct PullCycleReport {
 pub struct SyncEngine<R: SyncRemote> {
     repo: SyncRepository,
     remote: R,
-    /// 本设备 id（注册时定；本地 op 的 device_id 与时钟归属都靠它）。
+    /// This device's id (fixed at registration; local op device_ids and clock
+    /// attribution both rely on it).
     device_id: Uuid,
-    /// travel 闸（见模块文档）。构造时注入，宿主读 WorkspaceSettings。
+    /// The travel gate (see module docs). Injected at construction; the host
+    /// reads WorkspaceSettings.
     travel_active: Box<dyn Fn() -> bool + Send + Sync>,
     pull_page: u32,
 }
@@ -101,8 +124,9 @@ impl<R: SyncRemote> SyncEngine<R> {
         }
     }
 
-    /// 本地写捕获（service 写路径调用）：lamport = 本机 + 1，op 入 push
-    /// 队列。**不设 travel 闸**（见模块文档）。
+    /// Local write capture (called by the service write path): lamport =
+    /// local + 1, and the op enters the push queue. **Not travel-gated** (see
+    /// module docs).
     pub async fn record_local_change(
         &self,
         item_id: Uuid,
@@ -121,15 +145,18 @@ impl<R: SyncRemote> SyncEngine<R> {
             timestamp: Some(Utc::now()),
             payload,
         };
-        // 先推时钟再落队列：两者间崩溃会留一个「时钟已过但 op 丢失」的
-        // 空洞——无害（lamport 只需全序，不需要连续），反序则可能产生
-        // 重复 lamport（同设备同 lamport 的两条 op 是协议越界）。
+        // Bump the clock before queueing: a crash in between leaves a
+        // "clock advanced but op lost" gap — harmless (lamport only needs a
+        // total order, not continuity), while the reverse order could produce
+        // a duplicate lamport (two ops with the same device and lamport is a
+        // protocol violation).
         self.repo.bump_lamport(lamport).await?;
         self.repo.append_local_op(&sync_op).await?;
         Ok(sync_op)
     }
 
-    /// 推平本地 push 队列（≤500 条/批，单轮一批；余量下轮再推）。
+    /// Drain the local push queue (≤500 ops per batch, one batch per round; any
+    /// remainder is pushed in the next round).
     pub async fn push_cycle(&self) -> Result<PushCycleReport> {
         if (self.travel_active)() {
             return Ok(PushCycleReport {
@@ -145,8 +172,10 @@ impl<R: SyncRemote> SyncEngine<R> {
             });
         }
         let (_accepted, _duplicates) = self.remote.push_ops(&pending).await?;
-        // 全部标记 acked：服务器已收的不再推；万一服务器实际没收到
-        //（响应丢失被误判成功），INSERT OR IGNORE 保证下轮重推幂等安全。
+        // Mark everything acked: ops the server received are not pushed again;
+        // if the server in fact never got them (a lost response misread as
+        // success), INSERT OR IGNORE keeps the next round's re-push
+        // idempotently safe.
         let ids: Vec<Uuid> = pending.iter().map(|op| op.op_id).collect();
         self.repo.mark_acked(&ids).await?;
         Ok(PushCycleReport {
@@ -155,8 +184,9 @@ impl<R: SyncRemote> SyncEngine<R> {
         })
     }
 
-    /// 拉取远端增量并落本地 oplog（视图由 item_view 随时推导，落库本身
-    /// 不做 LWW 物化）。游标推进 + 时钟推进（`max` 语义）。
+    /// Pull remote increments and land them in the local oplog (the view is
+    /// derived from item_view on demand; persisting them does no LWW
+    /// materialization). Advances the cursor and the clock (`max` semantics).
     pub async fn pull_cycle(&self) -> Result<PullCycleReport> {
         if (self.travel_active)() {
             return Ok(PullCycleReport {
@@ -180,20 +210,21 @@ impl<R: SyncRemote> SyncEngine<R> {
             for op in ops {
                 max_lamport_seen = max_lamport_seen.max(op.lamport);
                 if seen.contains(&op.op_id) {
-                    continue; // 重放/重复投递（存储层幂等的第二道防线）
+                    continue; // replay/duplicate delivery (second line of defense behind storage-layer idempotency)
                 }
                 self.repo.record_remote_op(&op).await?;
                 applied += 1;
             }
             match next_cursor {
                 Some(cursor) => self.repo.set_last_pull_cursor(Some(&cursor)).await?,
-                None => break, // 已到最后一页
+                None => break, // last page reached
             }
         }
         if max_lamport_seen > 0 {
             self.repo.bump_lamport(max_lamport_seen).await?;
         }
-        // 完整跑完一轮 pull（哪怕无新 op）= 与组对过账，记最近同步时间。
+        // A pull round that ran to completion (even with no new ops) = reconciled
+        // with the group; record the last sync time.
         self.repo.mark_synced(Utc::now()).await?;
         Ok(PullCycleReport {
             applied,
@@ -201,21 +232,30 @@ impl<R: SyncRemote> SyncEngine<R> {
         })
     }
 
-    /// 库级快照上传原语（S2，E2EE_SYNC_DESIGN §5）：调用方（service 层，
-    /// 持密钥层）经 `pack` 回调把整库打包成 group key 密文，引擎负责收敛
-    /// 与覆盖位点的确定——先推平本机待推队列（上云拿到 seq）再拉平远端
-    /// 增量，然后以「本机已同步水位」为覆盖位点 S 上云。先 push 后 pull
-    /// 的周期顺序保证服务器上 seq ≤ S 的每条 op 都已反映进本机状态（pull
-    /// 按 (seq, op_id) 全序分页，拉到空页 = 水位即当时的 head）。
+    /// Library-level snapshot upload primitive (S2, E2EE_SYNC_DESIGN §5): the
+    /// caller (service layer, which holds the key layer) packs the whole
+    /// library into group key ciphertext via the `pack` callback, while the
+    /// engine owns convergence and coverage-position determination — first
+    /// drain the local pending push queue (which gets seqs from the server),
+    /// then drain remote increments, and upload with the "local synced
+    /// watermark" as coverage position S. The push-before-pull cycle order
+    /// guarantees that every op with seq ≤ S on the server has already been
+    /// reflected into local state (pull pages in (seq, op_id) total order, so
+    /// an empty page means the watermark is the head at that moment).
     ///
-    /// **打包必须在收敛之后**（2026-11-13 codex 深审 Critical 修复）：
-    /// 早先签名让调用方先 `snapshot_payload()` 再上传，收敛 pull 拉进的
-    /// 远端 op 不在已打包的密文里、却进水位被服务器 `seq ≤ S` 裁剪——
-    /// 快照外的增量被永久删除。现在引擎先收敛，水位与打包同取收敛后的
-    /// 一致视图（水位先读、打包紧随；收敛后本任务不再推进水位），覆盖
-    /// 区间与内容一致；`pack` 内不得调用引擎的 push/pull。成功后记
-    /// `last_snapshot_seq`（触发阈值基线）。
-    /// 返回 (覆盖位点 S, 服务器压缩的 op 条数)。
+    /// **Packing must happen after convergence** (2026-11-13 codex deep
+    /// review, Critical fix): the earlier signature had the caller call
+    /// `snapshot_payload()` before uploading, so remote ops pulled in by the
+    /// converging pull were absent from the already-packed ciphertext yet
+    /// still inside the watermark, where the server's `seq ≤ S` trimming
+    /// pruned them — increments outside the snapshot were deleted forever.
+    /// Now the engine converges first, and the watermark and the pack both
+    /// read the same consistent post-convergence view (watermark read first,
+    /// pack immediately after; this task no longer advances the watermark
+    /// after convergence), so the coverage range matches its content; `pack`
+    /// must not call the engine's push/pull. On success, record
+    /// `last_snapshot_seq` (the trigger threshold baseline).
+    /// Returns (coverage position S, number of ops compacted on the server).
     pub async fn upload_library_snapshot<F>(&self, pack: F) -> Result<(i64, u64)>
     where
         F: AsyncFnOnce() -> Result<Vec<u8>>,
@@ -238,16 +278,25 @@ impl<R: SyncRemote> SyncEngine<R> {
         Ok((seq, pruned))
     }
 
-    /// 库级快照安装原语（S2 bootstrap 第一步）：取服务器快照 → 整包密文交
-    /// 回调（装配层持密钥：group key 拆包 + 视图充分集按 op_id 幂等入本地
-    /// oplog）→ 回调成功后才把 pull 游标推进到覆盖位点并记
-    /// `last_snapshot_seq`，后续 pull 只拿增量。回调失败或服务器无快照
-    /// 一律不动游标，全量重放路径保持原状——fail-closed：游标先动而装包
-    /// 失败 = 覆盖区间已被压缩、本机又没装上，数据洞不可挽回。
-    /// travel 激活期间整体跳过（装包把远端数据写进 oplog/主库，与 pull
-    /// 同向，travel 期间不得发生；退 travel 后下次 bootstrap 照装——游标
-    /// 未动）。返回 `Some(覆盖位点 seq)`；无快照或 travel 跳过为 `None`
-    /// （两者行为一致：都退回全量重放路径，游标决定下次是否还试）。
+    /// Library-level snapshot install primitive (first step of S2 bootstrap):
+    /// fetch the server snapshot → hand the whole package ciphertext to the
+    /// callback (the assembly layer holds the keys: unwrap with the group key
+    /// + idempotently insert the view-sufficient set into the local oplog by
+    /// op_id) → only after the callback succeeds advance the pull cursor to
+    /// the coverage position and record `last_snapshot_seq`, so later pulls
+    /// take only increments. A callback failure or a missing server snapshot
+    /// never moves the cursor, leaving the full-replay path as it was —
+    /// fail-closed: the cursor moving first while install fails means the
+    /// covered range is already compacted yet never installed locally, an
+    /// unrecoverable data hole.
+    /// While travel is active the whole step is skipped (installing writes
+    /// remote data into the oplog/primary database, the same direction as
+    /// pull, and must not happen during travel; after leaving travel the next
+    /// bootstrap installs as usual — the cursor was untouched). Returns
+    /// `Some(coverage position seq)`; `None` when there is no snapshot or
+    /// travel skipped it (both behave the same: they fall back to the
+    /// full-replay path, and the cursor decides whether to try again next
+    /// time).
     pub async fn install_library_snapshot<F>(&self, install: F) -> Result<Option<i64>>
     where
         F: AsyncFnOnce(i64, Vec<u8>) -> Result<()>,
@@ -269,10 +318,13 @@ impl<R: SyncRemote> SyncEngine<R> {
         Ok(Some(seq))
     }
 
-    /// 快照上传触发判定（E2EE_SYNC_DESIGN §5「触发时机」）：`head − 上次
-    /// 快照位点 > threshold` 才值得重打包（防频繁重打包）。travel 恒 false
-    /// （不上传）；从未有过快照基线记 0。判定与 [`Self::upload_library_snapshot`]
-    /// 分开：触发只是可能，上传仍要过收敛周期——调用方在 push ack 后询问。
+    /// Snapshot upload trigger check (E2EE_SYNC_DESIGN §5 "trigger timing"):
+    /// repacking is only worthwhile when `head − last snapshot position >
+    /// threshold` (to avoid frequent repacking). Always false during travel
+    /// (no upload); a missing snapshot baseline counts as 0. Kept separate
+    /// from [`Self::upload_library_snapshot`]: the trigger only means it is
+    /// possible — the upload still has to pass the convergence cycle, so the
+    /// caller asks after a push ack.
     pub async fn library_snapshot_needed(&self, threshold: i64) -> Result<bool> {
         if (self.travel_active)() {
             return Ok(false);
@@ -282,8 +334,9 @@ impl<R: SyncRemote> SyncEngine<R> {
         Ok(head - last > threshold)
     }
 
-    /// 同步状态（sync-group-mode §二.5.5）：组最新版本号、本机已同步水位、
-    /// 落后条数、待推条数与最近同步时间。只读，不动任何周期状态。
+    /// Sync status (sync-group-mode §2.5.5): latest group version, local
+    /// synced watermark, lag count, pending push count and last sync time.
+    /// Read-only; it touches no cycle state.
     pub async fn sync_status(&self) -> Result<SyncStatusReport> {
         let head_seq = self.remote.head_seq().await?;
         let local_watermark = self.repo.local_watermark().await?;
@@ -299,18 +352,19 @@ impl<R: SyncRemote> SyncEngine<R> {
     }
 }
 
-/// 组同步水位快照（设置页状态显示的数据面）。
+/// Group sync watermark snapshot (the data plane for the settings page
+/// status display).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SyncStatusReport {
-    /// 组最新版本号（服务器 oplog 最大 seq；空组 0）。
+    /// Latest group version (maximum server oplog seq; 0 for an empty group).
     pub head_seq: i64,
-    /// 本机已同步水位（已拉到的 seq；从未拉过 0）。
+    /// Local synced watermark (the seq pulled so far; 0 if never pulled).
     pub local_watermark: i64,
-    /// 落后组多少条指令（head − local，不取负）。
+    /// How many ops behind the group (head − local, floored at zero).
     pub behind: i64,
-    /// 本机已产生、尚未推上组的指令数。
+    /// Ops produced locally that have not yet been pushed to the group.
     pub pending_push: i64,
-    /// 最近一次成功同步周期；None = 从未同步。
+    /// Last successful sync cycle; None = never synced.
     pub last_sync_at: Option<chrono::DateTime<Utc>>,
 }
 
@@ -321,8 +375,10 @@ mod tests {
     use std::collections::HashSet;
     use std::sync::{Arc, Mutex};
 
-    /// 内存远端：op 原样累积；pull 忽略游标全量返回（重放由 engine 的
-    /// existing_op_ids 去重兜住——游标语义本身由 server 集成测试锁定）。
+    /// In-memory remote: ops accumulate verbatim; pull ignores the cursor and
+    /// returns everything (replays are caught by the engine's existing_op_ids
+    /// dedup — the cursor semantics themselves are pinned by the server
+    /// integration tests).
     struct MemorySyncRemote {
         state: Mutex<MemState>,
     }
@@ -330,7 +386,8 @@ mod tests {
     struct MemState {
         ops: Vec<SyncOp>,
         fail_push: bool,
-        /// 库级快照（S2）：(覆盖位点, 密文)；None = 尚未上传过。
+        /// Library-level snapshot (S2): (coverage position, ciphertext); None =
+        /// not uploaded yet.
         snapshot: Option<(i64, Vec<u8>)>,
     }
 
@@ -376,8 +433,10 @@ mod tests {
             since: Option<&str>,
             limit: u32,
         ) -> Result<(Vec<SyncOp>, Option<String>)> {
-            // 游标语义与 server 同构：cursor 位点 = 已返回条数，next 指向下
-            // 一页起点；拉到最后一页返回 None（否则引擎循环永不收尾）。
+            // Cursor semantics are isomorphic with the server's: the cursor position =
+            // number of entries returned, and next points at the start of the
+            // following page; reaching the last page returns None (otherwise
+            // the engine's loop would never terminate).
             let state = self.state.lock().unwrap();
             let start = match since {
                 Some(raw) => crate::sync::cursor::decode_cursor(raw)
@@ -388,8 +447,10 @@ mod tests {
             let total = state.ops.len();
             let end = start.saturating_add(limit as usize).min(total);
             let page = state.ops[start.min(total)..end].to_vec();
-            // 与 server 同语义：非空页恒返回该页最后一行的游标（空页 null，
-            // 客户端按「空页才停」循环）——水位因此总能推进到已消费位点。
+            // Same semantics as the server: a non-empty page always returns the cursor
+            // of its last row (null for an empty page, and the client loops
+            // on "stop only at an empty page") — so the watermark can always
+            // advance to the consumed position.
             let next = (end > start).then(|| {
                 crate::sync::cursor::encode_cursor(
                     end as i64,
@@ -400,7 +461,8 @@ mod tests {
         }
 
         async fn head_seq(&self) -> Result<i64> {
-            // 内存远端的「服务器 seq」= 累计 op 条数（push 进几条 head 涨几条）
+            // The in-memory remote's "server seq" = cumulative op count (head grows by
+            // however many ops are pushed)
             Ok(self.state.lock().unwrap().ops.len() as i64)
         }
 
@@ -410,10 +472,12 @@ mod tests {
             _device_id: &str,
             ciphertext: &[u8],
         ) -> Result<u64> {
-            // 单快照 upsert；返回值记账「将被压缩的 op 条数」。内存远端保持
-            // append-only——真删除的 seq 语义（rowid 单调、游标绝对）用数组
-            // 模拟会分叉，server 侧已由集成测试锁定
-            //（snapshot_put_get_roundtrip_and_prunes_covered_ops）。
+            // Single-snapshot upsert; the return value bookkeeps "the number of ops to
+            // be compacted". The in-memory remote stays append-only — the seq
+            // semantics of real deletion (monotonic rowid, absolute cursors)
+            // would fork if simulated with a vec, and the server side is
+            // already pinned by integration tests
+            // (snapshot_put_get_roundtrip_and_prunes_covered_ops).
             let mut state = self.state.lock().unwrap();
             let pruned = (seq as usize).min(state.ops.len());
             state.snapshot = Some((seq, ciphertext.to_vec()));
@@ -425,7 +489,8 @@ mod tests {
         }
     }
 
-    /// 引擎持 Arc 共享内存远端（orphan 规则允许：local trait for Arc<T>）。
+    /// The engine holds an Arc-shared in-memory remote (orphan rule allows: local
+    /// trait for Arc<T>).
     #[async_trait::async_trait]
     impl<T: SyncRemote + ?Sized> SyncRemote for Arc<T> {
         async fn push_ops(&self, ops: &[SyncOp]) -> Result<(u64, u64)> {
@@ -531,7 +596,7 @@ mod tests {
         assert!(engine.repo.pending_ops(100).await.unwrap().is_empty());
         assert_eq!(remote.state.lock().unwrap().ops.len(), 3);
 
-        // 再推一轮：空队列 no-op
+        // Push again: empty queue is a no-op
         let again = engine.push_cycle().await.unwrap();
         assert_eq!(again.pushed, 0);
     }
@@ -566,13 +631,13 @@ mod tests {
         let push = engine.push_cycle().await.unwrap();
         assert!(push.skipped_travel);
         assert_eq!(push.pushed, 0);
-        assert_eq!(engine.repo.pending_ops(100).await.unwrap().len(), 1); // 队列原样保留
+        assert_eq!(engine.repo.pending_ops(100).await.unwrap().len(), 1); // queue kept intact
 
         remote.add(vec![remote_put(9, 1, ItemKind::Credential)]);
         let pull = engine.pull_cycle().await.unwrap();
         assert!(pull.skipped_travel);
         assert_eq!(pull.applied, 0);
-        assert_eq!(engine.repo.get_state().await.unwrap().local_lamport, 1); // 时钟未被远端推进
+        assert_eq!(engine.repo.get_state().await.unwrap().local_lamport, 1); // clock not advanced by the remote
     }
 
     #[tokio::test]
@@ -587,7 +652,7 @@ mod tests {
         assert_eq!(report.applied, 2);
         assert_eq!(engine.repo.get_state().await.unwrap().local_lamport, 7);
 
-        // 重放同一远端：全量去重
+        // Replay the same remote: full dedup
         let replay = engine.pull_cycle().await.unwrap();
         assert_eq!(replay.applied, 0);
     }
@@ -608,7 +673,8 @@ mod tests {
         remote.add(vec![remote_put(7, 1, ItemKind::Credential)]);
         engine.pull_cycle().await.unwrap();
 
-        // 拉到远端 lamport 7 后，本地写下一条必须接 8（时钟 = max）
+        // After pulling remote lamport 7, the next local write must continue at 8
+        // (clock = max)
         let op = engine
             .record_local_change(
                 Uuid::new_v4(),
@@ -621,13 +687,13 @@ mod tests {
         assert_eq!(op.lamport, 8);
     }
 
-    // ---- sync_status（sync-group-mode §二.5.5 状态显示）----
+    // ---- sync_status (sync-group-mode §2.5.5 status display) ----
 
     #[tokio::test]
     async fn sync_status_tracks_head_watermark_pending_and_last_sync() {
         let (engine, remote) = fixture(false).await;
 
-        // 初始：组 head=0，本机水位 0，从未同步
+        // Initial: group head=0, local watermark 0, never synced
         let s = engine.sync_status().await.unwrap();
         assert_eq!(
             (s.head_seq, s.local_watermark, s.behind, s.pending_push),
@@ -635,7 +701,7 @@ mod tests {
         );
         assert_eq!(s.last_sync_at, None);
 
-        // 组里出现 5 条指令 + 本机离线写 2 条：落后 5、待推 2
+        // 5 ops appear in the group + 2 offline local writes: behind 5, pending 2
         remote.add(
             (1..=5)
                 .map(|i| remote_put(i, 1, ItemKind::Credential))
@@ -664,7 +730,8 @@ mod tests {
             (5, 0, 5, 2, true)
         );
 
-        // pull 完成：水位到 5、落后清零、记下同步时间；待推不受 pull 影响
+        // Pull done: watermark at 5, lag cleared, sync time recorded; pending push
+        // is unaffected by pull
         engine.pull_cycle().await.unwrap();
         let after = engine.sync_status().await.unwrap();
         assert_eq!(after.local_watermark, 5);
@@ -672,7 +739,8 @@ mod tests {
         assert_eq!(after.pending_push, 2);
         assert!(after.last_sync_at.is_some());
 
-        // push 完成：待推清零；head 不含未推前的 2 条时是 5，推完远端变 7
+        // Push done: pending cleared; head is 5 before the 2 unpushed ops are
+        // counted, and becomes 7 on the remote after they land
         engine.push_cycle().await.unwrap();
         let final_status = engine.sync_status().await.unwrap();
         assert_eq!(final_status.head_seq, 7, "推上的 2 条计入组流水位");
@@ -682,7 +750,8 @@ mod tests {
 
     #[tokio::test]
     async fn pull_again_never_loops_and_watermark_reaches_head() {
-        // 大批次跨页拉取：水位必须一路推进到 head（位点续传）
+        // Large batch pulled across pages: the watermark must advance all the way to
+        // head (position-based resumption)
         let (engine, remote) = fixture(false).await;
         remote.add(
             (1..=450)
@@ -693,16 +762,18 @@ mod tests {
         assert_eq!(report.applied, 450);
         let s = engine.sync_status().await.unwrap();
         assert_eq!((s.local_watermark, s.behind), (450, 0));
-        // 游标推进到头后，下一轮 pull 是一次空页往返
+        // Once the cursor has advanced to the end, the next pull round is a single
+        // empty-page round trip
         let again = engine.pull_cycle().await.unwrap();
         assert_eq!(again.applied, 0);
     }
 
-    // ---- 库级快照原语（S2，E2EE_SYNC_DESIGN §5）----
+    // ---- library-level snapshot primitives (S2, E2EE_SYNC_DESIGN §5) ----
 
     #[tokio::test]
     async fn upload_snapshot_converges_then_stamps_watermark() {
-        // 覆盖位点语义：先推平本机队列再拉平远端，水位 = 服务器已消费位点
+        // Coverage position semantics: drain the local queue first, then pull remote
+        // increments; the watermark = the position the server has consumed
         let (engine, remote) = fixture(false).await;
         remote.add(vec![
             remote_put(1, 1, ItemKind::Credential),
@@ -739,7 +810,8 @@ mod tests {
             "上传成功记触发阈值基线"
         );
 
-        // 快照后继续增量续拉：游标绝对位点（绝对 seq）不受压缩影响
+        // Continue pulling increments after the snapshot: the cursor's absolute
+        // position (absolute seq) is unaffected by compaction
         remote.add(vec![remote_put(4, 4, ItemKind::Credential)]);
         let pull = engine.pull_cycle().await.unwrap();
         assert_eq!(pull.applied, 1, "只拉到快照点之后的增量");
@@ -789,7 +861,8 @@ mod tests {
             "装包成功记触发阈值基线"
         );
 
-        // 快照点后的增量照常续拉——哨兵游标 (3, "0") 起拉
+        // Increments after the snapshot point are pulled as usual — starting from
+        // the sentinel cursor (3, "0")
         remote.add(vec![remote_put(4, 4, ItemKind::Credential)]);
         let pull = engine.pull_cycle().await.unwrap();
         assert_eq!(pull.applied, 1, "只拉 seq > 3 的增量，不重放已装快照");
@@ -808,15 +881,17 @@ mod tests {
         assert_eq!(seq, None);
         assert_eq!(engine.repo.local_watermark().await.unwrap(), 0);
 
-        // 全量重放路径原状可用
+        // Full-replay path still works as before
         let pull = engine.pull_cycle().await.unwrap();
         assert_eq!(pull.applied, 1);
     }
 
     #[tokio::test]
     async fn install_callback_failure_leaves_cursor_untouched() {
-        // fail-closed 主场景：装包失败游标不动——覆盖区间虽已在服务器压缩，
-        // 本机仍从零全量重放剩余 ops（缩水子集也收敛），不留半装状态
+        // Main fail-closed scenario: an install failure leaves the cursor untouched —
+        // although the covered range has already been compacted on the server,
+        // the device still replays the remaining ops from zero (the shrunken
+        // subset converges too), with no half-installed state left behind
         let (engine, remote) = fixture(false).await;
         remote.add(vec![
             remote_put(1, 1, ItemKind::Credential),
@@ -839,9 +914,10 @@ mod tests {
 
     #[tokio::test]
     async fn install_snapshot_skipped_during_travel() {
-        // travel 期间装包整体跳过（装包把远端数据写进 oplog，与 pull 同闸）：
-        // 回调不得被调、游标与水位基线都不动——退 travel 后下次 bootstrap
-        // 还会再试
+        // Install is skipped outright during travel (it writes remote data into the
+        // oplog, the same gate as pull): the callback must not be called and
+        // neither the cursor nor the watermark baseline may move — after
+        // leaving travel, the next bootstrap will try again
         let (engine, remote) = fixture(true).await;
         remote.state.lock().unwrap().snapshot = Some((3, vec![1u8; 2]));
         let seq = engine
@@ -862,18 +938,21 @@ mod tests {
                 .collect(),
         );
 
-        // 从未有过快照（基线 0）：head 5 超阈值 3 触发；严格大于——阈值 5 不触发
+        // Never snapshotted (baseline 0): head 5 exceeds threshold 3 and triggers;
+        // strictly greater — threshold 5 does not trigger
         assert!(engine.library_snapshot_needed(3).await.unwrap());
         assert!(!engine.library_snapshot_needed(5).await.unwrap());
 
-        // 上传后基线 = 水位 5：head 5 − 5 = 0，任何阈值都不再触发
+        // After upload the baseline = watermark 5: head 5 − 5 = 0, so no threshold
+        // triggers anymore
         engine
             .upload_library_snapshot(|| async { Ok(vec![1u8; 3]) })
             .await
             .unwrap();
         assert!(!engine.library_snapshot_needed(0).await.unwrap());
 
-        // 组继续前进：head 8 − 基线 5 = 3 → 超 2 触发、等于 3 不触发
+        // The group keeps advancing: head 8 − baseline 5 = 3 → exceeds 2 and
+        // triggers, equal to 3 does not trigger
         remote.add(
             (6..=8)
                 .map(|i| remote_put(i, 1, ItemKind::Credential))
@@ -882,7 +961,7 @@ mod tests {
         assert!(engine.library_snapshot_needed(2).await.unwrap());
         assert!(!engine.library_snapshot_needed(3).await.unwrap());
 
-        // travel 激活：恒不触发（不上传）
+        // Travel active: never triggers (no upload)
         let (travel_engine, travel_remote) = fixture(true).await;
         travel_remote.add(vec![remote_put(1, 1, ItemKind::Credential)]);
         assert!(!travel_engine.library_snapshot_needed(0).await.unwrap());

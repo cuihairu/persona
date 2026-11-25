@@ -1,5 +1,6 @@
-//! 配对密码学原语：参数常量、短码生成/规范化、Argon2id 派生、HKDF
-//! 收缩、短指纹与组密钥 AEAD 封解。
+//! Pairing cryptographic primitives: parameter constants, short-code
+//! generation/normalization, Argon2id derivation, HKDF contraction, short
+//! fingerprint, and group-key AEAD sealing/opening.
 
 use aes_gcm::aead::Aead;
 use aes_gcm::{Aes256Gcm, KeyInit};
@@ -8,41 +9,45 @@ use sha2::{Digest, Sha256};
 
 use crate::{PersonaError, PersonaResult};
 
-// ---- 参数常量 ----
+// ---- Parameter constants ----
 
-/// 动态密码长度（Crockford base32 字符数；9×5 bit = 45 bit 熵，
-/// 短时效 + 单次使用 + 中转限次共同兜住在线爆破面）。
+/// Passcode length (Crockford base32 characters; 9x5 bits = 45 bits of
+/// entropy; short TTL + single use + relay attempt caps together bound the
+/// online brute-force surface).
 pub const PAIRING_CODE_LEN: usize = 9;
-/// 配对 salt 字节数（经邀请面交给 guest，与 code 一起进 KDF）。
+/// Pairing salt size in bytes (handed to the guest with the invite facet, and
+/// fed into the KDF together with the code).
 pub const PAIRING_SALT_LEN: usize = 16;
-/// 组密钥长度（与 [`crate::sync::envelope`] 的组密钥同规格）。
+/// Group key length (same spec as [`crate::sync::envelope`]'s group key).
 pub const PAIRING_GROUP_KEY_LEN: usize = 32;
-/// 双端比对的短指纹位数（10^6 空间；防 MITM 靠「不一致即人工拒绝」）。
+/// Short-fingerprint digit count compared by both sides (10^6 space; MITM
+/// resistance relies on "mismatch means human rejection").
 pub const FINGERPRINT_LEN: usize = 6;
 
-/// Argon2id 域前缀（进 KDF 的盐头）。
+/// Argon2id domain prefix (prepended to the KDF salt).
 const PAIRING_KDF_DOMAIN: &[u8] = b"persona-pairing-v1";
-/// SRP identity（配对路径固定身份，与账号登录的 username 空间隔离）。
+/// SRP identity (fixed identity for the pairing path, isolated from the account
+/// login username space).
 pub(super) const PAIRING_IDENTITY: &[u8] = b"persona-pairing-v1";
-/// HKDF info：premaster → pairing key。
+/// HKDF info: premaster → pairing key.
 const PAIRING_KEY_INFO: &[u8] = b"persona-pairing-key-v1";
-/// 短指纹派生域。
+/// Short-fingerprint derivation domain.
 const FINGERPRINT_DOMAIN: &[u8] = b"persona-pairing-fp-v1";
-/// AEAD 附加认证数据（wrap 的域绑定）。
+/// AEAD authenticated additional data (domain binding for the wrap).
 const WRAP_AAD: &[u8] = b"persona-pairing-wrap-v1";
 
-/// Crockford base32（排除 I L O U 易混字形）。
+/// Crockford base32 (excludes the confusable glyphs I L O U).
 pub(super) const CROCKFORD: &[u8; 32] = b"0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 
-/// nonce + 组密钥 + GCM tag。
+/// nonce + group key + GCM tag.
 pub const WRAPPED_GROUP_KEY_LEN: usize = 12 + PAIRING_GROUP_KEY_LEN + 16;
 
-/// 生成动态密码：Crockford base32，[`PAIRING_CODE_LEN`] 字符。
+/// Generate the passcode: Crockford base32, [`PAIRING_CODE_LEN`] characters.
 pub fn generate_pairing_code() -> String {
     let bytes: [u8; 6] = rand::random();
     let mut extended = [0u8; 8];
     extended[..6].copy_from_slice(&bytes);
-    let bits = u64::from_be_bytes(extended); // 48 bit，取高 45
+    let bits = u64::from_be_bytes(extended); // 48 bits; the top 45 are taken
     (0..PAIRING_CODE_LEN)
         .map(|i| {
             let idx = ((bits >> (3 + 5 * (PAIRING_CODE_LEN - 1 - i))) & 31) as usize;
@@ -51,8 +56,9 @@ pub fn generate_pairing_code() -> String {
         .collect()
 }
 
-/// 规范化用户输入的动态密码：去空白/连字符、大写、易混字形映射
-/// （O→0、I→1、L→1、U→V）。非字母数字字符一律丢弃。
+/// Normalize a user-typed passcode: strip whitespace/hyphens, uppercase it, and
+/// map confusable glyphs (O→0, I→1, L→1, U→V). All non-alphanumeric
+/// characters are discarded.
 pub fn normalize_pairing_code(input: &str) -> String {
     input
         .chars()
@@ -67,7 +73,8 @@ pub fn normalize_pairing_code(input: &str) -> String {
         .collect()
 }
 
-/// Argon2id 派生配对密钥材料（短码 → SRP 的「password」角色）。
+/// Argon2id derivation of the pairing key material (the short code plays SRP's
+/// "password" role).
 pub(super) fn derive_pairing_secret(code: &str, salt: &[u8]) -> PersonaResult<[u8; 32]> {
     let mut domain_salt = Vec::with_capacity(PAIRING_KDF_DOMAIN.len() + salt.len());
     domain_salt.extend_from_slice(PAIRING_KDF_DOMAIN);
@@ -83,8 +90,8 @@ pub(super) fn derive_pairing_secret(code: &str, salt: &[u8]) -> PersonaResult<[u
     Ok(out)
 }
 
-/// pairing key = HKDF-SHA256(premaster)——SRP premaster 到 AEAD 钥的
-/// 域绑定收缩。
+/// pairing key = HKDF-SHA256(premaster) — the domain-bound contraction from the
+/// SRP premaster to the AEAD key.
 pub(super) fn pairing_key_from(premaster: &[u8]) -> PersonaResult<[u8; 32]> {
     let hk = Hkdf::<Sha256>::new(Some(PAIRING_KDF_DOMAIN), premaster);
     let mut out = [0u8; 32];
@@ -93,7 +100,8 @@ pub(super) fn pairing_key_from(premaster: &[u8]) -> PersonaResult<[u8; 32]> {
     Ok(out)
 }
 
-/// 双端比对的短指纹：6 位十进制（前导零保留）。
+/// Short fingerprint compared by both sides: 6 decimal digits (leading zeros
+/// preserved).
 pub fn pairing_fingerprint(pairing_key: &[u8; 32]) -> String {
     let digest = Sha256::new()
         .chain_update(FINGERPRINT_DOMAIN)

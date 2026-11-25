@@ -142,8 +142,9 @@ fn credential_touch_refreshes_updated_at() {
     assert!(cred.updated_at >= before);
 }
 
-// FromStr 与 Display/存储层字符串对齐：已知串逐一归位，未知串归入
-// Custom（与 row_to_credential 同一策略）。
+// FromStr lines up with the Display/storage-layer strings: known strings map to
+// their variants one by one, unknown strings fall back to
+// Custom (same policy as row_to_credential).
 
 #[test]
 fn credential_serde_roundtrip_preserves_every_field() {

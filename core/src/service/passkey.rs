@@ -74,7 +74,8 @@ impl PersonaService {
         let master_encryption = self.get_master_encryption_service()?;
         let hierarchy = KeyHierarchy::new(master_encryption);
         let scalar = registration.signing_key.to_bytes();
-        // 同步捕获需要 item key 明文（包 group 信封）——与凭据同款 revealed 变体
+        // Sync capture needs the item key in the clear (to wrap it in a group envelope) — the same
+        // revealed variant used for credentials
         let (envelope, item_key) =
             hierarchy.encrypt_with_new_item_key_revealed(scalar.as_slice())?;
 
@@ -105,8 +106,9 @@ impl PersonaService {
             None,
         )
         .await;
-        // 同步载荷 = passkey 语义快照（不含设备本地使用态）密封——与凭据
-        // 捕获同口径：密封失败只跳过捕获，不影响主库写入。
+        // Sync payload = a sealed passkey semantic snapshot (without device-local usage state) —
+        // same contract as credential capture: a seal failure only skips the capture and never
+        // affects the primary database write.
         match SyncPasskeySnapshot::from_item(&created).seal(&item_key) {
             Ok(sealed) => {
                 self.capture_sync(
@@ -183,7 +185,7 @@ impl PersonaService {
             None,
         )
         .await;
-        // 删除照实广播 tombstone（尽力而为旁路：无捕获装配时是 no-op）
+        // Broadcast the tombstone as-is (best-effort side channel: a no-op when no capture is wired)
         if ok {
             self.capture_sync(*id, ItemKind::Passkey, OpType::Delete, None, None)
                 .await;
@@ -285,8 +287,9 @@ impl PersonaService {
     /// Refused when the passkey is marked non-exportable; audited as a
     /// security-sensitive event.
     pub async fn export_passkey_private_key(&self, id: &Uuid) -> Result<Vec<u8>> {
-        // Export 判 InteractionRequired：履约在调用边（CLI `--include-sensitive`
-        // 的确认框/桌面导出对话框）；core 侧不重复弹窗，状态门禁照旧。
+        // Export is judged InteractionRequired: the consent is fulfilled at the call edge (the CLI
+        // `--include-sensitive` confirmation prompt / the desktop export dialog); core does not
+        // prompt again, and the state gate still applies as usual.
         self.ensure_authorized(&AuthzResource::Vault, AuthzAction::Export)
             .await?;
         self.touch_activity();

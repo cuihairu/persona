@@ -43,7 +43,7 @@ async fn identity_travel_marked_round_trips() {
     let fetched = repo.find_by_name("travel light").await.unwrap().unwrap();
     assert!(fetched.travel_marked);
 
-    // update 路径同样保列
+    // The update path preserves the column too
     let mut flipped = fetched.clone();
     flipped.travel_marked = false;
     repo.update(&flipped).await.unwrap();

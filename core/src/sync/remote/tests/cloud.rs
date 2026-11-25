@@ -1,8 +1,9 @@
-//! 云盘传输（Phase 2）域测试：`CloudDriveRemote`（指令流/快照/游标）、
-//! `CloudGroupKeyStore`（登记/信封）、`open_cloud` 双设备收敛。
+//! Domain tests for the cloud-drive transport (Phase 2): `CloudDriveRemote` (instruction stream / snapshot /
+//! cursor), `CloudGroupKeyStore` (registration / envelopes), and two-device convergence via `open_cloud`.
 //!
-//! 全部走临时目录（无真实云盘、无网络）——传输语义（水位/合并/原子写）
-//! 是纯本地文件逻辑，云盘代理只做跨设备分发，不在本测试面。
+//! Everything runs against temporary directories (no real cloud drive, no network) — the transport
+//! semantics (watermarks / merging / atomic writes) are pure local file logic, and the cloud agent only does
+//! cross-device distribution, which is outside this test surface.
 
 use crate::sync::engine::SyncRemote;
 use crate::sync::oplog::{ItemKind, OpType, SyncOp, SyncPayload};
@@ -26,7 +27,7 @@ fn op(device: Uuid, lamport: u64, item: Uuid) -> SyncOp {
     }
 }
 
-// ---- CloudDriveRemote：指令流 ----
+// ---- CloudDriveRemote: instruction stream ----
 
 #[tokio::test]
 async fn push_pull_round_trip() {
@@ -50,7 +51,7 @@ async fn push_pull_round_trip() {
     assert_eq!(ops[0].lamport, 1);
     assert!(cursor.is_some(), "非空页必须带游标，引擎才能推进水位");
 
-    // 再 pull：无新增量 → 空页 + None（引擎「空页才停」）
+    // Pull again: no new delta -> an empty page + None (the engine's "stop only on an empty page" rule)
     let (ops2, cursor2) = remote_b.pull_ops(cursor.as_deref(), 200).await.unwrap();
     assert!(ops2.is_empty());
     assert!(cursor2.is_none());
@@ -65,7 +66,7 @@ async fn push_dedups_by_op_id() {
 
     let item = Uuid::new_v4();
     let pushed = op(dev_a, 1, item);
-    // 崩溃后重推同 op（引擎未 ack 前掉线）→ 第二次是重复
+    // Re-pushing the same op after a crash (dropped before the engine acked) -> the second push is a duplicate
     let (a1, d1) = remote_a
         .push_ops(std::slice::from_ref(&pushed))
         .await
@@ -77,7 +78,7 @@ async fn push_dedups_by_op_id() {
     assert_eq!((a1, d1), (1, 0));
     assert_eq!((a2, d2), (0, 1));
 
-    // 分片只有一行（op_id 幂等）
+    // The shard has only one line (op_id idempotency)
     let (ops, _) = remote_b.pull_ops(None, 200).await.unwrap();
     assert_eq!(ops.len(), 1);
 }
@@ -90,7 +91,7 @@ async fn pull_cursor_resume_never_skips_late_lower_lamport() {
     let remote_a = CloudDriveRemote::new(dir.path(), dev_a);
     let remote_b = CloudDriveRemote::new(dir.path(), dev_b);
 
-    // A 先推两条（lamport 7, 9）。B 拉到水位，游标记录每分片行数。
+    // A pushes two ops first (lamport 7, 9). B pulls to a watermark; the cursor records the per-shard row counts.
     let item = Uuid::new_v4();
     let a7 = op(dev_a, 7, item);
     let a9 = op(dev_a, 9, item);
@@ -98,9 +99,9 @@ async fn pull_cursor_resume_never_skips_late_lower_lamport() {
     let (first, cursor) = remote_b.pull_ops(None, 200).await.unwrap();
     assert_eq!(first.len(), 2);
 
-    // B 离线期间：B 自身写 lamport 3（低于 A 的 7、9）——晚到但更小。
-    // rank 游标会把它当「已消费」跳过（插到已读 rank 前）；行数水位必须
-    // 读到它（关键收敛性：低 lamport 晚到 op 永不丢）。
+    // While B is offline: B itself writes lamport 3 (lower than A's 7 and 9) — late-arriving but smaller.
+    // A rank cursor would treat it as "already consumed" and skip it (it lands before a rank already read); the
+    // row-count watermark must pick it up (key convergence property: a late op with a low lamport is never lost).
     let b3 = op(dev_b, 3, item);
     remote_b.push_ops(std::slice::from_ref(&b3)).await.unwrap();
 
@@ -109,7 +110,7 @@ async fn pull_cursor_resume_never_skips_late_lower_lamport() {
         later.iter().any(|o| o.op_id == b3.op_id),
         "低 lamport 晚到 op 不得被游标跳过（rank 游标的已知收敛洞）"
     );
-    // 合并按 (lamport, device_id) 全序：b3(3) 在 a7(7)、a9(9) 前
+    // Merging follows the (lamport, device_id) total order: b3(3) comes before a7(7) and a9(9)
     assert_eq!(later[0].lamport, 3);
     assert_eq!(later[0].device_id, dev_b);
 }
@@ -131,7 +132,7 @@ async fn dual_device_merge_is_deterministic_and_totally_ordered() {
     remote_a.push_ops(&[a1.clone(), a5.clone()]).await.unwrap();
     remote_b.push_ops(&[b3.clone(), b4.clone()]).await.unwrap();
 
-    // 任意观察者（不同 device_id）对同一分片集算出同一全序
+    // Any observer (a different device_id) derives the same total order from the same shard set
     let (ops, _) = observer.pull_ops(None, 200).await.unwrap();
     assert_eq!(ops.len(), 4);
     let keys: Vec<(u64, Uuid)> = ops.iter().map(|o| (o.lamport, o.device_id)).collect();
@@ -147,7 +148,7 @@ async fn dual_device_merge_is_deterministic_and_totally_ordered() {
     );
 }
 
-// ---- CloudDriveRemote：库级快照 ----
+// ---- CloudDriveRemote: vault-level snapshots ----
 
 #[tokio::test]
 async fn snapshot_immutable_and_max_seq_wins() {
@@ -157,7 +158,7 @@ async fn snapshot_immutable_and_max_seq_wins() {
     let remote_a = CloudDriveRemote::new(dir.path(), dev_a);
     let remote_b = CloudDriveRemote::new(dir.path(), dev_b);
 
-    // 并发多设备各写一份（不同 (seq, device) 文件名，无 CAS 冲突）
+    // Several devices writing concurrently each produce one file (distinct (seq, device) filenames, no CAS conflict)
     remote_a
         .put_library_snapshot(5, &dev_a.to_string(), b"snap-5-a")
         .await
@@ -167,12 +168,12 @@ async fn snapshot_immutable_and_max_seq_wins() {
         .await
         .unwrap();
 
-    // max-seq 是确定收敛点
+    // max-seq is the deterministic convergence point
     let (seq, bytes) = remote_b.get_library_snapshot().await.unwrap().unwrap();
     assert_eq!(seq, 5);
     assert_eq!(bytes, b"snap-5-a");
 
-    // 同 (seq, device) 重传 = 不可变：不覆盖（内容寻址，幂等）
+    // Re-sending the same (seq, device) = immutable: no overwrite (content-addressed, idempotent)
     let pruned = remote_a
         .put_library_snapshot(5, &dev_a.to_string(), b"different")
         .await
@@ -182,7 +183,7 @@ async fn snapshot_immutable_and_max_seq_wins() {
     assert_eq!(seq2, 5);
     assert_eq!(bytes2, b"snap-5-a", "快照文件一旦写入不改（不可变）");
 
-    // 更高 seq 覆盖收敛点
+    // A higher seq takes over the convergence point
     remote_a
         .put_library_snapshot(8, &dev_a.to_string(), b"snap-8-a")
         .await
@@ -199,7 +200,7 @@ async fn no_snapshot_is_none() {
     assert!(remote.get_library_snapshot().await.unwrap().is_none());
 }
 
-// ---- CloudGroupKeyStore：登记 + 信封 ----
+// ---- CloudGroupKeyStore: registration + envelopes ----
 
 #[tokio::test]
 async fn cloud_group_key_store_round_trip_and_bootstrap() {
@@ -211,12 +212,12 @@ async fn cloud_group_key_store_round_trip_and_bootstrap() {
         .with_device_id(Uuid::new_v4());
     store.register_device(&identity).await.unwrap();
 
-    // 空组自举：生成组密钥并密封给自己
+    // Bootstrapping an empty group: generate the group key and seal it to itself
     assert!(store
         .bootstrap_group_if_empty(identity.device_id, identity.key_pair.public_bytes())
         .await
         .unwrap());
-    // 已有信封 → 不再自举
+    // Envelopes already exist -> no bootstrap
     assert!(!store
         .bootstrap_group_if_empty(identity.device_id, identity.key_pair.public_bytes())
         .await
@@ -226,13 +227,13 @@ async fn cloud_group_key_store_round_trip_and_bootstrap() {
     assert_eq!(keys.len(), 1);
     assert_eq!(keys[0].device_id, identity.device_id);
 
-    // 拆出组密钥可解（自举密封给自己）
+    // Unwrapping the group key from it works (bootstrap sealed it to itself)
     let group_bytes =
         crate::sync::envelope::open_group_key(&keys[0].envelope, identity.key_pair.secret_bytes())
             .unwrap();
     assert_eq!(group_bytes.len(), 32);
 
-    // 第二台设备：登记 + 授权（第一台拆组密钥重封给 B）
+    // Second device: registration + authorization (the first device unwraps the group key and reseals it for B)
     let identity_b = crate::sync::device::DeviceIdentity::generate("beta")
         .unwrap()
         .with_device_id(Uuid::new_v4());
@@ -267,7 +268,7 @@ async fn put_group_key_fails_for_unregistered_device() {
     assert!(store.put_group_key(ghost, &[0u8; 80]).await.is_err());
 }
 
-// ---- 设备管理面（宿主 join/list/authorize/revoke/leave 取用）----
+// ---- Device management plane (consumed by host join/list/authorize/revoke/leave) ----
 
 #[tokio::test]
 async fn list_remove_and_remark_devices() {
@@ -283,7 +284,7 @@ async fn list_remove_and_remark_devices() {
     store.register_device(&identity).await.unwrap();
     store.register_device(&identity_b).await.unwrap();
 
-    // 列表含公钥（授权目标要取）与本机标记所需的字段
+    // The listing carries the public key (needed when authorizing a target) and the fields needed to mark the local device
     let devices = store.list_devices().await.unwrap();
     assert_eq!(devices.len(), 2);
     let alpha = devices
@@ -296,7 +297,7 @@ async fn list_remove_and_remark_devices() {
         base64::engine::general_purpose::STANDARD.encode(identity.key_pair.public_bytes())
     });
 
-    // 备注写入：trim 规整 + 登记表持久化（重开 store 可读回）
+    // Writing a remark: trimmed normalization + persisted in the registry (readable back after reopening the store)
     let stored = store
         .set_device_remark(identity.device_id, "  laptop  ")
         .await
@@ -314,13 +315,13 @@ async fn list_remove_and_remark_devices() {
             .remark,
         "laptop"
     );
-    // 不在登记表 → NotFound（fail-closed）
+    // Not in the registry -> NotFound (fail-closed)
     assert!(reopened
         .set_device_remark(Uuid::new_v4(), "x")
         .await
         .is_err());
 
-    // 移除设备：登记表剔除 + 信封文件清理 + 幂等（再删 false）
+    // Removing a device: dropped from the registry + envelope files cleaned up + idempotent (a second removal returns false)
     let group_bytes = [7u8; 32];
     let env_b =
         crate::sync::envelope::seal_group_key(&group_bytes, identity_b.key_pair.public_bytes())
@@ -342,7 +343,7 @@ async fn list_remove_and_remark_devices() {
             .exists(),
         "信封文件一并清理"
     );
-    // group_keys 以登记表为准：被移除设备即使残留孤儿信封也不读
+    // group_keys trusts the registry: the removed device is not read even if it left an orphan envelope behind
     assert!(store
         .group_keys()
         .await
@@ -351,7 +352,7 @@ async fn list_remove_and_remark_devices() {
         .all(|k| k.device_id != identity_b.device_id));
 }
 
-// ---- open_cloud：双设备收敛（镜像 HTTP 收敛测试，文件版）----
+// ---- open_cloud: two-device convergence (a file-based mirror of the HTTP convergence tests) ----
 
 #[tokio::test]
 async fn open_cloud_two_devices_converge() {
@@ -371,7 +372,7 @@ async fn open_cloud_two_devices_converge() {
     let dir = tempfile::tempdir().unwrap();
     let store = CloudGroupKeyStore::new(dir.path());
 
-    // 设备身份 + 共用的组密钥（跨设备配对 E2EE 产物，测试直接构造）
+    // Device identities + a shared group key (an E2EE pairing artifact across devices, constructed directly in tests)
     let identity_a = DeviceIdentity::generate("alpha")
         .unwrap()
         .with_device_id(Uuid::new_v4());
@@ -404,7 +405,7 @@ async fn open_cloud_two_devices_converge() {
         .await
         .unwrap();
 
-    // A：有库存量 + 主密码 → open_cloud → backfill → run_cycle（推上分片）
+    // A: has an existing vault + primary key -> open_cloud -> backfill -> run_cycle (pushed onto the shard)
     let db_a = Database::in_memory().await.unwrap();
     db_a.migrate().await.unwrap();
     let identity_row_a = Identity::new("seed".to_string(), IdentityType::Personal);
@@ -444,10 +445,10 @@ async fn open_cloud_two_devices_converge() {
     let report_a = session_a.run_cycle(&master_a).await.unwrap();
     assert_eq!(report_a.pushed, 1, "A 的存量 op 推上分片");
 
-    // B：空库 + 同组密钥 → open_cloud → run_cycle（从分片拉回并物化）
+    // B: empty vault + the same group key -> open_cloud -> run_cycle (pulled back from the shard and materialized)
     let db_b = Database::in_memory().await.unwrap();
     db_b.migrate().await.unwrap();
-    // 身份行是设备本地可预置事实（配对流程已建）；走同步链的只有凭据 op
+    // The identity row is a pre-seedable device-local fact (already created by the pairing flow); only the credential op travels the sync chain
     IdentityRepository::new(db_b.clone())
         .create(&Identity {
             id: identity_row_a.id,
@@ -473,7 +474,7 @@ async fn open_cloud_two_devices_converge() {
         .collect();
     assert_eq!(names, vec!["alpha-cred".to_string()]);
 
-    // B 的水位推到分片行数（不再重拉）
+    // B's watermark has advanced to the shard row count (no re-pulling)
     let watermark = SyncRepository::new(db_b.clone())
         .local_watermark()
         .await

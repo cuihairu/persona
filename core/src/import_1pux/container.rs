@@ -1,5 +1,6 @@
-//! 1PUX 容器解包：ZIP 读取与 `export.attributes` / `export.data` 的
-//! 反序列化（版本宽松校验，未知版本告警但继续）。
+//! 1PUX container unpacking: reading the ZIP and deserializing
+//! `export.attributes` / `export.data` (version checks are lenient: an unknown
+//! version warns but continues).
 
 use std::io::{Cursor, Read};
 

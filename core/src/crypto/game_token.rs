@@ -1,27 +1,33 @@
-//! 游戏令牌统一调度器：按 provider 将 GameToken 凭据路由到具体算法。
+//! Unified game-token dispatcher: routes GameToken credentials to the concrete
+//! algorithm by provider.
 //!
-//! 桌面端/手机端/CLI 一律经本模块生成令牌码，而非直调具体算法——这样
-//! 未来接入绑定型 provider（腾讯安全中心/米哈游安全令等厂商服务端绑定，
-//! 无法离线计算，见 todo.md 游戏令牌路线图）时，读取路径会在此统一报
-//! "不支持离线生成"，而不是静默生成错误码。RFC TOTP 凭据（TwoFactor）
-//! 也可经 [`generate_code`] 统一取码，便于消费端用单一入口处理两类凭据。
+//! Desktop / mobile / CLI should all generate token codes through this module
+//! rather than calling the concrete algorithms directly. That way, when
+//! vendor-bound providers are added later (Tencent Security Center, miHoYo
+//! Security Token, etc. — bound to the vendor's server, impossible to compute
+//! offline; see the game-token roadmap in todo.md), the read path will report
+//! a single "offline generation not supported" error here instead of silently
+//! generating a wrong code. RFC TOTP credentials (TwoFactor) can also be
+//! fetched through [`generate_code`], giving consumers one entry point for
+//! both credential kinds.
 
 use crate::models::credential::{CredentialData, GameTokenData};
 use anyhow::{bail, Result};
 use serde::Serialize;
 
-/// Steam Guard（Valve），离线可算
+/// Steam Guard (Valve), computable offline
 pub const PROVIDER_STEAM_GUARD: &str = "steam_guard";
 
-/// 当前支持离线生成的 provider 清单（G2 按路线图追加）
+/// Providers currently supporting offline generation (G2 items get appended
+/// per the roadmap)
 pub const SUPPORTED_PROVIDERS: &[&str] = &[PROVIDER_STEAM_GUARD];
 
-/// provider 是否支持离线生成
+/// Whether the provider supports offline generation
 pub fn is_supported_provider(provider: &str) -> bool {
     SUPPORTED_PROVIDERS.contains(&provider)
 }
 
-/// 游戏令牌生成的码及剩余有效秒数/周期
+/// The code a game token generated, plus seconds remaining and its period
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct GameTokenCode {
     pub code: String,
@@ -37,7 +43,7 @@ fn unsupported(provider: &str) -> anyhow::Error {
     )
 }
 
-/// 按具体厂商数据在指定时刻生成令牌码
+/// Generate a token code at `at` from the concrete vendor data
 pub fn generate_game_token_code_at(
     data: &GameTokenData,
     at: chrono::DateTime<chrono::Utc>,
@@ -55,17 +61,18 @@ pub fn generate_game_token_code_at(
     }
 }
 
-/// 按具体厂商数据生成当前令牌码
+/// Generate the current token code from the concrete vendor data
 pub fn generate_game_token_code_now(data: &GameTokenData) -> Result<GameTokenCode> {
     generate_game_token_code_at(data, chrono::Utc::now())
 }
 
-/// 按凭据数据生成当前令牌码：TwoFactor 走 RFC TOTP，GameToken 走厂商调度
+/// Generate the current token code from credential data: TwoFactor uses RFC
+/// TOTP, GameToken goes through the vendor dispatcher
 pub fn generate_code_now(data: &CredentialData) -> Result<GameTokenCode> {
     generate_code_at(data, chrono::Utc::now())
 }
 
-/// 按凭据数据在指定时刻生成令牌码
+/// Generate a token code at `at` from credential data
 pub fn generate_code_at(
     data: &CredentialData,
     at: chrono::DateTime<chrono::Utc>,
@@ -73,9 +80,10 @@ pub fn generate_code_at(
     match data {
         CredentialData::GameToken(d) => generate_game_token_code_at(d, at),
         CredentialData::TwoFactor(t) => {
-            // HOTP 是计数器型：调度器不知道调用方当前计数器，统一报
-            // 不支持离线生成，而不是按时间窗静默生成错误码（见模块头
-            // 注释的 fail-closed 口径）。
+            // HOTP is counter-based: the dispatcher does not know the caller's current
+            // counter, so it uniformly reports "offline generation not supported"
+            // instead of silently generating a wrong code against a time window
+            // (the fail-closed stance described in the module header).
             if t.hotp.unwrap_or(false) {
                 bail!("HOTP entries are counter-based and need an explicit counter — use `persona totp code <id> --counter N`");
             }
@@ -109,7 +117,7 @@ mod tests {
 
     fn two_factor_data() -> TwoFactorData {
         TwoFactorData {
-            // RFC 6238 附录 B 的 ASCII secret "12345678901234567890"
+            // The ASCII secret "12345678901234567890" from RFC 6238 appendix B
             secret_key: "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ".to_string(),
             issuer: "Test".to_string(),
             account_name: "a@b.c".to_string(),
@@ -151,12 +159,13 @@ mod tests {
     fn generate_code_covers_two_factor_and_game_token_and_rejects_others() {
         let at = chrono::DateTime::from_timestamp(59, 0).unwrap();
 
-        // TwoFactor 经 RFC TOTP（官方向量：t=59 → 94287082，8 位；此处 6 位取后缀）
+        // TwoFactor goes through RFC TOTP (official test vector: t=59 -> 94287082,
+        // 8 digits; with 6 digits here we take the suffix).
         let tf_code = generate_code_at(&CredentialData::TwoFactor(two_factor_data()), at).unwrap();
         assert_eq!(tf_code.code, "287082");
         assert_eq!(tf_code.period, 30);
 
-        // GameToken 经厂商调度
+        // GameToken goes through the vendor dispatcher.
         let gt_code = generate_code_at(
             &CredentialData::GameToken(steam_data("QUJDREVGR0hJSktMTU5PUA==")),
             at,
@@ -164,7 +173,7 @@ mod tests {
         .unwrap();
         assert_eq!(gt_code.period, 30);
 
-        // 其余数据类型报"非令牌"
+        // The other credential kinds report "not a game token".
         let err = generate_code_at(
             &CredentialData::Password(PasswordCredentialData {
                 password: "x".to_string(),
@@ -185,8 +194,8 @@ mod tests {
         assert_eq!(via_dispatcher.code, via_totp.code);
     }
 
-    /// HOTP 条目经调度器必须显式拒绝（计数器未知），不能按时间窗
-    /// 静默生成错误码。
+    /// An HOTP entry must be explicitly rejected by the dispatcher (its counter is
+    /// unknown); it must not silently produce a wrong code off a time window.
     #[test]
     fn hotp_two_factor_is_rejected_by_dispatcher() {
         let mut hotp_data = two_factor_data();

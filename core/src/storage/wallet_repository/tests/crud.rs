@@ -1,4 +1,4 @@
-//! 钱包 CRUD、查询与地址维护域测试。
+//! Tests for the wallet CRUD, query and address-maintenance domains.
 
 use super::*;
 
@@ -267,10 +267,12 @@ async fn test_update_missing_wallet_is_not_found() {
     assert!(matches!(err, PersonaError::NotFound(_)));
 }
 
-// 深审 Critical 回归（2026-11-13）：update 全程单事务——地址重建中途
-// 约束失败（同 wallet 重复 address 撞 UNIQUE(wallet_id, address)）必须
-// 整体回滚，钱包行保持原值。老实现 UPDATE 先行提交，失败后留下新密钥
-// 与残缺地址的混合状态。
+// Deep-audit Critical regression (2026-11-13): update runs as one
+// transaction — a constraint failure mid-way through rebuilding the addresses
+// (a duplicate address in the same wallet hitting UNIQUE(wallet_id, address))
+// must roll the whole thing back, leaving the wallet row at its original
+// values. The old implementation committed the UPDATE first and, on failure,
+// left a mixed state of new key and half-set addresses.
 #[tokio::test]
 async fn update_rolls_back_as_a_whole_on_address_conflict() {
     let db = Database::in_memory().await.unwrap();
@@ -293,7 +295,8 @@ async fn update_rolls_back_as_a_whole_on_address_conflict() {
         "duplicate address must fail the update"
     );
 
-    // 整体回滚：名字与密钥保持原值，地址仍是原来的那一条
+    // Whole rollback: name and key keep their original values, and the address is
+    // still the original single one
     let after = repo.find_by_id(&created.id).await.unwrap().unwrap();
     assert_eq!(after.name, "Orig Name");
     assert_eq!(after.encrypted_private_key, vec![1, 2, 3, 4]);
@@ -301,9 +304,10 @@ async fn update_rolls_back_as_a_whole_on_address_conflict() {
     assert_eq!(after.addresses[0].address, "1Original");
 }
 
-// 深审 Critical 回归（2026-11-13）：delete 改为单条父表删除，四张子表
-// 经 ON DELETE CASCADE 在同一语句内清除——中途失败不再可能留下半删除
-// 状态（老实现逐表独立删除）。
+// Deep-audit Critical regression (2026-11-13): delete became a single parent
+// table delete, with the four child tables cleared by ON DELETE CASCADE within
+// the same statement — a mid-way failure can no longer leave a half-deleted
+// state (the old implementation deleted table by table).
 #[tokio::test]
 async fn delete_cascades_to_all_child_rows() {
     let db = Database::in_memory().await.unwrap();

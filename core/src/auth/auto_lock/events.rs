@@ -1,4 +1,4 @@
-//! 自动锁定的事件面：回调事件、上锁原因与回调类型。
+//! Auto-lock event surface: callback events, lock reasons, and callback type.
 
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;

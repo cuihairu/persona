@@ -1,15 +1,20 @@
-//! 同步条目快照（E2EE_SYNC_DESIGN §5）——oplog payload 密文的明文格式。
+//! Sync item snapshots (E2EE_SYNC_DESIGN §5) — the plaintext format of oplog
+//! payload ciphertext.
 //!
-//! 主库凭据行 = 明文元数据列 + `encrypted_data`（只含 [`CredentialData`]）。
-//! 远端设备要物化出同样的行，光有 `CredentialData` 不够——所以同步 payload
-//! 的密文携带**完整条目快照**：元数据 + `CredentialData` 复合序列化后用
-//! item key 一次性加密。主库密文与同步密文因此是两份不同字节（同一把
-//! item key）；「oplog 只持密文」不变，服务器两级都不可读。
+//! A credential row in the primary database = plaintext metadata columns +
+//! `encrypted_data` (holding only [`CredentialData`]). A remote device needs
+//! more than `CredentialData` to materialize the same row — so the sync
+//! payload ciphertext carries a **full item snapshot**: metadata and
+//! `CredentialData` serialized together and encrypted once with the item key.
+//! The primary-database ciphertext and the sync ciphertext are therefore two
+//! different byte strings (under the same item key); "the oplog holds only
+//! ciphertext" stays unchanged, and the server cannot read either level.
 //!
-//! 格式：`bincode(SyncItemSnapshot)` → `EncryptionService`（随机 nonce 前置
-//! 12B ‖ AES-256-GCM）。与 [`CredentialData`] 同款编码管线，字段演进靠
-//! bincode 默认的严格性——不识别的字节流直接报错（fail-closed），未来加
-//! 字段时升版本号再兼容。
+//! Format: `bincode(SyncItemSnapshot)` → `EncryptionService` (random nonce
+//! prefixed, 12B ‖ AES-256-GCM). Same encoding pipeline as
+//! [`CredentialData`]; field evolution relies on bincode's default strictness
+//! — unrecognized byte streams error out (fail-closed), and future fields
+//! bump the version first before being made compatible.
 
 use std::collections::HashMap;
 
@@ -20,11 +25,13 @@ use crate::models::{Credential, CredentialData, CredentialType, SecurityLevel};
 use crate::sync::oplog::SyncOp;
 use crate::{PersonaError, Result};
 
-/// 凭据条目的同步快照：远端物化一行凭据所需的全部语义字段。
+/// Sync snapshot of a credential entry: every semantic field a remote needs to
+/// materialize one credential row.
 ///
-/// **不含**设备本地的时间戳（`created_at`/`updated_at`/`last_accessed`）——
-/// 它们是设备本地事实，跨设备复制只会制造噪音；物化时保留接收方已有行的
-/// 本地时间戳（新行用物化时刻）。
+/// **Excludes** device-local timestamps (`created_at`/`updated_at`/
+/// `last_accessed`) — those are local device facts; copying them across
+/// devices only creates noise. On materialization the receiver keeps the local
+/// timestamps of its existing row (a new row uses the materialization time).
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SyncItemSnapshot {
     pub identity_id: Uuid,
@@ -42,7 +49,8 @@ pub struct SyncItemSnapshot {
 }
 
 impl SyncItemSnapshot {
-    /// 从本地凭据行 + 已解密的 `CredentialData` 组装快照。
+    /// Assemble a snapshot from a local credential row plus decrypted
+    /// `CredentialData`.
     pub fn from_credential(credential: &Credential, data: &CredentialData) -> Self {
         Self {
             identity_id: credential.identity_id,
@@ -68,7 +76,7 @@ impl SyncItemSnapshot {
         Ok(bincode::deserialize(bytes)?)
     }
 
-    /// 用 item key 加密封条（同步 payload 的 `ciphertext` 字段）。
+    /// Seal with the item key (the sync payload's `ciphertext` field).
     pub fn seal(&self, item_key: &[u8; 32]) -> Result<Vec<u8>> {
         EncryptionService::new(item_key)
             .encrypt(&self.to_bytes()?)
@@ -77,7 +85,8 @@ impl SyncItemSnapshot {
             })
     }
 
-    /// 拆封（物化路径；key 不对或密文被篡改一律 fail-closed）。
+    /// Open (materialization path; a wrong key or tampered ciphertext is
+    /// always fail-closed).
     pub fn open(sealed: &[u8], item_key: &[u8; 32]) -> Result<Self> {
         let plaintext = EncryptionService::new(item_key)
             .decrypt(sealed)
@@ -90,15 +99,20 @@ impl SyncItemSnapshot {
     }
 }
 
-/// passkey 条目的同步快照：远端物化一行 passkey 所需的全部语义字段。
+/// Sync snapshot of a passkey entry: every semantic field a remote needs to
+/// materialize one passkey row.
 ///
-/// **不含**设备本地事实——`created_at`（新行用物化时刻）、`sign_count` 与
-/// `last_used_at`（每次断言在各设备独立推进；跨设备复制计数只会伪造
-/// WebAuthn 克隆检测基线）。物化时保留接收方已有行的本地使用态。
+/// **Excludes** device-local facts — `created_at` (a new row uses the
+/// materialization time), `sign_count` and `last_used_at` (advanced
+/// independently on each device per assertion; copying counts across devices
+/// only fakes the WebAuthn clone-detection baseline). On materialization the
+/// receiver keeps the local usage state of its existing row.
 ///
-/// `encrypted_private_key` 是源端 item key 封存的私钥信封，**原样搬运**：
-/// item key 经 group 信封流转（物化端重包到本机主密钥，key 字节不变），
-/// 同一把 item key 仍可解开这份信封——与主库「附件不变量」同一口径。
+/// `encrypted_private_key` is the private-key envelope sealed by the source
+/// item key, moved **verbatim**: the item key travels inside the group
+/// envelope (the materializing device rewraps it to its local primary key
+/// without changing the key bytes), so the same item key can still open this
+/// envelope — same invariant as the primary database's attachment one.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SyncPasskeySnapshot {
     pub identity_id: Uuid,
@@ -117,7 +131,8 @@ pub struct SyncPasskeySnapshot {
 }
 
 impl SyncPasskeySnapshot {
-    /// 从本地 passkey 行组装快照（捕获路径；不含设备本地使用态）。
+    /// Assemble a snapshot from a local passkey row (capture path; no
+    /// device-local usage state).
     pub fn from_item(item: &crate::models::PasskeyItem) -> Self {
         Self {
             identity_id: item.identity_id,
@@ -144,7 +159,7 @@ impl SyncPasskeySnapshot {
         Ok(bincode::deserialize(bytes)?)
     }
 
-    /// 用 item key 加密封条（同步 payload 的 `ciphertext` 字段）。
+    /// Seal with the item key (the sync payload's `ciphertext` field).
     pub fn seal(&self, item_key: &[u8; 32]) -> Result<Vec<u8>> {
         EncryptionService::new(item_key)
             .encrypt(&self.to_bytes()?)
@@ -154,7 +169,8 @@ impl SyncPasskeySnapshot {
             })
     }
 
-    /// 拆封（物化路径；key 不对或密文被篡改一律 fail-closed）。
+    /// Open (materialization path; a wrong key or tampered ciphertext is
+    /// always fail-closed).
     pub fn open(sealed: &[u8], item_key: &[u8; 32]) -> Result<Self> {
         let plaintext = EncryptionService::new(item_key)
             .decrypt(sealed)
@@ -167,40 +183,55 @@ impl SyncPasskeySnapshot {
     }
 }
 
-/// 库级快照包（S2 收口，E2EE_SYNC_DESIGN §5「库级快照与指令压缩」）：
-/// 某一服务器 seq 处的整库状态包——本机 oplog 的**视图充分集**（每条目的
-/// 主位 op + 未裁决冲突副本，tombstone 主位同样在场；被 GC 的旧版本视图
-/// 中性故缺席）。整包再用 group key 加密后上云——服务器只见一个 BLOB
-/// （单快照 upsert + 压缩 `seq ≤ S` 的 ops）。
+/// Library-level snapshot package (S2 wrap-up, E2EE_SYNC_DESIGN §5
+/// "library-level snapshots and op compaction"): the whole library state at
+/// some server seq — the **view-sufficient set** of the local oplog (the
+/// primary op of every item plus undecided conflict copies, tombstones
+/// included as primary; older versions dropped by GC have a neutral view and
+/// are absent). The whole package is then encrypted with the group key and
+/// uploaded — the server sees a single BLOB (single-snapshot upsert plus
+/// compaction of ops with `seq ≤ S`).
 ///
-/// **打包原 op 而非凭据表行**（装包 = 按 op_id 幂等入本地 oplog + 既有物化
-/// 路径，全链路复用）：
+/// **Packs original ops rather than credential table rows** (install = upsert
+/// into the local oplog by op_id + the existing materialization path, reused
+/// end to end):
 ///
-/// - **pending identity 不丢**：新设备缺身份行时 `materialize_put` 会
-///   `SkippedPendingIdentity`——凭据表快照会把条目直接丢弃而其 op 已被
-///   压缩（真数据洞）；op 入 oplog 则与全量重放同款挂起重试。
-/// - **冲突副本不丢**：未裁决双版本是「数据不丢」底线的一部分，快照点
-///   前的冲突 ops 同样被压缩。
-/// - **tombstone 在场防复活**：`seq ≤ S` 被压缩后「点后增量」并不携带
-///   快照点前的删除；快照缺席删除会让装到非空库的设备复活已删条目。
-/// - **LWW 全序原样**：op_id/lamport/device_id 原封搬运，装包设备的
-///   `item_view` 与未走快照的老设备逐条同序——「快照起步 + 点后增量 ==
-///   全量重放」按视图相等（收敛等价性测试锚点的口径）。
+/// - **pending identities are not lost**: when a new device lacks the identity
+///   row, `materialize_put` returns `SkippedPendingIdentity` — a credential
+///   table snapshot would simply drop the item while its op has already been
+///   compacted (a real data hole); the op goes into the oplog instead and
+///   retries pending like a full replay.
+/// - **conflict copies are not lost**: undecided dual versions are part of the
+///   "no data loss" baseline, and conflict ops before the snapshot point are
+///   compacted too.
+/// - **tombstones present to prevent resurrection**: after `seq ≤ S` is
+///   compacted, "increments after the point" do not carry deletions from
+///   before the snapshot point; a snapshot missing deletions would resurrect
+///   deleted items on devices installing into a non-empty library.
+/// - **LWW total order preserved**: op_id/lamport/device_id are moved
+///   verbatim, so the `item_view` of a snapshot-installing device matches
+///   that of old devices not using snapshots, item by item — "snapshot start
+///   + increments after the point == full replay" by view equality (the
+///   criterion of the convergence-equivalence test anchor).
 ///
-/// 零知识不变式与单条快照相同：条目名/域名/用户名/口令只存在于 item key
-/// 密文内，item key 只存在于 group key 密文内；包装格式错误一律
-/// fail-closed（覆盖区间可能已被压缩删除，静默降级为全量重放不可行）。
+/// The zero-knowledge invariant matches single-item snapshots: item
+/// names/domains/usernames/passwords exist only inside item key ciphertext,
+/// and the item key only inside group key ciphertext; any packaging format
+/// error is fail-closed (the covered range may already be compacted away, so
+/// silently degrading to a full replay is not viable).
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct LibrarySnapshotPayload {
-    /// 打包时刻（rfc3339，仅展示）。
+    /// Packaging time (rfc3339, display only).
     pub created_at: String,
-    /// 视图充分集：主位（put 或 tombstone）+ 冲突副本，按条目收拢。
+    /// View-sufficient set: primaries (put or tombstone) plus conflict copies,
+    /// grouped by item.
     pub ops: Vec<SyncOp>,
 }
 
-/// 快照上传触发阈值（E2EE_SYNC_DESIGN §5「触发时机」）：push ack 后
-/// `head_seq − last_snapshot_seq > 此值` 才重打包（防频繁重打包）。
-/// 配置化口径：CLI/桌面不暴露。
+/// Snapshot upload trigger threshold (E2EE_SYNC_DESIGN §5 "trigger timing"):
+/// after a push ack, repack only when `head_seq − last_snapshot_seq > this
+/// value` (to avoid frequent repacking). Configuration-level only: not
+/// exposed by the CLI/desktop.
 pub const UPLOAD_THRESHOLD_OPS: i64 = 1000;
 
 impl LibrarySnapshotPayload {
@@ -212,7 +243,7 @@ impl LibrarySnapshotPayload {
         Ok(bincode::deserialize(bytes)?)
     }
 
-    /// group key 整包加密（服务器存储字节）。
+    /// Encrypt the whole package with the group key (server-stored bytes).
     pub fn seal(&self, group_key: &super::keys::GroupKey) -> Result<Vec<u8>> {
         EncryptionService::new(group_key.as_bytes())
             .encrypt(&self.to_bytes()?)
@@ -222,7 +253,8 @@ impl LibrarySnapshotPayload {
             })
     }
 
-    /// 拆封（bootstrap 路径；group key 不对或密文被篡改 fail-closed）。
+    /// Open (bootstrap path; a wrong group key or tampered ciphertext is
+    /// fail-closed).
     pub fn open(sealed: &[u8], group_key: &super::keys::GroupKey) -> Result<Self> {
         let plaintext = EncryptionService::new(group_key.as_bytes())
             .decrypt(sealed)
@@ -289,7 +321,7 @@ mod tests {
         let snap = sample();
         let sealed = snap.seal(&EncryptionService::generate_key()).unwrap();
         assert!(SyncItemSnapshot::open(&sealed, &EncryptionService::generate_key()).is_err());
-        // 篡改与截断同样报错而非 panic
+        // Tampering and truncation also error out rather than panicking
         let mut tampered = sealed.clone();
         let last = tampered.len() - 1;
         tampered[last] ^= 0x01;
@@ -325,7 +357,7 @@ mod tests {
         assert_eq!(snap.data.to_bytes().unwrap(), data.to_bytes().unwrap());
     }
 
-    // ---- passkey 快照 ----
+    // ---- passkey snapshots ----
 
     fn passkey_item() -> crate::models::PasskeyItem {
         let mut item = crate::models::PasskeyItem::new(
@@ -378,7 +410,7 @@ mod tests {
                 .credential_id,
             snap.credential_id
         );
-        // 错 key / 篡改 / 截断 fail-closed
+        // Wrong key / tampering / truncation all fail-closed
         assert!(SyncPasskeySnapshot::open(&sealed, &EncryptionService::generate_key()).is_err());
         let mut tampered = sealed.clone();
         let last = tampered.len() - 1;
@@ -388,9 +420,10 @@ mod tests {
         assert!(SyncPasskeySnapshot::from_bytes(b"not bincode").is_err());
     }
 
-    // ---- 库级快照包（S2，E2EE_SYNC_DESIGN §5）----
+    // ---- library-level snapshot package (S2, E2EE_SYNC_DESIGN §5) ----
 
-    /// 一条与打包路径同构的 op（put 带单条快照密文；tombstone payload 恒空）。
+    /// An op isomorphic with the packaging path (a put carrying one item
+    /// snapshot ciphertext; a tombstone always has an empty payload).
     fn library_op(
         item_key: &[u8; 32],
         group: &crate::sync::keys::GroupKey,
@@ -416,7 +449,8 @@ mod tests {
         let item_key = EncryptionService::generate_key();
         LibrarySnapshotPayload {
             created_at: "2026-10-07T00:00:00Z".to_string(),
-            // 视图充分集：put 主位 + tombstone 主位（防删除复活）
+            // View-sufficient set: put primary + tombstone primary (prevents deletion
+            // resurrection)
             ops: vec![
                 library_op(&item_key, group, 1, OpType::Put),
                 library_op(&item_key, group, 2, OpType::Delete),
@@ -434,14 +468,16 @@ mod tests {
         let opened = LibrarySnapshotPayload::open(&sealed, &group).unwrap();
         assert_eq!(opened.ops.len(), 2);
         assert_eq!(opened.created_at, payload.created_at);
-        // op 全字段原样（LWW 全序与 op_id 幂等都靠 op_id/lamport/device_id
-        // 不走样——装包设备与老设备的 item_view 因此逐条同序）
+        // Every op field verbatim (the LWW total order and op_id idempotency both
+        // rely on op_id/lamport/device_id staying intact — so the installing
+        // device's item_view is item-for-item the same order as old devices')
         assert_eq!(opened.ops, payload.ops);
-        // tombstone 主位在场且 payload 恒空
+        // Tombstone primary is present and its payload is always empty
         assert!(opened.ops[1].is_tombstone());
         assert!(opened.ops[1].payload.is_none());
 
-        // 逐条解链：group key → item key → 单条快照明文（物化路径原样）
+        // Unwrap the chain one level at a time: group key → item key →
+        // single-item snapshot plaintext (exactly the materialization path)
         let put = opened.ops[0].payload.as_ref().expect("put 必带 payload");
         let item_key =
             crate::sync::keys::unwrap_item_key_with_group(&put.wrapped_item_key, &group).unwrap();
@@ -468,7 +504,8 @@ mod tests {
 
     #[test]
     fn library_snapshot_bytes_never_leak_entry_plaintext() {
-        // 零知识平移：整包字节里搜不到条目名/域名/用户名/口令与密钥原字节
+        // Zero-knowledge: item name/domain/username/password and raw key bytes cannot
+        // be found anywhere in the stored package bytes
         let group = crate::sync::keys::GroupKey::generate().unwrap();
         let item_key = EncryptionService::generate_key();
         let snap = SyncItemSnapshot {

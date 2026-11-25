@@ -312,7 +312,7 @@ async fn test_storage_path_traversal_rejected() {
     store.init().await.unwrap();
     let credential_id = Uuid::new_v4();
 
-    // 根外放一个"诱饵"文件：若逃逸检查失效，retrieve/delete 会摸到它。
+    // Place a "decoy" file outside the root: if the escape check fails, retrieve/delete would reach it.
     let outside = temp_dir.path().join("outside-secret.txt");
     FileSystem::write(&outside, b"outside").await.unwrap();
 
@@ -325,19 +325,19 @@ async fn test_storage_path_traversal_rejected() {
         store.calculate_hash(b"outside"),
     );
 
-    // 单文件 retrieve：逃逸路径直接拒绝，不读根外文件。
+    // Single-file retrieve: the escaping path is rejected outright, without reading the outside-root file.
     let err = store
         .retrieve_file(&attachment, &[], false, None)
         .await
         .unwrap_err();
     assert!(err.to_string().contains("escapes storage root"), "{err}");
 
-    // 单文件 delete：同样拒绝，不删根外文件。
+    // Single-file delete: likewise rejected, without deleting the outside-root file.
     let err = store.delete_file(&attachment, &[]).await.unwrap_err();
     assert!(err.to_string().contains("escapes storage root"), "{err}");
     assert!(FileSystem::exists(&outside).await);
 
-    // 分块路径同样受检（chunk.storage_path 与 attachment.storage_path 各查各的）。
+    // The chunked path is checked the same way (chunk.storage_path and attachment.storage_path are each checked independently).
     let chunk = AttachmentChunk::new(
         attachment.id,
         0,
@@ -358,7 +358,7 @@ async fn test_storage_path_traversal_rejected() {
     assert!(err.to_string().contains("escapes storage root"), "{err}");
     assert!(FileSystem::exists(&outside).await);
 
-    // 绝对路径与深层嵌套 `..` 同样拒绝。
+    // Absolute paths and deeply nested `..` are likewise rejected.
     attachment.chunk_count = 1;
     for evil in ["/etc/passwd", "a/../../b.txt", "./here.txt"] {
         attachment.storage_path = evil.to_string();
@@ -373,7 +373,7 @@ async fn test_storage_path_traversal_rejected() {
         );
     }
 
-    // 合法的嵌套相对路径（uuid/uuid/filename 形态）不受影响。
+    // Legitimate nested relative paths (uuid/uuid/filename shape) are unaffected.
     let good = temp_dir.path().join("storage");
     let nested = good
         .join(credential_id.to_string())

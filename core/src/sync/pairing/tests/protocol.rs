@@ -31,7 +31,7 @@ fn full_handshake_delivers_group_key_and_fingerprints_match() {
 #[test]
 fn wrong_code_yields_mismatched_fingerprint_and_rejected_proof() {
     let (mut host, invite) = PairingHost::new_invite().unwrap();
-    // guest 输错最后一位（Crockford 内合法替换）
+    // guest mistypes the last digit (a legal substitution inside Crockford)
     let wrong: String = invite
         .code
         .chars()
@@ -54,13 +54,15 @@ fn wrong_code_yields_mismatched_fingerprint_and_rejected_proof() {
     let guest_proof = guest.finish(&host_offer.server_public).unwrap();
     assert_ne!(host_offer.fingerprint, guest_proof.fingerprint);
 
-    // 指纹不一致本应被人工拦下；即便误提交，M1 校验也必须拒绝
+    // A fingerprint mismatch should have been stopped by the human comparison;
+    // even if it were submitted by mistake, M1 verification must reject it
     let group_key: [u8; 32] = rand::random();
     let err = host
         .complete(&group_key, &guest_proof.client_proof)
         .unwrap_err();
     assert!(matches!(err, PersonaError::AuthenticationFailed(_)));
-    // guest 侧同款拒绝：host 从未交出 handoff，guest 直接收假 M2
+    // Same rejection on the guest side: the host never released a handoff, so
+    // the guest just receives a bogus M2
     let err = guest
         .accept_handoff(&[0u8; 32], &[0u8; WRAPPED_GROUP_KEY_LEN])
         .unwrap_err();
@@ -85,7 +87,8 @@ fn tampered_handoff_fails_to_open() {
         .unwrap_err();
     assert!(matches!(err, PersonaError::CryptographicError(_)));
 
-    // M2 篡改同样拒绝（独立握手：上一段的失败已消耗 guest 握手态）
+    // A tampered M2 is rejected too (independent handshake: the failure above
+    // already consumed the guest's handshake state)
     let (mut host, invite) = PairingHost::new_invite().unwrap();
     let (mut guest, offer) = PairingGuest::start(&invite.code, &invite.salt).unwrap();
     let host_offer = host.accept_join(&offer.client_public).unwrap();
@@ -115,13 +118,13 @@ fn handoff_is_single_use_on_both_sides() {
     assert!(guest
         .accept_handoff(&handoff.server_proof, &handoff.wrapped_group_key)
         .is_ok());
-    // 第二次收交接：握手态已消耗
+    // A second handoff: the handshake state is already consumed
     let err = guest
         .accept_handoff(&handoff.server_proof, &handoff.wrapped_group_key)
         .unwrap_err();
     assert!(matches!(err, PersonaError::InvalidInput(_)));
 
-    // host 侧 complete 同样一次性
+    // The host-side complete is single-use as well
     let err = host
         .complete(&group_key, &guest_proof.client_proof)
         .unwrap_err();

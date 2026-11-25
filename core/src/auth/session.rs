@@ -46,18 +46,22 @@ pub struct SessionMetadata {
     pub permissions: Vec<String>,
 }
 
-/// `now + duration` 的饱和版——到期时间计算的唯一入口。
+/// Saturating version of `now + duration` — the single entry point for
+/// computing expiry times.
 ///
-/// 「永不自动锁」会把 `Duration::MAX`（`auto_lock_timeout = 0` 的运行时
-/// 映射）乃至配置里的天文秒数传进来；`SystemTime + Duration` 溢出即
-/// **panic**（实测：`auto_lock_timeout = 0` → `Session::new` 直接炸掉
-/// `connect serve`，status=101）。两端平台可表示范围不一致（unix
-/// `time_t` i64 ≈ 292B 年；Windows FILETIME u64×100ns ≈ 58k 年），取
-/// 双方都装得下、且远超任何会话语义的 **1 万年** 作为饱和上限——对
-/// 「永不过期」语义等价。`now` 契约 = 真实当前时间戳（生产调用方均是）。
-/// 两个分支均有测试：超大值走饱和、普通值直通。
+/// "Never auto-lock" can pass in `Duration::MAX` (the runtime mapping of
+/// `auto_lock_timeout = 0`) or even astronomically large configured seconds;
+/// `SystemTime + Duration` overflow panics (observed: `auto_lock_timeout = 0`
+/// → `Session::new` crashed `connect serve` outright, status=101). The
+/// representable range differs across platforms (unix `time_t` i64 ≈ 292B
+/// years; Windows FILETIME u64×100ns ≈ 58k years), so the cap is set to
+/// **10,000 years** — small enough for both, and far beyond any session
+/// semantics — which is equivalent for the "never expires" intent. The `now`
+/// contract is a real current timestamp (all production callers comply).
+/// Both branches are tested: oversized values saturate, normal values pass
+/// through.
 pub(crate) fn saturating_add(now: SystemTime, duration: Duration) -> SystemTime {
-    const FAR: Duration = Duration::from_secs(10_000 * 365 * 24 * 60 * 60); // 1 万年
+    const FAR: Duration = Duration::from_secs(10_000 * 365 * 24 * 60 * 60); // 10,000 years
     now + if duration > FAR { FAR } else { duration }
 }
 
@@ -86,8 +90,9 @@ impl Session {
         !self.locked && SystemTime::now() < self.expires_at
     }
 
-    /// 测试用：把敏感活动时间拨到 `ago` 之前（模拟敏感窗口超时）。
-    /// 仅同 crate 单测可见——生产没有「让时间倒流」的需求。
+    /// Test helper: backdate the sensitive activity time to before `ago`
+    /// (simulating a sensitive-window timeout). Visible to same-crate unit
+    /// tests only — production has no need to rewind time.
     #[cfg(test)]
     pub(crate) fn backdate_sensitive_for_test(&mut self, ago: Duration) {
         self.last_sensitive_op = Some(SystemTime::now() - ago);
@@ -413,9 +418,10 @@ impl Default for SessionManager {
 mod tests {
     use super::*;
 
-    /// saturating_add 两分支：超大 duration 饱和到 1 万年上限（曾裸加
-    /// 溢出 panic——auto_lock_timeout=0 → Session::new 炸掉 serve，
-    /// status=101），普通值原样直通。
+    /// Both saturating_add branches: an oversized duration saturates at the
+    /// 10,000-year cap (a plain addition used to overflow and panic —
+    /// auto_lock_timeout=0 → Session::new crashed serve, status=101), while
+    /// normal values pass through untouched.
     #[test]
     fn saturating_add_caps_overflow_and_passes_through() {
         let now = SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000);
@@ -430,8 +436,9 @@ mod tests {
         assert_eq!(normal, now + Duration::from_secs(3600));
     }
 
-    /// 回归：`auto_lock_timeout = 0` 的「永不」映射（Duration::MAX）曾让
-    /// `Session::new` 在 `now + timeout` 处溢出 panic（serve status=101）。
+    /// Regression: the "never" mapping of `auto_lock_timeout = 0`
+    /// (Duration::MAX) used to make `Session::new` panic on the `now +
+    /// timeout` overflow (serve status=101).
     #[test]
     fn session_new_with_max_duration_never_expires_without_panicking() {
         let session = Session::new("u".to_string(), Duration::MAX);

@@ -59,7 +59,7 @@ async fn test_passkey_lifecycle() {
     let reloaded = service.get_passkey(&passkey.id).await.unwrap().unwrap();
     assert!(reloaded.last_used_at.is_some());
 
-    // 审计抽查：断言事件携带 via 来源元数据（P4.4 的 core 半边）。
+    // Audit spot check: assert the event carries the `via` source metadata (the core half of P4.4).
     let audit_repo = AuditLogRepository::new(db);
     let asserted = audit_repo
         .find_by_action(&AuditAction::PasskeyAsserted)

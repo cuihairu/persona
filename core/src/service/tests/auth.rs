@@ -552,7 +552,7 @@ async fn test_query_helpers_and_password_generation() {
 
     assert_eq!(service.search_credentials("").await.unwrap().len(), 2);
     assert_eq!(service.search_credentials("GitHub").await.unwrap().len(), 1);
-    // username / url 同样参与搜索（repository search_by_fields 链路）
+    // username / url also participate in search (the repository search_by_fields path)
     assert_eq!(
         service.search_credentials("octocat").await.unwrap().len(),
         1
@@ -615,8 +615,8 @@ async fn test_query_helpers_and_password_generation() {
     assert_eq!(hash, service.hash_data(b"persona"));
 }
 
-/// 工具三件套：带选项的密码生成长度准确；盐 32 字节；SHA-256 摘要
-/// 稳定且 32 字节。
+/// Utility trio: option-driven password generation has the exact length; the salt is 32 bytes;
+/// the SHA-256 digest is stable and 32 bytes.
 #[tokio::test]
 async fn password_options_salt_and_hash_helpers_behave() {
     let (_db, service) = unlocked_service().await;
@@ -938,8 +938,8 @@ async fn change_master_password_validates_new_password() {
     assert!(err.to_string().contains("must differ"));
 }
 
-/// 改密前置：库从未 init（无 user_auth 行）→ 如实报"未初始化"，
-/// 不把"没有用户"误报成"密码错"。
+/// Change-password precondition: the vault was never initialized (no user_auth row) -> reports
+/// "not initialized" honestly, without misreporting "no user" as a wrong password.
 #[tokio::test]
 async fn change_master_password_requires_an_initialized_workspace() {
     let db = Database::in_memory().await.unwrap();
@@ -956,8 +956,9 @@ async fn change_master_password_requires_an_initialized_workspace() {
     );
 }
 
-/// 改密不是锁定的旁路：连续失败触发锁定后，改密先吃锁门禁
-/// （verify old password 在锁检查之后，不构成锁定态下的猜密码 oracle）。
+/// Password change is not a lockout bypass: once consecutive failures trigger the lockout, the
+/// change first hits the lock gate (verify-old-password runs after the lock check, so it is not a
+/// password-guessing oracle while locked).
 #[tokio::test]
 async fn change_master_password_refused_while_account_locked() {
     let (_db, mut service) = unlocked_service().await;
@@ -980,8 +981,9 @@ async fn change_master_password_refused_while_account_locked() {
     );
 }
 
-/// 轮换撞上损坏的 legacy 行：解密失败如实报错并整体回滚，不静默跳过
-/// （跳过会让该行在新主密钥下永久变砖）。旧密码在回滚后仍可用。
+/// Rotation hitting a corrupted legacy row: the decryption failure is reported honestly and the
+/// whole rotation rolls back, without silently skipping (skipping would brick that row under the
+/// new master key permanently). The old password still works after the rollback.
 #[tokio::test]
 async fn master_password_rotation_fails_closed_on_corrupt_legacy_row() {
     let (db, mut service) = unlocked_service().await;
@@ -1016,8 +1018,9 @@ async fn master_password_rotation_fails_closed_on_corrupt_legacy_row() {
     );
 }
 
-/// 过期策略缺时间戳的防御臂：策略开着但行里没有 password_updated_at
-/// （迁移前的旧行）→ 跳过判定，绝不因缺时间戳锁死解锁（fail-open）。
+/// Defense arm for the expiry policy missing a timestamp: the policy is on but the row has no
+/// password_updated_at (a pre-migration old row) -> the decision is skipped, never locking the
+/// user out of unlocking over a missing timestamp (fail-open).
 #[tokio::test]
 async fn password_expiry_skips_rows_without_timestamp() {
     let (_dir, db, mut service) = travel_fixture().await;

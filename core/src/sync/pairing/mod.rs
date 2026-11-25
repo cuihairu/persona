@@ -1,37 +1,49 @@
-//! 同步组动态密码配对（跨设备同步 S1，`docs/sync-group-mode.md` §二.1-2）。
+//! Sync-group passcode pairing (cross-device sync S1, `docs/sync-group-mode.md`
+//! section 2.1-2).
 //!
-//! 零账号入组：邀请端出短时效动态密码，加入端输入同码，经 PAKE 换出强
-//! 共享钥（pairing key），组密钥以其 AEAD 包裹后经中转递交——短码与组密钥
-//! 都不上中转线路（中转只见 SRP 公开消息与密文信封，零知识）。
+//! Accountless join: the inviting side issues a short-lived passcode, the
+//! joining side types the same code, a PAKE exchange produces a strong shared
+//! key (pairing key), and the group key — AEAD-wrapped with it — is delivered
+//! via the relay. Neither the short code nor the group key ever travels the
+//! relay line (the relay only sees SRP public messages and ciphertext
+//! envelopes; it stays zero-knowledge).
 //!
-//! 协议（SRP-6a 原语复用 [`crate::auth::srp`]，RFC 5054 向量锁定），
-//! host = 邀请端（组内、持组密钥），guest = 加入端，中转 = 无账号信箱：
+//! Protocol (SRP-6a primitives reused from [`crate::auth::srp`], pinned to
+//! RFC 5054 test vectors); host = inviting side (in the group, holds the group
+//! key), guest = joining side, relay = accountless mailbox:
 //!
-//! 1. [`PairingHost::new_invite`] → `(host, invite{code, salt})`，code 展示
-//! 2. [`PairingGuest::start`]（输码）→ `client_public` 经中转交 host
-//! 3. [`PairingHost::accept_join`] → `server_public` 经中转回 guest；
-//!    双端各自派生 6 位数字短指纹展示，人工比对（防中间人）
-//! 4. [`PairingGuest::finish`] → `client_proof`（M1）经中转交 host
-//!    （比对通过后才提交）
-//! 5. [`PairingHost::complete`] → 校验 M1，交出 `{server_proof(M2),
-//!    wrapped_group_key}`；M2 只在 M1 验证通过后交付
-//! 6. [`PairingGuest::accept_handoff`] → 校验 M2，解出组密钥，入组完成
+//! 1. [`PairingHost::new_invite`] → `(host, invite{code, salt})`; code shown
+//! 2. [`PairingGuest::start`] (code typed in) → `client_public` to the host via
+//!    the relay
+//! 3. [`PairingHost::accept_join`] → `server_public` back to the guest via the
+//!    relay; both sides derive a 6-digit short fingerprint for display and
+//!    human comparison (MITM defense)
+//! 4. [`PairingGuest::finish`] → `client_proof` (M1) to the host via the relay
+//!    (submitted only after the comparison passes)
+//! 5. [`PairingHost::complete`] → validates M1, releases `{server_proof(M2),
+//!    wrapped_group_key}`; M2 is delivered only after M1 verifies
+//! 6. [`PairingGuest::accept_handoff`] → validates M2, extracts the group key,
+//!    join complete
 //!
-//! 安全语义：
-//! - **短码不作密钥**：先 Argon2id（独立域前缀，与本地解锁/备份/登录
-//!   SRP 互为不同协议域）派生，派生值才进 SRP 的 `x`；
-//! - **防中间人**：无短码的中间人派不出同款 pairing key，短指纹不一致
-//!   即被人工比对拦下；M1/M2 双向证明兜底；
-//! - **单向递送**：`wrapped_group_key` 只有 pairing key 能开，中转存密文
-//!   无益；`complete`/`accept_handoff` 均一次性（消耗握手态）。
-//! - TTL/单次会话/限次尝试由中转层负责（见 server `/api/v1/pairing/*`），
-//!   本模块只做纯密码逻辑，无 IO。
+//! Security semantics:
+//! - **The short code is not a key**: it is first run through Argon2id (its own
+//!   domain prefix, a distinct protocol domain from local unlock/backup/login
+//!   SRP), and only the derived value enters SRP's `x`;
+//! - **MITM defense**: a middleman without the short code cannot derive the same
+//!   pairing key; a short-fingerprint mismatch is caught by the human
+//!   comparison, and M1/M2 mutual proofs back this up;
+//! - **One-way delivery**: `wrapped_group_key` can only be opened with the
+//!   pairing key, so the relay holding ciphertext gains nothing;
+//!   `complete`/`accept_handoff` are both single-use (they consume the
+//!   handshake state).
+//! - TTL / one session / attempt caps are the relay layer's job (see server
+//!   `/api/v1/pairing/*`); this module is pure crypto logic with no IO.
 //!
-//! # 模块布局
+//! # Module layout
 //!
-//! 参数与码/KDF/指纹/组密钥封解在 [`crypto`]，host 侧在 [`host`]，guest
-//! 侧在 [`guest`]，wire 消息与邀请串在 [`message`]，中继客户端在
-//! [`relay`]。
+//! Parameters and code/KDF/fingerprint/group-key sealing live in [`crypto`],
+//! the host side in [`host`], the guest side in [`guest`], wire messages and
+//! the invite link in [`message`], and the relay client in [`relay`].
 
 mod crypto;
 mod guest;

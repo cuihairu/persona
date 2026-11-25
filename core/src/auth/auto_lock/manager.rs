@@ -1,5 +1,5 @@
-//! 管理器运行时核：构造、接线（审计/事件/回调）、运行期配置更新、
-//! 用户上下文、统计与过期清理。
+//! Manager runtime core: construction, wiring (audit/events/callbacks),
+//! runtime configuration updates, user context, statistics, and expiry cleanup.
 
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock as SyncRwLock};
@@ -38,9 +38,11 @@ impl AutoLockManager {
 
     /// Update the base auto-lock configuration in place.
     ///
-    /// [`crate::PersonaService::configure_auto_lock`] 经此同步命令层传来的
-    /// 设置。只换 `base`：其余增强字段（并发上限、宽限期等）保持不变，
-    /// 在管 session 与后台任务也不受影响。
+    /// The settings arrive here through the synchronous command layer driven by
+    /// [`crate::PersonaService::configure_auto_lock`]. Only `base` is replaced:
+    /// the other enhanced fields (concurrency limit, grace period, and so on)
+    /// stay as they are, and the tracked sessions and background task are
+    /// unaffected.
     pub fn update_base_config(&self, base: AutoLockConfig) {
         let mut config = self
             .config
@@ -55,9 +57,10 @@ impl AutoLockManager {
         self
     }
 
-    /// 注入/摘除审计事件上报器（`None` = 摘除）。调用方约定：
-    /// [`crate::PersonaService::set_event_emitter`] 会同步传播到这里，
-    /// 换上报器时先摘旧再挂新，防止双任务。
+    /// Install or remove the audit event emitter (`None` = remove). Caller
+    /// contract: [`crate::PersonaService::set_event_emitter`] propagates this
+    /// synchronously, and when swapping emitters it detaches the old one before
+    /// attaching the new one, so two emitters never run at once.
     pub fn set_event_emitter(&mut self, emitter: Option<Emitter>) {
         self.event_emitter = emitter;
     }

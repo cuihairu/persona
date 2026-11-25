@@ -1,15 +1,20 @@
-//! service 写路径 → 同步 oplog 的捕获缝（E2EE_SYNC_DESIGN §5「捕获点」）。
+//! The capture seam from the service write path to the sync oplog
+//! (E2EE_SYNC_DESIGN §5 "capture point").
 //!
-//! `PersonaService` 在与 change_history 相同的调用点把条目级变更交给
-//! [`SyncCapture`]：**只递条目密文与 item key 明文**，不持 group key——
-//! group 包裹（[`super::keys::wrap_item_key_with_group`]）与
-//! `SyncEngine::record_local_change` 都在装配层实现里做，保持密钥分层
-//! （group key 只属于同步装配层，service 的解锁会话里永远没有它）。
+//! `PersonaService` hands entry-level changes to [`SyncCapture`] at the same
+//! call sites as change_history: **it delivers only the entry ciphertext and
+//! the item key plaintext**, never holding the group key——the group wrapping
+//! ([`super::keys::wrap_item_key_with_group`]) and
+//! `SyncEngine::record_local_change` are both done in the assembly-layer
+//! implementation, preserving the key layering (the group key belongs only to
+//! the sync assembly layer; the service's unlocked session never has it).
 //!
-//! 容错语义与 `record_credential_history` 一致：捕获失败/未装配不得阻断
-//! 主操作。trait 方法返回 `()`（实现方自行 log），service 侧调用前也
-//! 不做可失败的准备工作——同步在本产品里是尽力而为的旁路，主库才是
-//! 第一事实源（STORAGE_AND_SYNC 原则句）。
+//! Fault tolerance matches `record_credential_history`: a capture failure or
+//! missing assembly must not block the main operation. Trait methods return
+//! `()` (the implementation logs on its own), and the service side does no
+//! fallible preparation before calling——sync in this product is a best-effort
+//! bypass; the main DB is the single source of truth (the STORAGE_AND_SYNC
+//! principle).
 
 use std::sync::Arc;
 
@@ -20,13 +25,15 @@ use crate::sync::engine::{SyncEngine, SyncRemote};
 use crate::sync::keys::{wrap_item_key_with_group, GroupKey};
 use crate::sync::oplog::{ItemKind, OpType, SyncPayload};
 
-/// 条目级变更捕获（装配层实现；未装配时 service 侧零开销跳过）。
+/// Entry-level change capture (implemented in the assembly layer; zero-cost
+/// skip on the service side when unassembled).
 #[async_trait::async_trait]
 pub trait SyncCapture: Send + Sync {
-    /// `put`：带同步快照密文（[`super::snapshot::SyncItemSnapshot`] 密封，
-    /// 元数据 + CredentialData 复合）与 item key 明文（实现方包完 group
-    /// 信封即刻丢弃——`Zeroizing` 保证）；`delete`：两者皆 `None`
-    /// （tombstone，payload 恒空）。
+    /// `put`: carries the sync snapshot ciphertext (sealed by
+    /// [`super::snapshot::SyncItemSnapshot`], a metadata + CredentialData
+    /// composite) and the item key plaintext (the implementation drops it
+    /// right after wrapping the group envelope——`Zeroizing` guarantees this);
+    /// `delete`: both are `None` (tombstone, the payload is always empty).
     async fn capture(
         &self,
         item_id: Uuid,
@@ -37,12 +44,14 @@ pub trait SyncCapture: Send + Sync {
     );
 }
 
-/// 默认装配实现：group 包裹 + oplog 记账。
+/// Default assembly implementation: group wrapping + oplog bookkeeping.
 ///
-/// service 递来的 item key 在此用 group key 包成
-/// `SyncPayload.wrapped_item_key`，随快照密文一起交给
-/// [`SyncEngine::record_local_change`];之后 `item_key`（`Zeroizing`）离开
-/// 作用域即清零。失败只 log 不上抛（trait 契约：捕获是尽力而为的旁路）。
+/// The item key handed over by the service is wrapped here with the group
+/// key into `SyncPayload.wrapped_item_key` and passed together with the
+/// snapshot ciphertext to [`SyncEngine::record_local_change`]; after that
+/// `item_key` (`Zeroizing`) is zeroed as soon as it leaves scope. Failures
+/// are only logged, never propagated (trait contract: capture is a best-effort
+/// bypass).
 pub struct OplogCapture<R: SyncRemote> {
     engine: Arc<SyncEngine<R>>,
     group_key: GroupKey,
@@ -173,18 +182,18 @@ mod tests {
             )
             .await;
 
-        // oplog 里恰好一条本地 op,payload 两级密文齐备
+        // Exactly one local op in the oplog, with both ciphertext layers present in the payload
         let ops = SyncRepository::new(db).item_ops(item_id).await.unwrap();
         assert_eq!(ops.len(), 1);
         let payload = ops[0].payload.as_ref().unwrap();
 
-        // group key 能还原 item key,进而解出快照——完整装配链
+        // The group key recovers the item key, which in turn opens the snapshot——the full assembly chain
         let recovered_key = unwrap_item_key_with_group(&payload.wrapped_item_key, &group).unwrap();
         let opened = SyncItemSnapshot::open(&payload.ciphertext, &recovered_key).unwrap();
         assert_eq!(opened.name, "端到端");
         assert_eq!(opened.username.as_deref(), Some("e2e@example.com"));
 
-        // lamport 从 1 起步,device_id 取 engine 的
+        // lamport starts at 1; device_id is taken from the engine
         assert_eq!(ops[0].lamport, 1);
     }
 
@@ -205,7 +214,7 @@ mod tests {
             .capture(item_id, ItemKind::Credential, OpType::Delete, None, None)
             .await;
         capture
-            .capture(item_id, ItemKind::Credential, OpType::Put, None, None) // put 缺 payload:不记账
+            .capture(item_id, ItemKind::Credential, OpType::Put, None, None) // put missing payload: not booked
             .await;
 
         let ops = SyncRepository::new(db).item_ops(item_id).await.unwrap();
@@ -214,10 +223,12 @@ mod tests {
         assert!(ops[0].payload.is_none());
     }
 
-    /// S2 零知识核查：捕获落库后的 oplog 原始字节里搜不到条目名/域名/
-    /// 用户名/口令明文，也搜不到 item key / group key 原始字节。本地落库
-    /// 字节=server 所存（服务器只是转发存储），此断言把「中转零知识」
-    /// 钉进测试而非只留在文档。
+    /// S2 zero-knowledge check: after the capture is stored, the oplog raw
+    /// bytes contain no plaintext of entry name / domain / username / password,
+    /// and no raw bytes of the item key / group key either. Local stored bytes
+    /// = what the server holds (the server is only a forwarding store), so
+    /// this assertion pins "relay zero-knowledge" into a test instead of
+    /// leaving it only in the docs.
     #[tokio::test]
     async fn oplog_bytes_never_contain_entry_plaintext_or_keys() {
         use sqlx::Row;
@@ -256,7 +267,8 @@ mod tests {
             )
             .await;
 
-        // 聚合 sync_oplog 全部存储字节（密文两级 + wrapped key + 文本列）
+        // Aggregate all stored bytes of sync_oplog (two ciphertext layers +
+        // wrapped key + text columns)
         let rows =
             sqlx::query("SELECT ciphertext, wrapped_item_key, item_id, device_id FROM sync_oplog")
                 .fetch_all(db.pool())
@@ -277,7 +289,8 @@ mod tests {
             stored.extend(row.get::<String, _>("device_id").as_bytes());
         }
 
-        // 明文特征：条目名/域名/用户名/备注域名/口令一律搜不到
+        // Plaintext markers: entry name / domain / username / notes domain /
+        // password must all be unfindable
         for plaintext in [
             "机密条目Alpha".as_bytes(),
             b"secret-site.example",
@@ -291,7 +304,7 @@ mod tests {
                 String::from_utf8_lossy(plaintext)
             );
         }
-        // 密钥原始字节同样不得出现（wrapped 必须真包过）
+        // Raw key bytes must not appear either (the wrapping must be real)
         assert!(
             !stored.windows(32).any(|w| w == item_key.as_slice()),
             "item key 原始字节泄露"
@@ -301,8 +314,10 @@ mod tests {
             "group key 原始字节泄露"
         );
 
-        // 反向对照：group key 解出 item key、item key 解出快照明文——
-        // 落库字节确实两级加密过（而非特征字段被丢掉）
+        // Reverse control: the group key recovers the item key and the item
+        // key recovers the snapshot plaintext——the stored bytes really are
+        // encrypted at both layers (rather than the marker fields having been
+        // dropped)
         let payload_row = sqlx::query("SELECT ciphertext, wrapped_item_key FROM sync_oplog")
             .fetch_one(db.pool())
             .await

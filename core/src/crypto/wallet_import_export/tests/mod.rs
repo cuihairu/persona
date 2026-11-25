@@ -1,9 +1,11 @@
-//! wallet_import_export 拆分（LAY-018）测试枢纽：共享常量/helper + 按主题分组的测试模块。
-//! 各分组经 `use super::*` 级联取用（常量、helper 与枢纽导入对后代可见）。
+//! Test hub for the wallet_import_export split (LAY-018): shared constants and
+//! helpers plus topic-grouped test modules. Each group pulls them in via
+//! `use super::*` (the constants, helpers and hub imports stay visible to
+//! descendants).
 
 use super::*;
-// expect_sign_err 签名引用 WalletSigningKey、hd_wallet 返回 CryptoWallet
-//（枢纽已不再整体导入这些类型）。
+// expect_sign_err's signature references WalletSigningKey and hd_wallet
+// returns CryptoWallet, but the hub no longer imports those types wholesale.
 use crate::crypto::transaction_signing::WalletSigningKey;
 use crate::models::wallet::CryptoWallet;
 

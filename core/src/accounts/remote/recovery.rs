@@ -19,8 +19,8 @@ pub struct VerifyRecoveryCodeResponse {
 }
 
 impl AccountsApi {
-    /// POST /accounts/{id}/recovery-codes（Bearer）。每次调用生成新一组
-    /// （8 个），旧未用的作废。
+    /// POST /accounts/{id}/recovery-codes (Bearer). Each call generates a fresh set
+    /// (8 codes); previously unused ones are invalidated.
     pub async fn generate_recovery_codes(&self, account_id: &str) -> Result<RecoveryCodesResponse> {
         let resp = self
             .http
@@ -35,7 +35,7 @@ impl AccountsApi {
         Ok(value)
     }
 
-    /// POST /accounts/{id}/recovery-codes/verify（公开）。一次性消费。
+    /// POST /accounts/{id}/recovery-codes/verify (public). Single-use consumption.
     pub async fn verify_recovery_code(
         &self,
         account_id: &str,

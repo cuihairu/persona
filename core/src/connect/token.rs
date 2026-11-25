@@ -1,4 +1,5 @@
-//! Connect token 形态、scope 三维与判定纯函数（DR-2）。
+//! Connect token shape, the three scope dimensions, and the pure decision
+//! functions (DR-2).
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -7,19 +8,21 @@ use uuid::Uuid;
 
 use crate::models::CredentialType;
 
-/// token 明文前缀；无此前缀的呈现值直接判无效（不进哈希查表）。
+/// Plaintext prefix of a token; a presented value without it is judged
+/// invalid outright (it never reaches the hash lookup).
 pub const TOKEN_PREFIX: &str = "pconn_";
 
-/// scope 可授权的条目类型。**敏感类型恒不在枚举里**：SSH key、crypto
-/// wallet、custom 由排除法不可授权（passkey 不走 token 端点，见 DR-3）。
+/// Item types that a scope may authorize. **Sensitive types never appear
+/// in the enum**: SSH key, crypto wallet, and custom are excluded by
+/// construction (passkey does not go through the token endpoint, see DR-3).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ConnectItemType {
     Password,
     ApiKey,
-    /// TwoFactor 凭据（TOTP）。
+    /// TwoFactor credential (TOTP).
     Totp,
-    /// SecureNote 凭据。
+    /// SecureNote credential.
     Note,
     BankCard,
     ServerConfig,
@@ -30,8 +33,9 @@ pub enum ConnectItemType {
 }
 
 impl ConnectItemType {
-    /// 从库内 [`CredentialType`] 折算到 scope 枚举；不在合法集的返回
-    /// `None`（custom / ssh key / crypto wallet → 永不在 scope 内）。
+    /// Map an in-database [`CredentialType`] onto the scope enum; types
+    /// outside the valid set return `None` (custom / ssh key / crypto
+    /// wallet → never in a scope).
     pub fn from_credential_type(t: &CredentialType) -> Option<Self> {
         let kind = match t {
             CredentialType::Password => Self::Password,
@@ -52,9 +56,10 @@ impl ConnectItemType {
     }
 }
 
-/// 授权动作；`read` 读数据面，`use` 在库内使用凭据（签名/出码类操作，
-/// 不含导出——导出不是 Connect 动词）。写路径未拍板，不在枚举里
-/// （设计稿 §9-1）。
+/// Authorized actions; `read` reads the data plane, `use` consumes a
+/// credential inside the database (signing / OTP-generation style
+/// operations, not export — export is not a Connect verb). Write paths
+/// are undecided and absent from the enum (design draft §9-1).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ConnectVerb {
@@ -62,9 +67,10 @@ pub enum ConnectVerb {
     Use,
 }
 
-/// 三维 scope。`identities` / `item_types` 为空 = 全部（显式选择，创建方
-/// UI 需二次确认「可读取所有身份/类型」——语义与 1P 的 vault 授权一致，
-/// 授权粒度是身份）。
+/// Three-dimensional scope. Empty `identities` / `item_types` = all (an
+/// explicit choice, so the creating UI needs a second confirmation for
+/// "may read all identities/types" — the semantics match the 1P vault
+/// grant, whose unit of authorization is the identity).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ConnectTokenScope {
     #[serde(default)]
@@ -76,9 +82,11 @@ pub struct ConnectTokenScope {
 }
 
 impl ConnectTokenScope {
-    /// 创建期校验：verbs 非空且为 `{read, use}` 的子集。数据面判定只认
-    /// 这个形态，其他形态（空 verbs / 含未来枚举）在入库前就拒绝
-    /// （fail-closed）。导出/签名经 Connect 不可授予（不是 Connect 动词）。
+    /// Creation-time validation: verbs must be non-empty and a subset of
+    /// `{read, use}`. Data-plane decisions only accept this shape, and any
+    /// other shape (empty verbs / containing future enum variants) is
+    /// rejected before insertion (fail-closed). Export/signing cannot be
+    /// granted via Connect (they are not Connect verbs).
     pub fn validate(&self) -> Result<(), &'static str> {
         if self.verbs.is_empty() {
             return Err("verbs must not be empty");
@@ -97,13 +105,13 @@ impl ConnectTokenScope {
         self.verbs.contains(&verb)
     }
 
-    /// 身份授权：空列表 = 全部身份。
+    /// Identity authorization: an empty list = all identities.
     pub fn allows_identity(&self, identity_id: &Uuid) -> bool {
         self.identities.is_empty() || self.identities.contains(identity_id)
     }
 
-    /// 类型授权：空列表 = 全部**合法**类型；不在合法集的类型（custom/
-    /// ssh/wallet）无论何时都不可见。
+    /// Type authorization: an empty list = all **valid** types; types
+    /// outside the valid set (custom / ssh / wallet) are never visible.
     pub fn allows_credential_type(&self, t: &CredentialType) -> bool {
         let Some(kind) = ConnectItemType::from_credential_type(t) else {
             return false;
@@ -112,22 +120,25 @@ impl ConnectTokenScope {
     }
 }
 
-/// `connect_tokens` 库行（scope JSON 已解出）。
+/// `connect_tokens` database row (scope JSON already decoded).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConnectTokenRow {
     pub id: Uuid,
     pub label: String,
-    /// SHA-256 hex；唯一，查表校验键。
+    /// SHA-256 hex; unique, the lookup/verification key.
     pub hash: String,
-    /// 哈希前 8 字节 hex（16 字符）——列表识别/审计用，不泄露 token。
+    /// Hex of the hash's first 8 bytes (16 chars) — used for list
+    /// identification/auditing, does not reveal the token.
     pub fingerprint: String,
     pub scope: ConnectTokenScope,
-    /// 绑定的调用方身份（迁移 019）；`None` = 旧数据未绑定。
+    /// Identity of the bound caller (migration 019); `None` = legacy data
+    /// with no binding.
     pub principal: Option<String>,
     pub created_at: DateTime<Utc>,
     pub last_used_at: Option<DateTime<Utc>>,
     pub revoked_at: Option<DateTime<Utc>>,
-    /// 过期时刻（迁移 019）；`None` = 永不过期（旧数据语义不变）。
+    /// Expiration time (migration 019); `None` = never expires (legacy
+    /// data keeps its semantics).
     pub expires_at: Option<DateTime<Utc>>,
 }
 
@@ -136,13 +147,15 @@ impl ConnectTokenRow {
         self.revoked_at.is_some()
     }
 
-    /// 过期判定：已到过期时刻即失效（鉴权处与吊销同形拒绝）。
+    /// Expiration check: once the expiration time has passed the token is
+    /// invalid (rejected in the same shape as revocation at auth time).
     pub fn expired(&self) -> bool {
         self.expires_at.is_some_and(|t| t <= chrono::Utc::now())
     }
 }
 
-/// 生成一次 presented token：`pconn_` + 32 随机字节 base64url（无 padding）。
+/// Generate a presented token: `pconn_` + 32 random bytes as base64url
+/// (no padding).
 pub fn generate_token() -> String {
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
     use base64::Engine;
@@ -151,8 +164,9 @@ pub fn generate_token() -> String {
     format!("{TOKEN_PREFIX}{}", URL_SAFE_NO_PAD.encode(bytes))
 }
 
-/// 呈现值 → SHA-256 hex；无 `pconn_` 前缀的输入返回 `None`
-/// （不浪费查表，也让「格式即无效」与「查无此 token」同形）。
+/// Presented value → SHA-256 hex; an input without the `pconn_` prefix
+/// returns `None` (saves the lookup and makes "invalid format" and "no
+/// such token" indistinguishable).
 pub fn hash_token(presented: &str) -> Option<String> {
     if !presented.starts_with(TOKEN_PREFIX) {
         return None;
@@ -161,7 +175,7 @@ pub fn hash_token(presented: &str) -> Option<String> {
     Some(hex::encode(digest))
 }
 
-/// 哈希前 8 字节的 hex 指纹。
+/// Hex fingerprint of the hash's first 8 bytes.
 pub fn fingerprint_from_hash(hash: &str) -> String {
     hash.chars().take(16).collect()
 }
@@ -176,7 +190,7 @@ mod tests {
         let b = generate_token();
         assert!(a.starts_with(TOKEN_PREFIX));
         assert_ne!(a, b, "OS RNG must not repeat within a test lifetime");
-        // 32 字节 base64url 无 padding = 43 字符。
+        // 32 bytes base64url without padding = 43 chars.
         assert_eq!(a[TOKEN_PREFIX.len()..].len(), 43);
     }
 
@@ -215,7 +229,7 @@ mod tests {
 
     #[test]
     fn scope_never_allows_sensitive_types_even_when_empty() {
-        // 空 item_types = 全部合法类型；ssh/wallet/custom 仍不可见。
+        // Empty item_types = all valid types; ssh/wallet/custom remain invisible.
         let scope = ConnectTokenScope {
             identities: vec![],
             item_types: vec![],
@@ -250,7 +264,8 @@ mod tests {
         };
         assert!(ok.validate().is_ok());
 
-        // read+use 与纯 use 均合法（use 供未来签名类端点，导出不可授予）。
+        // Both read+use and use-only are valid (use is for future signing-style
+        // endpoints; export cannot be granted).
         let read_use = ConnectTokenScope {
             verbs: vec![ConnectVerb::Read, ConnectVerb::Use],
             ..ok.clone()

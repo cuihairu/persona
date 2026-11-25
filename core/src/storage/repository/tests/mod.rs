@@ -1,5 +1,5 @@
-//! repository 拆分（LAY-017）测试枢纽：共享 fixture/helper + 按仓储分组的测试模块。
-//! 各分组经 `use super::*` 级联取用（helper 与模型绑定对后代可见）。
+//! Test hub for the repository split (LAY-017): shared fixtures/helpers + test modules grouped by repository.
+//! Each group picks things up via the `use super::*` cascade (helpers and model bindings are visible to descendants).
 
 use super::*;
 use crate::models::{

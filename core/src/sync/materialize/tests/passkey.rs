@@ -3,7 +3,7 @@ use super::*;
 use crate::crypto::key_hierarchy::KeyHierarchy;
 use crate::sync::materialize::MaterializeOutcome;
 
-// ---- passkey 物化 ----
+// ---- passkey materialization ----
 
 #[tokio::test]
 async fn remote_passkey_put_materializes_row_and_private_key_stays_decryptable() {
@@ -12,7 +12,7 @@ async fn remote_passkey_put_materializes_row_and_private_key_stays_decryptable()
 
     let item_id = Uuid::new_v4();
     let item_key = EncryptionService::generate_key();
-    // 私钥信封 = item key 封存的标量字节（与 create_passkey_full 同构）
+    // Private-key envelope = the scalar bytes sealed with the item key (same shape as create_passkey_full)
     let scalar = b"p256-scalar-bytes-32-bytes-xxxxxxx";
     let sealed_key = EncryptionService::new(&item_key).encrypt(scalar).unwrap();
     let snapshot = passkey_snapshot(identity_id, "remote.example", &sealed_key);
@@ -46,13 +46,13 @@ async fn remote_passkey_put_materializes_row_and_private_key_stays_decryptable()
     assert!(!row.export_allowed);
     assert_eq!(row.alg, -7);
 
-    // item key 重包到本机主密钥且字节不变 → 私钥信封照常可解
+    // The item key is rewrapped to the local primary key with unchanged bytes -> the private-key envelope still decrypts
     let hierarchy = KeyHierarchy::new(&master);
     let scalar_out = hierarchy
         .decrypt_with_wrapped_key(&row.wrapped_item_key, &row.encrypted_private_key)
         .unwrap();
     assert_eq!(scalar_out, scalar);
-    // 设备本地使用态走零值（远端快照不携带）
+    // Device-local usage state takes zero values (the remote snapshot carries none)
     assert_eq!(row.sign_count, 0);
     assert!(row.last_used_at.is_none());
 }
@@ -84,7 +84,7 @@ async fn remote_passkey_put_overwrites_semantics_but_keeps_local_usage() {
         .await
         .unwrap();
 
-    // 本机使用态：直接写（repo.update 的语义字段集不含 sign_count）
+    // Local usage state: written directly (repo.update's semantic field set excludes sign_count)
     sqlx::query("UPDATE passkeys SET sign_count = 5, last_used_at = ? WHERE id = ?")
         .bind(Utc::now().timestamp())
         .bind(item_id.to_string())
@@ -92,7 +92,7 @@ async fn remote_passkey_put_overwrites_semantics_but_keeps_local_usage() {
         .await
         .unwrap();
 
-    // 远端第二轮 put（新 lamport）：换 rp、换私钥信封
+    // Second remote put (newer lamport): a different rp and a different private-key envelope
     let sealed_key2 = EncryptionService::new(&item_key)
         .encrypt(b"scalar-v2")
         .unwrap();
@@ -121,7 +121,7 @@ async fn remote_passkey_put_overwrites_semantics_but_keeps_local_usage() {
         .unwrap()
         .unwrap();
     assert_eq!(row.rp_id, "second.example");
-    // 使用态保留本机值
+    // Usage state keeps the local values
     assert_eq!(row.sign_count, 5);
     assert!(row.last_used_at.is_some());
 }

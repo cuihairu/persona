@@ -1,8 +1,10 @@
-//! 备份链：VACUUM INTO 物理快照 → gzip → PERSENC1 加密；恢复反向。
+//! Backup chain: VACUUM INTO physical snapshot → gzip → PERSENC1 encryption;
+//! restore runs it in reverse.
 //!
-//! 恢复 = 解密 → 魔数自适应解压 → SQLite 头校验 → 写目标路径。免写
-//! 逻辑导入代码：物理快照恢复即完整库（schema 迁移由恢复端首次打开时
-//! 正常执行）。
+//! Restore = decrypt → magic-adaptive decompression → SQLite header check →
+//! write the target path. No logical import code to write: a restored physical
+//! snapshot is already the complete database (schema migrations run normally on
+//! first open by the restoring side).
 
 use super::file_crypto::{decrypt_bytes, encrypt_bytes, KdfParams};
 use anyhow::{anyhow, Result};
@@ -16,23 +18,30 @@ use std::path::Path;
 
 const SQLITE_HEADER: &[u8; 16] = b"SQLite format 3\0";
 
-/// 一份加密备份（内存字节 + 元数据）。
+/// An encrypted backup (in-memory bytes + metadata).
 pub struct BackupBlob {
     pub bytes: Vec<u8>,
     pub size_bytes: u64,
-    /// 密文 hex 摘要（服务器去重键与下载复验键）。
+    /// Hex digest of the ciphertext (the server's dedupe key and the download
+    /// re-verification key).
     pub sha256: String,
 }
 
-/// 把库快照到 `dest`（VACUUM INTO：目标须不存在；产物自洽、无 WAL 依赖）。
+/// Snapshot the database into `dest` (VACUUM INTO: the target must not exist;
+/// the output is self-contained with no WAL dependency).
 ///
-/// 绑定参数优先；驱动拒绝时退回单引号转义的字面量（路径注入面靠
-/// `''` 转义闭合）。不能在事务内执行（VACUUM 限制），调用方勿包事务。
+/// Prefer a bound parameter; if the driver rejects it, fall back to a
+/// single-quote-escaped literal (the path-injection surface is closed by the
+/// `''` escaping). Cannot run inside a transaction (a VACUUM restriction), so
+/// callers must not wrap it in one.
 ///
-/// 已知坑（2026-09 实测）：sqlx 0.8 对 `sqlite::memory:` 连接池上的
-/// VACUUM INTO 返回 Ok 却不落盘（SQLite 本身与文件库路径均正常）——
-/// 内存库不适用于备份链，生产路径 identities.db 恒为文件库；末尾的
-/// 产物存在性校验就是防这类静默失败流出空备份。
+/// Known pitfall (measured 2026-09): sqlx 0.8 returns Ok for VACUUM INTO on a
+/// `sqlite::memory:` connection pool without ever writing anything to disk
+/// (both SQLite itself and file-database paths behave normally) — in-memory
+/// databases are unsuitable for the backup chain, and the production path
+/// identities.db is always a file database. The output-existence check at the
+/// end exists precisely to keep such silent failures from leaking an empty
+/// backup.
 pub async fn vault_snapshot(pool: &SqlitePool, dest: &Path) -> Result<()> {
     let dest_str = dest
         .to_str()
@@ -42,8 +51,10 @@ pub async fn vault_snapshot(pool: &SqlitePool, dest: &Path) -> Result<()> {
         .execute(pool)
         .await
     {
-        // 退路：转义字面量（SQLite 字符串字面量仅 ' 需转义为 ''）；
-        // 路径先经过 ?1 绑定尝试失败才走到这里，字面量已按 SQLite 规则转义
+        // Fallback: escaped literal (in a SQLite string literal only ' needs
+        // escaping to ''); the path first goes through the ?1 bound attempt and
+        // only reaches here once that has failed, the literal is escaped per
+        // SQLite rules
         let escaped = dest_str.replace('\'', "''");
         sqlx::query(AssertSqlSafe(format!("VACUUM INTO '{escaped}'")))
             .execute(pool)
@@ -58,7 +69,8 @@ pub async fn vault_snapshot(pool: &SqlitePool, dest: &Path) -> Result<()> {
     Ok(())
 }
 
-/// gzip 压缩（默认等级）。内存 `Vec` writer 的 `io::Error` 实际不可达。
+/// gzip compression (default level). The `io::Error` of an in-memory `Vec`
+/// writer is not actually reachable.
 pub fn gzip_bytes(data: Vec<u8>) -> Vec<u8> {
     let mut encoder = GzEncoder::new(Vec::with_capacity(data.len() / 2), Compression::default());
     encoder
@@ -67,8 +79,9 @@ pub fn gzip_bytes(data: Vec<u8>) -> Vec<u8> {
         .expect("in-memory gzip cannot fail")
 }
 
-/// 魔数自适应解压：`1f 8b`（gzip）则解压，否则原样返回（容忍未压缩
-/// 的纯 SQLite 字节——如手工加密的旧导出文件）。
+/// Magic-adaptive decompression: decompress when the bytes start with `1f 8b`
+/// (gzip), otherwise return them unchanged (tolerates uncompressed raw SQLite
+/// bytes — e.g. old manually encrypted export files).
 pub fn maybe_gunzip(data: &[u8]) -> Result<Vec<u8>> {
     if data.len() >= 2 && data[0] == 0x1f && data[1] == 0x8b {
         let mut decoder = GzDecoder::new(data);
@@ -82,7 +95,7 @@ pub fn maybe_gunzip(data: &[u8]) -> Result<Vec<u8>> {
     }
 }
 
-/// 创建加密备份：快照 → gzip → 加密 → sha256（一条链）。
+/// Create an encrypted backup: snapshot → gzip → encrypt → sha256 (one chain).
 pub async fn create_backup_bytes(
     pool: &SqlitePool,
     passphrase: &str,
@@ -93,7 +106,7 @@ pub async fn create_backup_bytes(
     vault_snapshot(pool, &snapshot_path).await?;
     let raw = std::fs::read(&snapshot_path)
         .map_err(|error| anyhow!("failed to read snapshot: {error}"))?;
-    drop(dir); // 快照临时文件尽早清理
+    drop(dir); // clean up the snapshot temp file as early as possible
 
     let gz = gzip_bytes(raw);
     let bytes = encrypt_bytes(&gz, passphrase, kdf)?;
@@ -106,10 +119,13 @@ pub async fn create_backup_bytes(
     })
 }
 
-/// 从加密备份恢复：解密 → 自适应解压 → SQLite 头校验 → 写 `dest`。
+/// Restore from an encrypted backup: decrypt → adaptive decompression →
+/// SQLite header check → write `dest`.
 ///
-/// 只产出文件、不打开库、不跑迁移——换库/重开的顺序编排归调用方
-/// （CLI 先留 .bak 再换文件；桌面端有连接排空约束，见各自实现）。
+/// Only produces the file; does not open the database or run migrations —
+/// sequencing the swap/reopen is the caller's job (the CLI keeps a .bak before
+/// swapping the file; the desktop side has connection-draining constraints, see
+/// each implementation).
 pub fn restore_backup_bytes(data: &[u8], passphrase: &str, dest: &Path) -> Result<()> {
     let decrypted = decrypt_bytes(data, passphrase)?;
     let plain = maybe_gunzip(&decrypted)?;
@@ -151,14 +167,14 @@ mod tests {
         let gz = gzip_bytes(raw.clone());
         assert_eq!(&gz[..2], &[0x1f, 0x8b]);
         assert_eq!(maybe_gunzip(&gz).unwrap(), raw);
-        // 非 gzip 原样返回
+        // non-gzip bytes are returned as-is
         assert_eq!(maybe_gunzip(&raw).unwrap(), raw);
     }
 
     #[test]
     fn maybe_gunzip_reports_corrupt_stream() {
         let mut gz = gzip_bytes(b"payload".to_vec());
-        gz.truncate(gz.len() - 4); // 截断破坏 CRC/长度
+        gz.truncate(gz.len() - 4); // truncation corrupts the CRC/length
         assert!(maybe_gunzip(&gz).is_err());
     }
 
@@ -177,20 +193,21 @@ mod tests {
         vault_snapshot(db.pool(), &snapshot_path).await.unwrap();
         assert!(snapshot_path.exists());
 
-        // 快照是自洽 SQLite：重开后行还在
+        // The snapshot is self-contained SQLite: the rows survive a reopen
         let reopened = Database::from_file(&snapshot_path).await.unwrap();
         let repo2 = IdentityRepository::new(reopened.clone());
         let fetched = repo2.find_by_id(&created.id).await.unwrap();
         assert!(fetched.is_some(), "snapshot must preserve rows");
 
-        // VACUUM INTO 不允许覆盖已存在的目标
+        // VACUUM INTO refuses to overwrite an existing target
         assert!(vault_snapshot(db.pool(), &snapshot_path).await.is_err());
     }
 
     #[tokio::test]
     async fn create_then_restore_round_trips_a_working_database() {
-        // from_file 而非 in_memory：sqlx 对内存库的 VACUUM INTO 会静默
-        // 无效果（见 vault_snapshot 注释），备份链只对文件库成立
+        // from_file rather than in_memory: VACUUM INTO on an in-memory
+        // database silently has no effect with sqlx (see the vault_snapshot
+        // comment); the backup chain only works with file databases
         let dir = tempfile::tempdir().unwrap();
         let db = Database::from_file(dir.path().join("source.db"))
             .await
@@ -205,7 +222,8 @@ mod tests {
             .unwrap();
         assert_eq!(blob.size_bytes, blob.bytes.len() as u64);
         assert_eq!(blob.sha256.len(), 64);
-        // 密文中找不到明文痕迹（名字不做加密，但整个快照是加密+gzip 的）
+        // No plaintext trace survives in the ciphertext (the name itself is
+        // not separately encrypted, but the whole snapshot is encrypted+gzip)
         assert!(!blob
             .bytes
             .windows(b"Roundtrip".len())
@@ -224,8 +242,10 @@ mod tests {
         );
     }
 
-    /// sqlx 对 `:memory:` 池的 VACUUM INTO 会返回 Ok 但不落盘——产物
-    /// 校验必须把这类静默失败转成显式错误（借该行为当天然故障注入）。
+    /// sqlx returns Ok for VACUUM INTO on a `:memory:` pool without ever
+    /// writing anything to disk — the output check must turn that kind of
+    /// silent failure into an explicit error (this behavior is borrowed as
+    /// a natural fault injection).
     #[tokio::test]
     async fn snapshot_surfaces_silent_vacuum_failure() {
         let db = Database::in_memory().await.unwrap();
@@ -240,7 +260,8 @@ mod tests {
 
     #[test]
     fn restore_rejects_wrong_passphrase_and_non_sqlite_payload() {
-        // 手工构造一个"解密成功但内容不是 SQLite"的备份（加密纯文本）
+        // Hand-build a backup that "decrypts fine but is not SQLite inside"
+        // (an encrypted plaintext)
         let encrypted = encrypt_bytes(b"not a database", "pw", Some(fast_kdf())).unwrap();
         let dir = tempfile::tempdir().unwrap();
         let dest = dir.path().join("out.db");

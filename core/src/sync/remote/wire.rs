@@ -1,6 +1,6 @@
-//! oplog 线路类型与 base64 编解码：[`WirePayload`]/[`WireOp`] 系列与
-//! [`SyncOp`] 的手工互转（serde 默认的 `Vec<u8>` 数字数组与服务器 base64
-//! 文本契约对不上，见模块文档）。
+//! Oplog wire types and base64 (de)coding: the [`WirePayload`]/[`WireOp`] families and the hand-written
+//! conversions to/from [`SyncOp`] (serde's default `Vec<u8>` number array does not match the server's
+//! base64 text contract — see the module docs).
 
 use base64::engine::general_purpose::STANDARD as B64;
 use base64::Engine as _;
@@ -9,7 +9,7 @@ use uuid::Uuid;
 
 use crate::sync::oplog::{ItemKind, OpType, SyncOp, SyncPayload};
 
-// ---- wire 类型（与 server/src/api/sync.rs 的 WireOp/WirePayload 对齐）----
+// ---- wire types (aligned with WireOp/WirePayload in server/src/api/sync.rs) ----
 
 #[derive(Debug, serde::Deserialize)]
 pub(super) struct WirePayload {
@@ -25,13 +25,13 @@ pub(super) struct WireOp {
     pub(super) op: String,
     pub(super) lamport: u64,
     pub(super) device_id: String,
-    /// 服务器原样转发的 rfc3339，仅展示。
+    /// The rfc3339 the server forwards verbatim, display only.
     pub(super) timestamp: Option<String>,
     pub(super) payload: Option<WirePayload>,
 }
 
-/// push 侧 wire op（只序列化，字段与 [`WireOp`] 相同但独立定义：
-/// pull 侧的 kind 等字段对本端没有构造语义）。
+/// Wire op for the push side (serialize only, same fields as [`WireOp`] but defined separately:
+/// pull-side kind and similar fields carry no construction semantics for this end).
 #[derive(Debug, serde::Serialize)]
 pub(super) struct WireOpOut {
     pub(super) op_id: String,
@@ -67,16 +67,17 @@ pub(super) struct PullResponseWire {
     pub(super) next_cursor: Option<String>,
 }
 
-/// `GET /sync/status`：组指令流水位（§二.5.5）。旧 server（无此路由）
-/// 返回 404 → 本层如实报错，状态显示降级为不可用，不谎报 0。
+/// `GET /sync/status`: the group instruction stream high-water mark (§2.5.5). An old server (without this
+/// route) returns 404 → this layer reports the error as-is and the status display degrades to unavailable,
+/// rather than falsely reporting 0.
 #[derive(Debug, serde::Deserialize)]
 pub(super) struct StatusResponseWire {
     pub(super) head_seq: i64,
 }
 
-// ---- 库级快照 wire（S2，与 server PutSnapshotRequest/PutSnapshotResponse
-// 对齐：ciphertext 是 base64 文本——Vec<u8> 的 serde 默认是数字数组，
-// 与服务器 base64 wire 对不上，手工编解码）----
+// ---- Vault-level snapshot wire (S2, aligned with server PutSnapshotRequest/PutSnapshotResponse:
+// ciphertext is base64 text — serde's default Vec<u8> is a number array that does not match the server's
+// base64 wire, so (de)coding is done by hand) ----
 
 #[derive(Debug, serde::Serialize)]
 pub(super) struct WirePutSnapshot<'a> {
@@ -102,7 +103,7 @@ fn kind_to_wire(kind: ItemKind) -> String {
         ItemKind::Credential => "credential".to_string(),
         ItemKind::Identity => "identity".to_string(),
         ItemKind::Passkey => "passkey".to_string(),
-        // 前向兼容的折返：未知 kind 本就不产生本地写（见 oplog 模块文档）
+        // Round trip for forward compatibility: an unknown kind never produces a local write (see the oplog module docs)
         ItemKind::Unknown => "unknown".to_string(),
     }
 }
@@ -144,14 +145,14 @@ pub(super) fn op_to_wire(op: &SyncOp) -> WireOpOut {
     }
 }
 
-/// wire op → SyncOp。任何一处不可解析 → `None`（调用方跳过该条）。
+/// Wire op → SyncOp. If any field is unparsable → `None` (the caller skips that entry).
 pub(super) fn op_from_wire(wire: WireOp) -> Option<SyncOp> {
     let op_id = Uuid::parse_str(&wire.op_id).ok()?;
     let item_id = Uuid::parse_str(&wire.item_id).ok()?;
     let device_id = Uuid::parse_str(&wire.device_id).ok()?;
     let op = op_type_from_wire(&wire.op)?;
-    // payload 形状不变量（服务器 validate_op 已保证，这里防存储侧错乱）：
-    // put 恒有载荷，delete（tombstone）恒无载荷
+    // Payload shape invariant (guaranteed by the server's validate_op; defended here against storage-side corruption):
+    // a put always carries a payload, a delete (tombstone) never does
     let payload = match (op, wire.payload) {
         (OpType::Put, Some(raw)) => Some(SyncPayload {
             ciphertext: B64.decode(&raw.ciphertext).ok()?,
@@ -160,7 +161,7 @@ pub(super) fn op_from_wire(wire: WireOp) -> Option<SyncOp> {
         (OpType::Delete, None) => None,
         _ => return None,
     };
-    // timestamp 仅展示：解析失败降级为 None，不因此丢弃 op
+    // Timestamp is display only: on a parse failure it degrades to None rather than dropping the op
     let timestamp = wire
         .timestamp
         .and_then(|t| DateTime::parse_from_rfc3339(&t).ok())

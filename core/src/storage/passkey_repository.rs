@@ -150,11 +150,12 @@ impl PasskeyRepository {
         Ok(())
     }
 
-    /// 同步物化路径 upsert：新行插入（`created_at` 用物化时刻、
-    /// `sign_count`/`last_used_at` 走零值/NULL 默认）；既有行则覆写全部
-    /// 语义字段（含私钥信封与本机重包的 wrapped key），**保留**设备本地
-    /// 使用态（`created_at`/`sign_count`/`last_used_at`）——使用计数在各
-    /// 设备独立推进，远端值只会伪造 WebAuthn 克隆检测基线。
+    /// Upsert on the sync materialization path: new rows are inserted (`created_at` set to the
+    /// materialization time, `sign_count`/`last_used_at` use zero/NULL defaults); existing rows
+    /// have all semantic fields overwritten (including the private key envelope and the
+    /// locally re-wrapped key), while **preserving** the device-local usage state
+    /// (`created_at`/`sign_count`/`last_used_at`) — usage counters advance independently per
+    /// device, and remote values would only forge the WebAuthn clone-detection baseline.
     pub async fn upsert_synced(&self, item: &PasskeyItem) -> PersonaResult<()> {
         sqlx::query(
             r#"
@@ -350,8 +351,10 @@ mod tests {
 
     #[tokio::test]
     async fn duplicate_credential_id_rejected_across_identities() {
-        // 设计稿 §5：credential_id 全库唯一（"同一库内不重复"），不只是同一
-        // 身份内——同一条 passkey 不允许在两个身份下各存一份（016 迁移收紧）。
+        // Design spec §5: credential_id is unique across the whole database
+        // (no duplicates "within the same database"), not merely within one identity —
+        // the same passkey may not be stored once under each of two identities
+        // (tightened by migration 016).
         let db = setup_db().await;
         let repo = PasskeyRepository::new(db.clone());
         let first = seed_identity(&db).await;
@@ -390,7 +393,8 @@ mod tests {
         let item = make_item(&db, identity_id);
         repo.create(&item).await.unwrap();
 
-        // 模拟本机已用过的行：直接写使用态（repo.update 的字段集不含 sign_count）
+        // Simulate a row already used locally: write the usage state directly
+        // (repo.update's field set does not include sign_count)
         sqlx::query("UPDATE passkeys SET sign_count = 7, last_used_at = ? WHERE id = ?")
             .bind(chrono::Utc::now().timestamp())
             .bind(item.id.to_string())
@@ -399,7 +403,7 @@ mod tests {
             .unwrap();
         let before = repo.find_by_id(&item.id).await.unwrap().unwrap();
 
-        // 远端物化同名条目（语义字段与本机不同）
+        // Remote-materialized entry with the same name (semantic fields differ from the local one)
         let mut synced = item.clone();
         synced.user_display_name = Some("Synced".to_string());
         synced.export_allowed = false;
@@ -409,18 +413,18 @@ mod tests {
         repo.upsert_synced(&synced).await.unwrap();
 
         let after = repo.find_by_id(&item.id).await.unwrap().unwrap();
-        // 语义字段被远端覆写
+        // Semantic fields were overwritten by the remote values
         assert_eq!(after.user_display_name.as_deref(), Some("Synced"));
         assert!(!after.export_allowed);
         assert_eq!(after.tags, vec!["from-remote".to_string()]);
         assert_eq!(after.encrypted_private_key, vec![1; 48]);
         assert_eq!(after.wrapped_item_key, vec![2; 48]);
-        // 设备本地使用态保留
+        // Device-local usage state preserved
         assert_eq!(after.sign_count, 7);
         assert_eq!(after.last_used_at, before.last_used_at);
         assert_eq!(after.created_at, before.created_at);
 
-        // 插入臂：全新 id 落行，使用态走零值/NULL
+        // Insert arm: a brand-new id lands a row, with usage state at zero/NULL
         let mut fresh = item.clone();
         fresh.id = Uuid::new_v4();
         fresh.credential_id = b"another-credential-id-32-bytes-x".to_vec();

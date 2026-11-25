@@ -21,8 +21,9 @@ impl CachedAutoLockManager {
 
         // Apply policy settings to session
         if let Some(ref p) = policy {
-            // 策略里的 absolute_timeout_secs 来自库/配置（u64 无上界），
-            // 裸加溢出即 panic——与 Session::new 同一饱和口径。
+            // The policy's absolute_timeout_secs comes from the database or
+            // config (an unbounded u64), so a plain addition can overflow and
+            // panic — use the same saturating convention as Session::new.
             session.expires_at = saturating_add(
                 SystemTime::now(),
                 Duration::from_secs(p.absolute_timeout_secs),

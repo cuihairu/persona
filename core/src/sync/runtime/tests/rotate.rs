@@ -1,11 +1,14 @@
-//! group key 轮换/重包域测试。
+//! Group key rotation / rewrap domain tests.
 
 use super::*;
 
-// 轮换核心（重包半边）：rewrap_all 把主库全部凭据以新组密钥重新
-// 入账——新 op 的 item key 信封只有新组密钥拆得开、快照开封内容
-// 与原凭据一致、lamport 严格递增（LWW 使其成为新主位）。
-// drain_push_queue 只在 remote-auth feature 下存在，测试同 gate。
+// Rotation core (the rewrap half): rewrap_all re-logs every credential in
+// the master database under the new group key -- the new ops' item key
+// envelopes can only be unwrapped with the new group key, the opened
+// snapshot content matches the original credential, and the lamport strictly
+// increases (LWW makes them the new master position).
+// drain_push_queue only exists under the remote-auth feature, so the test is
+// gated the same way.
 #[cfg(feature = "remote-auth")]
 #[tokio::test]
 async fn rewrap_all_reseals_every_credential_with_new_group_key() {
@@ -22,19 +25,21 @@ async fn rewrap_all_reseals_every_credential_with_new_group_key() {
     let (rewrapped, skipped) = session.rewrap_all(&master, &new_group).await.unwrap();
     assert_eq!((rewrapped, skipped), (2, 0));
 
-    // drain 后远端共收 4 条：backfill 2 条（旧 key 封）+ 重包 2 条（新 key 封）
+    // After draining, the remote receives 4 ops in total: 2 from backfill
+    // (sealed with the old key) + 2 from the rewrap (sealed with the new key)
     let drained = session.drain_push_queue().await.unwrap();
     assert_eq!(drained, 4);
     let pushed = pushed_log.lock().unwrap();
     assert_eq!(pushed.len(), 4);
     assert_eq!(pushed.len(), 4);
     let (older, newer) = pushed.split_at(2);
-    // 新批次 lamport 严格大于旧批次（全序递增）
+    // The new batch's lamport is strictly greater than the old batch's
+    // (monotonically increasing in total order)
     assert!(newer.iter().all(|op| op.lamport > older[0].lamport));
 
     for op in newer {
         let payload = op.payload.as_ref().unwrap();
-        // 只有新组密钥拆得开 item key 信封
+        // Only the new group key can unwrap the item key envelope
         let item_key =
             crate::sync::keys::unwrap_item_key_with_group(&payload.wrapped_item_key, &new_group)
                 .unwrap();
@@ -50,7 +55,8 @@ async fn rewrap_all_reseals_every_credential_with_new_group_key() {
             _ => String::new(),
         };
         assert_eq!(opened, expected);
-        // 旧组密钥拆不开新批次（前向边界：被吊销设备持旧 key 读不到）
+        // The old group key cannot unwrap the new batch (forward boundary: a
+        // revoked device holding the old key reads nothing)
         assert!(crate::sync::keys::unwrap_item_key_with_group(
             &payload.wrapped_item_key,
             &old_group
@@ -59,9 +65,11 @@ async fn rewrap_all_reseals_every_credential_with_new_group_key() {
     }
 }
 
-// 轮换的 admin 侧失败必须零副作用：时钟不推进、pending 无新增——
-// 失败发生在信封重封之前，本地 oplog 未被触碰。
-// rotate_group_key/SyncAdminApi 只在 remote-auth feature 下存在，同 gate。
+// An admin-side failure during rotation must have zero side effects: the
+// clock does not advance and no pending op is added -- the failure happens
+// before the envelopes are re-sealed, so the local oplog is untouched.
+// rotate_group_key/SyncAdminApi only exist under the remote-auth feature, so
+// this is gated the same way.
 #[cfg(feature = "remote-auth")]
 #[tokio::test]
 async fn rotate_with_failing_admin_leaves_no_side_effects() {
@@ -81,15 +89,17 @@ async fn rotate_with_failing_admin_leaves_no_side_effects() {
     assert_eq!(lamport_after, lamport_before);
 }
 
-// ---- 重包容错矩阵：legacy / wrapped 损坏 / 密文损坏 / 明文非法，
-// 逐条跳过不阻断整批；健康条目正常重包（对照组）。----
+// ---- Rewrap tolerance matrix: legacy / corrupt wrapped key / corrupt
+// ciphertext / invalid plaintext -- each is skipped individually without
+// blocking the whole batch; a healthy entry rewraps normally (control
+// group). ----
 
 #[tokio::test]
 async fn rewrap_all_skips_unreadable_credentials_one_by_one() {
     let (db, identity, master) = seeded_db().await;
     let cred_repo = CredentialRepository::new(db.clone());
 
-    // ① legacy：无 wrapped item key（取不出 item key）→ skip
+    // (1) legacy: no wrapped item key (no item key to recover) -> skip
     cred_repo
         .create(&Credential::new(
             identity.id,
@@ -102,7 +112,7 @@ async fn rewrap_all_skips_unreadable_credentials_one_by_one() {
         .await
         .unwrap();
 
-    // ② wrapped 损坏（unwrap_item_key 失败）→ skip
+    // (2) wrapped key corrupt (unwrap_item_key fails) -> skip
     cred_repo
         .create(&Credential::new(
             identity.id,
@@ -115,7 +125,7 @@ async fn rewrap_all_skips_unreadable_credentials_one_by_one() {
         .await
         .unwrap();
 
-    // ③ wrapped 有效但密文损坏（decrypt 失败）→ skip
+    // (3) wrapped key valid but ciphertext corrupt (decrypt fails) -> skip
     let item_key = EncryptionService::generate_key();
     let wrapped = master.encrypt(&item_key).unwrap();
     cred_repo
@@ -130,7 +140,8 @@ async fn rewrap_all_skips_unreadable_credentials_one_by_one() {
         .await
         .unwrap();
 
-    // ④ 解密成功但明文不是合法 CredentialData（from_bytes 失败）→ skip
+    // (4) decryption succeeds but the plaintext is not valid CredentialData
+    // (from_bytes fails) -> skip
     let junk = KeyHierarchy::new(&master)
         .encrypt_with_item_key(&item_key, b"not-credential-data")
         .unwrap();
@@ -146,7 +157,7 @@ async fn rewrap_all_skips_unreadable_credentials_one_by_one() {
         .await
         .unwrap();
 
-    // 对照组：健康凭据应正常重包
+    // Control group: a healthy credential should rewrap normally
     store_credential(&cred_repo, identity.id, "healthy", &master, "ok").await;
 
     let new_group = GroupKey::generate().unwrap();

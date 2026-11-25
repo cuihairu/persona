@@ -4,7 +4,7 @@ use crate::accounts::remote::{CreateAccountSessionRequest, PasskeyAssertionReque
 
 #[tokio::test]
 async fn create_session_relays_each_evidence_variant() {
-    // srp_token 证据
+    // srp_token evidence
     let url = spawn_mock(|req| {
         assert_eq!(req.method, "POST");
         assert_eq!(req.path, "/api/v1/accounts/acct-1/sessions");
@@ -31,7 +31,7 @@ async fn create_session_relays_each_evidence_variant() {
     assert_eq!(resp.session_token, "sess-24h");
     assert_eq!(resp.expires_in_secs, 86400);
 
-    // passkey_assertion 证据
+    // passkey_assertion evidence
     let url = spawn_mock(|req| {
         let body: serde_json::Value = serde_json::from_str(&req.body).unwrap();
         let assertion = &body["passkey_assertion"];

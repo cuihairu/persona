@@ -121,10 +121,11 @@ impl RedactedLoggerBuilder {
             .with_target(self.include_target)
             .event_format(formatter);
 
-        // try_init 唯一的失败形态就是"全局 subscriber 已被占用"（宿主先装）。
-        // 幂等语义：保持已装的并返回 Ok——内嵌 agent 场景下 desktop 壳先装
-        // 文件 writer 是正常次序，绝不能当致命错误传给调用方。签名保留
-        // Result 以防将来引入真实可失败的初始化步骤。
+        // The only failure shape try_init has is "the global subscriber is already taken" (the
+        // host installed one first). Idempotent semantics: keep the existing one and return Ok —
+        // in the embedded-agent scenario the desktop shell installing a file writer first is a
+        // normal ordering, and it must never surface to the caller as a fatal error. The Result
+        // signature is kept in case a genuinely fallible init step is introduced later.
         let _ = match self.writer {
             Some(factory) => tracing_subscriber::util::SubscriberInitExt::try_init(
                 subscriber.with_writer(factory),
@@ -649,9 +650,10 @@ mod tests {
         );
     }
 
-    // with_writer 分支的 init：无论进程内全局槽位是否已被占（竞态下
-    // 可能本测试先装成功），init 都幂等地返回 Ok——成功装上（输出
-    // 进 SharedBuf）或保持已装的，两条路都不报错。
+    // init with the with_writer branch: regardless of whether the process-wide global slot is
+    // already taken (under a race this test may install first), init idempotently returns Ok —
+    // either it installs successfully (output goes into SharedBuf) or keeps the existing one;
+    // neither path errors.
     #[test]
     fn init_with_writer_is_idempotent() {
         let sink = SharedBuf(Arc::new(Mutex::new(Vec::new())));
@@ -662,7 +664,7 @@ mod tests {
                 move || Box::new(SharedWriter(sink.0.clone()))
             })
             .init();
-        // 幂等断言：无论槽位归属如何都必须 Ok（占用 = 保持已装的）
+        // Idempotency assertion: must be Ok regardless of who owns the slot (taken = keep the existing one)
         assert!(
             result.is_ok(),
             "with_writer init must stay idempotent: {:?}",

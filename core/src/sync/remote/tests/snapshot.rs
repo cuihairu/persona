@@ -1,7 +1,7 @@
 use super::*;
 
-/// PUT/GET /snapshot 的 wire 正面：路径、方法、bearer；PUT 响应回显
-/// seq 一致放行 + pruned_ops 透传；GET 的 base64 密文解包。
+/// Happy-path wire for PUT/GET /snapshot: path, method, bearer; a PUT response echoing the same
+/// seq is allowed through, plus pruned_ops pass-through; and unwrapping the GET base64 ciphertext.
 #[tokio::test(flavor = "multi_thread")]
 async fn snapshot_put_get_wire_contract() {
     let captured: Arc<Mutex<Vec<Captured>>> = Default::default();
@@ -40,8 +40,8 @@ async fn snapshot_put_get_wire_contract() {
     assert_eq!(reqs[1].path, "/api/v1/sync/snapshot");
 }
 
-/// GET 404 → Ok(None)：新服务器尚无快照（absent）与老服务器无此路由
-/// （not_found）在客户端行为上收敛为全量重放。
+/// GET 404 → Ok(None): a new server with no snapshot yet (absent) and an old server without this
+/// route (not_found) converge into the same client behavior — a full replay.
 #[tokio::test(flavor = "multi_thread")]
 async fn snapshot_fetch_404_maps_to_none() {
     for body in [
@@ -55,7 +55,7 @@ async fn snapshot_fetch_404_maps_to_none() {
     }
 }
 
-/// PUT 响应回显 seq 与请求不符（代理/缓存错乱面）：fail-closed。
+/// A PUT response echoing a seq that does not match the request (the proxy/cache corruption surface): fail-closed.
 #[tokio::test(flavor = "multi_thread")]
 async fn snapshot_upload_rejects_seq_mismatch() {
     let base = spawn_mock(Arc::new(|_req| {
@@ -70,7 +70,7 @@ async fn snapshot_upload_rejects_seq_mismatch() {
     assert!(err.to_string().contains("seq mismatch"), "{err}");
 }
 
-/// malformed 响应臂：PUT 非 JSON、GET 非 JSON、GET 密文坏 base64。
+/// The malformed response arms: a non-JSON PUT body, a non-JSON GET body, and a GET ciphertext with bad base64.
 #[tokio::test(flavor = "multi_thread")]
 async fn snapshot_malformed_responses_are_rejected() {
     let base = spawn_mock(Arc::new(|req| match req.method.as_str() {

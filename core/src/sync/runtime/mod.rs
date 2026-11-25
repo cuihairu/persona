@@ -1,21 +1,28 @@
-//! 同步会话装配（E2EE_SYNC_DESIGN 阶段 3b）：把设备身份、oplog 引擎、
-//! 物化层与存量数据在宿主的一次「立即同步」调用里串起来。
+//! Sync session assembly (E2EE_SYNC_DESIGN phase 3b): strings together the
+//! device identity, oplog engine, materialization layer, and existing data
+//! inside a single "sync now" call by the host.
 //!
-//! 分层口径：协议/密码学/编排全在 core，宿主（desktop/CLI）只提供
-//! 参数（设备身份、服务器 url/token、travel 闸值）与持久化槽位。宿主
-//! 不直接触碰 [`SyncEngine`] / [`Materializer`]。
+//! Layering contract: protocol / cryptography / orchestration all live in
+//! core; the host (desktop/CLI) only supplies parameters (device identity,
+//! server url/token, travel gate) and persistence slots. The host never
+//! touches [`SyncEngine`] / [`Materializer`] directly.
 //!
-//! 会话生命周期 = 单次 `sync_now` 调用：`open`（拆信封装配）→
-//! `backfill_existing`（存量灌入，幂等）→ `run_cycle`（pull → materialize
-//! → push）→ `capture`（把 [`OplogCapture`] 挂上 service，让后续本地写
-//! 自动入队）。会话对象可弃；引擎状态全在本地库（local_lamport/游标/
-//! pending op 不随实例走）。travel 闸值由宿主在调用前评估一次（cycle 是
-//! 短过程，中途不变；travel 激活期间 cycle 侧自行拒绝，见 engine 模块）。
-
+//! Session lifecycle = a single `sync_now` call: `open` (unwraps the
+//! envelope and assembles) -> `backfill_existing` (seeds existing data,
+//! idempotent) -> `run_cycle` (pull -> materialize -> push) -> `capture`
+//! (attaches [`OplogCapture`] to the service so later local writes enqueue
+//! automatically). The session object can be discarded; engine state lives
+//! entirely in the local database (local_lamport / cursor / pending op do
+//! not travel with the instance). The travel gate is evaluated once by the
+//! host before the call (a cycle is short and does not change mid-flight;
+//! while travel is active the cycle side refuses on its own, see the engine
+//! module).
 //!
-//! 拆分（LAY-021）：会话核心（open/backfill/snapshot/run_cycle/status/gc/
-//! capture）留在本文件；rewrap/rotate 见 `rotate.rs`，冲突裁决见
-//! `conflicts.rs`，测试按域分在 `tests/`。
+//!
+//! Split (LAY-021): the session core (open/backfill/snapshot/run_cycle/
+//! status/gc/capture) stays in this file; rewrap/rotate are in `rotate.rs`,
+//! conflict resolution in `conflicts.rs`, and tests are grouped by domain in
+//! `tests/`.
 use std::sync::Arc;
 
 use uuid::Uuid;
@@ -37,24 +44,29 @@ use crate::storage::{CredentialRepository, Database};
 use crate::PersonaError;
 use crate::Result;
 
-/// 一次 `sync_now` 的汇总（字段全部是计数，供宿主 UI 展示）。
+/// Summary of one `sync_now` (every field is a count, for host UI display).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct SyncNowReport {
-    /// 新拉取落库的远端 op 条数。
+    /// Number of remote ops newly pulled and recorded.
     pub pulled: usize,
-    /// 物化进主库的条目数（新行或更新）。
+    /// Number of entries materialized into the master database (new rows or
+    /// updates).
     pub materialized: usize,
-    /// 冲突败方留驻 oplog 的条目数（数据不丢，裁决 UI 消费）。
+    /// Number of conflict losers remaining in the oplog (nothing is lost;
+    /// consumed by the resolution UI).
     pub conflicts: usize,
-    /// 因身份未同步而挂起的条目数（下轮补齐）。
+    /// Number of entries held pending because their identity has not synced
+    /// yet (completed next round).
     pub pending_identity: usize,
-    /// push 出去的本地 op 条数。
+    /// Number of local ops pushed out.
     pub pushed: usize,
-    /// 本次灌入 oplog 的存量凭据条数（通常只在首次同步非零）。
+    /// Number of existing credentials seeded into the oplog this time
+    /// (usually nonzero only on the first sync).
     pub backfilled: u64,
 }
 
-/// 一次同步会话。宿主用完即弃，状态在库。
+/// One sync session. The host discards it after use; state lives in the
+/// database.
 pub struct SyncSession<R: SyncRemote> {
     engine: Arc<SyncEngine<R>>,
     sync_repo: SyncRepository,
@@ -63,41 +75,54 @@ pub struct SyncSession<R: SyncRemote> {
     device_id: Uuid,
 }
 
-/// 一次 group key 轮换的汇总。轮换 = 换信封 + 全量重包（E2EE_SYNC_DESIGN
-/// DR-3「安全轮换」、§11 开放问题 2 的 v1 答案）。
+/// Summary of one group key rotation. Rotation = swap envelopes + a full
+/// rewrap (E2EE_SYNC_DESIGN DR-3 "safe rotation", the v1 answer to section
+/// 11 open question 2).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct SyncRotateReport {
-    /// 以新组密钥重新入账的凭据条数（每条一个新 lamport 的 put）。
+    /// Number of credentials re-logged under the new group key (one put with
+    /// a fresh lamport each).
     pub rewrapped: u64,
-    /// 主库凭据中因 legacy（无 wrapped item key）/解密失败跳过的条数——
-    /// 这些条目轮换后仍只有旧组密文，对只有新信封的设备不可见。
+    /// Number of master-database credentials skipped because of legacy (no
+    /// wrapped item key) or a decrypt failure -- after rotation these
+    /// entries still carry only old-group ciphertext, invisible to devices
+    /// that only have the new envelope.
     pub skipped: u64,
-    /// 轮换全程（前置清队列 + 重包批次）push 出去的 op 总条数。
+    /// Total number of ops pushed over the whole rotation (the initial queue
+    /// drain + the rewrap batch).
     pub pushed: u64,
 }
 
-/// 一轮 oplog 清理的汇总（[`SyncSession::gc_oplog`]）。
+/// Summary of one oplog cleanup pass ([`SyncSession::gc_oplog`]).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct GcReport {
-    /// 清理的 oplog 行数（已消费的历史版本 + 过保留窗口的 tombstone）。
+    /// Number of oplog rows pruned (consumed historical versions +
+    /// tombstones past the retention window).
     pub removed_ops: u64,
 }
 
-/// GC 默认的 tombstone 保留窗口：主位 tombstone 在 ack 后保留这么久才清，
-/// 给慢设备/游标重置留重放余地。chrono 的 Duration 无 const 构造，走函数。
+/// The GC's default tombstone retention window: a master-position tombstone
+/// is kept this long after ack before it is pruned, leaving replay headroom
+/// for slow devices / cursor resets. chrono's Duration has no const
+/// constructor, so this is a function.
 pub fn default_tombstone_retention() -> chrono::Duration {
     chrono::Duration::try_days(30).expect("30 days always fits in chrono::Duration")
 }
 
 #[cfg(feature = "remote-auth")]
 impl<R: SyncRemote> SyncSession<R> {
-    /// 装配会话的传输无关主体：取全部信封（[`GroupKeyStore`]，具体传输
-    /// 由实现决定）→ 拆本机那份得 group key → 建引擎（[`SyncRemote`]）。
-    /// 本机信封缺失（未授权）或拆不开（fail-closed：信封不是包给这把
-    /// 私钥的/被篡改）一律 Err——未授权设备拿不到同步能力。
+    /// Transport-independent assembly of the session: fetch all envelopes
+    /// ([`GroupKeyStore`], the concrete transport is decided by the
+    /// implementation) -> unwrap this device's share to get the group key ->
+    /// build the engine ([`SyncRemote`]).
+    /// A missing own envelope (not authorized) or one that cannot be unwrapped
+    /// (fail-closed: the envelope is not wrapped for this private key / was
+    /// tampered with) is always Err -- an unauthorized device gets no sync
+    /// capability.
     ///
-    /// 两种传输共用的装配逻辑在此：HTTP 传输（[`Self::open`]）与云盘
-    /// 传输（[`Self::open_cloud`]）都只是提供各自的 remote + key_store。
+    /// The assembly logic shared by both transports lives here: the HTTP
+    /// transport ([`Self::open`]) and the cloud-drive transport
+    /// ([`Self::open_cloud`]) each just provide their own remote + key_store.
     pub async fn open_with<K: super::remote::GroupKeyStore>(
         db: &Database,
         identity: &DeviceIdentity,
@@ -139,7 +164,8 @@ impl<R: SyncRemote> SyncSession<R> {
 
 #[cfg(feature = "remote-auth")]
 impl SyncSession<super::remote::HttpSyncRemote> {
-    /// 装配 HTTP 传输会话：从服务器取全部信封，拆出本机的那份得 group key。
+    /// Assemble an HTTP transport session: fetch all envelopes from the
+    /// server and unwrap this device's share to get the group key.
     pub async fn open(
         db: &Database,
         identity: &DeviceIdentity,
@@ -161,9 +187,11 @@ impl SyncSession<super::remote::HttpSyncRemote> {
 
 #[cfg(feature = "remote-auth")]
 impl SyncSession<super::remote::CloudDriveRemote> {
-    /// 装配云盘传输会话：云盘目录即传输与信封交换槽位，无需服务器。
-    /// `cloud_dir` 是本机云盘同步文件夹（iCloud Drive/Dropbox/Google Drive），
-    /// OS 云代理负责跨设备分发；目录不存在会在首次写时创建。
+    /// Assemble a cloud-drive transport session: the cloud-drive directory
+    /// doubles as the transport and envelope exchange slot, no server needed.
+    /// `cloud_dir` is this machine's cloud sync folder (iCloud Drive /
+    /// Dropbox / Google Drive); the OS cloud agent handles cross-device
+    /// distribution; a missing directory is created on first write.
     pub async fn open_cloud(
         db: &Database,
         identity: &DeviceIdentity,
@@ -183,10 +211,13 @@ impl SyncSession<super::remote::CloudDriveRemote> {
 }
 
 impl<R: SyncRemote> SyncSession<R> {
-    /// 存量灌入：主库存在但 oplog 缺席的凭据逐条生成 put。以 oplog 的
-    /// item 集为准跳过已入队条目，因此重复调用幂等（通常只有首次同步
-    /// 灌入非零条）。legacy 凭据（无 wrapped_item_key）无法取出 item key，
-    /// 跳过并 warn（与捕获缝同语义——先编辑一次升级加密形态）。
+    /// Seed existing data: generate a put for each credential that exists in
+    /// the master database but is absent from the oplog. Already queued
+    /// entries are skipped based on the oplog's item set, so repeated calls
+    /// are idempotent (usually only the first sync seeds nonzero entries).
+    /// Legacy credentials (no wrapped_item_key) have no item key to recover;
+    /// they are skipped with a warn (same semantics as the capture seam --
+    /// edit once to upgrade the encryption form).
     pub async fn backfill_existing(&self, master: &EncryptionService) -> Result<u64> {
         let cred_repo = CredentialRepository::new(self.db.clone());
         let all = cred_repo.list_all().await?;
@@ -205,7 +236,8 @@ impl<R: SyncRemote> SyncSession<R> {
                 );
                 continue;
             };
-            // 失败逐条跳过（坏行不阻断整批），与捕获缝的容错口径一致
+            // Failures skip the single entry (a bad row does not block the
+            // whole batch), consistent with the capture seam's tolerance
             let item_key = match hierarchy.unwrap_item_key(wrapped) {
                 Ok(item_key) => item_key,
                 Err(e) => {
@@ -259,10 +291,12 @@ impl<R: SyncRemote> SyncSession<R> {
         }
         Ok(count)
     }
-    /// 打包本机 oplog 视图充分集为库级快照明文（S2）：逐 item 取
-    /// [`item_view`] 的主位（put/tombstone）+ 未裁决冲突副本。凭据表
-    /// 行打包会丢 pending identity / 冲突副本 / tombstone，oplog 原封
-    /// 搬运才能保证「快照起步 + 点后增量 == 全量重放」。
+    /// Pack this device's oplog view into a library snapshot plaintext (S2):
+    /// for each item, take [`item_view`]'s primary position (put/tombstone)
+    /// plus the unresolved conflict copies. Packing credential table rows
+    /// would lose pending identity / conflict copies / tombstones; only
+    /// carrying the oplog verbatim guarantees "snapshot bootstrap + post-point
+    /// delta == full replay".
     pub async fn snapshot_payload(&self) -> Result<LibrarySnapshotPayload> {
         let mut ops = Vec::new();
         for item_id in self.sync_repo.item_ids().await? {
@@ -277,9 +311,11 @@ impl<R: SyncRemote> SyncSession<R> {
             ops,
         })
     }
-    /// 装包回调本体：group key 拆包（fail-closed）→ 视图充分处理 op_id
-    /// 幂等入本地 oplog（record_remote_op，acked——这些位点已被压缩进
-    /// 快照，不该再推）。装包前游标不动，失败整体不收敛。
+    /// The install callback proper: unwrap with the group key (fail-closed)
+    /// -> the fully-viewed ops enter the local oplog idempotently by op_id
+    /// (record_remote_op, acked -- these positions are already compressed into
+    /// the snapshot and must not be pushed again). The cursor does not move
+    /// before installation; on failure nothing converges.
     #[allow(dead_code)]
     async fn install_snapshot_ops(&self, _seq: i64, sealed: Vec<u8>) -> Result<()> {
         let payload = LibrarySnapshotPayload::open(&sealed, &self.group_key)?;
@@ -288,19 +324,24 @@ impl<R: SyncRemote> SyncSession<R> {
         }
         Ok(())
     }
-    /// 完整周期：pull（远端 op 攒进本地 oplog）→ materialize（oplog 主位
-    /// 物化进主库）→ push（本地 pending op 推上服务器）。
+    /// Full cycle: pull (batch remote ops into the local oplog) ->
+    /// materialize (materialize the oplog primary position into the master
+    /// database) -> push (push local pending ops to the server).
     pub async fn run_cycle(&self, master: &EncryptionService) -> Result<SyncNowReport> {
-        // bootstrap：本机从未拉过（首次/新设备）时先试装库级快照——
-        // 装上则游标推到覆盖位点，pull 只拿增量；无快照/失败游标不动，
-        // 走全量重放（fail-closed，与 engine 原语约定一致）。
+        // bootstrap: when this device has never pulled (first run / new
+        // device), try installing a library snapshot first -- on success the
+        // cursor advances to the overwrite position and pull takes only
+        // deltas; with no snapshot or on failure the cursor stays put and we
+        // fall back to full replay (fail-closed, matching the engine
+        // primitive's contract).
         if self.sync_repo.get_state().await?.last_pull_cursor.is_none() {
             if let Err(e) = self
                 .engine
                 .install_library_snapshot(|seq, sealed| self.install_snapshot_ops(seq, sealed))
                 .await
             {
-                // 装包失败不收敛游标——全量重放兜底，仅记日志。
+                // A failed install does not converge the cursor -- full
+                // replay is the fallback, only logged.
                 tracing::warn!(error = %e, "snapshot install failed; full replay");
             }
         }
@@ -309,15 +350,20 @@ impl<R: SyncRemote> SyncSession<R> {
             .materialize_all(master, &self.group_key, self.device_id)
             .await?;
         let push = self.engine.push_cycle().await?;
-        // 机会主义清理已消费的 oplog 历史（§11 开放问题 3 客户端半边）；
-        // 失败不阻断同步——增长治理不是同步正确性的前置条件。
+        // Opportunistically prune consumed oplog history (the client half of
+        // section 11 open question 3); failure does not block sync -- growth
+        // governance is not a precondition of sync correctness.
         if let Err(e) = self.gc_oplog(default_tombstone_retention()).await {
             tracing::warn!(error = %e, "oplog gc skipped");
         }
-        // 快照触发（S2）：head − 上次快照位点 > 阈值才重打包。失败仅记
-        // 日志不阻断——快照是优化层，缺位只是回退全量重放。打包经回调
-        // 在引擎收敛（push/pull）之后执行：水位与快照内容同取收敛后的
-        // 一致视图，收敛拉进的 op 不会既被服务器裁剪又不在快照里。
+        // Snapshot trigger (S2): repack only when head - last snapshot
+        // position > threshold. Failure is only logged and does not block --
+        // the snapshot is an optimization layer; its absence just falls back
+        // to full replay. Packing goes through the callback, which runs after
+        // the engine converges (push/pull): the watermark and snapshot content
+        // both read from the same post-convergence view, so an op pulled in
+        // by convergence is not both pruned by the server and missing from
+        // the snapshot.
         if let Ok(true) = self
             .engine
             .library_snapshot_needed(UPLOAD_THRESHOLD_OPS)
@@ -337,34 +383,46 @@ impl<R: SyncRemote> SyncSession<R> {
         Ok(SyncNowReport {
             pulled: pull.applied,
             materialized: materialize.written,
-            // 待裁决冲突条目数（从 oplog 现算真值；3b 曾错用
-            // skipped_local_primary——那是「主位是本机 op」的跳过计数）。
+            // Number of entries pending resolution (computed fresh from the
+            // oplog as the truth; 3b once misused
+            // skipped_local_primary -- that was the "primary is a local op"
+            // skip count).
             conflicts: self.conflict_item_count().await?,
             pending_identity: materialize.pending_identity.len(),
             pushed: push.pushed,
             backfilled: 0,
         })
     }
-    /// 同步状态快照（sync-group-mode §二.5.5 设置页显示的数据面）：组最新
-    /// 版本号、本机已同步水位、落后条数、待推条数、最近同步时间。只读，
-    /// 不跑周期——「立即同步」仍走 [`Self::run_cycle`]。
+    /// Sync status snapshot (the data surface shown on the settings page in
+    /// sync-group-mode section 2.5.5): the group's latest version number,
+    /// this device's synced watermark, the number of entries behind, the
+    /// number pending push, and the last sync time. Read-only and does not
+    /// run a cycle -- "sync now" still goes through [`Self::run_cycle`].
     pub async fn status(&self) -> Result<super::engine::SyncStatusReport> {
         self.engine.sync_status().await
     }
-    /// oplog 增长治理（E2EE_SYNC_DESIGN §11 开放问题 3 的客户端半边）。
-    /// 本地 oplog 是 append-only 密文日志，长期使用无界增长；本方法按保守
-    /// 谓词只清「再无消费方」的历史版本：
+    /// oplog growth governance (the client half of E2EE_SYNC_DESIGN section
+    /// 11 open question 3).
+    /// The local oplog is an append-only ciphertext log that grows without
+    /// bound over long use; this method prunes only historical versions that
+    /// "have no more consumers", per a conservative predicate:
     ///
-    /// - **保护集**：push 队列未 ack 的本地 op（推数窗口，动了就丢改动）；
-    ///   未裁决冲突副本（`item_view` 推导的 conflicts——裁决采纳后其余版本
-    ///   以更大 lamport 赢回主位，败方自动落出副本集，下一轮 GC 可清）；
-    ///   主位 put（活条目的视图锚，永不清理）。
-    /// - **可清集**：acked 且既非主位也非副本的旧版本；以及 ack 且超过
-    ///   `tombstone_retention` 的主位 tombstone（条目已删，仅留重放余地；
-    ///   timestamp 缺失视为不清——无法证明足够老）。
+    /// - **Protected set**: local ops in the push queue that are not yet
+    ///   acked (the push window -- touching them loses changes); unresolved
+    ///   conflict copies (the conflicts derived by `item_view` -- after a
+    ///   resolution is adopted, the remaining versions win back the master
+    ///   position with a larger lamport, so the losers drop out of the copy
+    ///   set and the next GC round can prune them); the master-position put
+    ///   (a live entry's view anchor, never pruned).
+    /// - **Prunable set**: old versions that are acked and are neither the
+    ///   master position nor a copy; and master-position tombstones that are
+    ///   acked and older than `tombstone_retention` (the entry is already
+    ///   deleted, leaving only replay headroom; a missing timestamp counts as
+    ///   do not prune -- it cannot be proven old enough).
     ///
-    /// 被清 op 若因游标重置被重拉，按 op_id 幂等 upsert 重建，收敛不受影响；
-    /// 主库零触碰（GC 只作用于 oplog）。
+    /// If a pruned op is re-pulled because of a cursor reset, it is rebuilt by
+    /// an idempotent upsert keyed on op_id and convergence is unaffected; the
+    /// master database is never touched (GC only acts on the oplog).
     pub async fn gc_oplog(&self, tombstone_retention: chrono::Duration) -> Result<GcReport> {
         let pending = self.sync_repo.pending_op_ids().await?;
         let now = chrono::Utc::now();
@@ -380,7 +438,8 @@ impl<R: SyncRemote> SyncSession<R> {
                     continue;
                 }
                 if op.op_id == primary.op_id {
-                    // 主位：仅「超过保留窗口的 tombstone」可清。
+                    // Master position: only a "tombstone past the retention
+                    // window" is prunable.
                     if primary.is_tombstone() {
                         if let Some(ts) = primary.timestamp {
                             if now - ts > tombstone_retention {
@@ -404,8 +463,10 @@ impl<R: SyncRemote> SyncSession<R> {
             removed_ops: removed,
         })
     }
-    /// 本会话的捕获缝（挂上 service 后，本地写路径自动产 oplog put/
-    /// tombstone）。会话丢弃后 capture 依然有效（持 engine Arc）。
+    /// This session's capture seam (once attached to the service, the local
+    /// write path automatically produces oplog put / tombstone entries). The
+    /// capture stays valid after the session is dropped (it holds the engine
+    /// Arc).
     pub fn capture(&self) -> Arc<OplogCapture<R>> {
         Arc::new(OplogCapture::new(
             self.engine.clone(),

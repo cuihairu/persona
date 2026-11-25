@@ -57,9 +57,10 @@ async fn enter_exit_clears_and_restores_travel_mode_settings() {
     assert!(entered_at.is_none());
 }
 
-/// enter 事务写 settings 前的库内防御：settings 是合法 JSON 但非
-/// 对象 → Database；workspace 行缺失 → NotFound（提示 migrate）。
-/// 事务中途报错即回滚（identities 未被删）。
+/// In-database defenses of the enter transaction before it writes settings:
+/// settings that is valid JSON but not an object -> Database; a missing
+/// workspace row -> NotFound (pointing at migrate). An error mid-transaction
+/// rolls back (identities are not deleted).
 #[tokio::test]
 async fn enter_tx_rejects_missing_workspace_and_non_object_settings() {
     let (_dir, db) = seeded_db().await;
@@ -80,7 +81,7 @@ async fn enter_tx_rejects_missing_workspace_and_non_object_settings() {
     let err = apply_enter_tx(pool, &pack).await.unwrap_err();
     assert!(err.to_string().contains("persona migrate"), "{err}");
 
-    // 两次失败都回滚：身份行仍在
+    // Both failures rolled back: the identity rows are still there
     let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM identities")
         .fetch_one(pool)
         .await
@@ -88,8 +89,9 @@ async fn enter_tx_rejects_missing_workspace_and_non_object_settings() {
     assert_eq!(count, 2);
 }
 
-/// exit 恢复对 pack 缺表宽容：build_pack 恒写满 12 张表，但手改或
-/// 旧版 pack 缺键时跳过该表继续恢复其余表（if-let None 臂）。
+/// exit restore is tolerant of tables missing from the pack: build_pack
+/// always writes all 12 tables, but a hand-edited or older pack missing a key
+/// skips that table and keeps restoring the rest (the if-let-None arm).
 #[tokio::test]
 async fn exit_tx_skips_tables_absent_from_pack() {
     let (_dir, db) = seeded_db().await;
@@ -110,9 +112,10 @@ async fn exit_tx_skips_tables_absent_from_pack() {
     assert_eq!(repo.find_all().await.unwrap().len(), 2);
 }
 
-/// favicon 清理的 host 集合分支：重复 host 去重（contains 命中不
-/// 重推）、不可抓取 URL（非 https）与 NULL url 跳过提取、仅被移除
-/// 凭据引用的 host 才删——仍被保留凭据引用的 host 留下。
+/// The host-set branches of favicon pruning: duplicate hosts are deduplicated
+/// (a contains hit is not pushed again), unfetchable URLs (non-https) and
+/// NULL urls skip extraction, and only hosts referenced by removed
+/// credentials are deleted -- hosts still referenced by kept credentials stay.
 #[cfg(feature = "favicon")]
 #[tokio::test]
 async fn favicon_prune_dedups_hosts_and_skips_unfetchable_urls() {
@@ -121,14 +124,15 @@ async fn favicon_prune_dedups_hosts_and_skips_unfetchable_urls() {
     let id_a = identity_id_by_name(pool, "A").await;
     let id_b = identity_id_by_name(pool, "B").await;
 
-    // 被移除身份：dup.com 两条（去重臂）+ 非 https 一条（提取失败臂）
-    // + NULL url 一条（flatten 跳过臂）+ 仅本身份引用的 only-a.com
+    // Removed identity: two dup.com rows (dedup arm) + one non-https
+    // (extraction-failure arm) + one NULL url (flatten skip arm) +
+    // only-a.com, referenced by this identity only
     insert_credential(pool, &id_a, Some("https://dup.com/one")).await;
     insert_credential(pool, &id_a, Some("https://dup.com/two")).await;
     insert_credential(pool, &id_a, Some("http://plain.invalid/x")).await;
     insert_credential(pool, &id_a, None).await;
     insert_credential(pool, &id_a, Some("https://only-a.com/item")).await;
-    // 保留身份：dup.com 仍被引用 → 缓存行必须留下
+    // Kept identity: dup.com is still referenced -> the cache row must stay
     insert_credential(pool, &id_b, Some("https://dup.com/kept")).await;
 
     for host in ["dup.com", "only-a.com"] {

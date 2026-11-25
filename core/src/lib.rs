@@ -33,9 +33,9 @@ pub mod sync;
 pub mod travel;
 
 // Re-export commonly used types
-// 显式单条而非 `accounts::*`：`auth::*` 已 re-export 同名模块 `remote`，
-// glob 对撞（ambiguous_glob_reexports）。wire 类型走全路径
-// `persona_core::accounts::remote::*`。
+// Explicit single items instead of `accounts::*`: `auth::*` already re-exports a same-named
+// module `remote`, which would cause a glob collision (ambiguous_glob_reexports). Wire types
+// go through the full path `persona_core::accounts::remote::*`.
 #[cfg(feature = "accounts")]
 pub use accounts::remote::AccountsApi;
 pub use auth::*;
@@ -111,23 +111,25 @@ pub enum PersonaError {
     #[error("Validation error: {0}")]
     Validation(String),
 
-    /// 旅行模式进行中（改密等与 sidecar 中 wrapped key 不兼容的操作被拒；
-    /// 客户端应提示先退出旅行模式）
+    /// Travel mode is active (operations incompatible with the wrapped key in the sidecar,
+    /// such as password changes, are rejected; clients should prompt the user to exit travel mode first)
     #[error("Travel mode is active: {0}")]
     TravelModeActive(String),
 
-    /// 保险库处于锁定态，Connect 自动化数据面据此返回 503
-    /// （CONNECT_AUTOMATION_DESIGN DR-4：解锁即恢复，token 不扣限额）。
+    /// The vault is locked; the Connect automation data plane returns 503 on this
+    /// (CONNECT_AUTOMATION_DESIGN DR-4: unlocking restores service, no token quota deducted).
     #[error("Vault is locked: {0}")]
     VaultLocked(String),
 
-    /// 并发互斥操作冲突：group key 轮换的 epoch 乐观锁未命中（另一台
-    /// 设备已抢先轮换）。客户端应重读状态后重试（E2EE_SYNC_DESIGN §11-2）。
+    /// Concurrent exclusive-operation conflict: the epoch optimistic lock on group key rotation
+    /// missed (another device rotated first). Clients should re-read state and retry
+    /// (E2EE_SYNC_DESIGN §11-2).
     #[error("Concurrent operation conflict: {0}")]
     ConcurrentConflict(String),
 
-    /// 授权拒绝：统一授权入口（core/src/authz.rs）判 Denied。与认证失败
-    /// （AuthenticationFailed，身份没过）区分——这是身份已过但动作越权。
+    /// Authorization denied: the unified authorization entry point (core/src/authz.rs) returned Denied.
+    /// Distinct from authentication failure (AuthenticationFailed, identity did not pass) —
+    /// here the identity passed but the action is not permitted.
     #[error("Operation not allowed: {0}")]
     Forbidden(String),
 }
@@ -155,10 +157,11 @@ impl From<std::io::Error> for PersonaError {
 mod tests {
     use super::*;
 
-    // 加密错误三胞胎（CryptographicError/Crypto/Cryptography，Display 完全
-    // 相同）已合并为单一 CryptographicError——构造点随合并机械重命名，这里
-    // 钉住合并后的契约：唯一变体 + Display 前缀 + 透传 thiserror Source 语义
-    // （无内层 source，链顶就是它自身）。
+    // The crypto error triplets (CryptographicError/Crypto/Cryptography, with identical
+    // Display text) have been merged into a single CryptographicError — construction sites
+    // were mechanically renamed with the merge; this pins the post-merge contract: a unique
+    // variant + Display prefix + pass-through thiserror Source semantics
+    // (no inner source; the top of the chain is the variant itself).
     #[test]
     fn crypto_error_is_a_single_variant_with_stable_display() {
         let err = PersonaError::CryptographicError("gcm seal failed".to_string());

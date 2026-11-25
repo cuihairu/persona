@@ -1,40 +1,42 @@
 //! Favicon fetching for entry icons (`favicon` feature).
 //!
-//! 隐私红线（todo.md）：不常驻外联、不默认抓取——本模块唯一的网络入口
-//! [`FaviconFetcher::fetch`] 只在用户于详情面板点击 "Fetch icon" 时被
-//! service 调用，抓取源直连 `https://{host}/favicon.ico`，不经任何第三方
-//! 图标服务。这是仓库首个"用户可控 URL 外联"，host 提取按 SSRF 从紧校验：
-//! 只允许解析为公网域名的 https URL，IP 字面量与裸主机名一律拒绝。
+//! Privacy red line (todo.md): no standing outbound calls, no fetching by default — the only
+//! network entry in this module, [`FaviconFetcher::fetch`], is called by the service only when
+//! the user clicks "Fetch icon" in the detail panel. The fetch source connects directly to
+//! `https://{host}/favicon.ico` and never goes through any third-party icon service. This is the
+//! repo's first "user-controllable URL outbound call"; host extraction is validated strictly for
+//! SSRF: only https URLs resolving to public domains are allowed, and IP literals and bare
+//! hostnames are always rejected.
 
 use crate::{PersonaError, Result};
 use url::Url;
 
-/// 单个 favicon 的字节上限（512 KiB），与 `migrations/011_favicon_cache.sql`
-/// 中 `data` 列的 CHECK 上限保持一致（改动需双方同步）。
+/// Per-favicon byte limit (512 KiB), kept consistent with the `data` column CHECK limit in
+/// `migrations/011_favicon_cache.sql` (any change must be made on both sides).
 pub const MAX_FAVICON_BYTES: usize = 512 * 1024;
 
 const FETCH_TIMEOUT_SECS: u64 = 10;
 const USER_AGENT: &str = "persona-favicon";
 
-/// 抓取成功的产物；`data` 已确保非空且 ≤ [`MAX_FAVICON_BYTES`]。
+/// A successful fetch's output; `data` is guaranteed non-empty and ≤ [`MAX_FAVICON_BYTES`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FaviconBlob {
     pub mime_type: String,
     pub data: Vec<u8>,
 }
 
-/// 从用户提供的 URL / 裸域名中提取可用于抓取 favicon 的 host。
+/// Extract the host to fetch a favicon from, from a user-supplied URL / bare domain.
 ///
-/// 规则按序执行，任一失败即 Err。校验只覆盖 URL 字面 host
-/// （DNS rebinding 不在此防线内，见 todo.md 已知限制）：
+/// Rules run in order; any failure is an Err. Validation only covers the URL's literal host
+/// (DNS rebinding is not covered by this line of defense; see todo.md known limitations):
 ///
-/// ① `Url::parse` 失败时借道 `https://{raw}` 再试（补全裸域名）
-/// ② 仅接受 https scheme
-/// ③ 必须有 host
-/// ④ 拒绝 IP 字面量（IPv4/IPv6，含十进制/十六进制缩写——url crate 按
-///    WHATWG 规范归一，`169.254.169.254`、`127.0.0.1`、`[::1]` 全部落此）
-/// ⑤ 拒绝不含 `.` 的裸主机名（localhost / 内网单标签名）
-/// ⑥ 归一：去尾点 + ASCII 小写；端口 / userinfo / path 天然丢弃
+/// ① When `Url::parse` fails, retry via `https://{raw}` (completing bare domains)
+/// ② Only the https scheme is accepted
+/// ③ A host is required
+/// ④ IP literals are rejected (IPv4/IPv6, including decimal/hexadecimal shorthand — the url crate
+///    normalizes per the WHATWG spec, so `169.254.169.254`, `127.0.0.1`, `[::1]` all land here)
+/// ⑤ Bare hostnames without `.` are rejected (localhost / intranet single-label names)
+/// ⑥ Normalization: strip the trailing dot + ASCII lowercase; port / userinfo / path are naturally dropped
 pub fn extract_favicon_host(raw: &str) -> Result<String> {
     let raw = raw.trim();
     if raw.is_empty() {
@@ -43,7 +45,7 @@ pub fn extract_favicon_host(raw: &str) -> Result<String> {
 
     let parsed = match Url::parse(raw) {
         Ok(url) => url,
-        // 无 scheme 的裸域名（"example.com"）借道 https 再试一次
+        // Bare domain without a scheme ("example.com"): retry once via https
         Err(url::ParseError::RelativeUrlWithoutBase) => Url::parse(&format!("https://{raw}"))?,
         Err(e) => return Err(e.into()),
     };
@@ -81,15 +83,15 @@ pub fn extract_favicon_host(raw: &str) -> Result<String> {
 #[derive(Debug, Clone)]
 pub struct FaviconFetcher {
     http: reqwest::Client,
-    /// scheme + authority 前缀；真实路径为 `https://{host}`，测试注入本地 fake。
+    /// scheme + authority prefix; in production this is `https://{host}`, tests inject a local fake.
     base: String,
 }
 
 impl FaviconFetcher {
-    /// Client：10s 超时 + UA + 不跟随重定向。
+    /// Client: 10s timeout + UA + no redirect following.
     ///
-    /// 重定向必须关——host 校验只覆盖 URL 字面 host，跟随跳转等于把
-    /// "打向哪里"的决定权交回给远端。
+    /// Redirects must stay off — host validation only covers the URL's literal host, and
+    /// following redirects would hand the decision of "where to hit" back to the remote.
     pub fn new() -> Result<Self> {
         let http = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(FETCH_TIMEOUT_SECS))
@@ -109,16 +111,16 @@ impl FaviconFetcher {
         self
     }
 
-    /// 抓取 `https://{host}/favicon.ico`。
+    /// Fetch `https://{host}/favicon.ico`.
     ///
-    /// 请求 URL 仅由已校验的 host 重建，不回带端口 / path / userinfo。
-    /// 响应侧防线：非 2xx bail（`Policy::none` 下 3xx 自然落此）→
-    /// Content-Length 预检 → Content-Type 归一（`text/` 拒，SPA 的
-    /// 200 + HTML 不能混进图标缓存）→ chunk 流式累计双保险超限 bail →
-    /// 空 body bail。
+    /// The request URL is rebuilt from the validated host only; port / path / userinfo are never
+    /// carried back. Response-side defenses: non-2xx bail (under `Policy::none`, 3xx naturally
+    /// lands here) → Content-Length pre-check → Content-Type normalization (`text/` rejected;
+    /// an SPA's 200 + HTML must not slip into the icon cache) → chunked streaming accumulation
+    /// as a second size-limit check, bailing on overflow → empty body bail.
     pub async fn fetch(&self, host: &str) -> Result<FaviconBlob> {
-        // fetch 是 pub 入口，host 再过一遍与 extract 相同的六规则
-        // （裸域名借道 https 后结果不变，IP/裸主机名在此被拒）
+        // fetch is a public entry point: run the host through the same six rules as extract again
+        // (bare domains come out unchanged after the https detour; IP/bare hostnames are rejected here)
         let host = extract_favicon_host(&format!("https://{host}"))?;
         let url = format!("{}{}/favicon.ico", self.base, host);
 
@@ -138,7 +140,7 @@ impl FaviconFetcher {
             }
         }
 
-        // 归一：取 `;` 前段 lowercase（去 charset 等参数）；缺省回退 ico
+        // Normalize: take the segment before `;`, lowercased (drops charset etc. parameters); default fallback is ico
         let mime_type = response
             .headers()
             .get(reqwest::header::CONTENT_TYPE)
@@ -177,7 +179,7 @@ impl FaviconFetcher {
 mod tests {
     use super::*;
 
-    // ---- extract_favicon_host：接受矩阵 ----
+    // ---- extract_favicon_host: acceptance matrix ----
 
     #[test]
     fn extracts_host_from_bare_domain() {
@@ -196,7 +198,7 @@ mod tests {
         );
     }
 
-    // ---- extract_favicon_host：拒绝矩阵 ----
+    // ---- extract_favicon_host: rejection matrix ----
 
     fn assert_rejected(raw: &str) {
         let err = extract_favicon_host(raw).expect_err(raw);
@@ -221,7 +223,7 @@ mod tests {
 
     #[test]
     fn rejects_ip_literals() {
-        // 云元数据 / 本机回环 / IPv6 / 十进制与十六进制 IPv4 缩写
+        // Cloud metadata / local loopback / IPv6 / decimal and hexadecimal IPv4 shorthand
         assert_rejected("https://169.254.169.254/latest/meta-data");
         assert_rejected("https://127.0.0.1/x");
         assert_rejected("https://[::1]/x");
@@ -233,21 +235,22 @@ mod tests {
     fn rejects_bare_hostnames() {
         assert_rejected("https://localhost");
         assert_rejected("localhost");
-        assert_rejected("intranet"); // 借道 https 后仍是单标签名
-        assert_rejected("localhost."); // 去尾点后才查点号
+        assert_rejected("intranet"); // still a single-label name after the https detour
+        assert_rejected("localhost."); // the dot check runs after the trailing dot is stripped
     }
 
     #[test]
     fn rejects_urls_without_host() {
-        // "https://" 在 parse 阶段即 EmptyHost 错误（非借道分支），同样拒绝
+        // "https://" fails at parse time with EmptyHost (not the detour branch); also rejected
         assert!(extract_favicon_host("https://").is_err());
     }
 
-    // ---- FaviconFetcher：本地 fake server 集成 ----
+    // ---- FaviconFetcher: local fake server integration ----
 
-    /// 起一个本地 fake favicon 源；返回注入用 base URL 和收到的请求行日志。
-    /// `status` / `headers` / `body` 逐字回写（headers 传完整行）；可选用
-    /// `content_length_override` 谎报 Content-Length（body 照发真实长度）。
+    /// Start a local fake favicon source; returns the base URL for injection and a log of received
+    /// request lines. `status` / `headers` / `body` are written back verbatim (headers are full
+    /// lines); optionally `content_length_override` lies about Content-Length (the body is still
+    /// sent at its real length).
     async fn spawn_fake_favicon(
         status: &'static str,
         headers: &'static [&'static str],
@@ -293,7 +296,7 @@ mod tests {
         (format!("http://{addr}/"), requests)
     }
 
-    /// 起一个 chunked 传输的 fake（无 Content-Length），单块写指定字节。
+    /// Start a chunked-transfer fake (no Content-Length), writing the given bytes in a single chunk.
     async fn spawn_fake_chunked(body: Vec<u8>) -> String {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
@@ -307,7 +310,7 @@ mod tests {
             let mut out =
                 b"HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n"
                     .to_vec();
-            // 单块写完整 body；reqwest 解析 chunked 后 content_length 为 None
+            // Write the full body in one chunk; after reqwest parses the chunked encoding, content_length is None
             out.extend_from_slice(format!("{:x}\r\n", body.len()).as_bytes());
             out.extend_from_slice(&body);
             out.extend_from_slice(b"\r\n0\r\n\r\n");
@@ -338,9 +341,9 @@ mod tests {
         assert_eq!(blob.mime_type, "image/png");
         assert_eq!(blob.data, PNG_BYTES);
 
-        // URL 仅由 host 重建：真实 base 下 path 恒为 /favicon.ico；
-        // 测试注入本地 base 后 host 落在 path 前段，形态必须是
-        // GET /{host}/favicon.ico（不会带端口之外的任何杂项）
+        // URL is rebuilt from the host alone: with the real base the path is always /favicon.ico;
+        // once a test injects a local base, the host lands at the front of the path, so the shape
+        // must be GET /{host}/favicon.ico (no extras beyond the port)
         let requests = requests.lock().unwrap();
         assert!(
             requests[0].starts_with("GET /example.com/favicon.ico HTTP/1.1"),
@@ -388,7 +391,7 @@ mod tests {
 
     #[tokio::test]
     async fn fetch_rejects_text_responses() {
-        // SPA 常见陷阱：200 + HTML（index.html 兜底路由），混进缓存必然破图
+        // Common SPA trap: 200 + HTML (the index.html fallback route); letting it into the cache guarantees broken icons
         let (base, _) = spawn_fake_favicon(
             "HTTP/1.1 200 OK",
             &["Content-Type: text/html; charset=utf-8"],
@@ -407,7 +410,7 @@ mod tests {
 
     #[tokio::test]
     async fn fetch_rejects_oversized_content_length_before_reading_body() {
-        // Content-Length 谎报 600KB（body 其实很小）——预检必须在读 body 前 bail
+        // Content-Length lies about 600KB (the body is actually tiny) — the pre-check must bail before reading the body
         let (base, _) = spawn_fake_favicon(
             "HTTP/1.1 200 OK",
             &["Content-Type: image/png"],
@@ -426,7 +429,7 @@ mod tests {
 
     #[tokio::test]
     async fn fetch_rejects_oversized_streaming_body() {
-        // chunked 响应无 Content-Length → 预检跳过，流式累计双保险必须拦下
+        // A chunked response has no Content-Length → the pre-check is skipped, so the streaming accumulation must catch the over-limit body
         let base = spawn_fake_chunked(vec![0u8; MAX_FAVICON_BYTES + 1]).await;
         let err = FaviconFetcher::new()
             .unwrap()
@@ -452,7 +455,7 @@ mod tests {
 
     #[tokio::test]
     async fn fetch_revalidates_host() {
-        // fetch 是 pub 入口：IP host 即便绕过 extract 直呼也要被拒
+        // fetch is a public entry point: an IP host is rejected even if the caller bypasses extract and calls it directly
         let err = FaviconFetcher::new()
             .unwrap()
             .fetch("127.0.0.1")

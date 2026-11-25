@@ -1,4 +1,5 @@
-//! 交易请求、签名交易、元数据与时间戳 helper 域测试。
+//! Tests for the transaction-request, signed-transaction, metadata and
+//! timestamp helper domains.
 
 use super::*;
 
@@ -49,8 +50,8 @@ async fn test_transaction_requests_and_signed_transactions() {
     assert_eq!(stats.failed_transactions, 0);
 
     // One successful broadcast: signs the first request.
-    // create_signed_transaction 现在同一事务里把 transaction_requests
-    // 的 signed_at 标记为已签（2026-11-13 深审 Major 修复）。
+    // create_signed_transaction now marks transaction_requests.signed_at as
+    // signed within the same transaction (2026-11-13 deep audit, Major fix).
     let success = SignedTransaction {
         id: Uuid::new_v4(),
         request: request.clone(),
@@ -73,12 +74,14 @@ async fn test_transaction_requests_and_signed_transactions() {
     };
     repo.create_signed_transaction(&success).await.unwrap();
 
-    // 第二个请求先落库再签：请求行不存在会报 NotFound（老测试靠旧缺陷
-    // 合同——第二笔签名引用了从未落库的请求 id）。
+    // The second request is persisted before being signed: a missing request row
+    // reports NotFound (the old test leaned on the old buggy contract — the
+    // second signature referenced a request id that was never persisted).
     request.id = Uuid::new_v4();
     repo.create_transaction_request(&request).await.unwrap();
 
-    // 已签请求退出待签集合（不再可重复触发签名），剩下的仍是第二笔
+    // The signed request leaves the pending set (signing can no longer be
+    // re-triggered); the second one is what remains.
     let pending = repo.get_pending_requests(&created.id).await.unwrap();
     assert_eq!(pending.len(), 1);
     assert_eq!(pending[0].id, request.id);
@@ -97,7 +100,8 @@ async fn test_transaction_requests_and_signed_transactions() {
     };
     repo.create_signed_transaction(&failed).await.unwrap();
 
-    // 第二笔签完：待签集合清空，请求行的 signed_at 已落库
+    // With the second one signed: the pending set is empty and the request row's
+    // signed_at has been persisted
     let pending = repo.get_pending_requests(&created.id).await.unwrap();
     assert_eq!(pending.len(), 0);
     let signed_at: Option<i64> =
@@ -108,8 +112,8 @@ async fn test_transaction_requests_and_signed_transactions() {
             .unwrap();
     assert!(signed_at.is_some(), "signed request must carry signed_at");
 
-    // 深审 Major 回归（2026-11-13）：签名引用从未落库的请求必须报
-    // NotFound，不得静默成功。
+    // Deep-audit Major regression (2026-11-13): a signature referencing a request
+    // that was never persisted must report NotFound, not silently succeed.
     let ghost = SignedTransaction {
         id: Uuid::new_v4(),
         request: TransactionRequest {

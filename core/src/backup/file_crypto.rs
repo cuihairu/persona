@@ -1,12 +1,15 @@
-//! PERSENC1 字节加密：与 CLI `--encrypt` 导出文件字节级互解。
+//! PERSENC1 byte encryption: byte-level interoperable with the CLI
+//! `--encrypt` export files.
 //!
-//! 格式（自 CLI `utils/file_crypto` 平移，字节布局不可变）：
+//! Format (ported verbatim from the CLI `utils/file_crypto`; the byte layout
+//! must not change):
 //! `[magic:8]"PERSENC1" [salt_len:1][salt] [nonce_len:1][nonce]
 //! [kdf mem_kib:4 LE] [enc_len:8 LE] [ciphertext...]`
 //!
-//! KDF：Argon2id（salt 随机 16B、key 32B；解密侧只从头部读 mem_kib，
-//! iterations/parallelism 恒 3/1——历史格式如此，保持兼容）。
-//! 加密：AES-256-GCM（nonce 12B）。
+//! KDF: Argon2id (salt is a random 16B, key is 32B; the decrypt side reads
+//! only mem_kib from the header — iterations/parallelism are fixed at 3/1,
+//! that is what the legacy format dictates and we stay compatible).
+//! Encryption: AES-256-GCM (12B nonce).
 
 use aes_gcm::{aead::Aead, Aes256Gcm, KeyInit};
 use anyhow::{anyhow, Result};
@@ -16,7 +19,8 @@ use zeroize::Zeroize;
 
 const MAGIC: &[u8; 8] = b"PERSENC1";
 
-/// Argon2id 参数（写入头部的只有 mem_kib；见模块注释）。
+/// Argon2id parameters (only mem_kib is written to the header; see the module
+/// comment).
 pub struct KdfParams {
     pub mem_kib: u32,
     pub iterations: u32,
@@ -33,12 +37,14 @@ impl Default for KdfParams {
     }
 }
 
-/// 是否为 PERSENC1 密文（魔数探测；restore 链路先探测再走解密）。
+/// Whether this is PERSENC1 ciphertext (magic detection; the restore path
+/// probes first, then decrypts).
 pub fn is_persona_encrypted(data: &[u8]) -> bool {
     data.len() >= MAGIC.len() && &data[..MAGIC.len()] == MAGIC
 }
 
-/// 加密任意字节（备份链：明文恒为 gzip 过的快照；导出链：文件内容）。
+/// Encrypt arbitrary bytes (backup chain: the plaintext is always a gzipped
+/// snapshot; export chain: file contents).
 pub fn encrypt_bytes(
     plaintext: &[u8],
     passphrase: &str,
@@ -81,7 +87,8 @@ pub fn encrypt_bytes(
     Ok(out)
 }
 
-/// 解密 PERSENC1 字节；口令错或文件损坏均报错（GCM 认证失败）。
+/// Decrypt PERSENC1 bytes; a wrong passphrase or a corrupted file both error
+/// out (GCM authentication failure).
 pub fn decrypt_bytes(data: &[u8], passphrase: &str) -> Result<Vec<u8>> {
     let mut cursor = 0usize;
     if data.len() < MAGIC.len() || &data[..MAGIC.len()] != MAGIC {
@@ -112,8 +119,9 @@ pub fn decrypt_bytes(data: &[u8], passphrase: &str) -> Result<Vec<u8>> {
             .ok_or_else(|| anyhow!("Bad header len"))?,
     ) as usize;
     cursor += 8;
-    // checked_add：enc_len 是文件里的 u64（不受信），`cursor + enc_len` 可能
-    // 溢出 usize 在 debug 下 panic（DoS）；先查后切片。
+    // checked_add: enc_len is a u64 straight from the file (untrusted), and
+    // `cursor + enc_len` could overflow usize and panic in debug builds (a
+    // DoS); check first, slice second.
     let ciphertext_end = cursor
         .checked_add(enc_len)
         .ok_or_else(|| anyhow!("Bad ciphertext len"))?;
@@ -121,7 +129,8 @@ pub fn decrypt_bytes(data: &[u8], passphrase: &str) -> Result<Vec<u8>> {
         .get(cursor..ciphertext_end)
         .ok_or_else(|| anyhow!("Bad ciphertext len"))?;
 
-    // 历史格式：解密侧 iterations/parallelism 恒 3/1（头部只存 mem_kib）
+    // Legacy format: on the decrypt side iterations/parallelism are fixed at
+    // 3/1 (the header only stores mem_kib)
     let argon = argon2(mem_kib, 3, 1)?;
     let mut key = [0u8; 32];
     argon
@@ -140,7 +149,7 @@ pub fn decrypt_bytes(data: &[u8], passphrase: &str) -> Result<Vec<u8>> {
 fn argon2(mem_kib: u32, iterations: u32, parallelism: u32) -> Result<Argon2<'static>> {
     let params = Params::new(mem_kib, iterations, parallelism, Some(32))
         .map_err(|e| anyhow!("Argon2 params error: {:?}", e))?;
-    // 与 CLI 原实现一致：secret 为空切片（无 pepper）
+    // Matches the original CLI implementation: empty secret slice (no pepper)
     Argon2::new_with_secret(&[], Algorithm::Argon2id, Version::V0x13, params)
         .map_err(|e| anyhow!("Argon2 init error: {:?}", e))
 }
@@ -149,7 +158,8 @@ fn argon2(mem_kib: u32, iterations: u32, parallelism: u32) -> Result<Argon2<'sta
 mod tests {
     use super::*;
 
-    // 测试 KDF 保持便宜：8 MiB；iterations 必须保持 3（解密侧假定 3/1）
+    // Keep the test KDF cheap: 8 MiB; iterations must stay at 3 (the decrypt
+    // side assumes 3/1)
     fn fast_kdf() -> KdfParams {
         KdfParams {
             mem_kib: 8 * 1024,
@@ -171,7 +181,7 @@ mod tests {
         let encrypted =
             encrypt_bytes(b"top secret payload", "passphrase", Some(fast_kdf())).unwrap();
         assert!(is_persona_encrypted(&encrypted));
-        // 密文里找不到明文
+        // The plaintext must not be visible in the ciphertext
         assert!(!encrypted
             .windows(b"top secret".len())
             .any(|w| w == b"top secret"));
@@ -206,8 +216,9 @@ mod tests {
                 v
             },
             {
-                // enc_len = u64::MAX：`cursor + enc_len` 会溢出 usize（debug 下
-                // panic）。checked_add 必须转为"Bad ciphertext len"而非崩溃。
+                // enc_len = u64::MAX: `cursor + enc_len` overflows usize
+                // (panics in debug). checked_add must turn this into
+                // "Bad ciphertext len" rather than crashing.
                 let mut v = MAGIC.to_vec();
                 v.push(16);
                 v.extend_from_slice(&[7u8; 16]);
@@ -232,8 +243,9 @@ mod tests {
         }
     }
 
-    /// 与 CLI 历史实现互解：用 KdfParams 默认头部布局手工解出 salt/nonce，
-    /// 确认头部长度布局与文档一致（格式回归钉子）。
+    /// Interoperable with the CLI's historical implementation: hand-decode
+    /// the salt/nonce using the KdfParams default header layout, confirming the
+    /// header length layout matches the documentation (a format regression pin).
     #[test]
     fn header_layout_is_stable() {
         let encrypted = encrypt_bytes(

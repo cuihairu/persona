@@ -1,6 +1,6 @@
 //!
-//! 拆分（LAY-022）：钱包查询见 `query.rs`，写入见 `write.rs`，
-//! 地址维护见 `address.rs`，交易域见 `transaction.rs`；测试按域分在 `tests/`。
+//! Split (LAY-022): wallet queries in `query.rs`, writes in `write.rs`,
+//! address maintenance in `address.rs`, transaction domain in `transaction.rs`; tests grouped by domain in `tests/`.
 use crate::models::wallet::{
     BlockchainNetwork, CryptoWallet, SignedTransaction, TransactionRequest, WalletAddress,
     WalletMetadata, WalletSecurityLevel,

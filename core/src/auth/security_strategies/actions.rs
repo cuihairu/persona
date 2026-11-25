@@ -1,5 +1,5 @@
-//! 策略动作与严重级：`SecurityAction` 动作载荷、`AuthMethod`、通知与
-//! 事件严重级枚举。
+//! Policy actions and severities: the `SecurityAction` action payload,
+//! `AuthMethod`, and the notification/event severity enums.
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;

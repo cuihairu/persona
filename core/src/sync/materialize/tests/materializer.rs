@@ -50,7 +50,7 @@ async fn remote_put_materializes_row_and_rewraps_key_under_local_master() {
     assert_eq!(row.tags, vec!["synced".to_string()]);
     assert!(row.is_favorite);
 
-    // item key 被本机主密钥重包，数据可正常解密。
+    // The item key is rewrapped to the local primary key, so the data decrypts normally.
     let hierarchy = KeyHierarchy::new(&master);
     let plaintext = hierarchy
         .decrypt_with_wrapped_key(row.wrapped_item_key.as_ref().unwrap(), &row.encrypted_data)
@@ -136,7 +136,7 @@ async fn tombstone_with_audit_rows_detaches_references_instead_of_fk_error() {
         .await
         .unwrap();
 
-    // 审计行引用该凭据（audit_logs.credential_id FK 是 NO ACTION）
+    // The audit row references the credential (audit_logs.credential_id FK is NO ACTION)
     sqlx::query(
         "INSERT INTO audit_logs (id, credential_id, action, resource_type, success, timestamp) \
          VALUES (?, ?, 'credential.viewed', 'credential', 1, ?)",
@@ -148,7 +148,7 @@ async fn tombstone_with_audit_rows_detaches_references_instead_of_fk_error() {
     .await
     .unwrap();
 
-    // 远端 tombstone：删行前必须先摘审计引用，否则 FK 787 拒删
+    // Remote tombstone: the audit reference must be detached before deleting the row, otherwise the FK rejects it with 787
     materializer
         .sync_repo
         .record_remote_op(&delete_op(item_id, remote, 4))
@@ -165,7 +165,7 @@ async fn tombstone_with_audit_rows_detaches_references_instead_of_fk_error() {
         .await
         .unwrap()
         .is_none());
-    // 审计行保留，引用已摘除
+    // The audit row survives with its reference detached
     let (detached,) =
         sqlx::query_as::<_, (i64,)>("SELECT COUNT(*) FROM audit_logs WHERE credential_id IS NULL")
             .fetch_one(db.pool())
@@ -194,7 +194,7 @@ async fn local_primary_is_skipped() {
         is_active: true,
         data: password_data("local"),
     };
-    // 主位是本机 op（device_id 相同）：主库是事实源，物化必须让路。
+    // The primary is a local op (same device_id): the primary store is the source of truth, so materialization must yield.
     materializer
         .sync_repo
         .record_remote_op(&put_op(item_id, local_device, 9, &snapshot, &group))
@@ -220,7 +220,7 @@ async fn pending_identity_defers_materialization() {
     let master = EncryptionService::new(&EncryptionService::generate_key());
     let item_id = Uuid::new_v4();
     let snapshot = SyncItemSnapshot {
-        identity_id: Uuid::new_v4(), // 未知身份：Identity 条目尚未同步
+        identity_id: Uuid::new_v4(), // Unknown identity: the Identity entry has not synced yet
         name: "悬空凭据".to_string(),
         credential_type: CredentialType::Password,
         security_level: SecurityLevel::Medium,
@@ -253,7 +253,7 @@ async fn pending_identity_defers_materialization() {
         .await
         .unwrap()
         .is_none());
-    // op 留在 oplog，下轮可补齐
+    // The op stays in the oplog and can be caught up next round
     assert_eq!(
         materializer
             .sync_repo
@@ -287,7 +287,7 @@ async fn true_conflict_materializes_winner_only() {
     };
     let device_a = Uuid::new_v4();
     let device_b = Uuid::new_v4();
-    // 同 lamport 异设备 = 真冲突；主位 = device_id 大者（§7 降序）。
+    // Same lamport, different devices = a real conflict; the primary is the one with the larger device_id (§7, descending).
     let (winner_device, loser_device) = if device_a > device_b {
         (device_a, device_b)
     } else {
@@ -322,12 +322,12 @@ async fn true_conflict_materializes_winner_only() {
         .unwrap()
         .unwrap();
     assert_eq!(row.name, winner_name);
-    // 败方留驻 oplog 冲突区，等阶段 3 裁决 UI。
+    // The loser stays resident in the oplog conflict area, awaiting phase 3's arbitration UI.
     let view = item_view(materializer.sync_repo.item_ops(item_id).await.unwrap());
     assert_eq!(view.primary.unwrap().device_id, winner_device);
     assert_eq!(view.conflicts.len(), 1);
     assert_eq!(view.conflicts[0].device_id, loser_device);
-    let _ = winner_device; // 已通过名称断言
+    let _ = winner_device; // Already asserted via the name
 }
 
 #[tokio::test]
@@ -377,7 +377,7 @@ async fn materialize_all_reports_and_is_idempotent() {
     assert_eq!(report.tombstoned, 1);
     assert!(report.pending_identity.is_empty());
 
-    // 重跑幂等：同样的结果，不重复也不报错。
+    // Re-running is idempotent: the same outcome, with no duplication and no error.
     let again = materializer
         .materialize_all(&master, &group, local_device)
         .await
@@ -385,15 +385,15 @@ async fn materialize_all_reports_and_is_idempotent() {
     assert_eq!(again, report);
 }
 
-/// 协议防御面：oplog 无该 item（调用方枚举与查询竞态）与
-/// 「Put 无 payload」的不变量违反都归 NoPrimary，且后者绝不写库。
+/// Protocol defense surface: an item with no op in the oplog (a caller enumeration racing the query) and
+/// the "put without payload" invariant violation both map to NoPrimary, and the latter never writes to the store.
 #[tokio::test]
 async fn no_primary_paths_never_touch_main_store() {
     let (_db, materializer, _identity_repo, group, _identity_id) = setup().await;
     let master = EncryptionService::new(&EncryptionService::generate_key());
     let other_device = Uuid::new_v4();
 
-    // 1) oplog 里没有这个 item 的任何 op。
+    // 1) No op for this item exists in the oplog.
     let ghost = Uuid::new_v4();
     let outcome = materializer
         .materialize_item(&ghost, &master, &group, other_device)
@@ -401,7 +401,7 @@ async fn no_primary_paths_never_touch_main_store() {
         .unwrap();
     assert_eq!(outcome, MaterializeOutcome::NoPrimary);
 
-    // 2) Put 不带 payload——fail-closed，不落半行。
+    // 2) A put carrying no payload — fail-closed, no half-written row.
     let item = Uuid::new_v4();
     let broken = SyncOp {
         op_id: Uuid::new_v4(),
@@ -432,15 +432,15 @@ async fn no_primary_paths_never_touch_main_store() {
         .is_none());
 }
 
-/// materialize_all 的报告面：pending 身份进报告留待下轮；单 item
-/// 快照损坏（wrapped key 合法但密文坏）走 Err 臂只记 warn，不中断
-/// 整批——两条 op 都留驻 oplog。
+/// The reporting surface of materialize_all: pending identities land in the report and wait for the next round; a
+/// single item with a corrupt snapshot (a valid wrapped key but bad ciphertext) takes the Err arm and is only
+/// warned about, without aborting the batch — both ops stay resident in the oplog.
 #[tokio::test]
 async fn materialize_all_reports_pending_and_tolerates_corrupt_snapshot() {
     let (_db, materializer, _identity_repo, group, _identity_id) = setup().await;
     let master = EncryptionService::new(&EncryptionService::generate_key());
 
-    // pending：引用未知身份（Identity 尚未同步）
+    // pending: references an unknown identity (Identity not synced yet)
     let pending_item = Uuid::new_v4();
     let pending_identity = Uuid::new_v4();
     let pending_snapshot = SyncItemSnapshot {
@@ -469,7 +469,7 @@ async fn materialize_all_reports_pending_and_tolerates_corrupt_snapshot() {
         .await
         .unwrap();
 
-    // 损坏：wrapped item key 合法（group 能拆），但密文解不出快照
+    // Corrupt: the wrapped item key is valid (the group can unwrap it), but the ciphertext yields no snapshot
     let corrupt_item = Uuid::new_v4();
     let broken = SyncOp {
         op_id: Uuid::new_v4(),

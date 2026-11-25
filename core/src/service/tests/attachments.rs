@@ -133,8 +133,10 @@ async fn test_attachment_encrypted_store_marks_and_scrambles_content() {
     assert_eq!(std::fs::read(&out_path).unwrap(), raw);
 }
 
-/// 加密附件复用凭据 item key 的核心保障：改密（rewrap）后附件仍可解密。
-/// rotation 只重包 wrapped_item_key，item key 本身不变，blob 无需重写。
+/// Core guarantee of encrypted attachments reusing the credential item key: attachments remain
+/// decryptable after a master password change (rewrap).
+/// Rotation only re-wraps wrapped_item_key; the item key itself is unchanged, so the blob does not
+/// need rewriting.
 #[tokio::test]
 async fn encrypted_attachment_survives_master_password_rotation() {
     let (db, mut service) = unlocked_service().await;
@@ -175,13 +177,14 @@ async fn encrypted_attachment_survives_master_password_rotation() {
         .unwrap();
     assert_eq!(plain, b"survive-rotation-payload".to_vec());
 
-    // 凭据本体同样可解（改密事务的既有承诺），防回归连带断言
+    // The credential body is still decryptable too (an existing promise of the change transaction); a regression guard
     let data = service.get_credential_data(&credential.id).await.unwrap();
     assert!(data.is_some());
 }
 
-/// legacy 凭据（wrapped_item_key NULL）首次挂加密附件时升级为 per-item key：
-/// 升级后凭据 payload 仍可读、行获得 wrapped key、附件可解密往返。
+/// A legacy credential (wrapped_item_key NULL) is upgraded to a per-item key when it first gets an
+/// encrypted attachment: after the upgrade the credential payload is still readable, the row gains
+/// a wrapped key, and the attachment round-trips decryptable.
 #[tokio::test]
 async fn attach_upgrades_legacy_credential_to_item_key() {
     let (db, mut service) = unlocked_service().await;
@@ -191,7 +194,7 @@ async fn attach_upgrades_legacy_credential_to_item_key() {
         .await
         .unwrap();
 
-    // 手工构造 legacy 行：encrypted_data 直接用主密钥封、无 wrapped key
+    // Build the legacy row by hand: encrypted_data sealed directly with the master key, no wrapped key
     let master = service.get_master_encryption_service().unwrap();
     let plaintext = CredentialData::Password(PasswordCredentialData {
         password: "legacy-pw".to_string(),
@@ -225,7 +228,7 @@ async fn attach_upgrades_legacy_credential_to_item_key() {
         .await
         .unwrap();
 
-    // 升级后：行有 wrapped key、凭据数据可解回原值、附件往返成功
+    // After the upgrade: the row has a wrapped key, the credential data decrypts back to the original value, and the attachment round-trips
     let upgraded = service
         .get_credential(&credential.id)
         .await
@@ -250,8 +253,8 @@ async fn attach_upgrades_legacy_credential_to_item_key() {
     assert_eq!(plain, b"legacy-attachment-bytes".to_vec());
 }
 
-/// retrieve_attachment 解密路径的三条防御臂：metadata 指向已删除凭据、
-/// legacy 行缺 per-item key、wrapped key 损坏——全部 fail-closed。
+/// Three defenses on the retrieve_attachment decryption path: metadata pointing at a deleted
+/// credential, a legacy row missing its per-item key, and a corrupted wrapped key — all fail-closed.
 #[tokio::test]
 async fn retrieve_attachment_decrypt_defensive_arms() {
     let (db, mut service) = unlocked_service().await;
@@ -275,9 +278,10 @@ async fn retrieve_attachment_decrypt_defensive_arms() {
         .await
         .unwrap();
 
-    // ① metadata 的 credential_id 指向已删除凭据。运行态的孤儿行来自
-    // 「删除凭据时 blob 清理失败只告警」的路径；FK 不会放行直接构造，
-    // 测试借连接级 PRAGMA 短暂绕过（用完即恢复，还回池里）。
+    // ① metadata's credential_id points at a deleted credential. At runtime an orphan row comes
+    // from the "blob cleanup failure on credential deletion only warns" path; an FK would not let
+    // it be constructed directly, so the test briefly bypasses it with a connection-level PRAGMA
+    // (restored right after, returned to the pool).
     let orphan = Uuid::new_v4().to_string();
     {
         let mut conn = db.pool().acquire().await.unwrap();
@@ -305,7 +309,7 @@ async fn retrieve_attachment_decrypt_defensive_arms() {
         "{err}"
     );
 
-    // ② legacy 行（无 per-item key）不能解密封存附件
+    // ② A legacy row (no per-item key) cannot decrypt a sealed attachment
     sqlx::query("UPDATE attachments SET credential_id = ? WHERE id = ?")
         .bind(credential.id.to_string())
         .bind(attachment_id.to_string())
@@ -326,7 +330,7 @@ async fn retrieve_attachment_decrypt_defensive_arms() {
         "{err}"
     );
 
-    // ③ wrapped key 损坏 → unwrap 失败
+    // ③ Corrupted wrapped key -> unwrap fails
     sqlx::query("UPDATE credentials SET wrapped_item_key = ? WHERE id = ?")
         .bind(vec![0u8, 1, 2, 3, 4, 5, 6, 7])
         .bind(credential.id.to_string())

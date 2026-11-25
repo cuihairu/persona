@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 /// Attachment metadata
-/// 附件元数据，存储在数据库中
+/// Stored in the database
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Attachment {
     /// Unique identifier
@@ -127,7 +127,7 @@ impl Attachment {
 }
 
 /// Attachment chunk for large file storage
-/// 用于大文件分块存储
+/// Chunked storage for large files
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AttachmentChunk {
     /// Chunk ID

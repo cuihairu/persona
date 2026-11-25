@@ -1,16 +1,21 @@
-//! PEM 家族私钥导入（PKCS#8 / PKCS#1 / SEC1）——OpenSSH 容器之外的常见格式。
+//! PEM-family private key import (PKCS#8 / PKCS#1 / SEC1) — formats common
+//! outside the OpenSSH container.
 //!
-//! `openssl genpkey`、`genrsa -traditional`、`ecparam -genkey` 的输出都走
-//! 这里。解码交给 RustCrypto 同系审计 crate：PKCS#8 用 `pkcs8`（含加密
-//! PBES2 解锁），PKCS#1/SEC1 字段级结构用 `pkcs1`、`p256`（无需自写
-//! DER），Ed25519 组装用 `ed25519-dalek`；本模块只做格式嗅探（PEM label
-//! 与 PKCS#8 algorithm OID）及 `ssh-key` 容器组装（入库口径复用
-//! `ssh_import`）。
+//! Output from `openssl genpkey`, `genrsa -traditional`, and
+//! `ecparam -genkey` all lands here. Decoding is delegated to the audited
+//! RustCrypto crates: PKCS#8 via `pkcs8` (including encrypted PBES2
+//! unlocking), PKCS#1/SEC1 field-level structures via `pkcs1` and `p256`
+//! (no hand-written DER), and Ed25519 assembly via `ed25519-dalek`. This
+//! module only does format sniffing (PEM label and PKCS#8 algorithm OID)
+//! plus `ssh-key` container assembly (reusing the `ssh_import` storage
+//! conventions).
 //!
-//! 口令口径与 OpenSSH 导入一致：加密 PKCS#8 在导入时解锁，入库存解锁后
-//! 的 OpenSSH PEM。受保护 PEM 没有明文公钥半边（不像 OpenSSH 容器），
-//! 预览（inspect）必须先解密才能算指纹——无口令的 inspect 直接报需要
-//! 口令，由调用方提示。
+//! Passphrase handling matches OpenSSH import: an encrypted PKCS#8 is
+//! unlocked at import time and the vault stores the unlocked OpenSSH PEM.
+//! A protected PEM has no plaintext public-key half (unlike the OpenSSH
+//! container), so an inspect must decrypt first to compute the
+//! fingerprint — an inspect without a passphrase errors out asking for one,
+//! and the caller surfaces the prompt.
 
 use crate::{PersonaError, PersonaResult};
 use pkcs8::der::asn1::{ObjectIdentifier, OctetStringRef};
@@ -18,19 +23,20 @@ use pkcs8::der::Decode;
 use pkcs8::{EncryptedPrivateKeyInfoOwned, PrivateKeyInfoOwned, SecretDocument};
 use ssh_key::private::{KeypairData, PrivateKey};
 
-/// PKCS#8 algorithm OID：rsaEncryption / ecPublicKey / Ed25519。
-/// ecPublicKey 的 parameters 携带命名曲线，P-256 与否交给 p256 校验。
+/// PKCS#8 algorithm OIDs: rsaEncryption / ecPublicKey / Ed25519.
+/// The ecPublicKey parameters carry a named curve; P-256 or not is left to the p256 check.
 const OID_RSA_ENCRYPTION: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.2.840.113549.1.1.1");
 const OID_EC_PUBLIC_KEY: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.2.840.10045.2.1");
 const OID_ED25519: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.3.101.112");
 
-/// PEM 头嗅探结果。OpenSSH 容器头不在其中——它由 ssh_import 的既有路径
-/// 先行处理（未命中任何已知头的输入也交给原路径报错，保持错误口径一致）。
+/// Result of PEM header sniffing. The OpenSSH container header is not here — it is
+/// handled first by the existing ssh_import path (inputs that match no known header
+/// also go to that path for the error, keeping the error reporting consistent).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum PemKind {
-    /// `-----BEGIN PRIVATE KEY-----`（明文 PKCS#8，算法看 OID）
+    /// `-----BEGIN PRIVATE KEY-----` (plaintext PKCS#8; algorithm determined by OID)
     Pkcs8,
-    /// `-----BEGIN ENCRYPTED PRIVATE KEY-----`（PBES2 加密 PKCS#8）
+    /// `-----BEGIN ENCRYPTED PRIVATE KEY-----` (PBES2-encrypted PKCS#8)
     EncryptedPkcs8,
     /// `-----BEGIN RSA PRIVATE KEY-----`（PKCS#1 RSAPrivateKey）
     Pkcs1Rsa,
@@ -38,7 +44,7 @@ pub(super) enum PemKind {
     Sec1Ec,
 }
 
-/// 识别 PEM label；不认识的头返回 None。
+/// Recognize a PEM label; returns None for unknown headers.
 pub(super) fn sniff_pem(content: &str) -> Option<PemKind> {
     let c = content.trim_start();
     if c.starts_with("-----BEGIN ENCRYPTED PRIVATE KEY-----") {
@@ -54,7 +60,7 @@ pub(super) fn sniff_pem(content: &str) -> Option<PemKind> {
     }
 }
 
-/// 明确不支持的格式的专门提示（区别于笼统的"无法识别"）。
+/// A dedicated hint for explicitly unsupported formats (distinct from a generic "unrecognized").
 pub(super) fn unsupported_format_note(content: &str) -> Option<String> {
     if content.contains("PuTTY-User-Key-File") {
         Some(
@@ -67,7 +73,7 @@ pub(super) fn unsupported_format_note(content: &str) -> Option<String> {
     }
 }
 
-/// 解码 PEM 私钥为 `ssh-key` 容器（已解锁明文）。
+/// Decode a PEM private key into an `ssh-key` container (unlocked plaintext).
 pub(super) fn decode(
     kind: PemKind,
     pem: &str,
@@ -86,8 +92,9 @@ pub(super) fn decode(
             decode_pkcs8(pem, Some(pass))
         }
         PemKind::Pkcs1Rsa => {
-            // pkcs1 的 DER 结构没有 pem 入口（DecodeRsaPrivateKey 只为 rsa crate
-            // 的高级类型实现），PEM 壳自己剥，内层走 der::Decode
+            // pkcs1's DER structure has no PEM entry point (DecodeRsaPrivateKey is only
+            // implemented for the rsa crate's high-level types), so strip the PEM shell
+            // ourselves and feed the inner layer through der::Decode
             let der = SecretDocument::from_pem(pem.trim())
                 .map_err(|e| {
                     PersonaError::InvalidInput(format!("Failed to parse RSA PKCS#1 PEM: {e}"))
@@ -103,18 +110,19 @@ pub(super) fn decode(
     }
 }
 
-/// PKCS#8：解出 `PrivateKeyInfo`（必要时先 PBES2 解密），按 algorithm OID
-/// 分发；内层 `private_key` 字节对 Ed25519 是 DER OCTET STRING 包着的
-/// 32B seed（RFC 8410 双层包裹）、对 EC 是 SEC1 ECPrivateKey DER
-/// （RFC 5958/RFC 5915）、对 RSA 是 RSAPrivateKey DER（RFC 5208 → PKCS#1）。
+/// PKCS#8: unwrap the `PrivateKeyInfo` (decrypting PBES2 first when needed) and
+/// dispatch by algorithm OID; the inner `private_key` bytes are a 32B seed wrapped
+/// in a DER OCTET STRING for Ed25519 (RFC 8410's double wrapping), SEC1
+/// ECPrivateKey DER for EC (RFC 5958/RFC 5915), and RSAPrivateKey DER for RSA
+/// (RFC 5208 → PKCS#1).
 fn decode_pkcs8(pem: &str, password: Option<&str>) -> PersonaResult<PrivateKey> {
-    // PEM → DER 用 SecretDocument（密钥材料落盘前 zeroize）
+    // PEM → DER via SecretDocument (key material is zeroized before it could ever hit disk)
     let der = SecretDocument::from_pem(pem.trim())
         .map_err(|e| {
             PersonaError::InvalidInput(format!("Failed to parse PKCS#8 private key PEM: {e}"))
         })?
         .1;
-    // 明文 DER 统一收敛为 SecretDocument（pki 借用其字节，须活得一样长）
+    // Plaintext DER is uniformly funneled into SecretDocument (pki borrows its bytes, so both must live equally long)
     let plain = match password {
         Some(pass) => {
             let encrypted =
@@ -138,9 +146,9 @@ fn decode_pkcs8(pem: &str, password: Option<&str>) -> PersonaResult<PrivateKey> 
 
     match pki.algorithm.oid {
         OID_ED25519 => {
-            // RFC 8410 §7：privateKey 外层 OCTET STRING 里再包一层 DER
-            // OCTET STRING（04 20 ‖ seed），两层都剥掉才到 32B seed
-            // der 0.8：引用类型的 DecodeValue 落在 &OctetStringRef 上
+            // RFC 8410 §7: inside privateKey's outer OCTET STRING is another DER
+            // OCTET STRING (04 20 ‖ seed); both layers must be stripped to reach the 32B seed
+            // der 0.8: the reference type's DecodeValue lands on &OctetStringRef
             let seed_ref =
                 <&OctetStringRef as pkcs8::der::Decode>::from_der(pki.private_key.as_bytes())
                     .map_err(|e| {
@@ -168,8 +176,8 @@ fn decode_pkcs8(pem: &str, password: Option<&str>) -> PersonaResult<PrivateKey> 
                 })?;
             Ok(build_ecdsa_p256(secret))
         }
-        // pkcs1 0.7 停在 der 0.7（pkcs8 0.11 已是 der 0.8），from_der 走
-        // 各自版本的 Decode trait，这里显式指定 pkcs1 侧避免歧义
+        // pkcs1 0.7 stays on der 0.7 (pkcs8 0.11 is already der 0.8), so from_der resolves
+        // each crate's own Decode trait; the pkcs1 side is specified explicitly here to avoid ambiguity
         OID_RSA_ENCRYPTION => build_rsa(
             <pkcs1::RsaPrivateKey as pkcs1::der::Decode>::from_der(pki.private_key.as_bytes())
                 .map_err(|e| {
@@ -182,7 +190,7 @@ fn decode_pkcs8(pem: &str, password: Option<&str>) -> PersonaResult<PrivateKey> 
     }
 }
 
-/// SEC1 `ECPrivateKey`（`BEGIN EC PRIVATE KEY`）；非 P-256 曲线在此报错。
+/// SEC1 `ECPrivateKey` (`BEGIN EC PRIVATE KEY`); non-P-256 curves error out here.
 fn decode_sec1(pem: &str) -> PersonaResult<PrivateKey> {
     let secret = p256::SecretKey::from_sec1_pem(pem.trim()).map_err(|e| {
         PersonaError::InvalidInput(format!(
@@ -194,25 +202,25 @@ fn decode_sec1(pem: &str) -> PersonaResult<PrivateKey> {
 
 fn build_ecdsa_p256(secret: p256::SecretKey) -> PrivateKey {
     let keypair = ssh_key::private::EcdsaKeypair::NistP256 {
-        // ssh-key 的字段类型是 sec1::EncodedPoint<U32>；From<PublicKey> 即非压缩点
+        // ssh-key's field type is sec1::EncodedPoint<U32>; From<PublicKey> yields the uncompressed point
         public: secret.public_key().into(),
         private: ssh_key::private::EcdsaPrivateKey::from(secret),
     };
-    // 组装错误只有曲线/尺寸不一致才可能触发，上面已按 P-256 校验过
+    // Assembly errors can only come from a curve/size mismatch, which was already validated as P-256 above
     PrivateKey::new(KeypairData::Ecdsa(keypair), "").expect("P-256 keypair validated by decode")
 }
 
-/// RSA（PKCS#8 / PKCS#1 统一在此）：pkcs1 的字段级结构公开 n/e/d/p/q/
-/// dp/dq/iqmp，SSH 线格式恰好只要 d/iqmp/p/q + n/e，coefficient 即 iqmp，
-/// 无需自算任何大数。多素数 RSA（>2 素数）明确拒绝。
+/// RSA (PKCS#8 / PKCS#1 unified here): pkcs1's field-level structure exposes n/e/d/p/q/
+/// dp/dq/iqmp; the SSH wire format needs exactly d/iqmp/p/q + n/e, the coefficient is
+/// iqmp, and no big-number is computed by hand. Multi-prime RSA (>2 primes) is rejected explicitly.
 fn build_rsa(der_key: pkcs1::RsaPrivateKey<'_>) -> PersonaResult<PrivateKey> {
     if der_key.other_prime_infos.is_some() {
         return Err(PersonaError::InvalidInput(
             "Multi-prime RSA private keys are not supported".to_string(),
         ));
     }
-    // ssh-key 0.7 把 Mpint/公私钥构造全部换成带规范校验的 new()：
-    // from_positive_bytes 直接返回 Mpint，范围检查集中在 new() 一处报错。
+    // ssh-key 0.7 switched all Mpint/public-private-key constructors to canonical-checking new()s:
+    // from_positive_bytes returns an Mpint directly, and range checks are concentrated in one error path in new().
     let mp = ssh_key::Mpint::from_positive_bytes;
     let public = ssh_key::public::RsaPublicKey::new(
         mp(der_key.public_exponent.as_bytes()),
@@ -238,10 +246,10 @@ mod tests {
     use crate::crypto::ssh_import::{import_private_key_file, inspect_private_key_file};
     use ssh_key::HashAlg;
 
-    // 一次性 openssl 生成的测试钥匙（从未用于任何真实场景）：
+    // One-shot openssl-generated test keys (never used in any real scenario):
     //   openssl genpkey -algorithm ed25519 / RSA 2048 / ecparam prime256v1
-    //   openssl rsa -traditional；加密件 -aes-128-cbc -pass pass:fixture-pass-1
-    // 指纹由 ssh-keygen -lf 独立得出，钉死在此作第三方裁判。
+    //   openssl rsa -traditional; encrypted ones with -aes-128-cbc -pass pass:fixture-pass-1
+    // Fingerprints obtained independently via ssh-keygen -lf and pinned here as a third-party referee.
     const ED25519_PKCS8: &str = "-----BEGIN PRIVATE KEY-----
 MC4CAQAwBQYDK2VwBCIEIKMDimteeX8+ZNEj5dWYYmLfi6CqdX8cZsKWyvXSUGTb
 -----END PRIVATE KEY-----";
@@ -322,7 +330,7 @@ qkbvrvWWzBSQPEC0FxGXt6QnwJvTdA==
 
     fn assert_roundtrip(imported: &crate::crypto::ssh_import::ImportedSshKey, fp: &str) {
         assert_eq!(imported.fingerprint, fp);
-        // 独立裁判：入库的 OpenSSH PEM 能被 ssh-key 原生解析，且指纹一致
+        // Independent referee: the stored OpenSSH PEM must re-parse natively under ssh-key with a matching fingerprint
         let reparsed = PrivateKey::from_openssh(&imported.private_key_pem)
             .expect("converted PEM must re-parse as OpenSSH");
         assert_eq!(
@@ -373,7 +381,7 @@ qkbvrvWWzBSQPEC0FxGXt6QnwJvTdA==
         let imported = import_private_key_file(ED25519_ENCRYPTED_PKCS8, Some(ENCRYPTED_PASS))
             .expect("correct passphrase must unlock");
         assert_roundtrip(&imported, ED25519_ENCRYPTED_FP);
-        // 入库口径：解锁后的明文 OpenSSH PEM，加密壳不随行
+        // Storage convention: the unlocked plaintext OpenSSH PEM; the encrypted shell does not travel along
         assert!(!imported.private_key_pem.contains("ENCRYPTED"));
     }
 
@@ -413,7 +421,7 @@ qkbvrvWWzBSQPEC0FxGXt6QnwJvTdA==
     fn unrecognized_content_lists_supported_formats() {
         let err = import_private_key_file("hello world", None).unwrap_err();
         let msg = err.to_string();
-        // 无 PEM 头：明说不是 PEM + 期望格式清单全列
+        // No PEM header: say plainly it is not a PEM + list the full expected-format roster
         assert!(msg.contains("not a PEM private key file"), "{msg}");
         assert!(msg.contains("BEGIN OPENSSH PRIVATE KEY"), "{msg}");
         assert!(msg.contains("BEGIN RSA PRIVATE KEY"), "{msg}");

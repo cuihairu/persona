@@ -1,5 +1,5 @@
-//! `events-server` feature：把事件批 POST 到 persona-server 的
-//! `/api/v1/events`（Bearer 认证，契约见 server/src/api/events.rs）。
+//! `events-server` feature: POST event batches to persona-server's
+//! `/api/v1/events` (Bearer auth; contract in server/src/api/events.rs).
 
 use crate::events::emitter::{EventSink, SendReport};
 use crate::events::wire::WireEvent;
@@ -9,27 +9,30 @@ use flate2::Compression;
 use std::io::Write;
 use std::time::Duration;
 
-/// 明文 body 超过该阈值才 gzip：审计事件是重复结构的 JSON，百条批次
-/// 体积可观；小批次（单事件约 200 B）压缩比常为负，头开销 + CPU 白花。
+/// Only gzip a plain-text body once it exceeds this threshold: audit events
+/// are JSON with repetitive structure, and batches of hundreds of entries
+/// get sizable; for small batches (a single event is ~200 B) the compression
+/// ratio is often negative, wasting header overhead plus CPU.
 const GZIP_THRESHOLD_BYTES: usize = 1024;
 
-/// persona-server 事件上报端。token 由调用方注入（宿主负责安全存储），
-/// core 不读环境变量、不落盘。
+/// persona-server event reporting endpoint. The token is injected by the caller
+/// (the host is responsible for secure storage); core neither reads
+/// environment variables nor persists anything to disk.
 pub struct ServerEventSink {
     http: reqwest::Client,
     endpoint: String,
     token: String,
 }
 
-/// server 202 响应体 `{"accepted": u64, "duplicates": u64}` 的镜像
-/// （id 幂等去重后：accepted = 新收，duplicates = 重复）。
+/// Mirror of the server 202 response body `{"accepted": u64, "duplicates": u64}`
+/// (after id-based idempotent deduplication: accepted = newly received, duplicates = repeats).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
 pub struct IngestResponse {
     pub accepted: u64,
     pub duplicates: u64,
 }
 
-/// gzip 压缩（默认等级）。内存 `Vec` writer 的 `io::Error` 实际不可达。
+/// gzip compression (default level). The `io::Error` from an in-memory `Vec` writer is effectively unreachable.
 fn gzip_payload(payload: Vec<u8>) -> Vec<u8> {
     let mut encoder = GzEncoder::new(
         Vec::with_capacity(payload.len() / 2),
@@ -42,7 +45,7 @@ fn gzip_payload(payload: Vec<u8>) -> Vec<u8> {
 }
 
 impl ServerEventSink {
-    /// `base_url` 形如 `http://127.0.0.1:3000`（尾斜杠容错，可带反代前缀）。
+    /// `base_url` looks like `http://127.0.0.1:3000` (tolerates a trailing slash, may carry a reverse-proxy prefix).
     pub fn new(base_url: &str, token: impl Into<String>) -> Result<Self> {
         let http = reqwest::Client::builder()
             .timeout(Duration::from_secs(10))
@@ -60,8 +63,9 @@ impl ServerEventSink {
 #[async_trait::async_trait]
 impl EventSink for ServerEventSink {
     async fn send(&self, events: Vec<WireEvent>) -> Result<SendReport> {
-        // 序列化后按阈值二选一：大批发 gzip（server 侧
-        // RequestDecompressionLayer 解压），小批明文直发。
+        // After serialization, pick one of two paths by threshold: large batches go
+        // out gzipped (the server's RequestDecompressionLayer decompresses), small
+        // batches go out as plain text.
         let payload = serde_json::to_vec(&serde_json::json!({ "events": events }))?;
         let gzipped = payload.len() > GZIP_THRESHOLD_BYTES;
         let body = if gzipped {
@@ -74,7 +78,7 @@ impl EventSink for ServerEventSink {
             .http
             .post(&self.endpoint)
             .bearer_auth(&self.token)
-            // .body(bytes) 不再自动设 Content-Type，必须显式
+            // .body(bytes) no longer sets Content-Type automatically — must set it explicitly
             .header(reqwest::header::CONTENT_TYPE, "application/json");
         if gzipped {
             request = request.header(reqwest::header::CONTENT_ENCODING, "gzip");
@@ -98,7 +102,7 @@ impl EventSink for ServerEventSink {
     }
 }
 
-/// 错误消息里的响应体预览；按字符截断（字节截断会切在多字节字符中间 panic）。
+/// Preview of the response body in an error message; truncated by character (byte truncation can slice through a multi-byte character and panic).
 fn truncate_preview(body: &str, max_chars: usize) -> String {
     if body.chars().count() <= max_chars {
         body.to_string()
@@ -126,11 +130,11 @@ mod tests {
         body: String,
     }
 
-    /// 与 breach.rs `spawn_fake_hibp` 同型：收一个请求、捕获、回固定响应。
-    /// 读循环按 Content-Length 收满整个请求体（JSON body 比 GET 大，不能
-    /// 假设单次 read 收全）。body 若声明 gzip 则解压回明文再存——测试
-    /// 断言的是解密后的 JSON 形状，与 server 端 RequestDecompressionLayer
-    /// 的行为对齐。
+    /// Same shape as breach.rs `spawn_fake_hibp`: accept one request, capture it, respond with a fixed body.
+    /// The read loop consumes the entire request body according to Content-Length (a JSON body is
+    /// bigger than a GET; cannot assume a single read collects it all). If the body declares gzip
+    /// it is decompressed back to plain text before being stored — the test asserts the decrypted
+    /// JSON shape, aligned with the server-side RequestDecompressionLayer behavior.
     async fn spawn_fake_server(
         status: &'static str,
         response_body: &'static str,
@@ -175,7 +179,7 @@ mod tests {
                     user_agent = v.trim().to_string();
                 }
             }
-            // body 是字节安全切片（gzip 是二进制），头部才走 lossy 文本
+            // the body is a byte-safe slice (gzip is binary); only headers go through lossy text
             let body_start = raw.find("\r\n\r\n").map_or(raw.len(), |i| i + 4);
             let body_bytes = buf[body_start.min(buf.len())..].to_vec();
             let body = if content_encoding.eq_ignore_ascii_case("gzip") {
@@ -204,7 +208,7 @@ mod tests {
         (format!("http://{addr}"), captured)
     }
 
-    /// 头部完整且 body 读满 Content-Length 即收全。
+    /// Complete once the headers are complete and the body has read to Content-Length.
     fn request_complete(buf: &[u8]) -> bool {
         let Some(pos) = buf.windows(4).position(|w| w == b"\r\n\r\n") else {
             return false;
@@ -251,9 +255,9 @@ mod tests {
         assert_eq!(captured.authorization, "Bearer s3cret");
         assert!(captured.content_type.starts_with("application/json"));
         assert!(captured.user_agent.starts_with("persona-emitter/"));
-        // 小批（2 条 ≈ 200 B < 1 KiB 阈值）直发明文，无压缩头
+        // Small batch (2 events ≈ 200 B < the 1 KiB threshold) goes out plain-text, no compression header
         assert!(captured.content_encoding.is_empty());
-        // body 形状对齐 server 契约：{"events": [IngestEvent, ...]}
+        // body shape matches the server contract: {"events": [IngestEvent, ...]}
         let body: serde_json::Value = serde_json::from_str(&captured.body).unwrap();
         let events = body["events"].as_array().unwrap();
         assert_eq!(events.len(), 2);
@@ -267,14 +271,14 @@ mod tests {
             spawn_fake_server("HTTP/1.1 202 Accepted", r#"{"accepted":50,"duplicates":0}"#).await;
         let sink = ServerEventSink::new(&base_url, "s3cret").unwrap();
 
-        let events = wire_events(50); // ≈ 5.5 KiB 明文，远超 1 KiB 阈值
+        let events = wire_events(50); // ≈ 5.5 KiB plain-text, well past the 1 KiB threshold
         let report = sink.send(events).await.unwrap();
         assert_eq!(report.accepted, 50);
 
         let captured = captured.lock().unwrap().take().unwrap();
         assert_eq!(captured.content_encoding, "gzip");
         assert!(captured.content_type.starts_with("application/json"));
-        // 假服务器已按 gzip 解压：JSON 与发送内容一致
+        // The fake server has decompressed per gzip: the JSON matches what was sent
         let body: serde_json::Value = serde_json::from_str(&captured.body).unwrap();
         assert_eq!(body["events"].as_array().unwrap().len(), 50);
     }
@@ -300,7 +304,7 @@ mod tests {
 
     #[tokio::test]
     async fn connection_refused_is_an_error() {
-        // 先拿一个已关闭的端口：bind 后立刻 drop
+        // First grab a closed port: drop immediately after bind
         let addr = {
             let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
             listener.local_addr().unwrap()
@@ -309,8 +313,9 @@ mod tests {
         assert!(sink.send(wire_events(1)).await.is_err());
     }
 
-    // 401 响应体超长（>200 字符）：预览按字符截断并以 … 结尾——按字节
-    // 截断会切在多字节字符中间 panic，这里连同多字节字符一起验证。
+    // An oversized 401 response body (>200 chars): the preview truncates by character and ends with
+    // an ellipsis — byte truncation can slice through a multi-byte character and panic, so the
+    // multi-byte character is verified here as well.
     #[tokio::test]
     async fn oversized_error_body_is_truncated_in_preview() {
         let long_body: &'static str = Box::leak(format!("{}世", "x".repeat(300)).into_boxed_str());
@@ -325,8 +330,8 @@ mod tests {
         );
     }
 
-    // request_complete 直接单测：头部未收全/Content-Length 未读满都
-    // 不算完成；无 Content-Length 时头部收全即放行。
+    // request_complete unit-tested directly: incomplete headers / an unread Content-Length
+    // both count as incomplete; with no Content-Length, complete headers are enough to accept.
     #[test]
     fn request_complete_rejects_partial_and_headerless_requests() {
         assert!(!request_complete(b""));

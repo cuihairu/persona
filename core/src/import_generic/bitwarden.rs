@@ -1,5 +1,5 @@
 // ---------------------------------------------------------------------------
-// Bitwarden JSON schema（明文导出；宽容：缺字段按 None 处理）
+// Bitwarden JSON schema (plaintext export; lenient: missing fields read as None)
 // ---------------------------------------------------------------------------
 
 use std::collections::HashMap;
@@ -92,8 +92,8 @@ struct BitwardenCard {
     code: Option<StringOrNumber>,
 }
 
-/// Bitwarden 的 exp_month/exp_year/code 在明文 JSON 里通常是字符串，
-/// 但有些导出器会写成数字——两者都容忍。
+/// Bitwarden's exp_month/exp_year/code are usually strings in a plaintext JSON,
+/// but some exporters write them as numbers — accept both.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(untagged)]
 enum StringOrNumber {
@@ -123,7 +123,8 @@ pub(super) fn parse_bitwarden_json(bytes: &[u8]) -> Result<BitwardenExport> {
     let value: serde_json::Value =
         serde_json::from_slice(strip_utf8_bom(bytes)).context("Bitwarden JSON 解析失败")?;
 
-    // 密码保护导出在 items 之前就要拦下：其字段全是密文，解析无意义。
+    // A password-protected export must be intercepted before items: every field is
+    // ciphertext, so parsing is pointless.
     if value.get("encrypted").and_then(|e| e.as_bool()) == Some(true) {
         bail!(
             "该 Bitwarden JSON 是密码保护导出（encrypted: true），内容为密文；\
@@ -249,7 +250,7 @@ pub(super) fn plan_bitwarden(
                             .code
                             .map(|c| c.as_str().to_string())
                             .unwrap_or_default(),
-                        // Bitwarden 导出没有银行名；品牌落 card_type。
+                        // Bitwarden exports carry no bank name; the brand goes into card_type.
                         bank_name: String::new(),
                         card_type: brand,
                     }),
@@ -280,7 +281,7 @@ pub(super) fn plan_bitwarden(
                     });
                     continue;
                 }
-                // 公钥首 token 即算法名（"ssh-ed25519 AAAA..."）
+                // The first token of the public key is the algorithm name ("ssh-ed25519 AAAA...")
                 let key_type = public_key
                     .split_whitespace()
                     .next()

@@ -3,10 +3,10 @@ use super::*;
 #[test]
 fn accept_join_rejects_illegal_public_values() {
     let (mut host, _invite) = PairingHost::new_invite().unwrap();
-    // 空 client_public → BigUint 0 ≡ 0 (mod N) → 拒绝
+    // Empty client_public → BigUint 0 ≡ 0 (mod N) → rejected
     assert!(host.accept_join(&[]).is_err());
     let (mut host2, _invite) = PairingHost::new_invite().unwrap();
-    // 全零 client_public 同款拒绝
+    // An all-zero client_public is rejected the same way
     assert!(host2.accept_join(&[0u8; 64]).is_err());
 }
 

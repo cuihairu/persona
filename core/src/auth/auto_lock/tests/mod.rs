@@ -11,7 +11,7 @@ mod manager;
 mod monitor;
 mod sensitive;
 
-// ---- 共享 helper ----
+// ---- Shared helpers ----
 
 fn session_info_with_idle_seconds(idle_secs: u64) -> SessionInfo {
     let mut session = Session::new("u".to_string(), Duration::from_secs(3600));

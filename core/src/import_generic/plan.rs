@@ -21,13 +21,14 @@ pub(super) fn generic_identity(identity_name: &str, source_label: &str) -> Plann
     }
 }
 
-/// folder 列（Bitwarden folder / 通用 group）映射为标签：CSV 导出的分组
-/// 是库内轻量分组，不该膨胀成身份。
+/// Map the folder column (Bitwarden folder / generic group) to tags: a CSV
+/// export's group is a lightweight grouping inside the vault, not an identity.
 pub(super) fn folder_tags(folder: &Option<String>) -> Vec<String> {
     folder.iter().cloned().collect()
 }
 
-/// 无标题列时的兜底名：URL 主机（站点登录的直觉名）→ 用户名 → 行号。
+/// Fallback name when there is no title column: the URL host (the intuitive
+/// name for a site login) → the username → the row number.
 pub(super) fn row_title_fallback(
     username: &Option<String>,
     url: &Option<String>,
@@ -57,9 +58,10 @@ fn host_of(url: &str) -> Option<String> {
         .map(str::to_string)
 }
 
-/// 登录形条目（CSV 普通行 / Bitwarden login）：密码凭据 + TOTP 拆分。
-/// 口径与 1PUX 一致：SecurityLevel::High、TOTP 命名 `{title} (TOTP)`、
-/// TOTP 解析失败进 skipped（reason 不带密值）。
+/// A login-shaped entry (a plain CSV row / Bitwarden login): a password
+/// credential plus a TOTP split.
+/// Same conventions as 1PUX: SecurityLevel::High, TOTP named `{title} (TOTP)`,
+/// and a TOTP parse failure goes to skipped (reason carries no secret values).
 #[allow(clippy::too_many_arguments)]
 pub(super) fn plan_login_like(
     plan: &mut ImportPlan,
@@ -73,7 +75,7 @@ pub(super) fn plan_login_like(
     is_favorite: bool,
     extra_metadata: HashMap<String, String>,
 ) {
-    // 与 1PUX 相同：@ 形用户名同时落 email。
+    // Same as 1PUX: an @-shaped username is also stored as the email.
     let email = username.as_ref().filter(|u| u.contains('@')).cloned();
     plan.credentials.push(PlannedCredential {
         vault_uuid: GENERIC_VAULT_KEY.to_string(),

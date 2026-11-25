@@ -4,8 +4,9 @@ use crate::{PersonaError, Result};
 use reqwest::Method;
 use serde::{Deserialize, Serialize};
 
-/// sessions 端点证据：SRP 15 分钟令牌或 passkey 断言，**恰好一种**
-/// （服务器两者同给/都缺 = 422，不猜语义）。
+/// Evidence for the sessions endpoint: an SRP 15-minute token or a passkey
+/// assertion — **exactly one** (the server returns 422 if both are given or
+/// both are missing; we do not guess at the semantics).
 #[derive(Debug, Default, Serialize)]
 pub struct CreateAccountSessionRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -21,8 +22,8 @@ pub struct AccountSessionInfo {
 }
 
 impl AccountsApi {
-    /// POST /accounts/{id}/sessions（Bearer）。凭恰好一种登录证据（SRP 15
-    /// 分钟令牌或 passkey 断言）兑换 24h 账号会话令牌。
+    /// POST /accounts/{id}/sessions (Bearer). Redeems a 24h account session token using
+    /// exactly one piece of login evidence (an SRP 15-minute token or a passkey assertion).
     pub async fn create_account_session(
         &self,
         account_id: &str,
@@ -42,8 +43,8 @@ impl AccountsApi {
         Ok(value)
     }
 
-    /// DELETE /accounts/{id}/sessions/{session_token}（Bearer）。登出该
-    /// 会话令牌。204 无体成功。
+    /// DELETE /accounts/{id}/sessions/{session_token} (Bearer). Logs that session token
+    /// out. A bodyless 204 means success.
     pub async fn revoke_account_session(
         &self,
         account_id: &str,

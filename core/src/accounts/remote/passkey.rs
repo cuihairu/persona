@@ -8,7 +8,7 @@ pub struct PasskeyCreateOptionsRequest {
     pub rp_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rp_name: Option<String>,
-    /// base64url，1-64 字节
+    /// base64url, 1-64 bytes
     pub user_handle: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub user_name: Option<String>,
@@ -16,14 +16,14 @@ pub struct PasskeyCreateOptionsRequest {
     pub user_display_name: Option<String>,
 }
 
-/// 响应是**裸** WebAuthn creation options JSON（服务器用 `serde_json::json!`
-/// 组装的非类型化对象），客户端原样透传。
+/// The response is the **raw** WebAuthn creation options JSON (an untyped object the server
+/// assembles with `serde_json::json!`); the client passes it through verbatim.
 pub type PasskeyCreationOptions = serde_json::Value;
 
 #[derive(Debug, Serialize)]
 pub struct PasskeyRegisterRequest {
-    /// 认证器 attestation 响应（`{credentialId, attestationObject}`，均
-    /// base64url 串）——服务器按 `serde_json::Value` 接收，原样透传。
+    /// The authenticator attestation response (`{credentialId, attestationObject}`, both
+    /// base64url strings) — the server accepts it as `serde_json::Value` and passes it through verbatim.
     pub attestation_response: serde_json::Value,
     /// base64url
     pub client_data_json: String,
@@ -46,7 +46,7 @@ pub struct PasskeyLoginOptionsResponse {
     pub rp_id: String,
 }
 
-/// passkey 断言证据（sessions 端点；字段全为 base64url 编码）。
+/// Passkey assertion evidence (sessions endpoint; all fields are base64url-encoded).
 #[derive(Debug, Serialize)]
 pub struct PasskeyAssertionRequest {
     pub credential_id: String,
@@ -57,8 +57,8 @@ pub struct PasskeyAssertionRequest {
 }
 
 impl AccountsApi {
-    /// POST /accounts/{id}/passkeys/create-options（公开）。响应是裸
-    /// creation options（含服务器签发的 120s 一次性挑战）。
+    /// POST /accounts/{id}/passkeys/create-options (public). The response is the raw
+    /// creation options (including the server-issued 120s one-time challenge).
     pub async fn passkey_create_options(
         &self,
         account_id: &str,
@@ -87,8 +87,8 @@ impl AccountsApi {
         Ok(value)
     }
 
-    /// POST /accounts/{id}/passkeys/register（公开）。提交认证器
-    /// attestation；服务器做 RP 侧完整验证后存公钥材料。
+    /// POST /accounts/{id}/passkeys/register (public). Submits the authenticator
+    /// attestation; after full RP-side verification the server stores the public key material.
     pub async fn passkey_register(
         &self,
         account_id: &str,
@@ -110,7 +110,7 @@ impl AccountsApi {
         Ok(value)
     }
 
-    /// POST /accounts/{id}/passkeys/login-options（公开，登录仪式第一步）。
+    /// POST /accounts/{id}/passkeys/login-options (public; the first step of the login ceremony).
     pub async fn passkey_login_options(
         &self,
         account_id: &str,

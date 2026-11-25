@@ -1,5 +1,6 @@
-//! 后台监控任务：周期巡检触发警告与自动上锁，以及任务所需的
-//! 纯判定 helper（warning / auto-lock / 距上锁秒数）。
+//! Background monitoring task: the periodic sweep that raises warnings and
+//! applies auto-lock, plus the pure decision helpers it needs (warning,
+//! auto-lock, and seconds until lock).
 
 use std::time::{Duration, SystemTime};
 
@@ -96,8 +97,9 @@ impl AutoLockManager {
                                 });
                             }
 
-                            // Log audit event if repository available（带全
-                            // session 上下文，与 helper 三处一致；写库后尽力上报）
+                            // Log audit event if repository available (with the
+                            // full session context, consistent with the three
+                            // helper sites; best-effort emission after the write)
                             if let Some(ref repo) = audit_repo {
                                 let user = *current_user.read().await;
                                 let lock_details = match lock_reason {

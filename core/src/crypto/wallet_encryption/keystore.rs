@@ -1,5 +1,5 @@
-//! Web3 Secret Storage v3（geth/MyCrypto 交换格式）：结构、
-//! scrypt/pbkdf2 边界与导入导出。
+//! Web3 Secret Storage v3 (the geth/MyCrypto interchange format): structure,
+//! scrypt/pbkdf2 limits, and import/export.
 
 use crate::{PersonaError, PersonaResult};
 use aes::cipher::{KeyIvInit, StreamCipher};
@@ -110,8 +110,10 @@ pub(super) fn derive_keystore_key(
                     "Invalid scrypt params: zero work factor".to_string(),
                 ));
             }
-            // 先校验参数：n/r 是文件里的 u32（不受信），128*r*n 可能溢出 u64 在
-            // debug 下 panic（DoS）或 release 下回绕误过上限；checked_mul 先查。
+            // Validate the params up front: n/r are u32 values read from the file
+            // (untrusted), and 128*r*n can overflow u64, panicking in debug
+            // (DoS) or wrapping in release and slipping past the cap;
+            // checked_mul checks for it first.
             let mem = 128u64
                 .checked_mul(u64::from(*r))
                 .and_then(|v| v.checked_mul(u64::from(*n)))
@@ -276,7 +278,8 @@ pub fn export_to_keystore_with_params(
             "Invalid scrypt params: log_n above 23".to_string(),
         ));
     }
-    // 同 import 侧：128*r*n 用 checked_mul 防溢出（r 未受限，log_n≤23 已查）。
+    // Same as on the import side: use checked_mul for 128*r*n to avoid overflow
+    // (r is unrestricted, log_n<=23 already checked).
     let mem = 128u64
         .checked_mul(u64::from(params.r))
         .and_then(|v| v.checked_mul(1u64 << params.log_n))

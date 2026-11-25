@@ -1,6 +1,7 @@
-//! enter / exit 的库内单事务：删除（先剥离 audit FK 引用）与恢复
-//! （父表在前 `INSERT OR REPLACE`），含 favicon 缓存清理与 settings
-//! travel 旗标读写。
+//! The in-database single transaction for enter / exit: deletion (stripping
+//! audit FK references first) and restore (`INSERT OR REPLACE` with parent
+//! tables first), including favicon cache pruning and the settings travel
+//! flag read/write.
 
 use serde_json::Value;
 use sqlx::{AssertSqlSafe, SqlitePool};
@@ -11,9 +12,10 @@ use super::pack::placeholders;
 use super::PACKED_TABLES_IN_INSERT_ORDER;
 use crate::{PersonaError, PersonaResult};
 
-/// enter 的库内删除（单事务）：剥离 audit FK → 清 favicon 缓存 →
-/// 删 change_history → settings 置位 + 清 active 指针 → 删 identities
-/// （级联清其余表）。
+/// enter's in-database deletion (single transaction): strip audit FKs ->
+/// prune the favicon cache -> delete change_history -> set the settings
+/// flag + clear the active pointer -> delete identities (which cascades to
+/// the remaining tables).
 pub(crate) async fn apply_enter_tx(pool: &SqlitePool, pack: &TravelPack) -> PersonaResult<()> {
     let marked = &pack.identity_ids;
     let in_identities = placeholders(marked.len());
@@ -24,9 +26,11 @@ pub(crate) async fn apply_enter_tx(pool: &SqlitePool, pack: &TravelPack) -> Pers
         .map_err(|e| PersonaError::Database(format!("begin enter tx: {e}")))?;
     let conn = &mut *tx;
 
-    // audit_logs.identity_id / credential_id 有 FK（sqlx 默认 foreign_keys=ON），
-    // 必须先剥离引用才能删 identities（与 delete_identity 的
-    // clear_identity_reference 同理）；审计行本身留下（只记 id 无明文）。
+    // audit_logs.identity_id / credential_id are FKs (sqlx defaults to
+    // foreign_keys=ON), so the references must be stripped before identities
+    // can be deleted (same reasoning as delete_identity's
+    // clear_identity_reference); the audit rows themselves stay (ids only,
+    // no plaintext).
     {
         let sql = format!(
             "UPDATE audit_logs SET identity_id = NULL WHERE identity_id IN ({in_identities})"
@@ -61,12 +65,15 @@ pub(crate) async fn apply_enter_tx(pool: &SqlitePool, pack: &TravelPack) -> Pers
             .map_err(|e| PersonaError::Database(format!("clearing audit credential refs: {e}")))?;
     }
 
-    // favicon_cache 无 FK；必须在 DELETE 之前清（URL 是 credentials 明文
-    // 列，行删后就无法区分哪些 host 只被被移除凭据引用了）
+    // favicon_cache has no FK; it must be pruned before the DELETE (the URL
+    // is a plaintext column of credentials, and once the rows are gone there
+    // is no way to tell which hosts were referenced only by the removed
+    // credentials)
     #[cfg(feature = "favicon")]
     prune_favicon_cache_tx(conn, marked).await?;
 
-    // change_history 无 FK，须显式删（快照含明文元数据，随 pack 走）
+    // change_history has no FK and must be deleted explicitly (its snapshots
+    // hold plaintext metadata and travel with the pack)
     {
         let sql = format!("DELETE FROM change_history WHERE entity_id IN ({in_identities})");
         let mut query = sqlx::query(AssertSqlSafe(sql.as_str()));
@@ -79,7 +86,8 @@ pub(crate) async fn apply_enter_tx(pool: &SqlitePool, pack: &TravelPack) -> Pers
             .map_err(|e| PersonaError::Database(format!("removing change history: {e}")))?;
     }
 
-    // settings 置位 + active 指针处理（workspaces 首行，单 workspace 惯例）
+    // Set the settings flag + handle the active pointer (first workspaces
+    // row, single-workspace convention)
     set_travel_mode_in_settings(conn, true, pack.active_identity_id.is_some()).await?;
 
     {
@@ -100,9 +108,11 @@ pub(crate) async fn apply_enter_tx(pool: &SqlitePool, pack: &TravelPack) -> Pers
     Ok(())
 }
 
-/// 事务内清理 favicon_cache 中仅被被移除凭据引用的 host（明文 host 是
-/// 被移除身份的浏览痕迹；仍被保留凭据引用的 host 保留）。非 favicon
-/// 构建下抓取入口不存在、缓存恒空，无需清理。
+/// Prune hosts from favicon_cache that are referenced only by removed
+/// credentials (a plaintext host is a browsing trace of a removed identity;
+/// hosts still referenced by kept credentials are preserved). Without the
+/// favicon feature there is no fetching entry point and the cache is always
+/// empty, so nothing needs pruning.
 #[cfg(feature = "favicon")]
 async fn prune_favicon_cache_tx(
     conn: &mut sqlx::SqliteConnection,
@@ -110,8 +120,10 @@ async fn prune_favicon_cache_tx(
 ) -> PersonaResult<()> {
     use crate::favicon::extract_favicon_host;
 
-    // 被移除凭据与保留凭据各自的 host 集（URL 是明文列，无需解密）。
-    // 不可抓取的 URL（IP/内网/非 https）本就进不了缓存，提取失败即跳过。
+    // The host sets of the removed and the kept credentials (URL is a
+    // plaintext column, no decryption needed). Unfetchable URLs (IP /
+    // internal / non-https) can never reach the cache, so a failed
+    // extraction is skipped.
     let hosts_of = |urls: Vec<Option<String>>| -> Vec<String> {
         let mut hosts = Vec::new();
         for url in urls.into_iter().flatten() {
@@ -177,8 +189,9 @@ async fn prune_favicon_cache_tx(
     Ok(())
 }
 
-/// exit 的库内恢复（单事务，失败回滚、sidecar 保留）：INSERT OR REPLACE
-/// 父表在前 + settings 复位 + active 指针还原。
+/// exit's in-database restore (single transaction; failure rolls back and
+/// leaves the sidecar in place): `INSERT OR REPLACE` with parent tables
+/// first + reset settings + restore the active pointer.
 pub(crate) async fn apply_exit_tx(pool: &SqlitePool, pack: &TravelPack) -> PersonaResult<()> {
     let mut tx = pool
         .begin()
@@ -208,8 +221,9 @@ pub(crate) async fn apply_exit_tx(pool: &SqlitePool, pack: &TravelPack) -> Perso
     Ok(())
 }
 
-/// settings JSON 里 travel_mode/travel_entered_at 的读写（直连 SQL，
-/// 不绕 WorkspaceRepository——travel.rs 不依赖类型化 repo）。
+/// Read/write travel_mode/travel_entered_at inside the settings JSON (plain
+/// SQL, bypassing WorkspaceRepository -- travel does not depend on typed
+/// repositories).
 async fn set_travel_mode_in_settings(
     conn: &mut sqlx::SqliteConnection,
     active: bool,

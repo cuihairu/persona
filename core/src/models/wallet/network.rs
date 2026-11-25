@@ -1,4 +1,5 @@
-//! 链与钱包类型：支持的网络、钱包形态与 BIP 版本（Display 往返存储字符串）。
+//! Chains and wallet types: supported networks, wallet forms and BIP versions
+//! (stored strings round-tripped through Display).
 
 use serde::{Deserialize, Serialize};
 

@@ -1,5 +1,5 @@
-//! Credential 仓储：`CredentialRepository` 与 `Repository<Credential>` 实现。
-//! 原 repository.rs 拆分（LAY-017）：credential 段原样迁出。
+//! Credential repository: `CredentialRepository` and the `Repository<Credential>` implementation.
+//! Split out of the original repository.rs (LAY-017): the credential section was migrated verbatim.
 
 use super::Repository;
 use crate::models::{Credential, CredentialType, SecurityLevel};
@@ -42,7 +42,7 @@ impl CredentialRepository {
         Ok(credentials)
     }
 
-    /// 全表列举（sync backfill 用：主库存在但 oplog 缺席的凭据灌入 oplog）
+    /// Full-table listing (for sync backfill: credentials present in the main database but absent from the oplog are poured into the oplog)
     pub async fn list_all(&self) -> Result<Vec<Credential>> {
         let rows = sqlx::query(
             r#"

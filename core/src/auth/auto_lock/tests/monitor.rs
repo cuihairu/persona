@@ -1,7 +1,8 @@
 use super::*;
 
-/// 后台监控超时落锁的审计行同样上报，且带全 session 上下文
-/// （session_id/user_id/details——修复原先裸 action 行的缺陷）。
+/// The audit row for a background-monitoring timeout lock is reported too,
+/// with the full session context (session_id/user_id/details — fixing the
+/// earlier bare action-only row).
 #[tokio::test]
 async fn background_timeout_lock_reports_session_context() {
     use crate::events::testing::{eventually, FakeSink};
@@ -51,7 +52,8 @@ async fn background_timeout_lock_reports_session_context() {
     manager.add_session(session).await.unwrap();
     manager.start_background_monitoring().await;
 
-    // ~2s 后后台任务按 inactivity 超时落锁并上报
+    // After ~2s the background task locks the session on the inactivity
+    // timeout and reports it.
     tokio::time::sleep(Duration::from_millis(2600)).await;
     manager.stop_background_monitoring().await;
 

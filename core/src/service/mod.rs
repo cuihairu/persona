@@ -78,11 +78,11 @@ pub struct PersonaService {
     audit_repo: AuditLogRepository,
     change_history_repo: ChangeHistoryRepository,
     attachment_manager: Option<AttachmentManager>,
-    /// favicon 缓存仓储（非 feature 门控：只依赖 sqlx；抓取才要 `favicon`）
+    /// favicon cache repository (not feature-gated: it only depends on sqlx; fetching needs `favicon`)
     favicon_repo: FaviconRepository,
-    /// workspace 设置仓储（读取密码过期策略等全局配置）
+    /// workspace settings repository (reads global configuration such as the password expiry policy)
     workspace_repo: WorkspaceRepository,
-    /// 数据库句柄（改主密码等跨表事务需要直接开事务）
+    /// database handle (cross-table transactions such as a master password change need a direct transaction)
     db: Database,
     /// AES-GCM service constructed from master key; used to wrap per-item keys
     master_encryption: Option<EncryptionService>,
@@ -95,14 +95,15 @@ pub struct PersonaService {
     auto_lock_manager: AutoLockManager,
     /// Current session ID for this service instance
     current_session_id: Arc<RwLock<Option<String>>>,
-    /// 可选审计事件上报器（`events::Emitter`；`set_event_emitter` 注入）
+    /// Optional audit event reporter (`events::Emitter`; injected via `set_event_emitter`)
     event_emitter: Option<Emitter>,
-    /// Connect token 审计/last_used 落库节流标记（key = token id 或指纹前缀，
-    /// 值 = 窗口起点）。内存态、进程重启即清——语义是防刷屏/批量写，
-    /// 不是访问限额（限额属宿主层 HTTP 面）。
+    /// Connect token audit/`last_used` persistence throttle marks (key = token id or fingerprint
+    /// prefix, value = window start). In-memory state, cleared on process restart — the
+    /// semantics are anti-spam/bulk-write, not an access rate limit (limits belong to the host's
+    /// HTTP layer).
     connect_audit_marks: Mutex<HashMap<String, Instant>>,
-    /// 同步捕获缝（E2EE_SYNC_DESIGN §5）。`None` = 未启用同步，写路径
-    /// 直接跳过（与 `attachment_manager` 同款可选组件模式）。
+    /// Sync capture seam (E2EE_SYNC_DESIGN §5). `None` = sync not enabled, and the write path
+    /// skips straight through (the same optional-component pattern as `attachment_manager`).
     sync_capture: RwLock<Option<Arc<dyn SyncCapture>>>,
 }
 

@@ -1,5 +1,7 @@
-//! 导入规划：把解析出的 1Password 导出映射为 persona 的身份/凭据计划
-//! （纯函数、无 IO；不支持的类别如实报告 skip，不做有损转换）。
+//! Import planning: mapping a parsed 1Password export onto a plan of persona
+//! identities/credentials
+//! (a pure function with no IO; unsupported categories are honestly reported as
+//! skipped, never lossily converted).
 
 use std::collections::HashMap;
 

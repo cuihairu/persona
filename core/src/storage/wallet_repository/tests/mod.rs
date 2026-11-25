@@ -1,5 +1,5 @@
-//! wallet_repository 拆分（LAY-022）测试枢纽：跨域共享 fixture/helper + 按域分组。
-//! 各分组经 `use super::*` 级联（枢纽导入与 helper 对后代可见）。
+//! Test hub for the wallet_repository split (LAY-022): cross-domain shared fixtures/helpers + grouping by domain.
+//! Each group cascades via `use super::*` (hub imports and helpers are visible to descendants).
 
 use super::*;
 use crate::models::wallet::{AddressType, WalletAddress, WalletType};
