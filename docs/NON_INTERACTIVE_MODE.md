@@ -361,24 +361,24 @@ kinds should match on the message text.
 **Best Practices:**
 
 1. **Use CI/CD secrets management:**
-   - GitHub Actions: `${{ secrets.PERSONA_MASTER_PASSWORD }}`
+   - GitHub Actions: <code v-pre>${{ secrets.PERSONA_MASTER_PASSWORD }}</code>
    - GitLab CI: `$MASTER_PASSWORD` (protected variable)
    - Jenkins: `credentials('persona-master-password')`
 
 2. **Clear environment variable after use:**
 
-   ```bash
-   unset PERSONA_MASTER_PASSWORD
-   ```
+```bash
+unset PERSONA_MASTER_PASSWORD
+```
 
 3. **Use temporary files with restricted permissions:**
 
-   ```bash
-   echo "$MASTER_PASSWORD" > /tmp/pw
-   chmod 600 /tmp/pw
-   PERSONA_MASTER_PASSWORD=$(cat /tmp/pw) persona export ...
-   rm /tmp/pw
-   ```
+```bash
+echo "$MASTER_PASSWORD" > /tmp/pw
+chmod 600 /tmp/pw
+PERSONA_MASTER_PASSWORD=$(cat /tmp/pw) persona export ...
+rm /tmp/pw
+```
 
 4. **Avoid logging:**
    - Disable shell history: `set +o history`
