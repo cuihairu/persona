@@ -59,11 +59,12 @@ pub(crate) async fn add_credential(
     let mut service = init_service(config, ui).await?;
     let identity = resolve_identity(&mut service, &identity_name).await?;
 
-    // note / identity / software-license 不走 secret 路径（各自必填字段）；
-    // api-key 走 secret 路径但 data 变体必须是 ApiKey（见该臂注释）；
-    // 其余单秘密类型（password 等）落 `_` 兜底。
+    // note / identity / software-license do not go through the secret path (each has its
+    // required fields); api-key goes through the secret path but the data variant must be
+    // ApiKey (see that arm's comment); the remaining single-secret types (password, etc.)
+    // fall through to the `_` catch-all.
     let credential_data = match credential_type {
-        // Secure Note：正文走 --note（或可见提示输入），密码路径不适用。
+        // Secure Note: the body goes through --note (or a visible prompt); the password path does not apply.
         CredentialTypeOption::Note => {
             if secret.is_some() || prompt_secret {
                 bail!("Note content is provided via --note; --secret/--prompt-secret do not apply");
@@ -76,7 +77,7 @@ pub(crate) async fn add_credential(
                 note: note_text.clone(),
             })
         }
-        // Identity：姓名必填（缺省提示），其余可选字段只在提供时入库。
+        // Identity: the name is required (prompted by default); the other optional fields are stored only when provided.
         CredentialTypeOption::Identity => {
             if secret.is_some() || prompt_secret {
                 bail!("Identity fields do not use --secret/--prompt-secret");
@@ -105,7 +106,7 @@ pub(crate) async fn add_credential(
                 job_title,
             })
         }
-        // Software License：license key 必填（缺省提示），元数据可选。
+        // Software License: the license key is required (prompted by default); metadata is optional.
         CredentialTypeOption::SoftwareLicense => {
             if secret.is_some() || prompt_secret {
                 bail!("License key is provided via --license-key; --secret/--prompt-secret do not apply");
@@ -126,10 +127,11 @@ pub(crate) async fn add_credential(
                 valid_until,
             })
         }
-        // API key：与 password 同为「单秘密」取值路径，但 data 变体必须是
-        // ApiKey——曾走 `_` 兜底被建成 Password 变体（type=ApiKey +
-        // data=Password），`secrets resolve IDENTITY/ITEM/api_key` 直接报
-        // "unknown field"，按变体消费的下游（cockpit 等）同样失效。
+        // API key: like password it goes through the "single-secret" retrieval path, but
+        // the data variant must be ApiKey — it once fell through the `_` catch-all and was
+        // built as a Password variant (type=ApiKey + data=Password), and `secrets resolve
+        // IDENTITY/ITEM/api_key` then reported "unknown field" immediately, while downstream
+        // consumers that match on the data variant (cockpit, etc.) broke too.
         CredentialTypeOption::ApiKey => {
             let secret_value = if prompt_secret {
                 super::super::service::prompt_credential_secret(ui)?

@@ -37,7 +37,7 @@ async fn push_uploads_a_decryptable_snapshot_and_reports_the_verdict() {
         !pushed.starts_with(b"SQLite format 3"),
         "推上去的必须是密文，不是明文快照"
     );
-    // 承诺的语义是「服务器上的东西能用同一口令恢复」：真解一次。
+    // The promised semantics are "what is on the server can be restored with the same passphrase": actually decrypt it once.
     let staged = dir.path().join("verify.db");
     restore_backup_bytes(&pushed, "backup-pass", &staged).unwrap();
     assert_eq!(identity_count(&staged).await, 1);
@@ -102,7 +102,7 @@ async fn list_renders_rows_and_passes_limit_cursor_through() {
     let dir = tempfile::tempdir().unwrap();
     let config = config_for(&dir);
 
-    // 三页：有行+有游标 → 空页 → 有行无游标（三次打印三种形态）
+    // Three pages: rows + cursor → empty page → rows without cursor (three prints, three shapes)
     let pages = [
         serde_json::json!({
             "backups": [
@@ -128,7 +128,7 @@ async fn list_renders_rows_and_passes_limit_cursor_through() {
         assert_eq!(method, "GET");
         assert_eq!(path.split('?').next(), Some("/api/v1/backups"));
         let index = tick.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        // 只有第二次调用带游标，且必须是服务器上一页给的那个值（原样回传）
+        // Only the second call carries a cursor, and it must be exactly the value the server gave on the previous page (echoed back verbatim)
         if index == 1 {
             assert!(path.contains("cursor=cur-2"), "游标必须回传: {path}");
         } else {
@@ -197,7 +197,7 @@ async fn pull_writes_verified_bytes_and_refuses_a_mismatch() {
     let digest = sha256_hex(&blob.bytes);
     source.close().await;
 
-    // ① ETag 与字节一致 → 落盘内容必须与服务器给的完全相同
+    // (1) ETag matches the bytes -> the file written must be byte-identical to what the server sent
     let bytes = blob.bytes.clone();
     let etag = format!("\"{digest}\"");
     let first_etag = etag.clone();
@@ -213,7 +213,7 @@ async fn pull_writes_verified_bytes_and_refuses_a_mismatch() {
         .unwrap();
     assert_eq!(std::fs::read(&out).unwrap(), blob.bytes);
 
-    // ② ETag 对不上 → 完整性校验报错，且绝不留半个文件
+    // (2) ETag mismatch -> the integrity check errors out, and it must never leave a half-written file
     let (addr, _log) = spawn_stub(Box::new(|_, _, _| {
         (
             200,
@@ -233,7 +233,7 @@ async fn pull_writes_verified_bytes_and_refuses_a_mismatch() {
     );
     assert!(!bad.exists(), "校验失败不该落盘");
 
-    // ③ 校验通过但写文件失败 → 错误必须点名「写」而不是「下载」
+    // (3) verification passes but writing the file fails -> the error must name the "write", not the "download"
     let bytes2 = blob.bytes.clone();
     let etag2 = etag.clone();
     let (addr, _log) = spawn_stub(Box::new(move |_, _, _| {
@@ -282,7 +282,7 @@ async fn restore_from_server_id_downloads_swaps_and_keeps_bak() {
     let config = config_for(&dir);
     let db_path = config.get_database_path();
 
-    // 备份出自只有 1 个 identity 的库；现网库继续长到 2 个
+    // The backup comes from a vault with a single identity; the live vault then grows to two
     let source = seeded_db(&dir.path().join("source.db")).await;
     let blob = create_backup_bytes(source.pool(), "backup-pass", None)
         .await
@@ -330,7 +330,7 @@ async fn delete_cancels_locally_and_reports_the_server_verdict() {
     let dir = tempfile::tempdir().unwrap();
     let config = config_for(&dir);
 
-    // ① 取消：确认门在构造客户端之前，一个字节都不该出网
+    // (1) Cancel: the confirmation gate comes before the client is built, so not a single byte should leave the machine
     let (addr, log) = spawn_stub(Box::new(|_, _, _| {
         json_response(200, &serde_json::json!({}))
     }));
@@ -342,7 +342,7 @@ async fn delete_cancels_locally_and_reports_the_server_verdict() {
     assert!(ui.exhausted());
     assert!(log.lock().unwrap().is_empty(), "取消后不得打到服务器");
 
-    // ② --yes → DELETE 到位、带 Bearer
+    // (2) --yes -> the DELETE lands, with Bearer auth
     execute_with(delete_args("b1", true), &config, &ScriptedUi::new())
         .await
         .unwrap();
@@ -354,7 +354,7 @@ async fn delete_cancels_locally_and_reports_the_server_verdict() {
         assert_eq!(served[0].auth.as_deref(), Some("Bearer test-token"));
     }
 
-    // ③ 404 视为幂等成功（已删过的版本）
+    // (3) 404 counts as an idempotent success (an already-deleted backup)
     let (addr, _log) = spawn_stub(Box::new(|_, _, _| {
         json_response(
             404,
@@ -366,7 +366,7 @@ async fn delete_cancels_locally_and_reports_the_server_verdict() {
         .await
         .unwrap();
 
-    // ④ 其他状态码 → 报错带服务器的 message
+    // (4) any other status code -> the error carries the server's message
     let (addr, _log) = spawn_stub(Box::new(|_, _, _| {
         json_response(
             500,

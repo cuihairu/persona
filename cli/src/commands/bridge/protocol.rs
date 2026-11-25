@@ -256,7 +256,7 @@ pub(super) struct FindForSaveResponse {
 #[serde(rename_all = "snake_case")]
 pub(super) struct SaveCredentialPayload {
     pub(super) origin: String,
-    /// Explicit user action on the save bar (保存/更新 click). Required —
+    /// Explicit user action on the save bar (the save/update button click). Required —
     /// the host refuses to write the vault behind a silent page event.
     #[serde(default)]
     pub(super) user_gesture: bool,

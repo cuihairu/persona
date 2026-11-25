@@ -3,9 +3,10 @@ use anyhow::{bail, Context, Result};
 use crate::utils::prompt::PromptUi;
 use persona_core::backup::BackupClient;
 
-/// `PERSONA_SERVER_URL` + `PERSONA_SERVER_TOKEN` 都非空才构造客户端
-/// （fail-closed，与事件上报同一惯例；缺一只直接报错——备份命令没有
-/// "静默跳过"的合理降级）。
+/// Build the client only when both `PERSONA_SERVER_URL` + `PERSONA_SERVER_TOKEN`
+/// are non-empty (fail-closed, the same convention as event reporting; a missing
+/// one errors outright — there is no sensible "silently skip" fallback for the
+/// backup commands).
 pub(super) fn client_from_env() -> Result<BackupClient> {
     let url = non_blank_env("PERSONA_SERVER_URL");
     let token = non_blank_env("PERSONA_SERVER_TOKEN");
@@ -21,9 +22,11 @@ fn non_blank_env(key: &str) -> Option<String> {
         .filter(|value| !value.trim().is_empty())
 }
 
-/// 备份口令解析：`--passphrase-env VAR`（必须已设且非空——显式指定
-/// 变量名后变量缺失是配置错误，不静默回退）→ `PERSONA_PAYLOAD_PASSPHRASE`
-/// → 交互提示。push 带确认（新口令要录两遍），restore 不带（口令是既有的）。
+/// Backup passphrase resolution: `--passphrase-env VAR` (must already be set and
+/// non-empty — a missing variable after an explicit name is a configuration
+/// error, no silent fallback) → `PERSONA_PAYLOAD_PASSPHRASE` → interactive prompt.
+/// push asks for confirmation (a new passphrase is typed twice); restore does not
+/// (the passphrase already exists).
 pub(super) fn resolve_passphrase(
     env_var: Option<&str>,
     kind: &str,

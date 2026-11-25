@@ -1,10 +1,12 @@
-//! 身份编辑命令：加载 → 展示现值 → 交互/单字段/参数三种编辑路径 →
-//! 校验 → 确认 → 保存。
+//! Identity edit command: load → show current values → one of the three edit
+//! paths (interactive / single field / arguments) → validate → confirm → save.
 //!
-//! # 模块布局
+//! # Module layout
 //!
-//! 类型（`EditArgs` 与编辑快照 `Identity`）留枢纽——私有字段被所有子模块
-//! 与测试共同读写；流程编排、字段编辑、自定义属性、展示、持久化分居子模块。
+//! The types (`EditArgs` and the `Identity` edit snapshot) stay in this hub —
+//! their private fields are read and written by every submodule and by the
+//! tests; flow orchestration, field editing, custom attributes, display, and
+//! persistence each live in their own submodule.
 
 use clap::Args;
 use serde_json::Value;

@@ -33,7 +33,8 @@ pub async fn execute(args: SuggestArgs, config: &CliConfig) -> Result<()> {
     let env_override = std::env::var("PERSONA_CONTEXT_OVERRIDE").ok();
     let result = compute_suggestion(config, &paths, &signals, env_override.as_deref()).await?;
     if args.short {
-        // PS1 友好：只打分身名，无候选/仅 active 时不打（提示层静默）。
+        // PS1-friendly: only score identity names; print nothing when there are no candidates
+        // or only active (the prompt layer stays silent).
         if let Some(top) = result.candidates.first() {
             println!("{}", top.identity);
         }
@@ -47,7 +48,7 @@ pub async fn execute(args: SuggestArgs, config: &CliConfig) -> Result<()> {
     Ok(())
 }
 
-/// 两张映射表的路径（真实执行取环境推导；测试注入 TempDir 路径）。
+/// The paths of the two mapping tables (taken from the environment at runtime; tests inject TempDir paths).
 pub(crate) struct MapPaths {
     pub global: PathBuf,
     pub repo_local: PathBuf,
@@ -62,8 +63,10 @@ impl MapPaths {
     }
 }
 
-/// 建议计算：开库（不解锁——名字与 active 指针不是秘密材料，锁着也要能
-/// 出建议）取有效分身名与 active，读两张映射表，交给 core 纯决策。
+/// Suggestion computation: open the vault (no unlock — the identity name and the active pointer are
+/// not secret material, so suggestions must still work while locked), take the
+/// effective identity name and active, read both mapping tables, and hand them
+/// to core for a pure decision.
 pub(crate) async fn compute_suggestion(
     config: &CliConfig,
     paths: &MapPaths,
@@ -107,8 +110,10 @@ pub(crate) async fn compute_suggestion(
     let repo_local = read_map_or_empty(&paths.repo_local);
     let global = read_map_or_empty(&paths.global);
 
-    // 历史学习（默认关）：开关打开时读同目录 30 天窗口计数，交给
-    // core 纯决策出学习候选。读失败按「无学习数据」降级（设计 §10）。
+    // History learning (off by default): when enabled, read the 30-day window
+    // counts from the same directory and hand them to core's pure decision to
+    // produce learning candidates. A read failure degrades as "no learning data"
+    // (design §10).
     let learn_counts = match ContextLearnRepository::new(db.clone())
         .learn_enabled()
         .await
@@ -132,7 +137,7 @@ pub(crate) async fn compute_suggestion(
         &valid_names,
         Some(&learn_counts),
     );
-    // 损坏映射层：忽略该层并告警（设计 §10），不崩。
+    // Corrupt mapping layer: ignore it and warn (design §10); do not crash.
     for (label, bad) in [("repo", &repo_local.1), ("global", &global.1)] {
         if let Some(err) = bad {
             result
@@ -143,19 +148,23 @@ pub(crate) async fn compute_suggestion(
     Ok(result)
 }
 
-/// 阶段 3 host 维度建议（`persona ssh run --host`）：以 SSH 目标主机为
-/// 唯一信号跑打分，命中时返回一行建议文本供调用方打印。
+/// Phase 3 host-dimension suggestion (`persona ssh run --host`): score using the
+/// SSH target host as the sole signal and, on a hit, return a line of suggestion
+/// text for the caller to print.
 ///
-/// 只建议不授权——不改 agent 目标主机文件、不改任何策略评判。
-/// `PERSONA_NO_CONTEXT` 非空时整层关闭（与 shell hook 同一口径）；任何
-/// 加载失败（开库/读映射/读历史）静默降级为无建议（设计 §10）。
+/// Suggest only, never authorize — it does not modify the agent's target host files or any policy judgment.
+/// When `PERSONA_NO_CONTEXT` is non-empty the whole layer is off (same policy
+/// as the shell hook); any load failure (vault/mappings/history) silently degrades
+/// to no suggestion (design §10).
 pub(crate) async fn host_suggestion_line(config: &CliConfig, host: &str) -> Option<String> {
     host_suggestion_line_for(config, &MapPaths::current(), host).await
 }
 
-/// 同上，映射表路径由调用方注入（`MapPaths::current()` 的环境推导在
-/// Windows 上走 known-folder API、不认 HOME 环境变量，测试无法重定向
-/// ——与 `compute_suggestion` 同一注入口径）。
+/// Same as above, the mapping-table paths are injected by the caller (the
+/// environment-based derivation in `MapPaths::current()` goes through the
+/// known-folder API on Windows and does not honor the HOME environment
+/// variable, so tests cannot redirect it — the same injection entrypoint as
+/// `compute_suggestion`).
 pub(crate) async fn host_suggestion_line_for(
     config: &CliConfig,
     paths: &MapPaths,
@@ -187,7 +196,7 @@ pub(crate) async fn host_suggestion_line_for(
     ))
 }
 
-/// 全局映射表 `~/.persona/context.toml`（设计 §5）。
+/// The global mapping table `~/.persona/context.toml` (design §5).
 pub fn global_map_path() -> PathBuf {
     dirs::home_dir()
         .unwrap_or_else(|| PathBuf::from("."))
@@ -195,7 +204,7 @@ pub fn global_map_path() -> PathBuf {
         .join("context.toml")
 }
 
-/// 仓库内映射表 `<cwd>/.persona/context.toml`（设计 §5，明文只含分身名）。
+/// The in-repo mapping table `<cwd>/.persona/context.toml` (design §5; plaintext holds identity names only).
 pub fn repo_local_map_path() -> PathBuf {
     std::env::current_dir()
         .unwrap_or_else(|_| PathBuf::from("."))
@@ -203,9 +212,9 @@ pub fn repo_local_map_path() -> PathBuf {
         .join("context.toml")
 }
 
-/// 读映射文件：(解析结果, 解析失败原因)。文件不存在 = 空表无告警；
-/// 损坏 = 空表 + 告警文本（调用方并进 suggest 告警）。
-/// pub(crate)：桥协议阶段 4 复用同一读取口径。
+/// Reading a mapping file: (parse result, parse failure reason). A missing file = an empty table with no warning;
+/// corrupt = an empty table plus warning text (the caller folds it into the suggest warnings).
+/// pub(crate): the bridge protocol phase 4 reuses this same reading policy.
 pub(crate) fn read_map_or_empty(path: &PathBuf) -> (ContextMapFile, Option<String>) {
     match std::fs::read_to_string(path) {
         Ok(text) => match ContextMapFile::parse(&text) {
@@ -288,7 +297,7 @@ mod tests {
     use persona_core::storage::WorkspaceRepository;
     use tempfile::TempDir;
 
-    /// 串行化改写 HOME / PERSONA_NO_CONTEXT 的测试。
+    /// Serialize tests that rewrite HOME / PERSONA_NO_CONTEXT.
     static SUGGEST_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     fn config_for(dir: &TempDir) -> CliConfig {
@@ -431,8 +440,9 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
-    /// 阶段 2 端到端：学习开关打开 + 有记录 → compute_suggestion 产出学习
-    /// 候选；开关默认关 → 行为与阶段 1 完全一致（无候选）。
+    /// Phase 2 end-to-end: learning switch on + records present →
+    /// compute_suggestion produces learning candidates; switch off (the default)
+    /// → behavior is identical to phase 1 (no candidates).
     #[tokio::test]
     async fn learn_records_surface_through_compute_suggestion() {
         use persona_core::context::LEARN_WEIGHT;
@@ -463,7 +473,7 @@ mod tests {
             }
         }
 
-        // 开关未开（默认关）→ 无候选，行为与阶段 1 一致。
+        // Switch off (the default) → no candidates; behavior matches phase 1.
         let result = compute_suggestion(
             &config,
             &paths_for(&dir),
@@ -477,7 +487,7 @@ mod tests {
             "learn off must change nothing"
         );
 
-        // 打开开关 → 学习候选进位。
+        // Switch on → learning candidates carry through.
         {
             let db = Database::from_file(config.get_database_path())
                 .await
@@ -502,10 +512,10 @@ mod tests {
     }
 
     // ------------------------------------------------------------------
-    // 阶段 3：host 维度建议（`persona ssh run --host`）
+    // Phase 3: host-dimension suggestion (`persona ssh run --host`)
     // ------------------------------------------------------------------
 
-    /// 串行化会改写进程环境变量的测试（PERSONA_NO_CONTEXT / PERSONA_CONTEXT_OVERRIDE）。
+    /// Serialize tests that rewrite process environment variables (PERSONA_NO_CONTEXT / PERSONA_CONTEXT_OVERRIDE).
     fn lock_env() -> (
         std::sync::MutexGuard<'static, ()>,
         std::sync::MutexGuard<'static, ()>,
@@ -518,7 +528,7 @@ mod tests {
         )
     }
 
-    /// 捕获一个环境变量并在 drop 时恢复，panic 也生效。
+    /// Capture an environment variable and restore it on drop; works even after a panic.
     struct EnvRestore {
         name: &'static str,
         prev: Option<std::ffi::OsString>,
@@ -553,8 +563,9 @@ mod tests {
         }
     }
 
-    /// 写注入的全局映射表（不走 home 目录推导：Windows 上 dirs 走
-    /// known-folder API、不认 HOME/USERPROFILE 环境变量，测试无法重定向）。
+    /// Write an injected global mapping table (not the home-directory derivation: on
+    /// Windows dirs goes through the known-folder API and does not honor the
+    /// HOME/USERPROFILE environment variables, so tests cannot redirect it).
     fn write_global_map(dir: &TempDir, body: &str) -> MapPaths {
         let paths = paths_for(dir);
         std::fs::write(&paths.global, body).unwrap();
@@ -578,7 +589,7 @@ mod tests {
             .expect("a host hit must produce a line");
         assert!(line.contains("persona switch OpenSource"));
         assert!(line.contains("score"));
-        // 建议层永不承诺授权——文案必须把边界说清。
+        // The suggestion layer never promises authorization — the copy must state the boundary clearly.
         assert!(line.contains("never authorizes"));
     }
 
@@ -592,17 +603,17 @@ mod tests {
 
         let config = config_for(&dir);
         let paths = paths_for(&dir);
-        // 只有 project 命中：host 维度不得借道 project 权重出题。
+        // Only a project hit: the host dimension must not borrow project weight to suggest.
         std::fs::write(
             &paths.repo_local,
             "[project.\"github.com/example/repo\"]\nidentity = \"OpenSource\"\n",
         )
         .unwrap();
-        // host 信号未命中任何映射 → 无建议。
+        // The host signal matches no mapping → no suggestion.
         assert!(host_suggestion_line_for(&config, &paths, "github.com")
             .await
             .is_none());
-        // 同一 host 命中 host 模式时，project 映射不参与（只出 host 候选）。
+        // When the same host hits the host pattern, the project mapping does not participate (only host candidates are produced).
         std::fs::write(
             &paths.global,
             "[host.'github\\.com']\nidentity = \"OpenSource\"\n",
@@ -612,9 +623,9 @@ mod tests {
             .await
             .unwrap();
         assert!(line.contains("persona switch OpenSource"));
-        // 与 project 精确命中的权重不同（0.8 < 1.0），行内含分数 0.80。
+        // The weight differs from an exact project hit (0.8 < 1.0), so the line carries the score 0.80.
         assert!(line.contains("0.80"));
-        // repo 维度走 project 权重、host 命中走 HOST_WEIGHT；同分身双命中聚合为一条。
+        // The repo dimension uses the project weight, a host hit uses HOST_WEIGHT; a double hit for the same identity is aggregated into one line.
         let with_repo = ContextSignals {
             cwd: PathBuf::new(),
             repo: Some("github.com/example/repo".to_string()),
@@ -636,7 +647,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let _no_ctx = EnvRestore::remove("PERSONA_NO_CONTEXT");
         let _ovr = EnvRestore::remove("PERSONA_CONTEXT_OVERRIDE");
-        seeded_db(&dir, true).await; // active 已设：仍不得凭 active 出题
+        seeded_db(&dir, true).await; // active is set: it must still not produce suggestions from active
         let paths = write_global_map(&dir, "[host.'^github\\.com$']\nidentity = \"OpenSource\"\n");
 
         assert!(
@@ -658,19 +669,19 @@ mod tests {
         );
         let config = config_for(&dir);
 
-        // 未设 → 建议照出。
+        // Not set → suggestions still appear.
         let _clear = EnvRestore::remove("PERSONA_NO_CONTEXT");
         assert!(host_suggestion_line_for(&config, &paths, "git.company.com")
             .await
             .is_some());
         drop(_clear);
-        // 空串 = 与未设同义（shell hook 用 [ -z ] 判定）。
+        // Empty string = same as unset (the shell hook checks with [ -z ]).
         let _empty = EnvRestore::set("PERSONA_NO_CONTEXT", "");
         assert!(host_suggestion_line_for(&config, &paths, "git.company.com")
             .await
             .is_some());
         drop(_empty);
-        // 非空 = 整层关闭。
+        // Non-empty = the whole layer is off.
         let _off = EnvRestore::set("PERSONA_NO_CONTEXT", "1");
         assert!(host_suggestion_line_for(&config, &paths, "git.company.com")
             .await
@@ -705,12 +716,12 @@ mod tests {
         let config = config_for(&dir);
         let paths = paths_for(&dir);
 
-        // 映射文件损坏 → 该层忽略，静默无建议（不崩、不告警外泄）。
+        // Corrupt mapping file → the layer is ignored, silently no suggestions (no crash, no leaked warning).
         std::fs::write(&paths.global, "[hosts\nbroken").unwrap();
         assert!(host_suggestion_line_for(&config, &paths, "git.company.com")
             .await
             .is_none());
-        // 映射里写了不存在的分身名 → 无候选。
+        // The mapping names an identity that does not exist → no candidates.
         std::fs::write(
             &paths.global,
             "[host.'git\\.company\\.com']\nidentity = \"Ghost\"\n",
@@ -719,7 +730,7 @@ mod tests {
         assert!(host_suggestion_line_for(&config, &paths, "git.company.com")
             .await
             .is_none());
-        // 无效正则 → 该条目不命中。
+        // Invalid regex → that entry does not match.
         std::fs::write(
             &paths.global,
             "[host.'[unclosed']\nidentity = \"OpenSource\"\n",
@@ -728,7 +739,7 @@ mod tests {
         assert!(host_suggestion_line_for(&config, &paths, "git.company.com")
             .await
             .is_none());
-        // 数据库打不开 → 整条链路降级为无建议，不向调用方上抛。
+        // The database cannot be opened → the whole chain degrades to no suggestions; the error is not propagated to the caller.
         std::fs::write(
             &paths.global,
             "[host.'git\\.company\\.com']\nidentity = \"OpenSource\"\n",
@@ -748,7 +759,7 @@ mod tests {
         let _no_ctx = EnvRestore::remove("PERSONA_NO_CONTEXT");
         seeded_db(&dir, false).await;
         let paths = paths_for(&dir);
-        // 无映射表：覆盖变量单独成候选（与 `persona context suggest` 同一口径）。
+        // No mapping tables: the override variable becomes the sole candidate (same policy as `persona context suggest`).
         let line = host_suggestion_line_for(&config_for(&dir), &paths, "github.com").await;
         assert!(line.is_none(), "override unset: no candidates without maps");
         let _ovr = EnvRestore::set("PERSONA_CONTEXT_OVERRIDE", "OpenSource");
@@ -756,7 +767,7 @@ mod tests {
             .await
             .expect("override produces a candidate");
         assert!(line.contains("persona switch OpenSource"));
-        // 无效分身名 → 与 suggest 命令一致，不成为候选。
+        // Invalid identity name → consistent with the suggest command; it does not become a candidate.
         let _bad = EnvRestore::set("PERSONA_CONTEXT_OVERRIDE", "Ghost");
         assert!(
             host_suggestion_line_for(&config_for(&dir), &paths, "github.com")
@@ -766,13 +777,14 @@ mod tests {
     }
 
     // ------------------------------------------------------------------
-    // execute() 端到端：走真实 MapPaths::current()/ContextSignals::collect()
-    // 推导，HOME 重定向到空 TempDir（仅 Unix：Windows 的 dirs 走
-    // known-folder API、不认 HOME，无法重定向——见 write_global_map 注）。
+    // execute() end-to-end: the real MapPaths::current()/ContextSignals::collect()
+    // derivation runs, HOME is redirected to an empty TempDir (Unix only: on
+    // Windows dirs goes through the known-folder API and does not honor
+    // HOME, so it cannot be redirected — see the write_global_map note).
     // ------------------------------------------------------------------
 
-    /// HOME 重定向到空目录：全局映射表读空、仓库内表不存在。
-    /// 守卫先 drop（恢复 HOME）再删目录，drop 顺序与声明相反故安全。
+    /// HOME redirected to an empty directory: the global table reads empty and the in-repo table does not exist.
+    /// The guard drops first (restoring HOME), then the directory is removed; the drop order is the reverse of the declaration order, so it is safe.
     #[cfg(unix)]
     fn home_redirect() -> (TempDir, EnvRestore) {
         let dir = TempDir::new().unwrap();
@@ -780,7 +792,7 @@ mod tests {
         (dir, guard)
     }
 
-    /// 与 execute 同口径直算一次，锁定环境前置条件（重定向确实生效）。
+    /// Compute once in the same terms as execute to lock in the environmental precondition (the redirect really took effect).
     #[cfg(unix)]
     async fn current_suggestion(config: &CliConfig, override_name: Option<&str>) -> SuggestResult {
         compute_suggestion(
@@ -804,7 +816,7 @@ mod tests {
         let config = config_for(&dir);
         let _ovr = EnvRestore::set("PERSONA_CONTEXT_OVERRIDE", "OpenSource");
 
-        // 前置条件锁定：重定向后两张映射表全空，唯一候选来自覆盖变量。
+        // Precondition locked in: after the redirect both mapping tables are empty and the only candidate comes from the override variable.
         let result = current_suggestion(&config, Some("OpenSource")).await;
         assert_eq!(result.candidates.len(), 1);
         assert_eq!(result.candidates[0].identity, "OpenSource");
@@ -847,7 +859,7 @@ mod tests {
         let _no_ctx = EnvRestore::remove("PERSONA_NO_CONTEXT");
         let _ovr = EnvRestore::remove("PERSONA_CONTEXT_OVERRIDE");
 
-        // active 在位：无候选时提示保持 active。
+        // active is set: when there are no candidates, prompt to keep active.
         let dir = TempDir::new().unwrap();
         seeded_db(&dir, true).await;
         let config = config_for(&dir);
@@ -864,7 +876,7 @@ mod tests {
         .await
         .unwrap();
 
-        // active 也缺位：提示未设置。
+        // active is missing too: prompt that it is not set.
         let bare = TempDir::new().unwrap();
         seeded_db(&bare, false).await;
         let config = config_for(&bare);

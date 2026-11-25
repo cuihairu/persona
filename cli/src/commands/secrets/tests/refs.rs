@@ -1,6 +1,6 @@
 use super::*;
 
-// ---- 引用解析 ----
+// ---- Reference resolution ----
 
 #[test]
 fn parse_ref_rejects_bad_shapes() {
@@ -53,7 +53,7 @@ async fn resolve_errors_are_precise() {
     let _pw = EnvVar::set("PERSONA_MASTER_PASSWORD", "master-pin");
     let (_dir, config) = seeded_workspace().await;
 
-    // 未知身份 / 未知条目 / 未知字段
+    // Unknown identity / unknown item / unknown field
     let err = execute_with(
         resolve_args(&["ghost/login/password"]),
         &config,
@@ -88,7 +88,7 @@ async fn resolve_errors_are_precise() {
     assert!(format!("{err:#}").contains("unknown field"), "{err}");
     assert!(format!("{err:#}").contains("api_secret"), "{err}");
 
-    // 未设置的可选字段：报错不给空串
+    // An unset optional field: errors instead of yielding an empty string
     let err = execute_with(
         resolve_args(&["work/deploy/api_secret"]),
         &config,
@@ -98,7 +98,7 @@ async fn resolve_errors_are_precise() {
     .unwrap_err();
     assert!(format!("{err:#}").contains("is not set"), "{err}");
 
-    // 元数据缺省同理
+    // The same applies to missing metadata
     let err = execute_with(
         resolve_args(&["work/deploy/username"]),
         &config,
@@ -108,7 +108,7 @@ async fn resolve_errors_are_precise() {
     .unwrap_err();
     assert!(format!("{err:#}").contains("is not set"), "{err}");
 
-    // secret 别名用在无主秘密类型 → 列出合法字段
+    // The secret alias on a type with no primary secret → lists the valid fields
     let err = execute_with(
         resolve_args(&["work/bank/secret"]),
         &config,

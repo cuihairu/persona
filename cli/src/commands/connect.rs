@@ -1,12 +1,15 @@
-//! `persona connect …`：Connect 本机自动化（token 管理 + serve）。
+//! `persona connect …`: Connect local automation (token management + serve).
 //!
-//! 门禁与 scope 判定都在 core（`persona_core::connect` + service 方法群），
-//! HTTP 面在独立 crate（`persona_connect_server`，与桌面共用同一 router/
-//! 三防线/限额）。本模块只做编排：解锁、scope 参数解析、一次性明文展示、
-//! 前台 serve（Ctrl-C 退出，不做 daemon 化——DR-1 A2，systemd 用户单元由
-//! 用户自配）。主密码解析走 service.rs 的惯例（`PERSONA_MASTER_PASSWORD`
-//! env 优先），serve 另支持 `--passphrase-env VAR`（显式变量必须已设且
-//! 非空，不静默回退）。
+//! Gating and scope decisions live in core (`persona_core::connect` plus the
+//! service method family), the HTTP surface lives in a separate crate
+//! (`persona_connect_server`, sharing the same router/three defense lines/
+//! rate limits with the desktop). This module only orchestrates: unlock, scope
+//! parameter parsing, one-time plaintext display, and foreground serve (exit on
+//! Ctrl-C, no daemonization — DR-1 A2; the systemd user unit is configured by
+//! the user). Master password resolution follows the service.rs convention
+//! (`PERSONA_MASTER_PASSWORD` env takes priority), and serve additionally
+//! supports `--passphrase-env VAR` (the explicit variable must already be set
+//! and non-empty; no silent fallback).
 
 use anyhow::{anyhow, bail, Context, Result};
 use clap::{Args, Subcommand};
@@ -27,22 +30,23 @@ pub struct ConnectArgs {
 
 #[derive(Subcommand)]
 enum ConnectCommand {
-    /// 管理 Connect token（明文只在创建时展示一次）
+    /// Manage Connect tokens (plaintext shown only once, at creation)
     Token {
         #[command(subcommand)]
         command: TokenCommand,
     },
-    /// 前台启动 Connect listener（loopback TCP 或 unix socket，Ctrl-C 退出）
+    /// Start the Connect listener in the foreground (loopback TCP or unix socket, exits on Ctrl-C)
     Serve {
-        /// 监听端口（默认 0 = 由 OS 分配；仅 TCP 传输）
+        /// Port to listen on (default 0 = assigned by the OS; TCP transport only)
         #[arg(long, default_value_t = 0)]
         port: u16,
-        /// 改用 Unix domain socket（0600 文件 + 属主 uid 校验；可带路径，
-        /// 缺省 $XDG_RUNTIME_DIR/persona/connect.sock，无 XDG_RUNTIME_DIR
-        /// 时退 ~/.persona/connect.sock）。与 --port 互斥；Windows 上报错
+        /// Use a Unix domain socket instead (0600 file + owner uid check; may carry a
+        /// path, defaulting to $XDG_RUNTIME_DIR/persona/connect.sock, falling back to
+        /// ~/.persona/connect.sock when XDG_RUNTIME_DIR is unset). Mutually exclusive
+        /// with --port; errors on Windows
         #[arg(long, value_name = "PATH", num_args = 0..=1)]
         unix_socket: Option<Option<std::path::PathBuf>>,
-        /// 从指定环境变量读主密码（必须已设且非空）
+        /// Read the master password from the given environment variable (must be set and non-empty)
         #[arg(long)]
         passphrase_env: Option<String>,
     },
@@ -50,26 +54,26 @@ enum ConnectCommand {
 
 #[derive(Subcommand)]
 enum TokenCommand {
-    /// 创建 token：scope 用「缺省 = 全部」语义，给了限定就收窄
+    /// Create a token: scope uses "default = all" semantics, narrowing whenever limits are given
     Create {
-        /// token 名称（如 "我的 CI 脚本"）
+        /// Token label (e.g. "my CI script")
         #[arg(long)]
         label: String,
-        /// 限定可读身份（按名称，可多次；缺省 = 全部身份）
+        /// Restrict readable identities (by name, repeatable; default = all identities)
         #[arg(long = "identity")]
         identities: Vec<String>,
-        /// 限定可读条目类型（snake_case，可多次；缺省 = 全部可授权类型）
+        /// Restrict readable entry types (snake_case, repeatable; default = all authorizable types)
         #[arg(long = "type")]
         item_types: Vec<String>,
-        /// 有效期时长（<正整数><s|m|h|d>，如 30d / 12h / 30m；缺省 = 永不过期）
+        /// Validity duration (<positive integer><s|m|h|d>, e.g. 30d / 12h / 30m; default = never expires)
         #[arg(long = "expires-in")]
         expires_in: Option<String>,
     },
-    /// 列出 token（含已吊销；只有指纹，明文不可找回）
+    /// List tokens (including revoked; fingerprints only, the plaintext is not recoverable)
     List,
-    /// 吊销 token（即时生效、幂等；接受 id 或指纹）
+    /// Revoke a token (takes effect immediately, idempotent; accepts an id or a fingerprint)
     Revoke {
-        /// token id（UUID）或指纹（列表里展示的 hex）
+        /// Token id (UUID) or fingerprint (the hex shown in the list)
         target: String,
     },
 }
@@ -113,10 +117,10 @@ pub(crate) async fn execute_with(
 }
 
 // -----------------------------------------------------------------------
-// 解锁（serve 的 --passphrase-env 显式变量优先；token 子命令走惯例链）
+// Unlock (serve's --passphrase-env explicit variable takes priority; token subcommands follow the convention chain)
 // -----------------------------------------------------------------------
 
-/// 打开库 + 迁移 + 构造 service 并解锁（认证失败/未初始化即 bail）。
+/// Open the vault + migrate + build the service and unlock (bails immediately on auth failure / not initialized).
 async fn open_unlocked(
     config: &CliConfig,
     ui: &dyn PromptUi,
@@ -157,11 +161,11 @@ async fn open_unlocked(
 }
 
 // -----------------------------------------------------------------------
-// token 管理
+// token management
 // -----------------------------------------------------------------------
 
-/// scope 词汇表解析：与 core `ConnectItemType` 的 serde snake_case 一致。
-/// 错误消息列出全部合法值（fail-fast，不猜最近邻）。
+/// Scope vocabulary parsing: consistent with the serde snake_case of core `ConnectItemType`.
+/// The error message lists every legal value (fail-fast, no nearest-neighbor guessing).
 fn parse_item_type(raw: &str) -> Result<ConnectItemType> {
     let value = serde_json::Value::String(raw.to_string());
     serde_json::from_value(value).map_err(|_| {
@@ -173,8 +177,8 @@ fn parse_item_type(raw: &str) -> Result<ConnectItemType> {
     })
 }
 
-/// 解析 `--expires-in` 时长：`<正整数><s|m|h|d>`（如 `30d`、`12h`、`30m`）。
-/// 从创建时刻起算的相对时长；缺省不传 = 永不过期（沿用既有语义）。
+/// Parse the `--expires-in` duration: `<positive integer><s|m|h|d>` (e.g. `30d`, `12h`, `30m`).
+/// A relative duration counted from creation time; omitting it means never expiring (existing semantics).
 fn parse_expires_in(raw: &str) -> Result<chrono::Duration> {
     let Some(idx) = raw.find(|c: char| !c.is_ascii_digit()) else {
         bail!("invalid duration {raw:?}: expected <number><unit> like 30d, 12h, 30m");
@@ -215,7 +219,7 @@ fn type_name(t: &ConnectItemType) -> &'static str {
     }
 }
 
-/// scope 摘要（与桌面列表同信息量）：身份 + 类型 + 只读。
+/// Scope summary (same information as the desktop list): identity + type + read-only.
 fn scope_summary(scope: &ConnectTokenScope) -> String {
     let identity_part = if scope.identities.is_empty() {
         "all identities".to_string()
@@ -257,7 +261,7 @@ async fn create_token(
         bail!("--label must be at most 128 bytes");
     }
 
-    // 类型/时长解析在解锁之前：参数错了就不该问密码
+    // Type/duration parsing happens before unlocking: wrong parameters should not prompt for a password
     let types = item_types
         .iter()
         .map(|raw| parse_item_type(raw))
@@ -368,7 +372,7 @@ async fn list_tokens(config: &CliConfig, ui: &dyn PromptUi) -> Result<()> {
 async fn revoke_token(config: &CliConfig, ui: &dyn PromptUi, target: &str) -> Result<()> {
     let service = open_unlocked(config, ui, None).await?;
 
-    // UUID 按 id；否则按指纹精确匹配（列表展示的就是指纹，复制即用）
+    // UUID matches by id; otherwise exact-match by fingerprint (the list shows fingerprints, so copy-paste just works)
     let id = match uuid::Uuid::parse_str(target) {
         Ok(id) => id,
         Err(_) => {
@@ -388,7 +392,7 @@ async fn revoke_token(config: &CliConfig, ui: &dyn PromptUi, target: &str) -> Re
         .await
         .into_anyhow()
         .context("failed to revoke connect token")?;
-    // 幂等：core 对已吊销 token 返回 false（且不重复记审计）——照实说
+    // Idempotent: core returns false for an already-revoked token (and does not re-audit) — report it as-is
     if already_revoked {
         println!(
             "{}",
@@ -401,7 +405,7 @@ async fn revoke_token(config: &CliConfig, ui: &dyn PromptUi, target: &str) -> Re
 }
 
 // -----------------------------------------------------------------------
-// serve（DR-1 A2：前台进程 + Ctrl-C，不做 daemon 化）
+// serve (DR-1 A2: foreground process + Ctrl-C, no daemonization)
 // -----------------------------------------------------------------------
 
 async fn serve(
@@ -411,23 +415,27 @@ async fn serve(
     unix_socket: Option<Option<std::path::PathBuf>>,
     passphrase_env: Option<&str>,
 ) -> Result<()> {
-    // 构造即注册 SIGTERM（在起监听之前）：此后任何时刻的 systemd stop / kill
-    // 都进同一条优雅关停路径，消灭「默认信号杀进程 → unix socket 残骸」窗口。
+    // Register SIGTERM at construction time (before starting the listener): any later
+    // systemd stop / kill goes through the same graceful-shutdown path, eliminating the
+    // window of "default signal kills the process → stale unix socket".
     let shutdown = shutdown_signal()?;
     serve_until(config, ui, port, unix_socket, passphrase_env, shutdown).await
 }
 
-/// 生产关停信号 future。SIGTERM 与 Ctrl-C 二选一即返回 `Ok(())`。
+/// The production shutdown-signal future. Returns `Ok(())` as soon as either SIGTERM or Ctrl-C fires.
 ///
-/// - **SIGTERM**：`shutdown_signal()` 构造时同步装好 OS handler（tokio
-///   `signal()` 的 `signal_enable` 是构造期调用）——serve() 在监听启动前
-///   调用本函数，SIGTERM 在进程任何阶段都被接管；若信号发生在解锁期间，
-///   tokio 的 watch 通道缓存该投递，`shutdown.await` 一到即处理（优雅、
-///   不丢、不产生残骸）。
-/// - **Ctrl-C(SIGINT)**：刻意保持惰性（select 首次 poll 才注册）。console
-///   的密码提示只清 ECHO、ISIG 仍开启——若提示期间就接管 SIGINT，用户的
-///   Ctrl-C 会被 tokio 吞掉、提示无法取消。代价：解锁窗口内的 Ctrl-C 仍是
-///   默认退出，可能留 socket 残骸，由下次启动按陈旧接管自愈（已实测）。
+/// - **SIGTERM**: `shutdown_signal()` installs the OS handler synchronously at
+///   construction time (tokio `signal()`'s `signal_enable` is a construction-time
+///   call) — serve() calls this function before starting the listener, so SIGTERM
+///   is taken over at any phase of the process; if the signal arrives during
+///   unlock, tokio's watch channel buffers the delivery and it is handled as soon
+///   as `shutdown.await` resolves (graceful, nothing lost, no leftovers).
+/// - **Ctrl-C(SIGINT)**: deliberately kept lazy (registered only at the select's
+///   first poll). The console password prompt only clears ECHO, leaving ISIG on —
+///   if SIGINT were taken over during the prompt, the user's Ctrl-C would be
+///   swallowed by tokio and the prompt could not be canceled. The cost: Ctrl-C
+///   during the unlock window still exits by the default behavior and may leave a
+///   stale socket, which self-heals on the next start via stale-socket takeover (verified on a real machine).
 fn shutdown_signal() -> Result<impl std::future::Future<Output = Result<()>>> {
     #[cfg(unix)]
     {
@@ -449,9 +457,10 @@ fn shutdown_signal() -> Result<impl std::future::Future<Output = Result<()>>> {
     }
 }
 
-/// `serve` 主体，「等待退出信号」参数化——这是测试缝：生产喂 Ctrl-C，
-/// 测试喂可控 future，使 解锁 → start → 打印端点 → stop → 清理 全路径
-/// 可被单测执行（否则 serve 只能在真实终端手工冒烟）。
+/// The `serve` body, with "wait for the exit signal" parameterized — this is the
+/// test seam: production feeds Ctrl-C, tests feed a controllable future, so the
+/// full path of unlock → start → print endpoints → stop → cleanup is unit-testable
+/// (otherwise serve could only be smoke-tested manually in a real terminal).
 async fn serve_until<F>(
     config: &CliConfig,
     ui: &dyn PromptUi,
@@ -464,10 +473,12 @@ where
     F: std::future::Future<Output = Result<()>>,
 {
     let transport = resolve_transport(port, unix_socket)?;
-    // 先起监听、后解锁：health 立即可探测（argon2 解锁的秒级延迟不再挡在
-    // fleet 探针前面）；解锁完成前数据面如实 503 vault_locked——与「保险库
-    // 锁定」同一语义，EXTERNAL_INTEGRATION 的重试纪律（503 退避重试）已覆盖
-    // 该窗口，消费者无需感知「正在输密码」这种中间态。
+    // Start the listener first, unlock second: health becomes probeable immediately
+    // (argon2's seconds-scale unlock delay no longer sits in front of the fleet probe);
+    // before unlock completes the data plane honestly reports 503 vault_locked — the
+    // same semantics as "vault locked", and the EXTERNAL_INTEGRATION retry discipline
+    // (503 backoff-and-retry) already covers that window, so consumers need not know
+    // about the "password being typed" intermediate state.
     let slot = std::sync::Arc::new(tokio::sync::Mutex::new(None));
     let handle =
         persona_connect_server::start_connect_server_with_transport(slot.clone(), transport)
@@ -504,8 +515,9 @@ where
             );
         }
     }
-    // 解锁（监听已就绪）。失败：先优雅关停（等端口/socket 真释放）再原样
-    // 上抛——不留「报错退出但 listener 还挂着」的半初始化状态。
+    // Unlock (listener already up). On failure: graceful shutdown first (wait for the
+    // port/socket to actually release), then re-raise as-is — never leave the
+    // half-initialized state of "error exit while the listener is still hanging around".
     let service = match open_unlocked(config, ui, passphrase_env).await {
         Ok(service) => service,
         Err(err) => {
@@ -516,20 +528,21 @@ where
     *slot.lock().await = Some(service);
 
     shutdown.await?;
-    // stop_and_wait：等 listener 任务完成（serve 循环退出 + socket 文件已删）。
-    // fire-and-forget 的 stop 在随后的进程退出竞态里可能丢掉清理任务。
+    // stop_and_wait: wait for the listener task to finish (the serve loop exits and the
+    // socket file is deleted). A fire-and-forget stop may lose the cleanup task in the
+    // subsequent process-exit race.
     handle.stop_and_wait().await;
     println!("{}", "Connect listener stopped".bright_black());
     Ok(())
 }
 
-/// `serve` 旗标 → 传输层（纯函数，单测入口）。
+/// The `serve` flags → transport layer (pure function; unit-test entrypoint).
 ///
-/// - 未给 `--unix-socket` → loopback TCP（`--port`，0 = OS 分配）；
-/// - `--unix-socket` 裸用 → unix socket，路径取 [`default_socket_path`]；
-/// - `--unix-socket <path>` → unix socket，指定路径；
-/// - `--port`（非 0）+ `--unix-socket` 同时给 → 报错（unix 无 TCP 端口，
-///   静默忽略任一侧都会让调用方对着错误端点排查）。
+/// - No `--unix-socket` → loopback TCP (`--port`, 0 = OS-assigned);
+/// - Bare `--unix-socket` → unix socket, path from [`default_socket_path`];
+/// - `--unix-socket <path>` → unix socket, the given path;
+/// - `--port` (non-0) together with `--unix-socket` → error (unix has no TCP port;
+///   silently ignoring either side would send the caller debugging against the wrong endpoint).
 fn resolve_transport(
     port: u16,
     unix_socket: Option<Option<std::path::PathBuf>>,
@@ -542,9 +555,10 @@ fn resolve_transport(
                     "--port cannot be combined with --unix-socket (a unix socket has no TCP port)"
                 );
             }
-            // Windows：在解锁之前就拒（fail-fast——先要主密码再报「平台不支持」
-            // 是把能力边界藏在交互后面）。库侧 start_connect_server_with_transport
-            // 仍保留同语义兜底（任何调用方都能传 Unix，库必须自卫）。
+            // Windows: reject before unlocking (fail-fast — demanding the master password
+            // first and only then reporting "platform not supported" hides the capability
+            // boundary behind interaction). The vault-side start_connect_server_with_transport
+            // keeps the same-semantics backstop (any caller may pass Unix; the library must defend itself).
             #[cfg(not(unix))]
             {
                 let _ = explicit;
@@ -562,24 +576,27 @@ fn resolve_transport(
     }
 }
 
-/// `--unix-socket` 裸用时的缺省路径。
+/// The default path when `--unix-socket` is used bare.
 ///
-/// 首选 `$XDG_RUNTIME_DIR/persona/connect.sock`（XDG 运行时目录随会话
-/// 登出清理、0700 属主私有）；无 XDG_RUNTIME_DIR（SSH/非 XDG 环境、
-/// macOS、Windows 回退分支）时退 `~/.persona/connect.sock`（与 connect.port
-/// 同目录，消费者约定的本机位置）。
+/// Prefers `$XDG_RUNTIME_DIR/persona/connect.sock` (the XDG runtime directory is
+/// cleaned up on session logout and is 0700 owner-private); when XDG_RUNTIME_DIR is
+/// absent (SSH/non-XDG environments, macOS, the Windows fallback branch) it falls
+/// back to `~/.persona/connect.sock` (same directory as connect.port, the local
+/// location agreed with consumers).
 ///
-/// Windows 上无生产调用方（resolve_transport 的 unix 分支 cfg(unix)），但
-/// 单测仍在此验证回退形态（openclaw 实机抓过斜杠断言 bug）——条件 allow
-/// 而非 cfg 掉，保住跨平台形状覆盖。
+/// On Windows there is no production caller (resolve_transport's unix branch is
+/// cfg(unix)), but unit tests still verify the fallback shape here (the openclaw
+/// real-machine run caught a slash-assertion bug) — a conditional allow instead of
+/// cfg-ing it out, preserving the cross-platform shape coverage.
 #[cfg_attr(not(unix), allow(dead_code))]
 fn default_socket_path() -> std::path::PathBuf {
     socket_path_from(dirs::runtime_dir(), dirs::home_dir())
 }
 
-/// [`default_socket_path`] 的纯函数内核（单测入口）：runtime 目录在 →
-/// `$runtime/persona/connect.sock`；否则 `$home/.persona/connect.sock`；
-/// home 也不可得 → `./.persona/connect.sock`（相对路径随 cwd，仅剩的兜底）。
+/// The pure-function kernel of [`default_socket_path`] (unit-test entrypoint):
+/// with a runtime directory → `$runtime/persona/connect.sock`; otherwise
+/// `$home/.persona/connect.sock`; with home unavailable as well →
+/// `./.persona/connect.sock` (a relative path following cwd, the last fallback).
 fn socket_path_from(
     runtime_dir: Option<std::path::PathBuf>,
     home_dir: Option<std::path::PathBuf>,
@@ -594,7 +611,7 @@ fn socket_path_from(
 }
 
 // -----------------------------------------------------------------------
-// 测试：ScriptedUi 缝 + env 串行（travel.rs 同款 fixture）
+// Tests: ScriptedUi seam + env serialization (same fixture style as travel.rs)
 // -----------------------------------------------------------------------
 
 #[cfg(test)]
@@ -605,8 +622,8 @@ mod tests {
     use persona_core::storage::WorkspaceRepository;
     use persona_core::Repository;
 
-    /// 进程 env 是单槽：与 bridge/switch/ssh/backup/travel 的 env 测试
-    /// 共用全局锁串行（poisoned 恢复防级联）。
+    /// The process env is a single slot: serialized through the global lock shared
+    /// with the env tests of bridge/switch/ssh/backup/travel (poison recovery prevents cascades).
     fn env_guard() -> std::sync::MutexGuard<'static, ()> {
         crate::commands::bridge::tests::ENV_LOCK
             .lock()
@@ -634,7 +651,7 @@ mod tests {
         config
     }
 
-    /// 建带 master 用户的库（含一个 identity + 一条密码凭据）。
+    /// Build a vault with a master user (one identity plus one password credential).
     async fn seeded_workspace() -> (tempfile::TempDir, CliConfig) {
         let dir = tempfile::tempdir().unwrap();
         let config = config_for(&dir);
@@ -730,7 +747,7 @@ mod tests {
             .await
             .unwrap();
 
-        // 库里只有哈希行；明文 pconn_ 不落库
+        // The vault holds only the hashed rows; the plaintext pconn_ is never stored
         let rows = token_rows(&config).await;
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].hash.len(), 64);
@@ -742,8 +759,8 @@ mod tests {
         assert!(rows[0].expires_at.is_none(), "缺省 = 永不过期");
     }
 
-    /// `--expires-in` 解析：<正整数><s|m|h|d>；0/负数/空数字/未知单位/
-    /// 溢出一律拒绝。
+    /// `--expires-in` parsing: <positive integer><s|m|h|d>; zero/negative/empty digits/
+    /// unknown units/overflow are all rejected.
     #[test]
     fn expires_in_parses_units_and_rejects_bad_input() {
         assert_eq!(parse_expires_in("45s").unwrap().num_seconds(), 45);
@@ -756,8 +773,8 @@ mod tests {
         }
     }
 
-    /// 带 `--expires-in` 创建：行内 expires_at 落在未来约 1h（±容差），
-    /// 明文行不落库语义不变。
+    /// Created with `--expires-in`: the row's expires_at lands about 1h in the future (± tolerance);
+    /// the plaintext-row-not-stored semantics are unchanged.
     #[tokio::test]
     #[allow(clippy::await_holding_lock)]
     async fn create_with_expires_in_persists_future_expiry() {
@@ -783,9 +800,10 @@ mod tests {
         );
     }
 
-    /// 坏时长在解锁之前拒绝（不设 PERSONA_MASTER_PASSWORD：真走到解锁
-    /// 会被 ScriptedUi 卡住/报别的错，报错含 invalid duration 即证明
-    /// 参数闸先于密码提示）。
+    /// A bad duration is rejected before unlocking (no PERSONA_MASTER_PASSWORD is set:
+    /// if execution actually reached unlock it would stall on ScriptedUi or fail with a
+    /// different error; an error containing invalid duration proves the parameter gate
+    /// precedes the password prompt).
     #[tokio::test]
     #[allow(clippy::await_holding_lock)]
     async fn create_with_bad_duration_fails_before_prompt() {
@@ -825,7 +843,7 @@ mod tests {
         assert_eq!(rows[0].scope.item_types.len(), 2);
         assert_eq!(rows[0].scope.identities.len(), 1);
 
-        // 未知身份：bail 且不留半成品
+        // Unknown identity: bail without leaving a half-built token
         let err = execute_with(
             create_args("x", &["ghost"], &[]),
             &config,
@@ -836,7 +854,7 @@ mod tests {
         assert!(err.to_string().contains("not found"), "{err}");
         assert_eq!(token_rows(&config).await.len(), 1);
 
-        // 非法类型词汇
+        // Illegal type vocabulary
         let err = execute_with(
             create_args("y", &[], &["passkey"]),
             &config,
@@ -848,8 +866,8 @@ mod tests {
         assert_eq!(token_rows(&config).await.len(), 1);
     }
 
-    /// `connect token list`：空列表分支 + active/revoked 与
-    /// never-used/revoked-at 状态行的完整打印路径。
+    /// `connect token list`: the empty-list branch plus the full print paths of the
+    /// active/revoked and never-used/revoked-at status lines.
     #[tokio::test]
     #[allow(clippy::await_holding_lock)]
     async fn list_tokens_renders_empty_and_populated_states() {
@@ -863,12 +881,12 @@ mod tests {
             },
         };
 
-        // 空库：走 "(none)" 早退分支
+        // Empty vault: takes the "(none)" early-exit branch
         execute_with(list_args(), &config, &ScriptedUi::new())
             .await
             .unwrap();
 
-        // 两个 token，吊销其一：覆盖 active/revoked 两种状态行
+        // Two tokens, one revoked: covers both the active and revoked status lines
         execute_with(create_args("alpha", &[], &[]), &config, &ScriptedUi::new())
             .await
             .unwrap();
@@ -910,7 +928,7 @@ mod tests {
             .await
             .unwrap();
 
-        // 指纹吊销（list 展示的就是指纹）
+        // Revoke by fingerprint (the list shows fingerprints)
         let fp = token_rows(&config).await[0].fingerprint.clone();
         execute_with(
             ConnectArgs {
@@ -927,7 +945,7 @@ mod tests {
         assert!(rows[0].revoked_at.is_some());
         assert!(rows[1].revoked_at.is_none());
 
-        // UUID 吊销 + 幂等
+        // Revoke by UUID + idempotency
         let id = rows[1].id;
         for _ in 0..2 {
             execute_with(
@@ -945,10 +963,10 @@ mod tests {
             .unwrap();
         }
         assert!(token_rows(&config).await[1].revoked_at.is_some());
-        // 幂等重复（false）不重复记审计：指纹 1 次 + UUID 首次 1 次
+        // An idempotent repeat (false) does not re-audit: 1 fingerprint entry + 1 first UUID entry
         assert_eq!(audit_count(&config, "connect_token_revoked").await, 2);
 
-        // 未知 target
+        // Unknown target
         let err = execute_with(
             ConnectArgs {
                 command: ConnectCommand::Token {
@@ -974,7 +992,7 @@ mod tests {
         let _guard = env_guard();
         let (_dir, config) = seeded_workspace().await;
 
-        // 错误主密码 → 认证失败（SERVICE 侧门禁语义在 core/desktop 已覆盖）
+        // Wrong master password → auth failure (the SERVICE-side gating semantics are already covered in core/desktop)
         std::env::set_var("PERSONA_MASTER_PASSWORD", "wrong");
         let err = execute_with(create_args("x", &[], &[]), &config, &ScriptedUi::new())
             .await
@@ -984,9 +1002,9 @@ mod tests {
         assert!(token_rows(&config).await.is_empty());
     }
 
-    /// serve 编排的冒烟（TCP 传输）：serve_until 的信号注入缝使
-    /// resolve → 解锁 → start → 打印 → stop 全路径进单测
-    /// （health/router 行为由 connect-server crate 全量覆盖）。
+    /// Smoke of the serve orchestration (TCP transport): serve_until's signal-injection
+    /// seam puts the full path of resolve → unlock → start → print → stop into unit
+    /// tests (health/router behavior is fully covered by the connect-server crate).
     #[tokio::test]
     #[allow(clippy::await_holding_lock)]
     async fn serve_pipeline_tcp_starts_prints_and_stops_on_signal() {
@@ -994,10 +1012,11 @@ mod tests {
         let _pw = EnvVar::set("PERSONA_MASTER_PASSWORD", "master-pin");
         let (_dir, config) = seeded_workspace().await;
 
-        // 信号立即就绪：serve 编排全路径（resolve → 解锁 → start →
-        // 打印 TCP 端点臂 → 收信号 → stop → 收尾打印）必须走完并正常返回。
-        // health 冒烟不在此重复——connect-server lib 的 http_over_tcp
-        // 测试已全量覆盖（含三防线），此处钉的是 serve 自身的编排。
+        // Signal ready immediately: the full serve-orchestration path (resolve → unlock →
+        // start → print the TCP endpoint arm → receive the signal → stop → final print)
+        // must complete and return normally. The health smoke is not repeated here —
+        // the connect-server lib's http_over_tcp tests already cover it fully (including
+        // the three defense lines); what is pinned here is serve's own orchestration.
         serve_until(
             &config,
             &ScriptedUi::new(),
@@ -1010,9 +1029,10 @@ mod tests {
         .unwrap();
     }
 
-    /// serve 编排的冒烟（unix 传输，serve_until 驱动）：health 应答作为
-    /// 退出信号的前置条件——serve 必须真的把 listener 起来、打印 unix 端点臂、
-    /// 收到信号后 stop 并移除 socket 文件，全路径单测执行。
+    /// Smoke of the serve orchestration (unix transport, driven by serve_until): the
+    /// health response is a precondition of the exit signal — serve must really start
+    /// the listener, print the unix endpoint arm, then stop and remove the socket file
+    /// after the signal, with the full path executed in a unit test.
     #[cfg(unix)]
     #[tokio::test]
     #[allow(clippy::await_holding_lock)]
@@ -1022,12 +1042,13 @@ mod tests {
         let (_dir, config) = seeded_workspace().await;
 
         let socket = _dir.path().join("connect.sock");
-        // 退出信号 = 首次 health 应答成功（listener 真起来了才允许退出）。
+        // Exit signal = the first successful health response (exit is only allowed once the listener is really up).
         let probe = async {
             use tokio::io::{AsyncReadExt, AsyncWriteExt};
-            // 结构上刻意「先睡后探 + 标志位退出」：sleep 无条件执行；成功用
-            // fall-through 而非 return/break 跳出，块收尾花括号在每次成功
-            // 迭代里都被执行（early return 会让它们成为永远填不上的覆盖洞）。
+            // Deliberately structured as "sleep first, probe after, flag-gated exit": the
+            // sleep runs unconditionally; a success falls through rather than returning or
+            // breaking out, so the block-closing braces execute on every successful
+            // iteration (an early return would leave them a coverage hole that never fills).
             let mut answered = false;
             for _ in 0..300 {
                 tokio::time::sleep(std::time::Duration::from_millis(10)).await;
@@ -1064,7 +1085,7 @@ mod tests {
         .await
         .unwrap();
 
-        // 收尾：socket 文件随 stop 移除（轮询，不 sleep 猜时长）
+        // Teardown: the socket file is removed by stop (polled, not a sleep-guessed duration)
         let mut gone = false;
         for _ in 0..100 {
             if !socket.exists() {
@@ -1076,16 +1097,19 @@ mod tests {
         assert!(gone, "stop 后 socket 文件应移除: {}", socket.display());
     }
 
-    /// SIGTERM 走优雅关停（systemd stop / kill 的入口）：`shutdown_signal()`
-    /// 构造期即同步装好 OS handler（tokio `signal()` 语义），此后自发 SIGTERM
-    /// 必被 tokio 接管并返回 Ok——而非默认行为直接杀死进程（那会在 unix 下
-    /// 留陈旧 socket）。Ctrl-C 刻意保持惰性注册（密码提示的 ISIG 仍开，
-    /// 提前接管会吞掉用户的取消键——见 shutdown_signal 文档）。
+    /// SIGTERM goes through graceful shutdown (the entrypoint of systemd stop / kill):
+    /// `shutdown_signal()` installs the OS handler synchronously at construction time
+    /// (tokio `signal()` semantics), and any subsequent spontaneous SIGTERM is taken
+    /// over by tokio and returns Ok — instead of the default behavior killing the
+    /// process outright (which would leave a stale socket on unix). Ctrl-C is kept
+    /// deliberately lazy in registration (the password prompt's ISIG is still on;
+    /// taking it over early would swallow the user's cancel key — see the
+    /// shutdown_signal docs).
     #[cfg(unix)]
     #[tokio::test]
     async fn shutdown_signal_returns_ok_on_sigterm() {
         let fut = shutdown_signal().expect("signal() 构造期应完成注册");
-        // 构造已完成注册，此刻的 SIGTERM 由 tokio 接管（不会杀死本测试进程）
+        // Registration finished at construction, so SIGTERM at this moment is taken over by tokio (it will not kill this test process)
         unsafe {
             libc::kill(std::process::id() as i32, libc::SIGTERM);
         }
@@ -1093,8 +1117,8 @@ mod tests {
         assert!(result.is_ok(), "SIGTERM 应触发关停信号: {result:?}");
     }
 
-    /// 解锁失败不留半初始化状态：错误密码 → 先优雅关停（socket 文件真实
-    /// 移除、连接被拒）再原样上抛——不存在「报错退出但 listener 还挂着」。
+    /// Unlock failure leaves no half-initialized state: a wrong password → graceful
+    ///
     #[cfg(unix)]
     #[tokio::test]
     #[allow(clippy::await_holding_lock)]
@@ -1154,7 +1178,7 @@ mod tests {
 
     #[test]
     fn resolve_transport_defaults_to_loopback_tcp() {
-        // matches! + guard：断言即判定，无 match+panic 的不可达覆盖死角。
+        // matches! + guard: the assertion is the decision, with no unreachable coverage corners from match+panic.
         let t = resolve_transport(0, None).unwrap();
         assert!(
             matches!(t, persona_connect_server::ConnectTransport::Tcp { port: 0 }),
@@ -1173,7 +1197,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn resolve_transport_unix_bare_uses_default_path_and_explicit_path_wins() {
-        // 裸用 → 缺省路径（与 default_socket_path 一致）
+        // Bare use → the default path (consistent with default_socket_path)
         let t = resolve_transport(0, Some(None)).unwrap();
         assert!(
             matches!(
@@ -1183,7 +1207,7 @@ mod tests {
             ),
             "裸用应取缺省路径: {t:?}"
         );
-        // 显式路径优先
+        // The explicit path takes priority
         let explicit = std::path::PathBuf::from("/tmp/persona-test.sock");
         let t = resolve_transport(0, Some(Some(explicit.clone()))).unwrap();
         assert!(
@@ -1198,14 +1222,16 @@ mod tests {
 
     #[test]
     fn resolve_transport_rejects_port_plus_unix_socket() {
-        // 两侧同时给是调用方旗标冲突：unix 无 TCP 端口，静默忽略任一侧
-        // 都会让调用方对着错误端点排查——硬报错。
+        // Giving both sides is a caller flag conflict: unix has no TCP port, and silently
+        // ignoring either side would send the caller debugging against the wrong
+        // endpoint — hard error.
         let err = resolve_transport(8737, Some(None)).unwrap_err();
         assert!(err.to_string().contains("--unix-socket"), "{err}");
     }
 
-    /// Windows：unix 传输在**解锁之前**即拒（fail-fast，不先要主密码）。
-    /// 库侧 start_connect_server_with_transport 另有同语义兜底（见其测试）。
+    /// Windows: the unix transport is rejected **before unlocking** (fail-fast, no
+    /// master-password prompt first). The vault-side start_connect_server_with_transport
+    /// carries its own same-semantics backstop (see its tests).
     #[cfg(not(unix))]
     #[test]
     fn resolve_transport_rejects_unix_before_unlock_on_windows() {
@@ -1218,25 +1244,28 @@ mod tests {
     #[test]
     fn default_socket_path_is_stable_and_falls_back_under_persona_dir() {
         let path = default_socket_path();
-        // display 预计算：多行 assert 的 message 参数行只在失败时执行，
-        // 成功的测试填不上那个覆盖洞——先算好再单行断言。
+        // display precomputed: the message-argument lines of a multi-line assert only run
+        // on failure, so a passing test cannot fill that coverage hole — compute first,
+        // then assert in one line.
         let shown = path.display().to_string();
-        // 形态固定：*/persona/connect.sock 或 */.persona/connect.sock——
-        // 消费者按文档定位，不随版本抖动。用 Path::ends_with 按**组件**比较：
-        // 字符串斜杠后缀在 Windows（反斜杠）上必然误报（openclaw 实机抓到）。
+        // Fixed shape: */persona/connect.sock or */.persona/connect.sock — consumers
+        // locate it per the docs, and the shape must not jitter between versions. Use
+        // Path::ends_with to compare by **component**: a string suffix containing slashes
+        // necessarily false-fails on Windows (backslashes; caught on a real openclaw machine).
         let stable_shape =
             path.ends_with("persona/connect.sock") || path.ends_with(".persona/connect.sock");
         assert!(stable_shape, "缺省路径形态不符: {shown}");
         if std::env::var_os("XDG_RUNTIME_DIR").is_some() {
-            // XDG_RUNTIME_DIR 是 unix 环境变量（此分支不会在 Windows 触发）；
-            // 组件级前缀判断同上，避免分隔符绑定。
+            // XDG_RUNTIME_DIR is a unix environment variable (this branch never triggers on
+            // Windows); the component-level prefix check follows the reasoning above, avoiding
+            // separator binding.
             let anchored = path.starts_with(std::path::Path::new("/"));
             assert!(anchored, "有 XDG_RUNTIME_DIR 时应在运行时目录: {shown}");
         }
     }
 
-    /// 缺省路径内核三分支：runtime → home → cwd 兜底（default_socket_path
-    /// 只是接线 dirs；分支逻辑在此钉死）。
+    /// The three branches of the default-path kernel: runtime → home → cwd fallback
+    /// (default_socket_path only wires dirs; the branch logic is pinned here).
     #[test]
     fn socket_path_from_prefers_runtime_then_home_then_cwd() {
         assert_eq!(

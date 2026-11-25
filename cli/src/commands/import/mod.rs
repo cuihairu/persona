@@ -1,10 +1,13 @@
-//! Plain JSON / YAML / CSV 导入命令：文件校验 → 解密 → 解析 → 预览 →
-//! 冲突检查 → 执行（备份、dry-run、merge/replace/skip 模式）。
+//! Plain JSON / YAML / CSV import command: file validation → decryption →
+//! parsing → preview → conflict check → execution (backup, dry-run, and
+//! merge/replace/skip modes).
 //!
-//! # 模块布局
+//! # Module layout
 //!
-//! 类型（`ImportArgs` 与三个导入数据结构）留枢纽——私有字段被 flow /
-//! display / formats 与测试共同读写；流程编排、格式解析、结果展示分居子模块。
+//! The types (`ImportArgs` and the three import data structures) stay in this hub —
+//! their private fields are read and written by flow / display / formats and by the
+//! tests; flow orchestration, format parsing, and result display each live in their
+//! own submodule.
 
 use std::path::PathBuf;
 

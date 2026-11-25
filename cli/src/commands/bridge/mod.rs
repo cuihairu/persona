@@ -393,8 +393,8 @@ async fn handle_request(
                 .await?
                 .ok_or_else(|| anyhow!("not_found"))?;
 
-            // HOTP 是计数器型，浏览器填充路径没有计数器概念：明确报错，
-            // 而不是按时间窗返回错误码。
+            // HOTP is counter-based and the browser autofill path has no counter concept:
+            // report an error explicitly rather than return a code on a time window.
             if let CredentialData::TwoFactor(tf) = &data {
                 if tf.hotp.unwrap_or(false) {
                     return Err(anyhow!(
@@ -405,8 +405,8 @@ async fn handle_request(
 
             let (code, remaining_seconds, period) = match data {
                 CredentialData::TwoFactor(tf) => generate_totp_code_from_data(&tf)?,
-                // 游戏令牌经 core 统一调度器（Steam Guard 离线可算；绑定型
-                // provider 在此报 unsupported 而不是生成错误码）
+                // Game tokens go through core's unified scheduler (Steam Guard can be computed
+                // offline; vendor-bound providers report unsupported here instead of producing a wrong code)
                 CredentialData::GameToken(gt) => {
                     let c = persona_core::crypto::game_token::generate_game_token_code_now(&gt)?;
                     (c.code, c.remaining_seconds, c.period)
@@ -593,8 +593,8 @@ async fn handle_request(
                 serde_json::from_value(req.payload).context("invalid payload for passkey_list")?;
             run_passkey_list(db_path, req.request_id, parsed, "passkey_list").await
         }
-        // OS passkey provider 数据源（P4.1）：与 passkey_list 同语义同校验链，
-        // 差异仅在消息名与审计/日志的来源口径。
+        // OS passkey provider data source (P4.1): the same semantics and validation chain as
+        // passkey_list, differing only in message name and the provenance terms of audit/logs.
         "passkey_credential_provider_list" => {
             require_authenticated_session(state_dir, &req)?;
             let parsed: PasskeyListPayload = serde_json::from_value(req.payload)
@@ -702,9 +702,10 @@ async fn handle_request(
             )
             .await
         }
-        // OS passkey provider 代断言（P4.1/P4.4）：同一信任链（gesture + 桌面
-        // 审批 + core origin↔rp_id + 敏感操作门禁），审计 via=os_provider 区分
-        // provider 来源；桌面审批弹窗 op 名透传，UI 可辨识。
+        // OS passkey provider assertion on behalf of the page (P4.1/P4.4): the same trust
+        // chain (gesture + desktop approval + core origin↔rp_id + the sensitive-operation
+        // gate), with the audit's via=os_provider distinguishing the provider source; the
+        // desktop approval dialog's op name is passed through so the UI can tell it apart.
         "passkey_credential_provider_assert" => {
             require_authenticated_session(state_dir, &req)?;
             let parsed: PasskeyAssertPayload = serde_json::from_value(req.payload)
@@ -718,11 +719,12 @@ async fn handle_request(
             )
             .await
         }
-        // 云端同步参数发放（协议 v6，M5 批1）：把扩展做 HTTP 直连数据面
-        // 所需的三件套（server_url / bearer / group key）经 HMAC 会话发给
-        // 扩展——桥此后只做认证与密钥交接，数据面出本地桥（协议设计见
-        // BRIDGE_PROTOCOL.md §17）。敏感级：group key 出桥，故在配对会话
-        // 之上再要求 user gesture。
+        // Cloud sync parameter handout (protocol v6, M5 batch 1): the trio the extension
+        // needs for its direct HTTP data plane (server_url / bearer / group key) is sent to
+        // the extension over the HMAC session — from here on the bridge only does
+        // authentication and key handover, and the data plane leaves the local bridge (see
+        // BRIDGE_PROTOCOL.md §17 for the protocol design). Sensitivity: the group key leaves
+        // the bridge, so a user gesture is additionally required on top of the pairing session.
         "sync_connect" => {
             require_authenticated_session(state_dir, &req)?;
             let parsed: SyncConnectRequest =
@@ -745,8 +747,9 @@ async fn handle_request(
                 serde_json::to_value(payload)?,
             ))
         }
-        // 账号域三件套（协议 v7，M5 批2）：SRP 登录/会话状态/登出，
-        // 令牌只落 OS keyring（persona-account 条目），不过桥协议下发。
+        // Account-domain trio (protocol v7, M5 batch 2): SRP login / session status / sign-out.
+        // The token lands only in the OS keyring (the persona-account entry) and is never
+        // delivered over the bridge protocol.
         "account_login" => {
             require_authenticated_session(state_dir, &req)?;
             let parsed: AccountLoginRequest =
@@ -781,8 +784,9 @@ async fn handle_request(
                 serde_json::to_value(payload)?,
             ))
         }
-        // 云端写路径（协议 v7，M5 批3）：把主库（含经 save_credential 落库
-        // 的扩展侧写入）推上云。写操作，配对会话之上再要求 user gesture。
+        // Cloud write path (protocol v7, M5 batch 3): push the primary vault (including
+        // extension-side writes that came in through save_credential) up to the cloud. A write
+        // operation, additionally requiring a user gesture on top of the pairing session.
         "sync_push_now" => {
             require_authenticated_session(state_dir, &req)?;
             let parsed: SyncPushNowRequest =
@@ -807,7 +811,7 @@ async fn handle_request(
                 serde_json::to_value(payload)?,
             ))
         }
-        // 冲突裁决（协议 v7，M5 批4）：采纳并发双版本之一，写操作。
+        // Conflict resolution (protocol v7, M5 batch 4): adopt one of the two concurrent versions; a write operation.
         "sync_resolve_conflict" => {
             require_authenticated_session(state_dir, &req)?;
             let parsed: SyncResolveConflictRequest = serde_json::from_value(req.payload)

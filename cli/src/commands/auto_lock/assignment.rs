@@ -1,4 +1,4 @@
-//! 用户指派：把策略指派给用户、解除指派、查询用户当前策略。
+//! User assignment: assign a policy to a user, unassign it, and query a user's current policy.
 
 use anyhow::{anyhow, bail, Result};
 use persona_core::storage::AutoLockPolicyRepository;

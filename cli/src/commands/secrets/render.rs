@@ -10,7 +10,7 @@ use super::open_unlocked;
 use super::refs::{parse_kv_pairs, resolve_ref, valid_key, SecretRef};
 
 // -----------------------------------------------------------------------
-// k8s（Secret 清单渲染；JSON 落 base64，kubectl 侧按需 apply）
+// k8s (Secret manifest rendering; JSON values base64-encoded, kubectl applies them on demand)
 // -----------------------------------------------------------------------
 
 #[derive(Serialize)]
@@ -100,12 +100,12 @@ pub(super) async fn render_k8s(
 }
 
 // -----------------------------------------------------------------------
-// external（Terraform external provider 协议助手）
+// external (Terraform external provider protocol helper)
 // -----------------------------------------------------------------------
 
-/// external 协议核心（纯函数）：stdin JSON 对象 `{"NAME":"REF"}` →
-/// stdout JSON 对象 `{"NAME":"明文"}`。保持插入顺序（serde_json 默认
-/// BTreeMap 有序即可——Terraform 只按 key 取值，顺序无语义）。
+/// The external protocol core (pure function): stdin JSON object `{"NAME":"REF"}` →
+/// stdout JSON object `{"NAME":"<plaintext>"}`. Keeps insertion order (serde_json's
+/// default ordered BTreeMap suffices — Terraform only fetches by key, so order carries no meaning).
 pub(crate) async fn resolve_external_map(
     service: &PersonaService,
     input: &str,

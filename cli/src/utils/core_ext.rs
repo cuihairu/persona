@@ -12,9 +12,9 @@ impl<T> CoreResultExt<T> for Result<T> {
     }
 }
 
-// For Box<dyn std::error::Error>。用 from_boxed 保住具体错误类型：
-// `anyhow!(e.to_string())` 会把错误压成裸字符串，调用方沿链
-// `downcast_ref::<E>()` 一律落空。
+// For Box<dyn std::error::Error>. Use from_boxed to keep the concrete error type:
+// `anyhow!(e.to_string())` would squash the error into a bare string, and every
+// `downcast_ref::<E>()` further down the chain would come back empty.
 impl<T> CoreResultExt<T>
     for std::result::Result<T, Box<dyn std::error::Error + Send + Sync + 'static>>
 {
@@ -23,8 +23,9 @@ impl<T> CoreResultExt<T>
     }
 }
 
-// For PersonaError。同样必须保型：CLI 侧（如 bridge 的 passkey 断言）
-// 依赖 downcast_ref::<PersonaError>() 识别语义变体。
+// For PersonaError. The type must be preserved here too: on the CLI side (e.g. the
+// bridge's passkey assertions) the code relies on downcast_ref::<PersonaError>() to
+// recognize semantic variants.
 impl<T> CoreResultExt<T> for std::result::Result<T, persona_core::PersonaError> {
     fn into_anyhow(self) -> Result<T> {
         self.map_err(anyhow::Error::new)
@@ -72,9 +73,11 @@ mod tests {
         assert_eq!(message, "Invalid input: bad input");
     }
 
-    // 转换必须保住具体错误类型：调用方沿链 downcast_ref::<PersonaError>()
-    // 识别语义变体（如 bridge 的 passkey NotFound 分流）。若实现退化成
-    // anyhow!(e.to_string())，此处 downcast 落 None——本测试即地雷探针。
+    // The conversion must preserve the concrete error type: callers use
+    // downcast_ref::<PersonaError>() along the chain to recognize semantic variants
+    // (e.g. the bridge's passkey NotFound branch). If the implementation degenerated
+    // into anyhow!(e.to_string()), this downcast would land on None — this test is
+    // the tripwire for that.
     #[test]
     fn persona_error_survives_into_anyhow_for_downcast() {
         let err: std::result::Result<i32, PersonaError> =
@@ -92,8 +95,9 @@ mod tests {
         let boxed: Box<dyn StdError + Send + Sync> = Box::new(io::Error::other("disk full"));
         let err: std::result::Result<i32, Box<dyn StdError + Send + Sync>> = Err(boxed);
         let anyhow_err = err.into_anyhow().unwrap_err();
-        // boxed 轨的保型上限：anyhow::from_boxed 保留整个擦除盒（不退化
-        // 为字符串），拿回 Box 后 std 的 downcast 链在内层继续可用。
+        // The type-preservation ceiling for the boxed path: anyhow::from_boxed keeps
+        // the whole erased box (it does not degenerate into a string), and once the
+        // Box is recovered std's downcast chain stays available inside it.
         let inner = anyhow_err
             .downcast_ref::<Box<dyn StdError + Send + Sync>>()
             .expect("boxed error must stay downcastable through into_anyhow");

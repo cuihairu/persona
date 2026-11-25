@@ -22,14 +22,15 @@ pub(crate) async fn generate_codes(
         .into_anyhow()?
         .ok_or_else(|| anyhow!("Unable to decrypt credential {}", id))?
     {
-        // RFC TOTP 与游戏令牌（如 Steam Guard）都经 core 调度器取码
+        // RFC TOTP and game tokens (e.g. Steam Guard) both fetch codes through the core scheduler
         d @ (CredentialData::TwoFactor(_) | CredentialData::GameToken(_)) => d,
         _ => bail!("Credential {} does not contain TOTP data", id),
     };
 
-    // HOTP（RFC 4226）是计数器型：调度器不知道调用方计数器，故在此分流到
-    // core hotp_code；core 侧对 HOTP 报不支持离线生成，消费方漏判时不会
-    // 静默出错误码。
+    // HOTP (RFC 4226) is counter-based: the scheduler does not know the caller's
+    // counter, so branch to core hotp_code here; core reports that HOTP is not
+    // supported for offline generation, so a consumer that misses the check does
+    // not silently get a wrong code.
     if let CredentialData::TwoFactor(tf) = &data {
         if tf.hotp.unwrap_or(false) {
             if watch {

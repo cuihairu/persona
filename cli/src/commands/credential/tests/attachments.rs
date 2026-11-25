@@ -16,8 +16,8 @@ fn attachment_size_formats_bytes_kb_and_mb() {
     );
 }
 
-/// Attachments：attach（加密封存）→ attachments 列表 → save-attachment
-/// 解密读回 → remove-attachment；凭据删除级联清附件。
+/// Attachments: attach (encrypted store) → attachments list → save-attachment decrypt
+/// and read back → remove-attachment; deleting a credential cascades to remove its attachments.
 #[tokio::test]
 async fn credential_attachment_commands_round_trip() {
     let _guard = lock_process_env();
@@ -50,7 +50,7 @@ async fn credential_attachment_commands_round_trip() {
         .id;
     drop(service);
 
-    // 源文件放在独立 tempdir（workspace tempdir 会被 attachments/ 目录复用）
+    // The source file goes in a dedicated tempdir (the workspace tempdir is reused by the attachments/ directory)
     let src_dir = TempDir::new().unwrap();
     let src = src_dir.path().join("recovery.txt");
     std::fs::write(&src, b"cli-attachment-payload").unwrap();
@@ -68,7 +68,7 @@ async fn credential_attachment_commands_round_trip() {
     .await
     .expect("attach works");
 
-    // 列表命令可跑；元数据断言走 service 层（is_encrypted / 文件名）
+    // The list command runs; the metadata assertions go through the service layer (is_encrypted / file name)
     execute(
         CredentialArgs {
             command: CredentialCommand::Attachments { id: cred_id },
@@ -89,7 +89,7 @@ async fn credential_attachment_commands_round_trip() {
     let attachment_id = attachments[0].id;
     drop(service);
 
-    // 解密保存：读回与源字节一致（item key 封存的核心保障）
+    // Decrypt and store: the bytes read back match the source exactly (the core guarantee of per-item key sealing)
     let out = src_dir.path().join("restored.txt");
     execute(
         CredentialArgs {
@@ -107,7 +107,7 @@ async fn credential_attachment_commands_round_trip() {
         b"cli-attachment-payload".to_vec()
     );
 
-    // 移除附件 → 列表清空
+    // Remove the attachment → the list comes back empty
     execute(
         CredentialArgs {
             command: CredentialCommand::RemoveAttachment {
@@ -126,7 +126,7 @@ async fn credential_attachment_commands_round_trip() {
             .unwrap();
     assert!(service.get_attachments(&cred_id).await.unwrap().is_empty());
 
-    // 凭据删除级联（再挂一个，然后删凭据）
+    // Credential deletion cascades (attach another one, then delete the credential)
     drop(service);
     execute(
         CredentialArgs {

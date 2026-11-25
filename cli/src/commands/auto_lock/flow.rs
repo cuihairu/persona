@@ -1,4 +1,4 @@
-//! 命令分发：按子命令把参数解构后转交各域函数；仓储初始化在此收口。
+//! Command dispatch: destructures the arguments per subcommand and hands them to the domain functions; vault initialization is finalized here.
 
 use anyhow::{Context, Result};
 use persona_core::storage::{AutoLockPolicyRepository, Database};

@@ -1,9 +1,10 @@
 use super::*;
 
-/// 同步环境的 keyring 读写与 service 常量（协议级，与 desktop/
-/// src-tauri/src/token_store.rs 一致——两边读写同一条目，改名即断链）。
-/// 单源：CLI `persona sync` 与扩展桥共用 `commands::sync::keyring`，本模块
-/// 只转发，避免两处漂移。
+/// Keyring read/write for the sync environment plus the service constants (protocol-level,
+/// consistent with desktop/src-tauri/src/token_store.rs — both sides read/write the same
+/// entry, and renaming it breaks the chain).
+/// Single source: CLI `persona sync` and the extension bridge share `commands::sync::keyring`;
+/// this module only forwards, avoiding divergence between the two.
 pub(super) use crate::commands::sync::keyring::read_entry as read_keyring_entry;
 pub(super) use crate::commands::sync::keyring::{
     open_own_group_key, read_sync_server_url, KEYRING_SERVICE_DEVICE_IDENTITY,
@@ -13,12 +14,13 @@ pub(super) use crate::commands::sync::keyring::{
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(super) struct SyncConnectRequest {
-    /// 必须来自显式用户操作（popup 点选）；发放的是保险库解密钥。
+    /// Must come from an explicit user action (a popup click); what is granted is the vault decryption key.
     pub(super) user_gesture: bool,
 }
 
-/// `sync_connect_response` 负载。token 与 group key 是敏感材料：扩展侧只存
-/// 内存区（chrome.storage.session），安全口径见 BRIDGE_PROTOCOL.md §17。
+/// The `sync_connect_response` payload. The token and group key are sensitive material:
+/// the extension side stores them only in a memory area (chrome.storage.session); see
+/// BRIDGE_PROTOCOL.md §17 for the security terms.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(super) struct SyncConnectPayload {
@@ -26,7 +28,7 @@ pub(super) struct SyncConnectPayload {
     pub(super) token: String,
     pub(super) device_id: String,
     pub(super) device_name: String,
-    /// group key 十六进制（与桌面 sync_group_store 的 group_key_to_hex 同编码）。
+    /// The group key as hex (the same encoding as the desktop sync_group_store's group_key_to_hex).
     pub(super) group_key_hex: String,
 }
 

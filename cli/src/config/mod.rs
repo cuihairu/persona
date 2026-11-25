@@ -3,8 +3,10 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use tracing::{debug, info};
 
-// 各段缺键回退默认：旧版本写出的配置少新字段/新段时不至于整份解析失败
-// （否则部分合并、前向兼容都无从谈起）。整份损坏仍由调用方显式处理。
+// Missing keys in each section fall back to defaults: a config written by an
+// older version that lacks new fields/sections still parses as a whole
+// (without this, partial merging and forward compatibility would be impossible).
+// A wholly corrupt config is still handled explicitly by the caller.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct CliConfig {
     #[serde(default)]
@@ -77,9 +79,10 @@ impl Default for WorkspaceConfig {
     }
 }
 
-// 缺段回退必须落到**产品默认值**而不是 derive 出来的零值——serde 的
-// `#[serde(default)]` 直接调用这里，零值会把加密/交互/彩色/日志全部静默
-// 关掉（等于又一次默认值覆盖用户配置）。
+// The fallback for a missing section must land on **product defaults**, not on
+// the derived zero values — serde's `#[serde(default)]` calls this directly, and
+// zero values would silently turn off encryption/interactive/color/logging
+// (which would once again be defaults overriding the user's configuration).
 impl Default for SecurityConfig {
     fn default() -> Self {
         Self {
@@ -227,9 +230,10 @@ impl CliConfig {
     }
 }
 
-/// `PERSONA_WORKSPACE_PATH` 的统一读取（空白视同未设置）——init 的
-/// workspace 路径推导与 `apply_env_overrides` 共用同一来源。否则
-/// `init -y` 落 home 默认而后续命令按 env 找库，两边语义割裂。
+/// The unified read of `PERSONA_WORKSPACE_PATH` (blank counts as unset) — init's
+/// workspace path derivation and `apply_env_overrides` share this one source. Otherwise
+/// `init -y` would fall on the home default while later commands locate the vault via the
+/// env var, splitting the semantics in two.
 pub(crate) fn workspace_path_from_env() -> Option<PathBuf> {
     std::env::var("PERSONA_WORKSPACE_PATH")
         .ok()
@@ -401,8 +405,10 @@ max_files = 2
         assert!(err.to_string().contains("Failed to parse config file"));
     }
 
-    /// 缺段/缺字段回退默认：旧版本写出的配置没有新段时仍能加载，
-    /// 既有自定义值不受影响（`persona init` 做 merge 而非整体覆盖的前提）。
+    /// Missing sections/fields fall back to defaults: a config written by an
+    /// older version without the new sections still loads, and existing
+    /// custom values are preserved (the premise behind `persona init` merging
+    /// rather than replacing the whole file).
     #[test]
     fn load_file_fills_missing_sections_with_defaults() {
         let dir = tempfile::TempDir::new().unwrap();
@@ -516,7 +522,7 @@ max_files = 2
         );
         restore_var("PERSONA_WORKSPACE_PATH", previous);
 
-        // 空白视同未设置：不让 apply 覆盖出空 PathBuf（= 当前目录）
+        // Blank counts as unset: avoid apply overriding into an empty PathBuf (= current directory)
         let previous = set_var("PERSONA_WORKSPACE_PATH", "   ");
         assert_eq!(workspace_path_from_env(), None);
         restore_var("PERSONA_WORKSPACE_PATH", previous);

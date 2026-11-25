@@ -1,10 +1,10 @@
-//! 设备面编排（`persona sync join|leave|devices|authorize|revoke|set-remark`）。
+//! Device-surface orchestration (`persona sync join|leave|devices|authorize|revoke|set-remark`).
 //!
-//! 逐条镜像 desktop `sync_join`/`sync_leave`/`sync_list_devices`/
-//! `sync_authorize`/`sync_revoke`/`sync_set_device_remark`（`desktop/
-//! src-tauri/src/commands/sync.rs`），仅把 `State<AppState>` 换成
-//! `(config, 已解锁的 service)`：门禁由调用方（mod.rs）先解锁，这里只做
-//! 服务器侧动作 + keyring 落身份。
+//! Mirrors desktop `sync_join`/`sync_leave`/`sync_list_devices`/
+//! `sync_authorize`/`sync_revoke`/`sync_set_device_remark` (`desktop/
+//! src-tauri/src/commands/sync.rs`) line by line, only swapping `State<AppState>` for
+//! `(config, an unlocked service)`: gating is done by the caller (mod.rs) unlocking first,
+//! and this file only performs the server-side actions + persists the identity to the keyring.
 
 use anyhow::{anyhow, Result};
 use colored::Colorize;
@@ -15,12 +15,12 @@ use uuid::Uuid;
 use super::keyring;
 use crate::config::CliConfig;
 
-/// vault db_path 文本（keyring 条目键；与 desktop token_store 同键）。
+/// The vault db_path text (the keyring entry key; same key as the desktop token_store).
 fn db_key(config: &CliConfig) -> String {
     config.get_database_path().to_string_lossy().to_string()
 }
 
-/// 本机设备身份三态（免解锁）：已加入 / 未加入 / 记录损坏。
+/// The three states of this machine's device identity (no unlock needed): joined / not joined / corrupt record.
 enum LocalDevice {
     Joined(DeviceIdentity),
     Corrupted,
@@ -34,12 +34,12 @@ fn local_device(config: &CliConfig) -> LocalDevice {
             Err(_) => LocalDevice::Corrupted,
         },
         Ok(None) => LocalDevice::NotJoined,
-        // keyring 读失败视同未加入（join 会再报具体错误）
+        // A keyring read failure counts as not joined (join reports the specific error afterwards)
         Err(_) => LocalDevice::NotJoined,
     }
 }
 
-/// settings.sync.server_url + keyring sync token → 管理客户端（同步）。
+/// settings.sync.server_url + the keyring sync token → the management client (sync).
 pub(super) async fn admin_api_for(config: &CliConfig) -> Result<SyncAdminApi> {
     let server_url = keyring::read_sync_server_url(&config.get_database_path()).await?;
     let token = keyring::read_entry(keyring::KEYRING_SERVICE_SYNC_TOKEN, &db_key(config))?
@@ -48,9 +48,10 @@ pub(super) async fn admin_api_for(config: &CliConfig) -> Result<SyncAdminApi> {
     SyncAdminApi::new(&server_url, &token)
 }
 
-/// 加入 E2EE 同步：生成本机设备密钥对 → 向服务器登记 → keyring 落身份。
-/// keyring 写失败时尽力吊销刚登记的服务器记录（不留半态，fail-closed）。
-/// 门禁（已解锁、device_name 1..=128 字节、未加入）由调用方前置。
+/// Join E2EE sync: generate this machine's device keypair → register with the server →
+/// persist the identity to the keyring. If the keyring write fails, best-effort revoke the
+/// just-registered server record (no half states left; fail-closed). The gates (unlocked,
+/// device_name 1..=128 bytes, not already joined) are enforced up front by the caller.
 pub(crate) async fn join(config: &CliConfig, device_name: &str) -> Result<()> {
     let device_name = device_name.trim().to_string();
     if device_name.is_empty() || device_name.len() > 128 {
@@ -87,8 +88,9 @@ pub(crate) async fn join(config: &CliConfig, device_name: &str) -> Result<()> {
         }
         return Err(anyhow!("Cannot store device identity in OS keyring: {e}"));
     }
-    // pending = group-keys 尚无本机信封；查询失败按「等授权」保守处理
-    // （fail-closed：授权状态宁可显示未授权）。空组时本机自举。
+    // pending = the group-keys entry has no local envelope yet; a query failure is handled
+    // conservatively as "awaiting authorization" (fail-closed: authorization status would
+    // rather show unauthorized). In an empty group this machine bootstraps itself.
     let pending = match api
         .bootstrap_group_if_empty(device_id, identity.key_pair.public_bytes())
         .await
@@ -113,8 +115,8 @@ pub(crate) async fn join(config: &CliConfig, device_name: &str) -> Result<()> {
     Ok(())
 }
 
-/// 离开同步：尽力吊销服务器侧记录（不可达仅 warn——本地清理优先），然后
-/// 无条件清 keyring 身份。
+/// Leave sync: best-effort revoke of the server-side record (unreachable only warns — local cleanup comes first), then
+/// unconditionally clear the keyring identity.
 pub(crate) async fn leave(config: &CliConfig) -> Result<()> {
     match local_device(config) {
         LocalDevice::NotJoined => anyhow::bail!("This vault has not joined sync"),
@@ -149,7 +151,7 @@ pub(crate) async fn leave(config: &CliConfig) -> Result<()> {
     Ok(())
 }
 
-/// 列出同步组全部设备（含授权状态与本机标记）。要求已加入。
+/// List all devices in the sync group (including authorization status and the local marker). Requires being joined.
 pub(crate) async fn list_devices(config: &CliConfig) -> Result<()> {
     let identity = match local_device(config) {
         LocalDevice::Joined(identity) => identity,
@@ -187,8 +189,9 @@ pub(crate) async fn list_devices(config: &CliConfig) -> Result<()> {
     Ok(())
 }
 
-/// 为目标设备授权：拆本机信封得 group key → 用目标公钥封新信封上传。
-/// 本机未授权（信封拆不开）fail-closed。
+/// Authorize the target device: unwrap the local envelope to get the group key → seal a new
+/// envelope with the target's public key and upload. An unauthorized local machine (envelope
+/// cannot be unwrapped) fails closed.
 pub(crate) async fn authorize(config: &CliConfig, target: &str) -> Result<()> {
     let identity = match local_device(config) {
         LocalDevice::Joined(identity) => identity,
@@ -228,7 +231,7 @@ pub(crate) async fn authorize(config: &CliConfig, target: &str) -> Result<()> {
     Ok(())
 }
 
-/// 吊销设备（服务器侧删登记+信封，幂等）。吊销自己请走 leave。
+/// Revoke a device (server-side deletion of the registration + envelope, idempotent). To revoke yourself, use leave.
 pub(crate) async fn revoke(config: &CliConfig, target: &str) -> Result<()> {
     let identity = match local_device(config) {
         LocalDevice::Joined(identity) => identity,
@@ -249,7 +252,7 @@ pub(crate) async fn revoke(config: &CliConfig, target: &str) -> Result<()> {
     Ok(())
 }
 
-/// 设置本设备的自由备注（服务器锁到令牌归属；空串 = 清除）。要求已加入。
+/// Set this device's free-form remark (the server locks it to the token owner; an empty string = clear). Requires being joined.
 pub(crate) async fn set_remark(config: &CliConfig, remark: &str) -> Result<()> {
     match local_device(config) {
         LocalDevice::Joined(_) => {}

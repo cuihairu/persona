@@ -1,4 +1,4 @@
-//! 自定义属性编辑：添加 / 改值 / 多选移除的交互子菜单。
+//! Custom attribute editing: the interactive sub-menu for adding, changing values, and multi-select removal.
 
 use anyhow::Result;
 use colored::*;

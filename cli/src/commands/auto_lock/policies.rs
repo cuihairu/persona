@@ -1,4 +1,4 @@
-//! 策略 CRUD：列表/详情/创建/更新/删除/设默认。表格渲染随列表在此。
+//! Policy CRUD: list/detail/create/update/delete/set default. Table rendering lives here with the list.
 
 use anyhow::{anyhow, bail, Result};
 use persona_core::models::auto_lock_policy::{

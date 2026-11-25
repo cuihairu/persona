@@ -1,13 +1,15 @@
-//! `persona sync …`：E2EE 指令流同步（server/中转形态）的指令面。
+//! `persona sync …`: the command surface for E2EE oplog sync (the server/relay form).
 //!
-//! 与桌面 `sync_*` 命令族、浏览器扩展桥 `sync_push_now` 共用同一 core 编排
-//! （`SyncSession::open` → backfill → run_cycle / status）与同一套 keyring
-//! 条目（service 名是协议级常量，见 [`keyring`]）。差异只在三点：
-//! - master 密钥走 CLI 解锁惯例（`PERSONA_MASTER_PASSWORD` env 优先，否则
-//!   交互提示）；
-//! - 会话不挂捕获缝——一进程一命令，缝随进程消亡没有意义（bridge 注释同理由）；
-//! - 服务器地址取 vault `settings.sync.server_url`，令牌取 keyring
-//!   `persona-sync`（与桌面同键，一处配置处处生效）。
+//! Shares the same core orchestration (`SyncSession::open` → backfill → run_cycle / status)
+//! and the same keyring entries with the desktop `sync_*` command family and the
+//! browser-extension bridge's `sync_push_now` (the service name is a protocol-level
+//! constant, see [`keyring`]). The differences are only three:
+//! - the master key follows the CLI unlock convention (`PERSONA_MASTER_PASSWORD` env
+//!   takes priority, otherwise an interactive prompt);
+//! - the session hangs no capture seam — one process per command, so a seam dying with the
+//!   process is meaningless (same reason as the bridge comment);
+//! - the server address comes from the vault's `settings.sync.server_url` and the token
+//!   from keyring `persona-sync` (same key as the desktop; configure once, effective everywhere).
 
 pub mod devices;
 pub mod group;
@@ -145,8 +147,9 @@ pub(crate) async fn execute_with(
             devices::set_remark(config, &remark).await
         }
         SyncCommand::Group { command } => match command {
-            // 出码/加入都要求已解锁：组密钥是解锁后才可信的 E2EE 材料，
-            // 且与桌面 require_unlocked 口径一致（防「未解锁也敢给别人发码」）。
+            // Showing the code / joining both require an unlocked vault: the group key is E2EE
+            // material that is only trustworthy after unlock, and this matches the desktop's
+            // require_unlocked terms (preventing "handing out codes without unlocking").
             GroupCommand::Create => {
                 session::open_unlocked(config, ui).await?;
                 group::create(config).await
@@ -169,11 +172,11 @@ pub(crate) async fn execute_with(
 }
 
 // -----------------------------------------------------------------------
-// 同步周期 / 状态
+// Sync cycle / status
 // -----------------------------------------------------------------------
 
-/// 立即同步：拆本机信封装配会话 → 存量灌入 → pull/materialize/push 周期。
-/// 编排与 bridge `sync_push_now`、桌面 `sync_now` 完全同序。
+/// Sync now: unwrap the local envelope to assemble the session → backfill the backlog → pull/materialize/push cycle.
+/// The orchestration runs in exactly the same order as the bridge's `sync_push_now` and the desktop's `sync_now`.
 async fn now(config: &CliConfig, ui: &dyn PromptUi) -> Result<()> {
     let (session, service) = session::open_sync_session(config, ui).await?;
     let master = service
@@ -213,8 +216,8 @@ async fn now(config: &CliConfig, ui: &dyn PromptUi) -> Result<()> {
     Ok(())
 }
 
-/// 同步状态快照（只读，不跑周期）：组最新版本 / 本机水位 / 落后条数 /
-/// 待推条数 / 最近同步时间。
+/// A sync status snapshot (read-only, no cycle run): the group's latest version / this
+/// machine's watermark / entries behind / entries pending push / last sync time.
 async fn status(config: &CliConfig, ui: &dyn PromptUi) -> Result<()> {
     let (session, _service) = session::open_sync_session(config, ui).await?;
     let report = session
@@ -246,8 +249,8 @@ async fn status(config: &CliConfig, ui: &dyn PromptUi) -> Result<()> {
     Ok(())
 }
 // -----------------------------------------------------------------------
-// 测试：早失败路径 + clap 面（网络/真 keyring 的正路径由
-// scripts/verify-sync-group-pairing.sh 与 core/desktop 测试兜底）
+// Tests: early-failure paths + the clap surface (the positive paths over network/real
+// keyring are backed by scripts/verify-sync-group-pairing.sh and the core/desktop tests)
 // -----------------------------------------------------------------------
 
 #[cfg(test)]
@@ -256,7 +259,7 @@ mod tests {
     use persona_core::sync::remote::SyncGroupKeyEntry;
     use uuid::Uuid;
 
-    /// 全量 clap 面（子命令 + 位置参数 + `--adopt`/`--name` 长选项）。
+    /// The full clap surface (subcommands + positional args + the `--adopt`/`--name` long options).
     #[test]
     fn clap_surface_parses() {
         use crate::Commands;
@@ -313,7 +316,7 @@ mod tests {
         (dir, config)
     }
 
-    /// 设备名门禁在接触 keyring/服务器之前（便宜的错误先报）。
+    /// The device-name gate fires before touching the keyring/server (cheap errors first).
     #[tokio::test]
     async fn join_rejects_bad_device_names_before_any_io() {
         let (_dir, config) = tmp_config();
@@ -327,7 +330,7 @@ mod tests {
         }
     }
 
-    /// 未入组 vault 上做 authorize/revoke：门禁在解析目标前（fail-closed）。
+    /// authorize/revoke on a vault that has not joined: the gate fires before resolving the target (fail-closed).
     #[tokio::test]
     async fn device_actions_require_a_joined_vault() {
         let (_dir, config) = tmp_config();
@@ -344,7 +347,7 @@ mod tests {
         }
     }
 
-    /// 冲突裁决的 UUID 解析在会话装配之前（免解锁即报「格式不对」）。
+    /// The conflict-resolution UUID parsing happens before session assembly (a malformed format errors without unlocking).
     #[tokio::test]
     async fn conflict_resolve_rejects_malformed_ids() {
         let (_dir, config) = tmp_config();
@@ -362,7 +365,7 @@ mod tests {
         }
     }
 
-    /// 组密钥信封往返：封到本机公钥 → 拆回即原值；无本机信封 → 待授权。
+    /// Group-key envelope round trip: sealed to this machine's public key → unwrapping yields the original value; no local envelope → awaiting authorization.
     #[test]
     fn own_group_key_round_trips_and_missing_envelope_fails_closed() {
         let identity = persona_core::sync::device::DeviceIdentity::generate("device-a")
@@ -385,9 +388,10 @@ mod tests {
             group_key
         );
 
-        // 别人的信封进列表：本机没有自己的信封 → 待授权（fail-closed）。
-        // device_id 必须各异（generate 给 nil；with_device_id 回填后才是
-        // 服务器分配的 id——nil 会撞，find 误配）。
+        // Another device's envelope enters the list: this machine has no envelope of its own →
+        // awaiting authorization (fail-closed). The device_ids must all differ (generate gives
+        // nil; only after with_device_id fills it back in does it become the server-assigned
+        // id — nils would collide and find would mismatch).
         let other = persona_core::sync::device::DeviceIdentity::generate("device-b")
             .unwrap()
             .with_device_id(Uuid::new_v4());
@@ -405,7 +409,7 @@ mod tests {
         assert!(err.to_string().contains("sync_not_authorized"), "{err}");
     }
 
-    /// 组密钥 hex 编解码（keyring 值格式：32 字节 ↔ 64 字符）。
+    /// Group-key hex encode/decode (the keyring value format: 32 bytes ↔ 64 chars).
     #[test]
     fn group_key_hex_round_trips_and_rejects_junk() {
         let key = [0xABu8; 32];
@@ -417,7 +421,7 @@ mod tests {
         assert_eq!(keyring::group_key_from_hex(&"g".repeat(64)), None);
     }
 
-    /// 组状态免解锁读（keyring 无条目 → 未入组，不报错）。
+    /// Group status read without unlocking (no keyring entry → not joined, no error).
     #[test]
     fn group_status_reads_unlock_free() {
         let (_dir, config) = tmp_config();

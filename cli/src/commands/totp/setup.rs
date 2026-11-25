@@ -150,7 +150,7 @@ pub(crate) async fn setup_totp(
     Ok(())
 }
 
-/// 录入 Steam Guard 令牌：secret 为 base64 shared_secret，固定 5 位码/30 秒
+/// Store a Steam Guard token: the secret is the base64 shared_secret, fixed 5-letter code / 30 seconds
 pub(crate) async fn setup_steam_token(
     config: &CliConfig,
     ui: &dyn crate::utils::prompt::PromptUi,
@@ -161,7 +161,7 @@ pub(crate) async fn setup_steam_token(
     url: Option<String>,
 ) -> Result<()> {
     println!("{}", "🔐 Setting up Steam Guard token...".cyan());
-    // 入库前先验证密钥可解码，坏密钥不该等到取码时才失败
+    // Verify the secret decodes before storing, so a bad key does not fail later at code generation time
     let secret = secret.trim().to_string();
     if decode_steam_secret(&secret).is_err() {
         bail!("Invalid Steam shared_secret (must be standard base64)");
@@ -225,10 +225,12 @@ pub(crate) async fn setup_steam_token(
     Ok(())
 }
 
-/// 录入游戏令牌记录：离线可算的 provider（当前仅 Steam）各有专用 setup
-/// 命令；厂商绑定型（腾讯安全中心/网易大神/米哈游安全令等，密钥在厂商
-/// 服务端配发进官方 App，无法离线出码）只做记录——不伪造动态码，出码
-/// 仍走厂商 App（todo.md G2 调研结论）。
+/// Record a game token entry: providers that can be computed offline (currently Steam only)
+/// each get a dedicated setup command; vendor-bound ones (Tencent Security Center /
+/// NetEase Dasha / miHoYo Security App, etc., where the key is provisioned on the
+/// vendor's servers into their official App and cannot generate codes offline) are
+/// recorded only — no dynamic codes are fabricated, and code generation still goes
+/// through the vendor's App (per the todo.md G2 investigation).
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn setup_game_token(
     config: &CliConfig,

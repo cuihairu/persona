@@ -11,8 +11,9 @@ pub(crate) async fn run_with_host(
     if command.is_empty() {
         anyhow::bail!("Provide a command after --");
     }
-    // 阶段 3 host 维度建议：只建议，不授权——不改 agent 目标主机文件、
-    // 不改任何策略评判；读失败在 suggest 层静默降级。
+    // Phase 3 host-dimension suggestion: advisory only, never authorization —
+    // it leaves the agent target host file and every policy verdict alone;
+    // read failures degrade silently in the suggest layer.
     if let Some(line) = crate::commands::suggest::host_suggestion_line(config, host).await {
         eprintln!("{line}");
     }
@@ -60,7 +61,8 @@ pub(crate) fn current_or_stored_agent_socket(state_dir: &Path) -> Option<String>
     }
 }
 
-/// 供远端脚本/argv 组装用的 ssh 二进制（测试与非常规安装可覆盖）。
+/// ssh binary used to assemble remote scripts/argv (overridable by tests and
+/// nonstandard installs).
 fn ssh_binary() -> String {
     std::env::var("PERSONA_SSH_BINARY")
         .ok()
@@ -69,14 +71,16 @@ fn ssh_binary() -> String {
         .unwrap_or_else(|| "ssh".to_string())
 }
 
-/// POSIX sh 单引号转义（authorized_keys 内容只出现 base64 与算法名，
-/// 但远端路径是调用方给的，一律按不可信处理）。
+/// POSIX sh single-quote escaping (authorized_keys content only ever holds
+/// base64 and algorithm names, but the remote path is caller-supplied and is
+/// always treated as untrusted).
 pub(crate) fn sh_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
 }
 
-/// bare 公钥行（去注释/选项）：与写入远端 authorized_keys 的形态一致，
-/// 也让 remove 的整行匹配只认我们的写法、不误删其他工具的行。
+/// Bare public key line (comments/options stripped): matches the form written
+/// to the remote authorized_keys, and keeps remove's whole-line matching
+/// limited to our own lines so other tools' entries are not deleted.
 pub(crate) fn bare_public_line(line: &str) -> String {
     let mut tokens = line.split_whitespace();
     let algo = tokens.next().unwrap_or_default();
@@ -88,14 +92,18 @@ pub(crate) fn bare_public_line(line: &str) -> String {
     }
 }
 
-/// 生成远端 `sh -c` 脚本（POSIX sh）。`path_expr` 已带引用：默认
-/// `"$HOME/.ssh/authorized_keys"`（远端展开），自定义路径走单引号字面量。
-/// - add：幂等（`grep -qxF` 去重后 `printf >>`，不覆盖已有行）；整行
-///   单引号引用——公钥行内含空格，不引号会被 shell 拆词
-/// - remove：只有第 2 字段（key blob）等于我们的行才会删——awk 重写到
-///   `cat` 回原文件保 inode/权限，不误伤其他工具管理的行；blob 内嵌
-///   awk 双引号程序体，只放行 base64 字符集
-/// - list：原样 `cat` 远端文件（不含即空）
+/// Build the remote `sh -c` script (POSIX sh). `path_expr` is already quoted:
+/// the default is `"$HOME/.ssh/authorized_keys"` (expanded remotely), custom
+/// paths use a single-quoted literal.
+/// - add: idempotent (dedupe with `grep -qxF` then `printf >>`, never
+///   overwriting existing lines); the whole line is single-quoted — a public
+///   key line contains spaces and would be word-split without quoting
+/// - remove: only lines whose 2nd field (key blob) equals ours are dropped —
+///   awk rewrites into a temp file and `cat`s it back into the original to
+///   preserve the inode/permissions, so lines managed by other tools stay
+///   intact; the blob is embedded in the awk program body wrapped in double
+///   quotes and only the base64 character set is allowed
+/// - list: `cat` the remote file as-is (empty if it does not exist)
 pub(crate) fn authorized_keys_plan(action: &str, path_expr: &str, key: &str) -> Result<String> {
     match action {
         "list" => Ok(format!("if test -f {path_expr}; then cat {path_expr}; fi")),
@@ -125,9 +133,10 @@ pub(crate) fn authorized_keys_plan(action: &str, path_expr: &str, key: &str) -> 
     }
 }
 
-/// 跑一次 ssh（captured stdout/stderr），期间挂 agent-target-host——
-/// 与 `ssh run` 同一策略口径（known_hosts/确认/限速由 agent 的 host
-/// 策略管）。会话结束无论成败都清 host 文件。
+/// Run ssh once (captured stdout/stderr) with the agent-target-host file set
+/// for the duration — same policy treatment as `ssh run` (known_hosts,
+/// confirmation, and rate limits are governed by the agent's host policy).
+/// The host file is cleared on session end whether the run succeeded or not.
 async fn ssh_capture(host: &str, program: &str, args: &[String]) -> Result<std::process::Output> {
     use tokio::process::Command;
     let state_dir = agent_state_dir();
@@ -144,9 +153,10 @@ async fn ssh_capture(host: &str, program: &str, args: &[String]) -> Result<std::
     outcome
 }
 
-/// authorized_keys 分发：密钥由 vault 出（私钥不出库），传输/认证交给
-/// 用户自己的 `ssh` 二进制（与 `ssh run` 同一信任模型——本仓不做 SSH
-/// 客户端协议实现，这是设计边界不是缺失）。
+/// authorized_keys distribution: keys come out of the vault (the private key
+/// never leaves it), while transport/authentication is handed to the user's
+/// own `ssh` binary (same trust model as `ssh run` — this repo does not
+/// implement the SSH client protocol; that is a design boundary, not a gap).
 pub(crate) async fn authorize(
     identity_name: &str,
     host: &str,
@@ -205,7 +215,7 @@ pub(crate) async fn authorize(
     } else {
         "add"
     };
-    // remove 的匹配键是 blob（第 2 字段），add/list 用整行
+    // remove matches on the blob (2nd field); add/list match the whole line
     let key = if action == "remove" {
         blob
     } else {
@@ -268,7 +278,7 @@ pub(crate) async fn authorize(
             cred_id
         );
     }
-    // 审计口径：动作 + 目标主机 + 凭据/身份（best-effort）
+    // Audit fields: action + target host + credential/identity (best-effort)
     audit_ssh_event(
         &config.get_database_path(),
         "ssh_authorize",

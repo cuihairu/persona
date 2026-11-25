@@ -1,9 +1,10 @@
-//! 同步环境的 keyring 取用（**单源**：CLI `persona sync` 与浏览器扩展桥
-//! 共用；`bridge/sync_connect` 只是转发本模块）。
+//! Keyring access for the sync environment (**single source**: shared by CLI `persona sync`
+//! and the browser-extension bridge; `bridge/sync_connect` merely forwards to this module).
 //!
-//! keyring 条目键 = vault db_path（与 desktop `token_store` 同键——一个
-//! vault 一套条目）；service 名是**协议级常量**，桌面↔CLI↔扩展三方共用，
-//! 改名即断链（已配对设备全部失效），只可新增不可改值。
+//! The keyring entry key = the vault db_path (same key as the desktop `token_store` — one
+//! vault, one set of entries); the service name is a **protocol-level constant** shared by
+//! desktop ↔ CLI ↔ extension; renaming it breaks the chain (all paired devices fail), so
+//! entries may only be added, never re-valued.
 
 use std::path::Path;
 
@@ -13,18 +14,18 @@ use persona_core::sync::device::DeviceIdentity;
 use persona_core::sync::remote::SyncGroupKeyEntry;
 use persona_core::Database;
 
-/// sync 服务器上报令牌（seahorse/Keychain 里按它展示）
+/// The sync server reporting token (displayed as such in seahorse/Keychain)
 pub const KEYRING_SERVICE_SYNC_TOKEN: &str = "persona-sync";
 
-/// E2EE sync 设备身份（值 = `DeviceIdentity::to_stored_json`）
+/// The E2EE sync device identity (value = `DeviceIdentity::to_stored_json`)
 pub const KEYRING_SERVICE_DEVICE_IDENTITY: &str = "persona-device";
 
-/// 同步组组密钥（零账号配对入组；值 = 32 字节组密钥的 hex）
+/// The sync group key (zero-account pairing enrollment; value = hex of the 32-byte group key)
 pub const KEYRING_SERVICE_SYNC_GROUP: &str = "persona-sync-group";
 
-/// 读 keyring 条目。条目不存在 → `None`；secret service 不可用 → 报错
-/// **而非**当「未配置」——fail-closed：把「keyring 坏了」误报成「没加入
-/// 同步」会把排障方向带偏。
+/// Read a keyring entry. A missing entry → `None`; the secret service being unavailable →
+/// error, **not** "unconfigured" — fail-closed: misreporting a broken keyring as "not
+/// joined to sync" would steer debugging in the wrong direction.
 pub fn read_entry(service: &str, account: &str) -> Result<Option<String>> {
     let entry = keyring::Entry::new(service, account)
         .map_err(|e| anyhow!("sync_keyring_unavailable: {e}"))?;
@@ -35,8 +36,8 @@ pub fn read_entry(service: &str, account: &str) -> Result<Option<String>> {
     }
 }
 
-/// 写 keyring 条目（fail-closed：keyring 不可用即报错，**绝不**退回明文
-/// 存储）。
+/// Write a keyring entry (fail-closed: an unavailable keyring errors out, **never**
+/// falling back to plaintext storage).
 pub fn write_entry(service: &str, account: &str, value: &str) -> Result<()> {
     let entry = keyring::Entry::new(service, account)
         .map_err(|e| anyhow!("sync_keyring_unavailable: {e}"))?;
@@ -45,7 +46,7 @@ pub fn write_entry(service: &str, account: &str, value: &str) -> Result<()> {
         .map_err(|e| anyhow!("sync_keyring_unavailable: {e}"))
 }
 
-/// 删 keyring 条目（幂等：条目本就不存在 = 已是目标状态）。
+/// Delete a keyring entry (idempotent: an entry that already does not exist = the target state).
 pub fn delete_entry(service: &str, account: &str) -> Result<()> {
     let entry = keyring::Entry::new(service, account)
         .map_err(|e| anyhow!("sync_keyring_unavailable: {e}"))?;
@@ -56,9 +57,9 @@ pub fn delete_entry(service: &str, account: &str) -> Result<()> {
     }
 }
 
-/// 从信封条目里拆出本机 group key（纯装配）。本机信封缺失（待授权）→
-/// `sync_not_authorized`；拆不开（信封不是包给这把私钥的/被篡改）→
-/// fail-closed 报错。
+/// Unwrap this machine's group key from its envelope entry (pure assembly). A missing
+/// local envelope (awaiting authorization) → `sync_not_authorized`; an envelope that
+/// cannot be unwrapped (not addressed to this private key / tampered with) → fail-closed error.
 pub fn open_own_group_key(
     entries: &[SyncGroupKeyEntry],
     identity: &DeviceIdentity,
@@ -75,8 +76,9 @@ pub fn open_own_group_key(
         .map_err(|e| anyhow!("sync_group_key_failed: failed to open own group key envelope: {e}"))
 }
 
-/// vault `settings.sync.server_url`（**免解锁**读取：settings 是低敏配置，
-/// 不含凭据材料——与桌面 `read_sync_config` 的读取口径一致）。
+/// The vault's `settings.sync.server_url` (**unlock-free** read: settings is low-sensitivity
+/// configuration with no credential material — the same read terms as the desktop
+/// `read_sync_config`).
 pub async fn read_sync_server_url(db_path: &Path) -> Result<String> {
     let db = Database::from_file(db_path)
         .await
@@ -106,12 +108,12 @@ pub async fn read_sync_server_url(db_path: &Path) -> Result<String> {
     Ok(server_url)
 }
 
-/// 组密钥 hex 编码（32 字节 ↔ 64 字符；keyring 值格式）。
+/// Group-key hex encoding (32 bytes ↔ 64 chars; the keyring value format).
 pub fn group_key_to_hex(key: &[u8; 32]) -> String {
     key.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// 组密钥 hex 解码（长度不足或非 hex 一律 `None`——不猜）。
+/// Group-key hex decoding (a short length or non-hex always yields `None` — no guessing).
 pub fn group_key_from_hex(value: &str) -> Option<[u8; 32]> {
     let value = value.trim();
     if value.len() != 64 {

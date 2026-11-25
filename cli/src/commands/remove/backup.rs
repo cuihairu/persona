@@ -103,7 +103,7 @@ pub(super) async fn create_backup(name: &str, config: &CliConfig, ui: &dyn Promp
         .create(&log)
         .await
         .map_err(|e| anyhow!("Failed to write audit log: {}", e))?;
-    // 该事件直写审计库绕过 service 挂钩，上报链路在这里补发
+    // This event is written straight to the audit vault, bypassing the service hook, so the reporting chain is fired here
     crate::commands::service::emit_audit(&log);
 
     Ok(())

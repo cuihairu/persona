@@ -19,7 +19,7 @@ path = "src/main.rs"
 [dependencies]
 # Core library
 persona-core = { path = "../core", features = ["remote-auth", "accounts"] }
-# Connect 本机自动化 HTTP 端点（serve 与桌面共用同一 router/三防线）
+# Connect local-machine automation HTTP endpoints (serve and desktop share the same router / three defense lines)
 persona-connect-server = { path = "../connect-server" }
 
 async-trait.workspace = true
@@ -55,8 +55,9 @@ thiserror = "2.0"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
-# sync_connect（桥发云参数）读 OS keyring 里的 sync token 与设备身份——
-# 条目与桌面 token_store 同 service 名同键（persona-sync / persona-device）
+# sync_connect (the bridge-sent cloud parameters) reads the sync token and device
+# identity from the OS keyring — the entries use the same service name and keys
+# as the desktop token_store (persona-sync / persona-device)
 keyring = "4"
 
 # File system
@@ -90,23 +91,24 @@ hex = { workspace = true }
 # Data formats
 csv = { version = "1.3", optional = true }
 tabled = "0.22"
-# ssh generate：ed25519 公钥行解析出 SHA256 指纹（生成走 core，此处只读公钥行）
+# ssh generate: derive the SHA256 fingerprint from the ed25519 public key line (generation happens in core; here only the public key line is read)
 ssh-key.workspace = true
 
-# stop_agent 的 unix 路径直接 libc::kill 发 SIGTERM（不 fork 外部 kill，
-# 避免内存吃紧时 fork 失败被误判为 Refused 而留下 pidfile）
+# stop_agent's unix path sends SIGTERM directly via libc::kill (no forking an
+# external kill, which could fail under memory pressure and be misread as
+# Refused, leaving the pidfile behind)
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
 [dev-dependencies]
 tempfile = "3.8"
-# 1PUX 测试 fixture 现场打包 ZIP 容器
+# Pack the 1PUX test fixture into a ZIP container on the fly
 zip.workspace = true
 assert_cmd = "2.0"
 predicates = "3.0"
 proptest = { workspace = true }
 sqlx = { workspace = true }
-# import-file 测试现场生成 OpenSSH 私钥 fixture
+# Generate the OpenSSH private key fixture on the fly for the import-file tests
 rand_core.workspace = true
 
 [features]

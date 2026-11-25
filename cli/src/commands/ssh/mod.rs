@@ -10,7 +10,7 @@ use persona_core::{
 use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
-/// 读 agent socket 响应的长度上限（与 ssh-agent 侧 BUG-1 同法）：恶意/损坏
+/// Cap on lengths read from agent socket responses (same approach as BUG-1 on the ssh-agent side): a malicious/corrupt
 mod agent;
 mod args;
 mod host;
@@ -26,7 +26,7 @@ use keys::{
 };
 use signing::gpg_sign;
 
-/// authorized_keys 分发的参数集（避免 handler 摊成十几个位置参数）。
+/// Parameter set for authorized_keys distribution (keeps the handler from sprawling into a dozen positional args).
 struct AuthorizeOptions {
     id: Option<Uuid>,
     remove: bool,

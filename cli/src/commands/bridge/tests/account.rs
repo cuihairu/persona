@@ -1,8 +1,8 @@
 use super::*;
 
-/// account_login 的 user_gesture 门禁：配对会话在场但无手势 → 拒。
+/// The user_gesture gate of account_login: a pairing session is present but there is no gesture → refuse.
 #[tokio::test]
-#[allow(clippy::await_holding_lock)] // 与既有 env 门禁测试同口径：ENV_LOCK 全程互斥
+#[allow(clippy::await_holding_lock)] // same terms as the existing env-gate tests: ENV_LOCK is exclusive for the whole duration
 async fn account_login_requires_user_gesture() {
     let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let (_dir, db_path, state_dir, _identity) = seeded_bridge().await;
@@ -30,8 +30,8 @@ async fn account_login_requires_user_gesture() {
     );
 }
 
-/// 服务器未配置 → sync_not_configured（复用 sync 侧分类；手势门禁
-/// 已过，配置解析先于任何网络/密钥动作）。
+/// Server not configured → sync_not_configured (reuses the sync-side classification; the
+/// gesture gate has passed and config parsing precedes any network/key action).
 #[tokio::test]
 async fn account_login_fails_closed_when_server_not_configured() {
     let (_dir, db_path, state_dir, _identity) = seeded_bridge().await;
@@ -59,8 +59,9 @@ async fn account_login_fails_closed_when_server_not_configured() {
     );
 }
 
-/// 服务器在场但不可达 → account_login_failed（SRP 编排错误如实
-/// 透传分类；连不上一台死端口即可走通全链，不需要 SRP mock）。
+/// The server is present but unreachable → account_login_failed (the SRP orchestration error
+/// is passed through as its classification; connecting to a dead port is enough to walk the
+/// whole chain — no SRP mock needed).
 #[tokio::test]
 async fn account_login_reports_srp_failure_against_dead_server() {
     let dir = tempfile::tempdir().unwrap();
@@ -79,12 +80,13 @@ async fn account_login_reports_srp_failure_against_dead_server() {
         err.to_string().starts_with("account_login_failed"),
         "got: {err}"
     );
-    // 失败不落地任何令牌
+    // A failure stores no token
     assert_eq!(store.get_token(&db_path.to_string_lossy()).unwrap(), None);
 }
 
-/// account_status 反映令牌仓现状（has_session）与服务器配置
-/// （server_configured），注入内存仓全路径可测、不碰真 keyring。
+/// account_status reflects the token store's current state (has_session) and the server
+/// configuration (server_configured); with an injected in-memory store the whole path is
+/// testable without touching the real keyring.
 #[tokio::test]
 async fn account_status_reflects_store_and_server_config() {
     let dir = tempfile::tempdir().unwrap();
@@ -106,14 +108,14 @@ async fn account_status_reflects_store_and_server_config() {
     let status = run_account_status(&db_path, &store).await.unwrap();
     assert!(status.has_session);
 
-    // 空白令牌视同未登录（与读侧 filter 同口径）
+    // A blank token counts as signed out (same terms as the read-side filter)
     store.set_token(&db_path.to_string_lossy(), "   ").unwrap();
     let status = run_account_status(&db_path, &store).await.unwrap();
     assert!(!status.has_session);
 }
 
-/// 无令牌 → 登出幂等成功（revoked_on_server=false），与桌面
-/// account_sign_out 同口径。
+/// No token → sign-out is an idempotent success (revoked_on_server=false), the same terms
+/// as the desktop account_sign_out.
 #[tokio::test]
 async fn account_logout_is_idempotent_without_token() {
     let dir = tempfile::tempdir().unwrap();
@@ -128,8 +130,8 @@ async fn account_logout_is_idempotent_without_token() {
     assert!(!payload.revoked_on_server);
 }
 
-/// 有令牌 + 服务器不可达 → 本地令牌照删（登出不因服务器失联卡死），
-/// revoked_on_server 如实报 false。
+/// A token present + the server unreachable → the local token is deleted anyway (sign-out
+/// never stalls on server unreachability), with revoked_on_server honestly reported false.
 #[tokio::test]
 async fn account_logout_clears_local_token_even_when_server_unreachable() {
     let dir = tempfile::tempdir().unwrap();

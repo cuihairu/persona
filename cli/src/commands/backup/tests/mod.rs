@@ -4,8 +4,8 @@ use persona_core::storage::repository::{IdentityRepository, Repository};
 use std::io::{BufRead, Read, Write};
 use std::sync::{Arc, Mutex};
 
-/// 进程 env 单槽（PERSONA_* 全局名空间）：与 bridge/switch/ssh/travel
-/// 的 env 测试共用 bridge 测试的全局锁串行。
+/// Single process-env slot (PERSONA_* is a global namespace): serialize with the
+/// bridge tests' global lock, shared with the env tests of bridge/switch/ssh/travel.
 fn env_guard() -> std::sync::MutexGuard<'static, ()> {
     crate::commands::bridge::tests::ENV_LOCK
         .lock()
@@ -18,7 +18,7 @@ fn config_for(dir: &tempfile::TempDir) -> CliConfig {
     config
 }
 
-/// 建一个带单个 identity 的库并返回 (库, identity id)。
+/// Build a database with a single identity and return (db, identity id).
 async fn seeded_db(path: &std::path::Path) -> Database {
     let db = Database::from_file(path).await.unwrap();
     db.migrate().await.unwrap();
@@ -33,27 +33,30 @@ async fn identity_count(path: &std::path::Path) -> usize {
     let db = Database::from_file(path).await.unwrap();
     let repo = IdentityRepository::new(db.clone());
     let count = repo.find_all().await.unwrap().len();
-    // 显式关闭：drop 只把池交给后台回收，Windows 上句柄可能仍短暂
-    // 持有，紧随其后的 restore rename 会撞 os error 5（Access denied）。
+    // Close explicitly: drop merely hands the pool to background reclamation, and on
+    // Windows handles can still be held briefly, so the restore rename right after
+    // would hit os error 5 (Access denied).
     db.close().await;
     count
 }
 
 // ------------------------------------------------------------------
-// 服务器侧分支（push/list/pull/restore-from-id/delete）。
+// Server-side branches (push/list/pull/restore-from-id/delete).
 //
-// 这些代码的有趣路径全在「请求长什么样」与「响应怎么被解释、落盘、
-// 换库」上，本地没有可替身的对象，所以起一个 loopback 上的极简
-// HTTP/1.1 桩服务（与 cli/tests/integration_test.rs 的事件上报测试
-// 同一惯例）：每个响应都带 `Connection: close`，reqwest 读完即断，
-// 不等 keep-alive → 逐请求串行、结果确定。
+// The interesting paths of this code are all about "what the request looks like"
+// and "how the response is interpreted, written to disk, and swapped into the
+// database", with nothing local to stub against. So spin up a minimal HTTP/1.1
+// stub server on loopback (same convention as the event-reporting tests in
+// cli/tests/integration_test.rs): every response carries `Connection: close`,
+// so reqwest disconnects once it has finished reading and does not wait for
+// keep-alive → requests are serialized one by one and results are deterministic.
 // ------------------------------------------------------------------
 
-/// 桩响应：(状态码, 附加响应头, 响应体)。
+/// Stub reply: (status code, extra response headers, body).
 type StubReply = (u16, Vec<(&'static str, String)>, Vec<u8>);
 type StubHandler = dyn Fn(&str, &str, &[u8]) -> StubReply + Send + Sync;
 
-/// 桩服务器收到的一条请求（body 全留：要断言推上去的确实是密文）。
+/// One request received by the stub server (the body is kept in full: we must assert what got pushed really is ciphertext).
 struct Served {
     method: String,
     path: String,
@@ -61,8 +64,8 @@ struct Served {
     body: Vec<u8>,
 }
 
-/// 环境变量 RAII：断言失败 panic 时也会清理，不留残留污染同进程里
-/// 其他读 `PERSONA_*` 的测试。
+/// Environment variable RAII: cleaned up even when an assertion panics, so no
+/// residue pollutes other tests in the same process that read `PERSONA_*`.
 struct TempEnv {
     key: &'static str,
 }
@@ -80,7 +83,7 @@ impl Drop for TempEnv {
     }
 }
 
-/// 把客户端指向桩（`PERSONA_SERVER_URL` + `PERSONA_SERVER_TOKEN`）。
+/// Point the client at the stub (`PERSONA_SERVER_URL` + `PERSONA_SERVER_TOKEN`).
 fn server_env(addr: std::net::SocketAddr) -> (TempEnv, TempEnv) {
     (
         TempEnv::set("PERSONA_SERVER_URL", &format!("http://{addr}")),
@@ -101,8 +104,9 @@ fn json_response(status: u16, value: &serde_json::Value) -> StubReply {
     )
 }
 
-/// 起桩：逐条 accept（测试内按序发请求），回 `handler` 的罐头响应，
-/// 并把每条请求记进返回的共享日志。线程随测试进程结束回收。
+/// Start the stub: accept one connection at a time (the test sends requests in
+/// order), replay `handler`'s canned responses, and record each request in the
+/// shared log it returns. The thread is reaped when the test process ends.
 fn spawn_stub(handler: Box<StubHandler>) -> (std::net::SocketAddr, Arc<Mutex<Vec<Served>>>) {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = listener.local_addr().unwrap();

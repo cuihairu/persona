@@ -78,8 +78,9 @@ pub(crate) fn decode_qr_file(path: &PathBuf) -> Result<String> {
 }
 
 fn two_factor_from_template(template: &FinalTotpConfig) -> TwoFactorData {
-    // 仅供入库前的预览取码：hotp 恒为 None，避免预览路径经 core 调度器
-    // 的 HOTP 门禁（预览按调用方显式选择的路径取码，不依赖条目标记）。
+    // Only for preview code generation before storing: hotp is always None, so the
+    // preview path does not hit the core scheduler's HOTP gate (preview takes codes
+    // via the path the caller explicitly chose, not via entry markers).
     TwoFactorData {
         secret_key: template.secret.clone(),
         issuer: template.issuer.clone(),
@@ -102,7 +103,7 @@ pub(crate) fn generate_hotp_code(template: &FinalTotpConfig, counter: u64) -> Re
 }
 
 fn generate_totp_code_from_data(data: &TwoFactorData) -> Result<(String, u32)> {
-    // 协议逻辑统一下沉到 core（RFC 4226/6238），CLI 只做调用。
+    // Protocol logic has been consolidated into core (RFC 4226/6238); the CLI only calls it.
     let code = totp_now(data)?;
     Ok((code.code, code.remaining_seconds))
 }

@@ -194,11 +194,12 @@ async fn credential_secret_env_var_serves_prompt() {
     std::env::remove_var("PERSONA_MASTER_PASSWORD");
 }
 
-/// `--credential-type api-key` 必须落 **ApiKey data 变体**（回归）：
-/// 曾经落进 `_` 兜底被建成 Password 变体——type=ApiKey + data=Password，
-/// `secrets resolve IDENTITY/ITEM/api_key` 报 "unknown field"（valid 只有
-/// password/email），按 data 变体消费的下游（cockpit 等）全部失效。
-/// 元数据 type 列一直显示 ApiKey，错在 data，只有解密路径能发现。
+/// `--credential-type api-key` must land on the **ApiKey data variant** (regression):
+/// it once fell into the `_` catch-all and was built as a Password variant —
+/// type=ApiKey + data=Password — and `secrets resolve IDENTITY/ITEM/api_key` reported
+/// "unknown field" (valid values are only password/email), so every downstream consumer
+/// that matches on the data variant (cockpit, etc.) broke. The metadata type column kept
+/// showing ApiKey; the fault is in the data and only the decryption path can catch it.
 #[tokio::test]
 async fn add_api_key_stores_api_key_data_variant_not_password() {
     let _guard = lock_process_env();
@@ -429,13 +430,13 @@ async fn credential_add_note_stores_encrypted_secure_note() {
         })),
     };
 
-    // note 类型不适用密码路径。
+    // The note type does not use the password path.
     let err = execute_with(note_args("bad", Some("pw"), None), &config, &TerminalUi)
         .await
         .expect_err("note with --secret must fail");
     assert!(err.to_string().contains("--note"));
 
-    // --note 显式提供正文。
+    // --note supplies the body explicitly.
     execute_with(
         note_args("Recovery codes", None, Some("1111-2222\n3333-4444")),
         &config,
@@ -444,14 +445,14 @@ async fn credential_add_note_stores_encrypted_secure_note() {
     .await
     .expect("explicit note works");
 
-    // --note 缺省：走可见 input 提示（ScriptedUi 预置答案）。
+    // --note default: goes through a visible input prompt (ScriptedUi preloads the answer).
     let scripted = ScriptedUi::new().input("interactive note body");
     execute_with(note_args("Scratch", None, None), &config, &scripted)
         .await
         .expect("interactive note works");
     assert!(scripted.exhausted());
 
-    // 读回：类型与数据变体正确，正文逐字保留（per-item key 加密往返）。
+    // Read-back: the type and data variant are correct and the body is preserved verbatim (per-item key encryption round trip).
     let service =
         crate::commands::service::init_service(&config, &crate::utils::prompt::TerminalUi)
             .await
@@ -486,8 +487,8 @@ async fn credential_add_note_stores_encrypted_secure_note() {
     std::env::remove_var("PERSONA_MASTER_PASSWORD");
 }
 
-/// Identity / Software License：flag 驱动建条目，字段逐字往返
-/// （per-item key 加密）；license key 缺省走交互提示。
+/// Identity / Software License: flag-driven creation, fields round-trip verbatim
+/// (per-item key encryption); the license key defaults to an interactive prompt.
 #[tokio::test]
 async fn credential_add_identity_and_license_round_trip() {
     let _guard = lock_process_env();
@@ -505,7 +506,7 @@ async fn credential_add_identity_and_license_round_trip() {
     std::env::set_var("PERSONA_MASTER_PASSWORD", "master-pin");
     seed(&config, "iris").await;
 
-    // Identity：姓名 + 证件号走 flag，未提供字段保持 None。
+    // Identity: name + document number via flags; fields not provided stay None.
     let identity_args = CredentialArgs {
         command: CredentialCommand::Add(Box::new(AddArgs {
             identity: "iris".to_string(),
@@ -545,7 +546,7 @@ async fn credential_add_identity_and_license_round_trip() {
         .await
         .expect("identity add works");
 
-    // SoftwareLicense：license key 缺省 → ScriptedUi 提示输入。
+    // SoftwareLicense: license key defaults to a ScriptedUi prompt.
     let mut license_args = identity_args;
     if let CredentialCommand::Add(add) = &mut license_args.command {
         debug_assert!(add.license_key.is_none());
@@ -566,7 +567,7 @@ async fn credential_add_identity_and_license_round_trip() {
         .expect("license add with prompted key works");
     assert!(scripted.exhausted());
 
-    // 互斥防线：--secret 不适用于这两种类型。
+    // Mutual-exclusion defense: --secret does not apply to these two types.
     let mut bad = CredentialArgs {
         command: CredentialCommand::Add(Box::new(AddArgs {
             identity: "iris".to_string(),
@@ -615,7 +616,7 @@ async fn credential_add_identity_and_license_round_trip() {
         .expect_err("identity with --secret must fail");
     assert!(err.to_string().contains("--secret"));
 
-    // 读回：类型变体与字段逐字保留。
+    // Read-back: the type variant and fields are preserved verbatim.
     let service =
         crate::commands::service::init_service(&config, &crate::utils::prompt::TerminalUi)
             .await

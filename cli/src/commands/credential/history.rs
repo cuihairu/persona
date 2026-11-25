@@ -12,9 +12,10 @@ struct HistoryRow {
     fields: String,
 }
 
-/// Item history（1Password 对齐）：凭据的变更时间线。
-/// 历史行只含明文元数据 diff——密文变化仅显示为 `encrypted_data` 占位。
-/// 凭据删除后历史仍可查询（名称退化为 UUID 展示）。
+/// Item history (1Password-aligned): the change timeline of a credential.
+/// History rows carry only plaintext metadata diffs — ciphertext changes show up as an
+/// `encrypted_data` placeholder. History stays queryable after the credential is
+/// deleted (the name degrades to a UUID display).
 pub(crate) async fn show_credential_history(
     config: &CliConfig,
     ui: &dyn PromptUi,

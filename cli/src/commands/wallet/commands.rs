@@ -857,9 +857,10 @@ pub(crate) async fn handle_wallet_with(
                 return Ok(());
             }
 
-            // 后端防投毒强制检查（WALLET_DESIGN.md §5 第 3 条）：to 地址模仿
-            // 本钱包任一已知地址即拒绝签名，除非显式 --confirm-poisoning-check。
-            // 放在口令 prompt 之前：被拦下时不必让用户先输口令。
+            // Backend-enforced anti-poisoning check (WALLET_DESIGN.md §5 rule 3): if the to
+            // address imitates any known address of this wallet, refuse to sign unless
+            // --confirm-poisoning-check is given explicitly. Placed before the passphrase
+            // prompt: no reason to make the user type a passphrase first just to be blocked.
             let known_addresses: Vec<String> =
                 wallet.addresses.iter().map(|a| a.address.clone()).collect();
             persona_core::crypto::enforce_poisoning_check(
@@ -992,11 +993,13 @@ pub(crate) async fn handle_wallet_with(
 /// `persona wallet passwd` — re-wrap a wallet's private key and mnemonic
 /// under a new password (WALLET_DESIGN.md §3).
 ///
-/// 解旧密与重包都在写回之前完成：任一步失败原钱包行保持不动，不会出现
-/// 两份材料口令不一致的半写状态。旧口令的解析方式与签名一致
-/// （`PERSONA_WALLET_PASSWORD` 环境变量优先，交互模式走 prompt）；新口令
-/// 交互式输入（与 `persona passwd` 同规：无环境变量覆盖，陈旧的环境
-/// 变量永远不能静默轮换口令）。
+/// Old-key decryption and rewrapping both complete before the write-back: if any step
+/// fails the original wallet row stays untouched, so there is never a half-written state
+/// where the two materials disagree on the passphrase. The old passphrase is resolved the
+/// same way as signing (`PERSONA_WALLET_PASSWORD` env takes priority, a prompt in
+/// interactive mode); the new passphrase is typed interactively (same rule as
+/// `persona passwd`: no env override — a stale environment variable must never be able
+/// to rotate the passphrase silently).
 async fn execute_passwd(
     repo: &CryptoWalletRepository,
     wallet_identifier: &str,
@@ -1033,7 +1036,7 @@ async fn execute_passwd(
         bail!("New password must be at least 8 characters");
     }
 
-    // 先全部解密（错旧口令在这里失败，不产生半写状态），再全部重包。
+    // Decrypt everything first (a wrong old passphrase fails here, leaving no half-written state), then rewrap everything.
     let old_key: EncryptedWalletKey = serde_json::from_slice(&wallet.encrypted_private_key)
         .map_err(|e| anyhow!("Stored private key is not valid wallet encryption JSON: {e}"))?;
     let new_key = change_wallet_password(&old_key, &old_password, &new_password)

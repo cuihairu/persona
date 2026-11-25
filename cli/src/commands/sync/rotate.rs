@@ -1,9 +1,10 @@
-//! 组密钥轮换与冲突裁决（`persona sync rotate` / `persona sync conflicts`）。
+//! Group-key rotation and conflict resolution (`persona sync rotate` / `persona sync conflicts`).
 //!
-//! 镜像 desktop `sync_rotate`（sync.rs:823）、`sync_conflicts_list`（864）、
-//! `sync_conflict_resolve`（889）。差异只在错误呈现：桌面用
-//! `ApiResponse::error_with_code` 把并发轮换 409 翻成前端可识别码，CLI 直接
-//! 报错给终端（`PersonaError::ConcurrentConflict` 的 Display 已带码）。
+//! Mirrors desktop `sync_rotate` (sync.rs:823), `sync_conflicts_list` (864), and
+//! `sync_conflict_resolve` (889). The only difference is error presentation: the desktop
+//! uses `ApiResponse::error_with_code` to translate the concurrent-rotation 409 into a
+//! frontend-recognizable code, while the CLI reports straight to the terminal (the Display
+//! of `PersonaError::ConcurrentConflict` already carries the code).
 
 use anyhow::{anyhow, Result};
 use colored::Colorize;
@@ -14,7 +15,7 @@ use super::session;
 use crate::config::CliConfig;
 use crate::utils::prompt::PromptUi;
 
-/// 轮换组密钥：全组凭据以新组密钥重新入账并推送（桌面同语义）。
+/// Rotate the group key: re-enqueue all group credentials under the new group key and push (same semantics as the desktop).
 pub(crate) async fn rotate(config: &CliConfig, ui: &dyn PromptUi) -> Result<()> {
     let (sess, service) = session::open_sync_session(config, ui).await?;
     let master = service
@@ -39,8 +40,9 @@ pub(crate) async fn rotate(config: &CliConfig, ui: &dyn PromptUi) -> Result<()> 
     Ok(())
 }
 
-/// 冲突裁决列表（只读，不改状态）：全部待裁决条目 + 主位/副本快照。
-/// 不解密 master——`list_conflicts` 的解密走组密钥（会话装配时拆信封得）。
+/// The conflict-resolution list (read-only, no state change): every pending entry plus
+/// primary/replica snapshots. master is not decrypted — `list_conflicts` decrypts with the
+/// group key (obtained by unwrapping the envelope at session assembly).
 pub(crate) async fn list_conflicts(config: &CliConfig, ui: &dyn PromptUi) -> Result<()> {
     let (sess, _service) = session::open_sync_session(config, ui).await?;
     let entries = sess
@@ -71,14 +73,14 @@ pub(crate) async fn list_conflicts(config: &CliConfig, ui: &dyn PromptUi) -> Res
     Ok(())
 }
 
-/// 裁决：采纳一个副本（先写主库再以新 lamport 入账，其余版本淘汰出视图）。
+/// Resolve: adopt one replica (write the primary vault first, then enqueue with the new lamport; the remaining versions are evicted from the view).
 pub(crate) async fn resolve_conflict(
     config: &CliConfig,
     item_id: &str,
     adopt_op_id: &str,
     ui: &dyn PromptUi,
 ) -> Result<()> {
-    // UUID 解析在会话装配之前（便宜的错误先报，免解锁）
+    // UUID parsing happens before session assembly (cheap errors first, no unlock needed)
     let item = Uuid::parse_str(item_id.trim()).map_err(|_| anyhow!("Malformed item id"))?;
     let adopt =
         Uuid::parse_str(adopt_op_id.trim()).map_err(|_| anyhow!("Malformed conflict op id"))?;
@@ -93,7 +95,7 @@ pub(crate) async fn resolve_conflict(
     Ok(())
 }
 
-/// 打印一个冲突版本（快照可用时附条目名，便于用户认哪份是真）。
+/// Print one conflict version (with the entry name attached when a snapshot is available, so the user can tell which copy is the real one).
 fn print_version(role: &str, version: &persona_core::sync::resolve::ConflictVersion) {
     let title = version
         .snapshot

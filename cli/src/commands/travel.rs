@@ -1,10 +1,14 @@
-//! `persona travel …`：旅行模式（把被标记身份整包移出本设备/原样恢复）。
+//! `persona travel …`: travel mode (move every marked identity off this device in
+//! one bundle, or restore it as it was).
 //!
-//! 语义与门禁都在 core（见 `persona_core::travel`）；本模块只做编排：
-//! 状态展示与 mark/unmark 不需要解密主密钥（status 无门禁、mark 走
-//! switch.rs 的解锁分叉），enter/exit 需要完整解锁（`init_service`，
-//! 同时带起附件存储）。travel 口令与主密码相互独立，三级解析照抄
-//! backup.rs：`--passphrase-env` → `PERSONA_PAYLOAD_PASSPHRASE` → 提示。
+//! The semantics and the gates all live in core (see `persona_core::travel`);
+//! this module only orchestrates: the status display and mark/unmark do not
+//! need to decrypt the master key (status has no gate, mark goes through the
+//! unlock fork in switch.rs), while enter/exit need a full unlock
+//! (`init_service`, which also brings up attachment storage). The travel
+//! passphrase is independent of the master passphrase, and its three-level
+//! resolution mirrors backup.rs: `--passphrase-env` →
+//! `PERSONA_PAYLOAD_PASSPHRASE` → prompt.
 
 use anyhow::{anyhow, bail, Context, Result};
 use clap::{Args, Subcommand};
@@ -76,7 +80,7 @@ pub(crate) async fn execute_with(
     }
 }
 
-/// 打开库 + 迁移 + 构造未解锁 service（status 只读旗标，无需主密码）。
+/// Open the database + migrate + build an unlocked service (status only reads the flag, so no master passphrase is needed).
 async fn open_service(config: &CliConfig) -> Result<(Database, PersonaService)> {
     let db_path = config.get_database_path();
     let db = Database::from_file(&db_path)
@@ -91,8 +95,9 @@ async fn open_service(config: &CliConfig) -> Result<(Database, PersonaService)> 
     Ok((db, service))
 }
 
-/// 被标记身份清单。sqlx 在 cli 只是 dev-dependency（生产代码走 repository
-/// 层），这里开一条只读连接列出全部身份再过滤。
+/// List the marked identities. sqlx is only a dev-dependency of the cli (production
+/// code goes through the repository layer), so open one read-only connection here
+/// and list all identities before filtering.
 async fn marked_names(config: &CliConfig) -> Result<Vec<String>> {
     let db = Database::from_file(config.get_database_path())
         .await
@@ -171,8 +176,10 @@ async fn show_status(config: &CliConfig) -> Result<()> {
     Ok(())
 }
 
-/// mark/unmark：switch.rs 的解锁分叉——有用户则解锁走 service（自带审计），
-/// 未初始化库直连 repo 并手工补审计（身份列存在但主密码体系未建）。
+/// mark/unmark: the unlock fork from switch.rs — with a user present, unlock and
+/// go through the service (which audits on its own); on an uninitialized
+/// database go straight to the repository and add the audit row by hand (the
+/// identities column exists but the master-passphrase scheme has not been set up).
 async fn set_marked(config: &CliConfig, ui: &dyn PromptUi, name: &str, marked: bool) -> Result<()> {
     let (db, mut service) = open_service(config).await?;
 
@@ -245,7 +252,7 @@ async fn enter(
         bail!("no identities are marked for travel — use `persona travel mark <name>` first");
     }
 
-    // 确认在前、口令在后：用户取消就不该被问口令
+    // Confirmation first, passphrase second: a cancelled run should not be asked for a passphrase
     if !yes {
         let listing = marked.join(", ");
         if !ui.confirm(
@@ -308,7 +315,7 @@ async fn exit(config: &CliConfig, ui: &dyn PromptUi, passphrase_env: Option<&str
         );
     }
 
-    // 口令本身就是确认：单录
+    // The passphrase itself is the confirmation: type it once
     let passphrase = resolve_passphrase(passphrase_env, ui, false)?;
 
     println!("{}", "📥 Restoring marked identities...".cyan().bold());
@@ -338,9 +345,10 @@ async fn exit(config: &CliConfig, ui: &dyn PromptUi, passphrase_env: Option<&str
     Ok(())
 }
 
-/// travel 口令三级解析（照抄 backup.rs）：显式 env 变量 →
-/// `PERSONA_PAYLOAD_PASSPHRASE` → 交互提示。enter 带确认（新口令双录，
-/// 由终端层执行），exit 不带（口令是既有的）。
+/// Three-level travel passphrase resolution (mirrors backup.rs): an explicit env
+/// variable → `PERSONA_PAYLOAD_PASSPHRASE` → interactive prompt. enter asks for
+/// confirmation (a new passphrase is typed twice, done at the terminal layer);
+/// exit does not (the passphrase already exists).
 fn resolve_passphrase(env_var: Option<&str>, ui: &dyn PromptUi, confirm: bool) -> Result<String> {
     if let Some(var) = env_var {
         return std::env::var(var)
@@ -364,18 +372,21 @@ mod tests {
     use persona_core::models::{Identity, IdentityType, Workspace};
     use persona_core::storage::WorkspaceRepository;
 
-    /// 进程 env 是单槽：凡 set/remove `PERSONA_*` 的测试都必须与读它的
-    /// 测试（prompt_master_password env 优先）串行。统一拿 bridge 测试的
-    /// 全局锁（switch/ssh/backup 同款，poisoned 恢复防级联）。
+    /// Process env is a single slot: any test that sets/removes `PERSONA_*` must
+    /// be serialized against the tests that read it (prompt_master_password prefers
+    /// env). Take the bridge tests' global lock (same as switch/ssh/backup, with
+    /// poisoned-lock recovery to avoid cascades).
     fn env_guard() -> std::sync::MutexGuard<'static, ()> {
         crate::commands::bridge::tests::ENV_LOCK
             .lock()
             .unwrap_or_else(|e| e.into_inner())
     }
 
-    /// env 变量 RAII 守卫：panic unwind 也保证清掉。之前靠测试尾部显式
-    /// remove_var，一次 panic 就把 PERSONA_MASTER_PASSWORD 泄漏给同进程
-    /// 其它测试（switch/ssh 的 ScriptedUi 队列被 env 抢答而错位失败）。
+    /// RAII guard for environment variables: cleanup is guaranteed even when a
+    /// panic unwinds. It used to rely on an explicit remove_var at the end of the
+    /// test, so a single panic leaked PERSONA_MASTER_PASSWORD to other tests in
+    /// the same process (switch/ssh ScriptedUi queues answered by env instead, and
+    /// failed out of alignment).
     struct EnvVar(&'static str);
 
     impl EnvVar {
@@ -384,7 +395,7 @@ mod tests {
             Self(name)
         }
 
-        /// 确保变量不存在（清掉进程里可能的残留），退出时无需恢复。
+        /// Make sure the variable does not exist (clearing any residue left in the process); nothing needs restoring on exit.
         fn remove(name: &'static str) -> Self {
             std::env::remove_var(name);
             Self(name)
@@ -403,10 +414,12 @@ mod tests {
         config
     }
 
-    /// 建一个带 master 用户的库（含一个 identity），返回 (dir, config)。
+    /// Build a database with a master user (and one identity), returning
+    /// (dir, config).
     ///
-    /// 照 `persona init` 的完整流程补 workspace 行——core 的 travel
-    /// settings 读写要求 workspaces 首行存在。
+    /// The workspace row is added the way the full `persona init` flow does it —
+    /// core's travel settings read/write require the first row of workspaces to
+    /// exist.
     async fn seeded_workspace() -> (tempfile::TempDir, CliConfig) {
         let dir = tempfile::tempdir().unwrap();
         let config = config_for(&dir);
@@ -431,8 +444,9 @@ mod tests {
         (dir, config)
     }
 
-    /// 行存在看 travel_marked；enter 之后行被移出库，None 同样视为
-    /// 未标记（这正是"被标记身份已不在本机"要断言的状态）。
+    /// For a present row, look at travel_marked; after enter the row is moved out
+    /// of the vault, so None also counts as unmarked (that is exactly the
+    /// "marked identities are no longer on this machine" state being asserted).
     async fn identity_marked(config: &CliConfig, name: &str) -> bool {
         let db = Database::from_file(config.get_database_path())
             .await
@@ -511,7 +525,7 @@ mod tests {
         let _pp = EnvVar::remove("PERSONA_PAYLOAD_PASSPHRASE");
         let (_dir, config) = seeded_workspace().await;
 
-        // 先标记
+        // Mark first
         let args = TravelArgs {
             command: TravelCommand::Mark {
                 name: "work".to_string(),
@@ -521,8 +535,8 @@ mod tests {
             .await
             .unwrap();
 
-        // 无标记即 enter：拒绝
-        // （work 已标记，这里验证的是确认取消路径）
+        // enter without a confirmation: refused
+        // (work is already marked, so this exercises the cancel path)
         let ui = ScriptedUi::new().confirm(false);
         let args = TravelArgs {
             command: TravelCommand::Enter {
@@ -537,8 +551,9 @@ mod tests {
         );
         assert!(!persona_core::travel::sidecar_path(&config.get_database_path()).exists());
 
-        // 确认 + 口令（双录由 dialoguer 在 TerminalUi 内部完成，ScriptedUi
-        // 的 password 忽略 confirmation 参数、只消费一个答案）
+        // Confirmation + passphrase (the retype is done by dialoguer inside
+        // TerminalUi; ScriptedUi's password ignores the confirmation argument and
+        // consumes a single answer)
         let ui = ScriptedUi::new().confirm(true).password("travel-secret");
         let args = TravelArgs {
             command: TravelCommand::Enter {
@@ -549,7 +564,7 @@ mod tests {
         execute_with(args, &config, &ui).await.unwrap();
         assert!(ui.exhausted());
 
-        // 行消失 + sidecar 落盘 + 旗标开
+        // Row gone + sidecar written + flag set
         assert!(!identity_marked(&config, "work").await, "row must be gone");
         let db = Database::from_file(config.get_database_path())
             .await
@@ -595,7 +610,7 @@ mod tests {
             .await
             .unwrap();
 
-        // 错口令：sidecar 保留、数据仍缺失
+        // Wrong passphrase: the sidecar is kept and the data is still missing
         let ui = ScriptedUi::new().password("wrong");
         let args = TravelArgs {
             command: TravelCommand::Exit {
@@ -606,7 +621,7 @@ mod tests {
         assert!(err.to_string().contains("passphrase is wrong"), "{err}");
         assert!(persona_core::travel::sidecar_path(&db_path).exists());
 
-        // 对口令：恢复 + sidecar 删除
+        // Right passphrase: restored + sidecar removed
         let ui = ScriptedUi::new().password("travel-secret");
         let args = TravelArgs {
             command: TravelCommand::Exit {
@@ -629,7 +644,7 @@ mod tests {
     async fn enter_reports_missing_passphrase_env() {
         let _guard = env_guard();
         let _tp = EnvVar::remove("PERSONA_TRAVEL_TEST_PW");
-        // 显式指定的 env 缺失是配置错误，不静默回退
+        // A missing explicitly-named env variable is a configuration error, no silent fallback
         let ui = ScriptedUi::new();
         let err = super::resolve_passphrase(Some("PERSONA_TRAVEL_TEST_PW"), &ui, true).unwrap_err();
         assert!(err.to_string().contains("--passphrase-env"), "{err}");
@@ -658,8 +673,9 @@ mod tests {
         );
     }
 
-    /// 未初始化主密码体系的库：直建 workspace + identity，不走
-    /// `initialize_user` → `has_users()` 为 false，mark 走 repo 直连分叉。
+    /// A vault without the master-passphrase scheme: build the workspace + identity
+    /// directly, skipping `initialize_user` → `has_users()` is false, so mark goes
+    /// through the repository-direct fork.
     async fn seeded_workspace_without_users() -> (tempfile::TempDir, CliConfig) {
         let dir = tempfile::tempdir().unwrap();
         let config = config_for(&dir);
@@ -696,7 +712,7 @@ mod tests {
         }
     }
 
-    /// 走 env 口令 + 跳过确认的 enter（要求测试已设 `PERSONA_TRAVEL_TEST_PW`）。
+    /// enter with an env passphrase + confirmation skipped (the test must have set `PERSONA_TRAVEL_TEST_PW`).
     fn enter_args() -> TravelArgs {
         TravelArgs {
             command: TravelCommand::Enter {
@@ -706,14 +722,16 @@ mod tests {
         }
     }
 
-    /// 未建主密码体系时 mark 也要能标（首次使用前就可能想标记），且必须补
-    /// 审计——这是 set_marked 里与 service 分叉平行的手工路径。
+    /// mark must still work when the master-passphrase scheme has not been set up
+    /// (you may want to mark before first use), and it must add the audit row — this
+    /// is the manual path in set_marked that parallels the service fork.
     #[tokio::test]
     #[allow(clippy::await_holding_lock)]
     async fn mark_on_an_uninitialized_vault_updates_the_row_and_audits() {
         let _guard = env_guard();
-        // 不设 PERSONA_MASTER_PASSWORD：若实现误走解锁分叉，无 env 无提示
-        // 队列的 ScriptedUi 会直接 panic（比断言更早暴露错误分叉）。
+        // PERSONA_MASTER_PASSWORD is not set: if the implementation wrongly takes the
+        // unlock fork, the ScriptedUi with no env and no prompt queue panics outright
+        // (surfacing the wrong fork before any assertion).
         let (_dir, config) = seeded_workspace_without_users().await;
 
         execute_with(mark_args("anon"), &config, &ScriptedUi::new())
@@ -764,9 +782,11 @@ mod tests {
         );
     }
 
-    /// status 的四种世界状态（inactive / 残留 sidecar / ACTIVE / 旗标在而
-    /// 容器没了）各走一遍渲染；分支条件用 core 的 travel_status 钉死，
-    /// stdout 不进断言（单元测试捕不到，行为由状态断言背书）。
+    /// Walk the four world states of status (inactive / leftover sidecar /
+    /// ACTIVE / flag set but the container gone) and render each; the branch
+    /// conditions are pinned down with core's travel_status, and stdout is not
+    /// asserted on (unit tests cannot capture it; the behavior is backed by the
+    /// state assertions).
     #[tokio::test]
     #[allow(clippy::await_holding_lock)]
     async fn status_walks_inactive_leftover_active_and_inconsistent_states() {
@@ -778,7 +798,7 @@ mod tests {
         let sidecar = persona_core::travel::sidecar_path(&db_path);
 
         async fn flags(config: &CliConfig) -> persona_core::travel::TravelStatus {
-            // PersonaService 没有 Debug：init_service 失败时手动 panic 带出错误
+            // PersonaService does not implement Debug: panic by hand with the error when init_service fails
             let service =
                 match crate::commands::service::init_service(config, &ScriptedUi::new()).await {
                     Ok(service) => service,
@@ -791,13 +811,13 @@ mod tests {
                 .unwrap()
         }
 
-        // ① inactive、无 sidecar、无标记
+        // (1) inactive, no sidecar, nothing marked
         execute_with(status_args(), &config, &ScriptedUi::new())
             .await
             .unwrap();
         assert!(!flags(&config).await.active);
 
-        // ② inactive 但残留 sidecar（手造一个）：警告分支
+        // (2) inactive but a leftover sidecar (hand-made): the warning branch
         std::fs::write(&sidecar, b"leftover").unwrap();
         execute_with(status_args(), &config, &ScriptedUi::new())
             .await
@@ -805,7 +825,7 @@ mod tests {
         let status = flags(&config).await;
         assert!(!status.active && status.sidecar_exists);
 
-        // ③ 标记两个身份（marked_names 必须排序输出）
+        // (3) mark two identities (marked_names must print them sorted)
         let service =
             match crate::commands::service::init_service(&config, &ScriptedUi::new()).await {
                 Ok(service) => service,
@@ -821,7 +841,7 @@ mod tests {
         execute_with(mark_args("alpha"), &config, &ScriptedUi::new())
             .await
             .unwrap();
-        // 挂着标记时的 status（清单有内容、随包提示两个分支都走到）
+        // status while marked (the listing has content, and both wording branches for travelling are reached)
         execute_with(status_args(), &config, &ScriptedUi::new())
             .await
             .unwrap();
@@ -831,7 +851,7 @@ mod tests {
             "标记清单必须排序"
         );
 
-        // ④ 残留 sidecar 挡路时 enter 必须拒绝：那是上一包的容器，覆盖=丢数据
+        // (4) a leftover sidecar in the way: enter must refuse — it is the container of the previous bundle, and overwriting it would lose data
         let err = execute_with(enter_args(), &config, &ScriptedUi::new())
             .await
             .unwrap_err()
@@ -841,7 +861,7 @@ mod tests {
             "unexpected: {err}"
         );
 
-        // ⑤ 清掉残留 → enter → ACTIVE
+        // (5) clear the leftover -> enter -> ACTIVE
         std::fs::remove_file(&sidecar).unwrap();
         execute_with(enter_args(), &config, &ScriptedUi::new())
             .await
@@ -857,8 +877,9 @@ mod tests {
             "行已随包移走"
         );
 
-        // ⑥ 手删 sidecar：旗标仍在而容器没了 → inconsistent（数据已丢，
-        // 必须诚实呈现而不是假装可恢复）
+        // (6) hand-deleted sidecar: the flag is still set but the container is
+        // gone -> inconsistent (the data is lost and must be reported honestly
+        // rather than pretending it is recoverable)
         std::fs::remove_file(&sidecar).unwrap();
         execute_with(status_args(), &config, &ScriptedUi::new())
             .await
@@ -884,7 +905,7 @@ mod tests {
         assert!(err.to_string().contains("no travel sidecar"), "{err}");
     }
 
-    /// `PERSONA_PAYLOAD_PASSPHRASE` 命中即返回、不碰提示；空白视同未设。
+    /// A hit on `PERSONA_PAYLOAD_PASSPHRASE` returns immediately without touching the prompt; blank counts as unset.
     #[tokio::test]
     #[allow(clippy::await_holding_lock)]
     async fn travel_passphrase_falls_back_to_payload_env() {

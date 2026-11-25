@@ -1,11 +1,15 @@
-//! `persona backup …`：整库加密备份的推送/列举/拉取/恢复/删除。
+//! `persona backup …`: push/list/pull/restore/delete for encrypted whole-database
+//! backups.
 //!
-//! 与事件上报共用 `PERSONA_SERVER_URL` + `PERSONA_SERVER_TOKEN`（env-only、
-//! 都非空才启用，敏感值不落盘）。备份体 = VACUUM INTO 快照 → gzip →
-//! PERSENC1（`persona_core::backup`），服务器只见密文。
+//! Shares `PERSONA_SERVER_URL` + `PERSONA_SERVER_TOKEN` with event reporting
+//! (env-only, enabled only when both are non-empty, no sensitive values written to
+//! disk). Backup body = VACUUM INTO snapshot → gzip →
+//! PERSENC1 (`persona_core::backup`); the server only ever sees ciphertext.
 //!
-//! push 不要求解锁主密码（物理快照是文件级操作）；restore 换库前先
-//! 留 `.bak`。附件 blob 不在 v1 备份内（恢复后元数据在、文件体缺失）。
+//! push does not require unlocking the master passphrase (a physical snapshot is a
+//! file-level operation); restore keeps a `.bak` before swapping the database.
+//! Attachment blobs are not part of v1 backups (metadata survives a restore, the
+//! file bodies are missing).
 
 use anyhow::{bail, Context, Result};
 use clap::{Args, Subcommand};
@@ -89,7 +93,7 @@ pub(crate) async fn execute_with(
 ) -> Result<()> {
     match args.command {
         BackupCommand::Push { passphrase_env } => {
-            // 物理快照无需主密钥；唯一前置是库文件存在
+            // A physical snapshot needs no master key; the only precondition is that the database file exists
             let db_path = config.get_database_path();
             if !db_path.exists() {
                 bail!(
@@ -187,7 +191,7 @@ pub(crate) async fn execute_with(
                 (None, None) => bail!("pass a backup id or --file"),
             };
             let passphrase = {
-                // 确认在前、口令在后：用户取消就不该被问口令
+                // Confirmation first, passphrase second: a cancelled restore should not be asked for a passphrase
                 let db_path_probe = config.get_database_path();
                 if !yes {
                     let target = if db_path_probe.exists() {
@@ -207,7 +211,7 @@ pub(crate) async fn execute_with(
             };
             let db_path = config.get_database_path();
 
-            // 解密复验到同目录临时文件，成功后才动现有库
+            // Decrypt and re-verify into a temp file in the same directory; only touch the existing database once that succeeds
             let mut staged = db_path.clone();
             staged.set_extension("restore.tmp");
             restore_backup_bytes(&ciphertext, &passphrase, &staged)

@@ -1,4 +1,4 @@
-//! 展示与解析助手：`OutputFormatter` 着色输出与用例标签解析。
+//! Display and parsing helpers: `OutputFormatter` colored output and use-case label parsing.
 
 use anyhow::{bail, Result};
 use colored::*;

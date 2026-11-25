@@ -14,33 +14,34 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
-/// 进程级审计事件上报器。
+/// The process-level audit event reporter.
 ///
-/// `PERSONA_SERVER_URL` + `PERSONA_SERVER_TOKEN` **都**非空时启用
-/// （敏感值走 env，与 PERSONA_MASTER_PASSWORD 同一惯例；CLI 不提供
-/// 配置文件通道，避免令牌落盘）。core 不读环境变量——读取与构造
-/// 都在宿主侧完成。
+/// Enabled when `PERSONA_SERVER_URL` and `PERSONA_SERVER_TOKEN` are **both** non-empty
+/// (sensitive values go through env, the same convention as PERSONA_MASTER_PASSWORD; the
+/// CLI provides no config-file channel so the token never lands on disk). core does not read
+/// environment variables — reading and construction both happen on the host side.
 static EVENT_EMITTER: OnceLock<Emitter> = OnceLock::new();
 
-/// 进程级 auto-lock 空闲超时（秒；**0 = 永不自动锁**）。
+/// Process-level auto-lock idle timeout (seconds; **0 = never auto-lock**).
 ///
-/// main 在加载配置后按 `security.auto_lock_timeout` 写入，[`new_service`]
-/// 构造每个服务时应用。该字段此前只被写入 config.toml 与测试读取、从未
-/// 接进运行时——`connect serve` 因此恒用 PersonaService 硬编码默认 300s
-/// 空闲即锁，headless 无人值守场景数据面 5 分钟后全 503 且无人能重开。
-/// 默认 300 = core 硬编码默认，未调用 init 时行为不变。
+/// main writes this from `security.auto_lock_timeout` after loading the config, and
+/// [`new_service`] applies it when constructing each service. Previously the field was only
+/// written to config.toml and read by tests, never wired into the runtime — so `connect serve`
+/// always used PersonaService's hardcoded 300s idle auto-lock, and in headless unattended
+/// scenarios the data plane went all-503 after 5 minutes with nobody able to reopen it.
+/// The default 300 = core's hardcoded default, so behavior is unchanged when init is not called.
 static AUTO_LOCK_TIMEOUT_SECS: AtomicU64 = AtomicU64::new(300);
 
-/// main 在 dispatch 前调用：把配置的空闲自动锁超时装进进程全局。
+/// Called by main before dispatch: loads the configured idle auto-lock timeout into the process global.
 pub(crate) fn init_auto_lock_from_config(secs: u64) {
     AUTO_LOCK_TIMEOUT_SECS.store(secs, Ordering::Relaxed);
 }
 
-/// 配置秒数 → 服务端时长。**0 映射为 `Duration::MAX`（禁用）**：
-/// `is_unlocked` 判定是 `last_activity.elapsed() < timeout`，直接给
-/// `Duration::ZERO` 会变成「永远已过期」——反而必锁；`AutoLockConfig`
-/// 侧文档语义同为「0 = disabled」（其守卫是 `>0` 才检查），MAX 在两条
-/// 判定路径下都等价于禁用。
+/// Configured seconds → service-side duration. **0 maps to `Duration::MAX` (disabled)**:
+/// the `is_unlocked` check is `last_activity.elapsed() < timeout`, and giving
+/// `Duration::ZERO` directly would mean "already expired forever" — which locks it, the
+/// opposite of intent. `AutoLockConfig`'s documented semantics are likewise "0 = disabled"
+/// (its guard only checks when `>0`); MAX is equivalent to disabled on both check paths.
 fn auto_lock_duration(secs: u64) -> Duration {
     if secs == 0 {
         Duration::MAX
@@ -49,7 +50,7 @@ fn auto_lock_duration(secs: u64) -> Duration {
     }
 }
 
-/// main 在 dispatch 前调用：按环境变量构造全局上报器并启动后台 flush。
+/// Called by main before dispatch: builds the global reporter from the environment variables and starts the background flush.
 pub(crate) fn init_event_emitter_from_env() {
     let url = non_blank_env("PERSONA_SERVER_URL");
     let token = non_blank_env("PERSONA_SERVER_TOKEN");
@@ -69,15 +70,16 @@ pub(crate) fn init_event_emitter_from_env() {
     }
 }
 
-/// 空白值视同未设置（与 PERSONA_MASTER_PASSWORD 的"blank 回退"惯例一致）。
+/// A blank value counts as unset (consistent with PERSONA_MASTER_PASSWORD's "blank falls back" convention).
 fn non_blank_env(key: &str) -> Option<String> {
     std::env::var(key)
         .ok()
         .filter(|value| !value.trim().is_empty())
 }
 
-/// URL 与 token **都**非空才启用；缺一只报 warn（提为纯函数便于单测——
-/// OnceLock 全局一旦 set 无法在测试中清除，副作用路径由集成测试覆盖）。
+/// Enabled only when the URL and token are **both** non-empty; if either is missing only a
+/// warn is logged (extracted as a pure function for unit tests — a OnceLock global cannot be
+/// cleared in tests once set, so the side-effect path is covered by integration tests).
 fn resolve_server_env(url: Option<String>, token: Option<String>) -> Option<(String, String)> {
     match (url, token) {
         (Some(url), Some(token)) => Some((url, token)),
@@ -91,8 +93,8 @@ fn resolve_server_env(url: Option<String>, token: Option<String>) -> Option<(Str
     }
 }
 
-/// 命令 dispatch 结束后调用：尽力 flush 队列剩余事件（幂等）。
-/// `panic = "abort"` 的崩溃路径不会经过这里（已知限制，THREAT_MODEL 登记）。
+/// Called after command dispatch finishes: best-effort flush of the remaining queued events (idempotent).
+/// Crash paths under `panic = "abort"` never reach this (a known limitation, registered in THREAT_MODEL).
 pub(crate) async fn shutdown_event_emitter() {
     if let Some(emitter) = EVENT_EMITTER.get() {
         emitter.stop().await;
@@ -103,13 +105,14 @@ fn event_emitter() -> Option<Emitter> {
     EVENT_EMITTER.get().cloned()
 }
 
-/// [`PersonaService::new`] 的宿主包装：构造后注入全局上报器（未启用时
-/// 为无操作）。返回 core Result，保持各调用点 `.into_anyhow()`/`.unwrap()`
-/// 链不变。
+/// The host wrapper around [`PersonaService::new`]: injects the global reporter after
+/// construction (a no-op when disabled). Returns the core Result so the `.into_anyhow()`/
+/// `.unwrap()` chains at every call site stay unchanged.
 pub(crate) async fn new_service(db: Database) -> persona_core::Result<PersonaService> {
     let mut service = PersonaService::new(db).await?;
-    // 应用进程级 auto-lock 配置。必须在 authenticate_user 之前——session
-    // 以 self.auto_lock_timeout 构造，晚设就管不住本次登录的会话。
+    // Apply the process-level auto-lock configuration. Must happen before authenticate_user —
+    // the session is constructed with self.auto_lock_timeout, so a late setting would not
+    // govern the session created by this login.
     service.set_auto_lock_timeout(auto_lock_duration(
         AUTO_LOCK_TIMEOUT_SECS.load(Ordering::Relaxed),
     ));
@@ -119,8 +122,8 @@ pub(crate) async fn new_service(db: Database) -> persona_core::Result<PersonaSer
     Ok(service)
 }
 
-/// 绕过 `PersonaService` 直写审计库的路径（switch/migrate/remove 备份）
-/// 用它补发同一事件，保证上报覆盖面。
+/// Paths that bypass `PersonaService` and write straight to the audit vault (switch/migrate/remove
+/// backups) use it to re-emit the same event, keeping the reporting coverage complete.
 pub(crate) fn emit_audit(log: &AuditLog) {
     if let Some(emitter) = event_emitter() {
         emitter.emit(log);
@@ -200,9 +203,9 @@ pub(crate) async fn init_service(config: &CliConfig, ui: &dyn PromptUi) -> Resul
         .into_anyhow()
         .context("Failed to create PersonaService")?;
 
-    // 附件 blob 存储：目录约定与 desktop 一致（<db dir>/attachments）。
-    // 初始化失败只降级附件命令（报 "Attachment storage not initialized"），
-    // 不阻断解锁与其余命令。
+    // Attachment blob storage: the directory convention matches the desktop (<db dir>/attachments).
+    // An initialization failure only degrades the attachment commands (they report
+    // "Attachment storage not initialized") without blocking unlock or the other commands.
     let attachments_dir = db_path
         .parent()
         .unwrap_or_else(|| std::path::Path::new("."))
@@ -260,9 +263,9 @@ mod tests {
         )
     }
 
-    /// auto_lock_duration 的映射：0 = 永不自动锁（Duration::MAX），非 0 原样。
-    /// 0 若直译成 ZERO，`is_unlocked`（elapsed < timeout）会永远 false——
-    /// 「禁用」变「必锁」，这是本修复要避开的核心陷阱。
+    /// The auto_lock_duration mapping: 0 = never auto-lock (Duration::MAX); non-zero passes through as-is.
+    /// If 0 were translated into ZERO, `is_unlocked` (elapsed < timeout) would be false forever —
+    /// "disabled" becoming "always locked" is the core trap this fix avoids.
     #[test]
     fn auto_lock_duration_maps_zero_to_never() {
         assert_eq!(auto_lock_duration(0), Duration::MAX);
@@ -270,8 +273,9 @@ mod tests {
         assert_eq!(auto_lock_duration(300), Duration::from_secs(300));
     }
 
-    /// new_service 应用进程级配置：init → 构造 → 断言 → RAII 恢复默认
-    /// （不留全局态给同进程其它 new_service 测试）。
+    /// new_service applies the process-level config: init → construct → assert → restore
+    /// the default via RAII (leaving no global state for the other new_service tests in the
+    /// same process).
     #[tokio::test]
     async fn new_service_applies_configured_auto_lock() {
         struct Restore;
@@ -294,12 +298,13 @@ mod tests {
             u64::MAX,
             "0 配置应映射为永不自动锁"
         );
-        // 回归：曾在此 panic——Session::new 的 `now + Duration::MAX` 溢出
-        // （core/auth/session.rs:58，serve status=101 反复重启）。真实
-        // 解锁路径必须走通且保持解锁态。
-        // 密码用运行时拼接而非字面量：CodeQL rust/hard-coded-cryptographic-
-        // value 会把流入 initialize_user/authenticate_user 的字符串字面量
-        // 标为 critical（本 PR 实测，annotations cli/service.rs:300/302）。
+        // Regression: this once panicked — Session::new's `now + Duration::MAX` overflowed
+        // (core/auth/session.rs:58; serve status=101 and restarted repeatedly). The real
+        // unlock path must complete and stay unlocked.
+        // The password is assembled at runtime instead of as a literal: CodeQL's
+        // rust/hard-coded-cryptographic-value flags string literals flowing into
+        // initialize_user/authenticate_user as critical (observed in this PR,
+        // annotations cli/service.rs:300/302).
         let master = format!("autolock-test-{}", std::process::id());
         service.initialize_user(&master).await.unwrap();
         service
@@ -319,7 +324,7 @@ mod tests {
 
     #[test]
     fn server_env_requires_both_url_and_token() {
-        // 决策纯函数：两者都设才启用，缺一只发 warn 并禁用
+        // The decision pure function: enabled only when both are set; with one missing it warns and disables
         assert_eq!(
             resolve_server_env(Some("http://x".into()), Some("t".into())),
             Some(("http://x".to_string(), "t".to_string()))

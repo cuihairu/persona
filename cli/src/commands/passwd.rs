@@ -159,7 +159,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let credential = seed_workspace(&dir, master).await;
 
-        // 旧密码走 env 覆盖；新密码仅交互（ScriptedUi 一发即中）
+        // The old password goes via an env override; the new password is interactive only (ScriptedUi hits on the first shot)
         std::env::set_var("PERSONA_MASTER_PASSWORD", master);
         let ui = ScriptedUi::new().password("passwd-new-pass");
         execute_with(&config_for(&dir), &ui)
@@ -168,7 +168,7 @@ mod tests {
         assert!(ui.exhausted());
         std::env::remove_var("PERSONA_MASTER_PASSWORD");
 
-        // 旧密码从此被拒
+        // The old password is rejected from now on
         std::env::set_var("PERSONA_MASTER_PASSWORD", master);
         let result = crate::commands::service::init_service(
             &config_for(&dir),
@@ -182,7 +182,7 @@ mod tests {
         };
         assert!(err.to_string().contains("Authentication failed"));
 
-        // 新密码解锁，且轮换前的凭据仍可解密（wrapped key 重包成功）
+        // The new password unlocks, and credentials from before the rotation still decrypt (the wrapped key was rewrapped successfully)
         let data = reauthenticate_and_read(&dir, "passwd-new-pass", &credential.id)
             .await
             .expect("new password unlocks and data stays decryptable");
@@ -205,10 +205,10 @@ mod tests {
             .await
             .expect_err("wrong old password must fail");
         std::env::remove_var("PERSONA_MASTER_PASSWORD");
-        // context 包裹在链首，{:#} 展开整条错误链
+        // context wraps the head of the chain; {:#} expands the whole error chain
         assert!(format!("{err:#}").contains("Invalid current master password"));
 
-        // 真密码依旧可用（失败的尝试不得损坏 vault）
+        // The real password still works (a failed attempt must not corrupt the vault)
         std::env::set_var("PERSONA_MASTER_PASSWORD", "real-pass");
         let result = crate::commands::service::init_service(
             &config_for(&dir),
@@ -235,7 +235,7 @@ mod tests {
         std::env::remove_var("PERSONA_MASTER_PASSWORD");
         assert!(err.to_string().contains("must be different"));
 
-        // 未发生轮换：旧密码仍能解锁
+        // No rotation happened: the old password can still unlock
         std::env::set_var("PERSONA_MASTER_PASSWORD", master);
         let result = crate::commands::service::init_service(
             &config_for(&dir),
@@ -267,8 +267,8 @@ mod tests {
         seed_workspace(&dir, master).await;
 
         std::env::set_var("PERSONA_MASTER_PASSWORD", master);
-        // ScriptedUi 绕过 TerminalUi 的 allow_empty=false 拦截，
-        // core 的空密码校验成为最后防线
+        // ScriptedUi bypasses TerminalUi's allow_empty=false interception,
+        // so core's empty-password check becomes the last line of defense
         let ui = ScriptedUi::new().password("");
         let err = execute_with(&config_for(&dir), &ui)
             .await

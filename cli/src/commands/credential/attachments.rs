@@ -1,6 +1,6 @@
 use super::*;
 
-/// 人类可读的附件大小（B → KB → MB）
+/// A human-readable attachment size (B → KB → MB)
 pub(crate) fn format_attachment_size(bytes: u64) -> String {
     if bytes < 1024 {
         format!("{} B", bytes)
@@ -11,8 +11,9 @@ pub(crate) fn format_attachment_size(bytes: u64) -> String {
     }
 }
 
-/// Attachments（1Password 对齐）：附件经所属凭据的 per-item key 加密封存，
-/// 改密（rewrap）后仍可解密。blob 目录在 init_service 里随解锁一起初始化。
+/// Attachments (1Password-aligned): blobs are encrypted under the owning credential's
+/// per-item key and stay decryptable after a rewrap. The blob directory is initialized
+/// alongside unlock in init_service.
 pub(crate) async fn attach_file_command(
     config: &CliConfig,
     ui: &dyn PromptUi,

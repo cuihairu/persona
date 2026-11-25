@@ -1,14 +1,16 @@
 use super::*;
 
-/// 的代理可能报一个超大长度导致无界内存分配，先查再分配。
+/// A malicious agent could report a huge length causing unbounded memory allocation; check before allocating.
 const MAX_AGENT_RESP_LEN: usize = 16 * 1024 * 1024;
 
-/// 等待 daemon 打出 SSH_AUTH_SOCK= 的上限。正常在 spawn 后毫秒级完成；
-/// 超窗仍无 socket 行按「daemon 挂起」处理（kill + 报错），绝不让 CLI
-/// 永久阻塞——无上限时 daemon 沉默（如 socket 绑定卡住）会拖死调用方。
+/// Upper bound for waiting until the daemon prints SSH_AUTH_SOCK=. Normally
+/// completes within milliseconds of spawn; if no socket line appears within
+/// the window, treat it as "daemon hung" (kill + error). Never let the CLI
+/// block forever — an unbounded wait lets a silent daemon (e.g. socket bind
+/// stuck) hang the caller indefinitely.
 const AGENT_STARTUP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
-/// 以 `deadline` 为上限等待 future，超时折算成 `TimedOut` 的 io::Error。
+/// Wait for the future, bounded by `deadline`; on timeout it becomes an `io::Error` with `TimedOut`.
 pub(crate) async fn with_startup_deadline<T>(
     deadline: std::time::Duration,
     fut: impl std::future::Future<Output = std::io::Result<T>>,
@@ -43,8 +45,9 @@ pub(crate) async fn start_agent(
     let service = ensure_service(config, ui).await?; // ensure migrations; may prompt
                                                      // If ensure_service prompted, service is unlocked; but agent needs password via env for future reloads
                                                      // Here we conservatively ask user again (not stored from ensure_service)
-                                                     // 身份过滤器：名字在这里先验存在（未知名早失败），agent 侧
-                                                     // 按 PERSONA_AGENT_IDENTITY fail-closed 只加载该分身的密钥。
+                                                     // Identity filter: the name is validated here (fails fast on unknown
+                                                     // names); the agent side fail-closes on PERSONA_AGENT_IDENTITY and
+                                                     // only loads keys for that persona.
     if let Some(name) = identity {
         let resolved = resolve_identity(&service, name).await?;
         cmd.env("PERSONA_AGENT_IDENTITY", resolved.name);
@@ -415,7 +418,7 @@ pub(crate) fn stop_agent() -> Result<()> {
             let sock_file = state_dir.join("ssh-agent.sock");
             let _ = std::fs::remove_file(sock_file);
         }
-        // 进程已不在（陈旧 pidfile）：清掉文件，按"无需再停"处理。
+        // Process is already gone (stale pidfile): remove the files and treat it as "nothing to stop".
         StopOutcome::AlreadyGone => {
             println!(
                 "{}",
@@ -425,7 +428,7 @@ pub(crate) fn stop_agent() -> Result<()> {
             let sock_file = state_dir.join("ssh-agent.sock");
             let _ = std::fs::remove_file(sock_file);
         }
-        // PID 被别的进程复用（不是 agent）：拒绝杀，绝不误伤。
+        // PID was reused by another process (not the agent): refuse to kill, never hit the wrong one.
         StopOutcome::Refused => {
             println!(
                 "{}",
@@ -436,7 +439,7 @@ pub(crate) fn stop_agent() -> Result<()> {
     Ok(())
 }
 
-/// stop_agent 的三态结果：杀成功 / 进程早已不在（陈旧 pidfile）/ 拒绝杀。
+/// Three-way result of stop_agent: killed successfully / process was already gone (stale pidfile) / refused.
 #[derive(PartialEq, Debug)]
 pub(crate) enum StopOutcome {
     Stopped,
@@ -444,10 +447,10 @@ pub(crate) enum StopOutcome {
     Refused,
 }
 
-/// 读 /proc/<pid>/cmdline 判断该 PID 是否为 persona-ssh-agent。
+/// Read /proc/<pid>/cmdline to determine whether this PID is persona-ssh-agent.
 ///
-/// `None` = 进程不存在；`Some(true)` = 是我们；`Some(false)` = 别的进程。
-/// 用来防"陈旧 pidfile + PID 被复用"时误杀无辜进程。
+/// `None` = the process does not exist; `Some(true)` = it is ours; `Some(false)` = some other process.
+/// Guards against killing an innocent process when a stale pidfile meets a reused PID.
 #[cfg(unix)]
 pub(crate) fn is_persona_agent_process(pid: &str) -> Option<bool> {
     let cmdline = std::fs::read(format!("/proc/{pid}/cmdline")).ok()?;
@@ -461,16 +464,16 @@ pub(crate) fn is_persona_agent_process(pid: &str) -> Option<bool> {
 #[cfg(unix)]
 pub(crate) fn stop_agent_pid(pid: &str) -> Result<StopOutcome> {
     let Ok(numeric) = pid.parse::<i32>() else {
-        // 非数字 pidfile 是损坏状态而非进程：按陈旧清理，不误判为"拒绝杀"。
+        // A non-numeric pidfile is a corrupt state, not a live process: clean it as stale rather than misreporting "refused to kill".
         return Ok(StopOutcome::AlreadyGone);
     };
     match is_persona_agent_process(pid) {
         None => Ok(StopOutcome::AlreadyGone),
         Some(false) => Ok(StopOutcome::Refused),
         Some(true) => {
-            // 直接用 libc::kill 发 SIGTERM：fork 外部 `kill` 在内存吃紧时可能
-            // 因 fork 失败返回 Err，被误报为 Refused 而留下 pidfile；直接
-            // 系统调用无此窗口。EPERM 等仍按 Refused 处理（与旧语义一致）。
+            // Issue SIGTERM straight through libc::kill: forking an external `kill` can fail
+            // under memory pressure, get misreported as Refused and leave the pidfile behind; a
+            // direct syscall has no such window. EPERM and the like still map to Refused (same as before).
             let rc = unsafe { libc::kill(numeric, libc::SIGTERM) };
             Ok(if rc == 0 {
                 StopOutcome::Stopped
@@ -485,9 +488,10 @@ pub(crate) fn stop_agent_pid(pid: &str) -> Result<StopOutcome> {
 pub(crate) fn stop_agent_pid(pid: &str) -> Result<StopOutcome> {
     use std::process::Command;
 
-    // Windows 没有 /proc：用 tasklist 探测进程是否还在（输出含 PID 数字即
-    // 存活，判定不受系统语言影响）；不在则按陈旧 pidfile 处理，与 Unix
-    // 侧语义对齐，也让 AlreadyGone 分支在 Windows 上可达。
+    // Windows has no /proc: probe liveness with tasklist (the output containing the PID
+    // number means alive, so the check does not depend on the system language); if it is
+    // gone, treat it as a stale pidfile to match the Unix semantics and keep the
+    // AlreadyGone branch reachable on Windows too.
     let listed = Command::new("tasklist")
         .args(["/FI", &format!("PID eq {pid}"), "/NH"])
         .output();

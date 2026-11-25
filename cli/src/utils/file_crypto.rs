@@ -1,14 +1,15 @@
-//! PERSENC1 文件加密的薄包装：格式与算法实现平移至
-//! `persona_core::backup::file_crypto`（备份链与 `--encrypt` 导出共用同一
-//! 实现，字节级互解）。这里只保留文件 I/O 与 `.decrypted.tmp` 约定，
-//! 对外签名与错误文案不变。
+//! Thin wrapper around PERSENC1 file encryption: the format and algorithm
+//! implementation moved to `persona_core::backup::file_crypto` (the backup chain
+//! and `--encrypt` export share one implementation and interoperate byte for
+//! byte). Only the file I/O and the `.decrypted.tmp` convention stay here, with
+//! the public signatures and error wording unchanged.
 
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 
 pub use persona_core::backup::{decrypt_bytes, encrypt_bytes, KdfParams};
 
-/// 原地加密：读文件 → `encrypt_bytes` → 写回。
+/// Encrypt in place: read the file → `encrypt_bytes` → write it back.
 pub fn encrypt_file_inplace(path: &Path, passphrase: &str, kdf: Option<KdfParams>) -> Result<()> {
     let plaintext =
         std::fs::read(path).with_context(|| format!("Failed to read {}", path.display()))?;
@@ -18,7 +19,7 @@ pub fn encrypt_file_inplace(path: &Path, passphrase: &str, kdf: Option<KdfParams
     Ok(())
 }
 
-/// 解密到旁路临时文件 `<path>.decrypted.tmp`（原文件保持密文不动）。
+/// Decrypt into a sidecar temp file `<path>.decrypted.tmp` (the original stays ciphertext and is left alone).
 pub fn decrypt_file_to_temp(path: &Path, passphrase: &str) -> Result<PathBuf> {
     let data = std::fs::read(path).with_context(|| format!("Failed to read {}", path.display()))?;
     let plaintext = decrypt_bytes(&data, passphrase)?;

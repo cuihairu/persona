@@ -1,5 +1,6 @@
-//! 导入流程编排：校验、解密、交互选择、冲突检查、备份与执行
-//! （dry-run / merge / replace / skip），对接 PersonaService 与仓储。
+//! Orchestration of the import flow: validation, decryption, interactive choice,
+//! conflict check, backup and execution (dry-run / merge / replace / skip),
+//! wiring up PersonaService and the repositories.
 
 use anyhow::{Context, Result};
 use colored::*;

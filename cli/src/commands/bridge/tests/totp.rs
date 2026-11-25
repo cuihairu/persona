@@ -270,8 +270,9 @@ async fn bridge_get_totp_success_and_error_branches() {
     std::env::remove_var("PERSONA_MASTER_PASSWORD");
 }
 
-/// GameToken 凭据走 get_totp/copy 的调度器臂：Steam Guard 出 5 位码，
-/// 绑定型 provider（如未来的腾讯安全中心）必须报错而不是伪造码。
+/// GameToken credentials take the get_totp/copy scheduler arm: Steam Guard produces a
+/// 5-character code, while vendor-bound providers (e.g. a future Tencent Security Center)
+/// must error out rather than fabricate a code.
 #[tokio::test]
 #[allow(clippy::await_holding_lock)]
 async fn bridge_get_totp_supports_game_token_provider() {

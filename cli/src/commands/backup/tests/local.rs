@@ -6,13 +6,13 @@ use crate::utils::prompt::scripted::ScriptedUi;
 fn resolve_passphrase_prefers_explicit_env_var() {
     let _guard = env_guard();
     std::env::set_var("PERSONA_BACKUP_TEST_PW", "from-var");
-    // 不预载答案：若实现误走 prompt，ScriptedUi 直接 panic（更强的保护）
+    // No canned answers preloaded: if the implementation wrongly goes through the prompt, ScriptedUi panics outright (a stronger guard)
     let ui = ScriptedUi::new();
     let got = resolve_passphrase(Some("PERSONA_BACKUP_TEST_PW"), "backup", &ui, true).unwrap();
     assert_eq!(got, "from-var");
     assert!(ui.exhausted(), "explicit var must skip the prompt");
 
-    // 显式指定的变量缺失/空白是配置错误，不静默回退
+    // A missing/blank explicitly-named variable is a configuration error, no silent fallback
     std::env::set_var("PERSONA_BACKUP_TEST_PW", "  ");
     let err = resolve_passphrase(Some("PERSONA_BACKUP_TEST_PW"), "backup", &ui, true).unwrap_err();
     assert!(err.to_string().contains("--passphrase-env"));
@@ -71,7 +71,7 @@ async fn restore_from_file_swaps_vault_and_keeps_bak() {
     let config = config_for(&dir);
     let db_path = config.get_database_path();
 
-    // 库 v1（1 个 identity）→ 备份；随后库继续长到 2 个
+    // Vault v1 (1 identity) -> back it up; the vault then grows to 2
     let db = seeded_db(&db_path).await;
     let blob = create_backup_bytes(db.pool(), "backup-pass", None)
         .await
@@ -88,7 +88,7 @@ async fn restore_from_file_swaps_vault_and_keeps_bak() {
     db.close().await;
     assert_eq!(identity_count(&db_path).await, 2);
 
-    // 恢复：确认 yes + 口令（restore 无确认式双录）
+    // Restore: confirm yes + passphrase (restore has no confirm-then-retype passphrase flow)
     let ui = ScriptedUi::new().confirm(true).password("backup-pass");
     let args = BackupArgs {
         command: BackupCommand::Restore {
@@ -101,7 +101,7 @@ async fn restore_from_file_swaps_vault_and_keeps_bak() {
     execute_with(args, &config, &ui).await.unwrap();
     assert!(ui.exhausted());
 
-    // 库回到备份时刻（1 个），.bak 保留覆盖前的状态（2 个）
+    // The vault is back to the backup moment (1), and .bak keeps the pre-overwrite state (2)
     let mut bak = db_path.clone();
     bak.set_extension("bak");
     assert_eq!(identity_count(&db_path).await, 1, "restored vault");
@@ -146,8 +146,8 @@ async fn restore_rejects_wrong_passphrase_and_leaves_vault_untouched() {
 
 #[tokio::test]
 async fn restore_requires_exactly_one_source() {
-    // 两个来源都给 / 都不给：在碰 env、碰磁盘之前就 bail，故无需
-    // env_guard 也无需桩服务器。
+    // Both sources given / neither given: bails before touching env or disk, so
+    // neither the env_guard nor a stub server is needed.
     let dir = tempfile::tempdir().unwrap();
     let config = config_for(&dir);
 
@@ -188,7 +188,7 @@ async fn restore_from_a_missing_file_names_the_read_failure() {
 #[test]
 fn blank_payload_passphrase_env_still_prompts() {
     let _guard = env_guard();
-    // 已设但全空白：视同没设，必须走交互（否则拿空串当口令）
+    // Set but entirely blank: treated as unset, must go interactive (otherwise the empty string would be taken as the passphrase)
     let _payload = TempEnv::set("PERSONA_PAYLOAD_PASSPHRASE", "   ");
     let ui = ScriptedUi::new().password("typed-after-blank");
     let got = resolve_passphrase(None, "backup", &ui, false).unwrap();
@@ -222,7 +222,7 @@ async fn restore_requires_confirmation_when_not_forced() {
     std::fs::write(&ciphertext_path, &blob.bytes).unwrap();
     db.close().await;
 
-    // confirm(false) → 取消；口令提示不应到达（确认在前）
+    // confirm(false) -> cancelled; the passphrase prompt must never be reached (confirmation comes first)
     let ui = ScriptedUi::new().confirm(false);
     let args = BackupArgs {
         command: BackupCommand::Restore {

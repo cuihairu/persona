@@ -1,9 +1,10 @@
 use anyhow::{anyhow, Result};
 use persona_core::models::credential::CredentialData;
 
-/// 该凭据类型上 `field` 的取值；`None` = 该类型没有此字段。
-/// 返回 `Some(None)` 语义用 `Option<Option<String>>` 表达不便，
-/// 这里改为：字段存在但未设置 → `Err`（`FieldNotSet`），不存在 → `Ok(None)`。
+/// The value of `field` on this credential type; `None` = the type has no such field.
+/// The `Some(None)` semantics are awkward to express with `Option<Option<String>>`,
+/// so instead: the field exists but is unset → `Err` (`FieldNotSet`); it does not
+/// exist → `Ok(None)`.
 pub(super) fn extract_data_field(data: &CredentialData, field: &str) -> Result<Option<String>> {
     use CredentialData::*;
     let (exists, value) = match data {
@@ -71,7 +72,7 @@ pub(super) fn extract_data_field(data: &CredentialData, field: &str) -> Result<O
             "download_url" => (true, d.download_url.clone()),
             _ => (false, None),
         },
-        // GameToken/Identity/Raw：没有面向自动化的稳定字段词汇
+        // GameToken/Identity/Raw: no stable field vocabulary oriented toward automation
         _ => (false, None),
     };
     if !exists {
@@ -85,7 +86,7 @@ pub(super) fn extract_data_field(data: &CredentialData, field: &str) -> Result<O
     })
 }
 
-/// 各类型支持的字段清单（错误提示用）。
+/// The field list each type supports (used in error messages).
 pub(super) fn data_fields_of(data: &CredentialData) -> &'static [&'static str] {
     use CredentialData::*;
     match data {
@@ -130,7 +131,7 @@ pub(super) fn data_fields_of(data: &CredentialData) -> &'static [&'static str] {
     }
 }
 
-/// `secret` 别名：各类型的主秘密字段。
+/// The `secret` alias: each type's primary secret field.
 pub(super) fn primary_secret_field(data: &CredentialData) -> Option<&'static str> {
     use CredentialData::*;
     Some(match data {

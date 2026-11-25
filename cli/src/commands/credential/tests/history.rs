@@ -1,7 +1,7 @@
 use super::*;
 
-/// Item history：add 落 created 行，元数据补写落 updated 行，
-/// `history` 子命令列出时间线；删除后历史仍可查询。
+/// Item history: add lands a created row, a metadata touch-up lands an updated row,
+/// the `history` subcommand lists the timeline; history stays queryable after deletion.
 #[tokio::test]
 async fn credential_history_lists_changes_and_survives_delete() {
     let _guard = lock_process_env();
@@ -19,7 +19,7 @@ async fn credential_history_lists_changes_and_survives_delete() {
     std::env::set_var("PERSONA_MASTER_PASSWORD", "master-pin");
     seed(&config, "gina").await;
 
-    // add = create + 元数据补写（username/url/favorite）→ created + updated 两行
+    // add = create + metadata fill-in (username/url/favorite) → two rows, created + updated
     execute(add_args("gina", "hist-login", Some("pw"), true), &config)
         .await
         .expect("seed add works");
@@ -46,7 +46,7 @@ async fn credential_history_lists_changes_and_survives_delete() {
     .await
     .expect("history lists rows");
 
-    // 删除后：凭据查询 404，历史命令仍列出（含 deleted 行）
+    // After deletion: the credential query 404s, the history command still lists (including the deleted row)
     execute(
         CredentialArgs {
             command: CredentialCommand::Remove {
@@ -84,7 +84,7 @@ async fn credential_history_lists_changes_and_survives_delete() {
     std::env::remove_var("PERSONA_MASTER_PASSWORD");
 }
 
-/// restore：元数据回滚到目标版本；秘密不回滚（历史只有元数据快照）。
+/// restore: the metadata rolls back to the target version; secrets do not (history only holds metadata snapshots).
 #[tokio::test]
 async fn credential_restore_reverts_metadata_to_target_version() {
     let _guard = lock_process_env();

@@ -624,8 +624,8 @@ fn context_payload(origin: &str, host: Option<&str>, cwd: Option<&str>) -> Sugge
     }
 }
 
-/// generate() 的 device_id 是 nil UUID（登记后回填）——测试里显式
-/// 分配不同 id 才能区分「本机」与「他机」。
+/// generate()'s device_id is a nil UUID (filled back in after registration) — tests must
+/// assign different ids explicitly to tell "this machine" from "another machine".
 fn device_identity(seed: u8) -> persona_core::sync::device::DeviceIdentity {
     let id = uuid::Uuid::from_bytes([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, seed]);
     persona_core::sync::device::DeviceIdentity::generate("test-device")
@@ -633,9 +633,9 @@ fn device_identity(seed: u8) -> persona_core::sync::device::DeviceIdentity {
         .with_device_id(id)
 }
 
-// ---- account_*（协议 v7，M5 批2）----
+// ---- account_* (protocol v7, M5 batch 2) ----
 
-/// 内存版账号令牌仓（测试注入；与生产 KeyringAccountTokenStore 同 trait）。
+/// An in-memory account token store (test injection; the same trait as the production KeyringAccountTokenStore).
 struct InMemoryAccountTokenStore(std::sync::Mutex<std::collections::HashMap<String, String>>);
 
 impl InMemoryAccountTokenStore {
@@ -671,7 +671,7 @@ impl AccountTokenStore for InMemoryAccountTokenStore {
     }
 }
 
-/// 完整 WorkspaceSettings 序列化（带指定 sync 配置）。
+/// A fully serialized WorkspaceSettings (with the given sync configuration).
 fn workspace_settings_json(sync: Option<(String, String)>) -> String {
     let settings = persona_core::models::WorkspaceSettings {
         sync: sync.map(
@@ -688,7 +688,7 @@ fn workspace_settings_json(sync: Option<(String, String)>) -> String {
     serde_json::to_string(&settings).unwrap()
 }
 
-/// v2 形态 workspace 行（path = 指定目录，settings = 完整 JSON）。
+/// A v2-shaped workspace row (path = the given directory, settings = full JSON).
 async fn insert_workspace_row(db: &Database, path: &str, settings_json: &str) {
     let now = chrono::Utc::now().to_rfc3339();
     sqlx::query(

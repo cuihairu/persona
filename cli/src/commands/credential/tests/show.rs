@@ -271,9 +271,9 @@ async fn credential_show_reveal_renders_generic_payload_kinds() {
     std::env::remove_var("PERSONA_MASTER_PASSWORD");
 }
 
-/// Reveal 的 SecureNote / Identity / SoftwareLicense 三个专用渲染分支
-/// （Identity 与 SoftwareLicense 用全 Some 字段，连内层 `if let Some`
-/// 打印行一起覆盖）。
+/// The three dedicated rendering branches of Reveal for SecureNote / Identity /
+/// SoftwareLicense (Identity and SoftwareLicense use all-Some fields, covering even the
+/// inner `if let Some` print lines).
 #[tokio::test]
 async fn credential_show_reveal_renders_note_identity_license_payloads() {
     let _guard = lock_process_env();

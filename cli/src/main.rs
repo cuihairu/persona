@@ -175,7 +175,7 @@ async fn main() -> Result<()> {
 
     // Execute command
     commands::service::init_event_emitter_from_env();
-    // 空闲自动锁超时随配置生效（0 = 永不；见 service.rs 的全局注释）
+    // The idle auto-lock timeout takes effect from the config (0 = never; see the module-level comment in service.rs)
     commands::service::init_auto_lock_from_config(config.security.auto_lock_timeout);
     let result = match cli.command {
         Commands::Init(args) => commands::init::execute(args, &config).await,
@@ -211,7 +211,7 @@ async fn main() -> Result<()> {
         Commands::Connect(args) => commands::connect::execute(args, &config).await,
         Commands::Secrets(args) => commands::secrets::execute(args, &config).await,
     };
-    // 尽力 flush 队列剩余审计事件（未启用时为无操作）
+    // Best-effort flush of remaining queued audit events (a no-op when not enabled)
     commands::service::shutdown_event_emitter().await;
     result
 }
@@ -250,8 +250,10 @@ fn command_requires_workspace(cmd: &Commands) -> bool {
         Commands::Init(_)
             | Commands::Bridge(_)
             | Commands::Password(_)
-            // suggest/context/use/shell-hook 在任意项目目录里用（shell 集成前提）：
-            // 走 PERSONA_WORKSPACE_PATH / 全局默认工作区，不要求 cwd 有 config.toml
+            // suggest/context/use/shell-hook are usable in any project directory (a
+            // prerequisite of shell integration): they go through
+            // PERSONA_WORKSPACE_PATH / the global default workspace and do not require
+            // a config.toml in cwd
             | Commands::Suggest(_)
             | Commands::Context(_)
             | Commands::Use(_)
@@ -311,7 +313,7 @@ mod tests {
 
     #[test]
     fn ssh_sign_injection_matches_the_git_calling_shape() {
-        // git 调用形状：-Y sign -n git -f <key> <file> → 插入 ssh gpg-sign
+        // git's calling shape: -Y sign -n git -f <key> <file> -> inject ssh gpg-sign
         let injected = maybe_inject_argv0_subcommand(args(&[
             "persona-ssh-sign",
             "-Y",
@@ -338,7 +340,7 @@ mod tests {
             ])
         );
 
-        // 装在 bin 目录 / Windows 大小写同样命中
+        // Installed in a bin directory / Windows casing matches too
         let injected =
             maybe_inject_argv0_subcommand(args(&["/usr/local/bin/persona-ssh-sign", "-Y", "sign"]));
         assert_eq!(
@@ -357,7 +359,7 @@ mod tests {
             args(&["PERSONA-SSH-SIGN.EXE", "ssh", "gpg-sign", "-Y", "sign"])
         );
 
-        // 常规 persona 二进制与无关名字不受影响
+        // The regular persona binary and unrelated names are left untouched
         let untouched = maybe_inject_argv0_subcommand(args(&["persona", "ssh", "list"]));
         assert_eq!(untouched, args(&["persona", "ssh", "list"]));
         let untouched = maybe_inject_argv0_subcommand(args(&["persona-ssh-agent", "-h"]));
@@ -415,9 +417,11 @@ mod tests {
 
     #[test]
     fn init_logging_installs_subscriber_exactly_once() {
-        // init() 自 b291488 起幂等：全局 subscriber 已被占用时保持已装的并
-        // 返回 Ok（内嵌 agent 场景 desktop 壳先装是正常次序）。断言重复调用
-        // 安全，且安装真实生效（全局默认不是 NoSubscriber）。
+        // init() has been idempotent since b291488: when the global subscriber is
+        // already taken it keeps the installed one and returns Ok (in the embedded
+        // agent scenario the desktop shell installing first is the normal order).
+        // Assert that repeated calls are safe, and that the install really takes
+        // effect (the global default is not NoSubscriber).
         init_logging(true, false).expect("init_logging must never fail (idempotent)");
         init_logging(false, true).expect("re-install keeps the existing subscriber and stays Ok");
         tracing::dispatcher::get_default(|d| {

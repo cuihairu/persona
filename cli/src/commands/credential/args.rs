@@ -9,7 +9,7 @@ pub struct CredentialArgs {
     pub(crate) command: CredentialCommand,
 }
 
-/// `credential add` 的参数（字段多，收拢成单变体 struct，避免枚举变体大小失衡）
+/// The `credential add` arguments (many fields, gathered into a single-variant struct to avoid unbalanced enum variant sizes)
 #[derive(Args, Clone, Debug)]
 pub struct AddArgs {
     /// Identity name to attach the credential

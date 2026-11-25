@@ -73,7 +73,7 @@ pub async fn execute(args: ContextArgs, config: &CliConfig) -> Result<()> {
     }
 }
 
-/// `persona context learn on|off|status|clear`（设计 §4.1，默认关）。
+/// `persona context learn on|off|status|clear` (design §4.1, off by default).
 async fn learn(action: &str, config: &CliConfig) -> Result<()> {
     let db = Database::from_file(config.get_database_path())
         .await
@@ -134,7 +134,7 @@ fn repo_local_map_path() -> PathBuf {
         .join("context.toml")
 }
 
-/// 读目标映射文件；存在但损坏时拒绝写入（宁可让用户先修表，不静默覆盖）。
+/// Read the target mapping file; refuse to write if it exists but is corrupt (better to let the user fix the table first than to silently overwrite).
 fn load_or_fail(path: &Path) -> Result<ContextMapFile> {
     match std::fs::read_to_string(path) {
         Ok(text) => ContextMapFile::parse(&text).map_err(|e| {
@@ -194,7 +194,7 @@ fn map_mapping(
     Ok(())
 }
 
-/// 在 (仓库内, 全局) 两个文件里按 project → host 顺序查一个模式。
+/// Look up a pattern in both files (repo-local, global) in project → host order.
 fn find_in<'a>(
     pattern: &str,
     map: &'a ContextMapFile,
@@ -231,7 +231,7 @@ fn get_mapping(pattern: &str, global: &Path, repo: &Path) -> Result<()> {
 fn unmap_mapping(pattern: &str, repo_local: bool, global: &Path, repo: &Path) -> Result<()> {
     let path = if repo_local { repo } else { global };
     let mut map = load_or_fail(path)?;
-    // 两类键都要尝试移除（同一 pattern 可能同时挂在 project 与 host 下）。
+    // Both key kinds must be attempted (the same pattern can be registered under both project and host).
     let removed_project = map.projects.remove(pattern).is_some();
     let removed_host = map.hosts.remove(pattern).is_some();
     if !removed_project && !removed_host {
@@ -305,7 +305,7 @@ mod tests {
     }
 
     fn cleanup(file: &Path) {
-        // 传入的是 base 目录内的文件路径，删的是其所在临时目录
+        // The input is a file path inside the base directory; the temp dir containing it is what gets removed
         std::fs::remove_dir_all(file.parent().unwrap()).ok();
     }
 
@@ -327,7 +327,7 @@ mod tests {
             parsed.projects.get("github.com/a/b").unwrap().identity,
             "Work"
         );
-        // upsert 同键覆盖
+        // upsert overwrites on the same key
         map_mapping(
             "github.com/a/b",
             "Ops",
@@ -339,7 +339,7 @@ mod tests {
         .unwrap();
         let parsed = ContextMapFile::parse(&std::fs::read_to_string(&global).unwrap()).unwrap();
         assert_eq!(parsed.hosts.get("github.com/a/b").unwrap().identity, "Ops");
-        // 同 pattern 跨 kind 共存是设计行为；unmap 才两类一起清
+        // The same pattern coexisting across kinds is by design; unmap clears both at once
         assert_eq!(
             parsed.projects.get("github.com/a/b").unwrap().identity,
             "Work"
@@ -367,7 +367,7 @@ mod tests {
         )
         .expect_err("corrupt file must refuse");
         assert!(err.to_string().contains("corrupt"));
-        // 原文件未被覆盖
+        // The original file is not overwritten
         assert_eq!(
             std::fs::read_to_string(&global).unwrap(),
             "[project.\"x\"\nidentity = "
@@ -380,7 +380,7 @@ mod tests {
         let (global, repo) = temp_paths("get");
         map_mapping("github.com/a/b", "Global", false, false, &global, &repo).unwrap();
         map_mapping("github.com/a/b", "Local", false, true, &global, &repo).unwrap();
-        // get 是打印型命令，这里只验证它不报错且两个文件都在位
+        // get is a printing command; just verify it does not error and both files are in place
         get_mapping("github.com/a/b", &global, &repo).unwrap();
         let local = ContextMapFile::parse(&std::fs::read_to_string(&repo).unwrap()).unwrap();
         assert_eq!(
@@ -426,10 +426,10 @@ mod tests {
         let mut config = CliConfig::default();
         config.workspace.path = dir.path().to_path_buf();
 
-        // status 在空库上可跑（迁移顺带建表）。
+        // status runs on an empty database (the migration creates the tables along the way).
         learn("status", &config).await.unwrap();
 
-        // on → 仓库层可见开关。
+        // on -> the switch becomes visible at the repo layer.
         learn("on", &config).await.unwrap();
         {
             let db = Database::from_file(config.get_database_path())
@@ -439,10 +439,10 @@ mod tests {
             assert!(repo.learn_enabled().await.unwrap());
         }
 
-        // clear 清记录不动开关。
+        // clear removes records but leaves the switch alone.
         learn("clear", &config).await.unwrap();
 
-        // off 关闭。
+        // off turns it off.
         learn("off", &config).await.unwrap();
         {
             let db = Database::from_file(config.get_database_path())
@@ -452,13 +452,13 @@ mod tests {
             assert!(!repo.learn_enabled().await.unwrap());
         }
 
-        // 未知动作报错并列出合法值。
+        // Unknown action errors out and lists the valid values.
         let err = learn("bogus", &config)
             .await
             .expect_err("bogus action must fail");
         assert!(err.to_string().contains("Use on, off, status or clear"));
     }
-    // ---- execute 派发 + status/get 视图补测（只读真实 HOME/cwd，不写入）----
+    // ---- execute dispatch plus supplementary status/get view tests (read-only against the real HOME/cwd, never writing) ----
 
     #[tokio::test]
     async fn execute_dispatches_read_only_commands() {
@@ -497,9 +497,9 @@ mod tests {
         );
         write_map(&global, &map).unwrap();
 
-        // repo 未建 → 全局兜底命中
+        // Repo layer absent -> the global fallback hits
         get_mapping("git.example.com", &global, &repo).unwrap();
-        // 双未命中 → "No mapping"
+        // Both miss -> "No mapping"
         get_mapping("nothing-here", &global, &repo).unwrap();
         cleanup(&global);
         cleanup(&repo);
@@ -511,24 +511,24 @@ mod tests {
         let dir = tempfile::TempDir::new().unwrap();
         let global = dir.path().join("nested/deeper/context.toml");
         let repo = dir.path().join("repo-side/context.toml");
-        // 深层路径：write_map 的 create_dir_all 分支
+        // Deep path: the create_dir_all branch of write_map
         map_mapping("proj", "id-1", false, false, &global, &repo).unwrap();
         assert!(global.exists());
-        // 仓库本地文件同款写入（repo_local=true 臂）
+        // Same-style write to the repo-local file (the repo_local=true arm)
         map_mapping("proj", "id-2", false, true, &global, &repo).unwrap();
         assert!(repo.exists());
 
-        // status：两文件在场 + 覆盖变量缺席
+        // status: both files present + override variable absent
         status(&global, &repo).unwrap();
 
-        // 覆盖变量在场分支
+        // The branch where the override variable is present
         let guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         std::env::set_var("PERSONA_CONTEXT_OVERRIDE", "mobile-identity");
         status(&global, &repo).unwrap();
         std::env::remove_var("PERSONA_CONTEXT_OVERRIDE");
         drop(guard);
 
-        // 损坏文件 → status 标记警告但不失败
+        // Corrupt file -> status flags a warning but does not fail
         std::fs::write(&repo, ">>> not toml <<<").unwrap();
         status(&global, &repo).unwrap();
     }

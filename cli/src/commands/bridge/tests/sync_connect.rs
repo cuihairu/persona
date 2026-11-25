@@ -1,9 +1,10 @@
 use super::*;
 
-// ---- sync_connect（协议 v6，M5 批1）----
+// ---- sync_connect (protocol v6, M5 batch 1) ----
 
-/// 纯装配回环：本地生成设备身份 + 本地密封信封 → open_own_group_key
-/// 还原 group key（不经过服务器，覆盖信封寻址与拆封两条路径）。
+/// A pure-assembly round trip: generate the device identity locally + seal the envelope
+/// locally → open_own_group_key restores the group key (no server involved, covering both
+/// the envelope-addressing and unwrapping paths).
 #[test]
 fn sync_connect_opens_own_group_key_from_entries() {
     let identity = device_identity(1);
@@ -22,7 +23,7 @@ fn sync_connect_opens_own_group_key_from_entries() {
     assert_eq!(&opened, &group_key);
 }
 
-/// 信封表里没有本机设备 → sync_not_authorized（待授权语义，fail-closed）。
+/// The envelope table has no entry for this machine → sync_not_authorized (awaiting-authorization semantics; fail-closed).
 #[test]
 fn sync_connect_rejects_missing_envelope() {
     let identity = device_identity(1);
@@ -44,14 +45,14 @@ fn sync_connect_rejects_missing_envelope() {
     );
 }
 
-/// 本机信封存在但信封封给**另一台设备**（device_id 对不上密钥）→
-/// sync_group_key_failed：与「缺信封」区分（后者是未授权，前者是数据
-/// 损坏/错配），fail-closed 不静默回退。
+/// The local envelope exists but is sealed to **another device** (the device_id does not
+/// match the key) → sync_group_key_failed: distinguished from "missing envelope" (the latter
+/// is unauthorized, the former is corrupt/mismatched data); fails closed, no silent fallback.
 #[test]
 fn sync_connect_rejects_envelope_sealed_for_other_device() {
     let identity = device_identity(1);
     let other = device_identity(2);
-    // 信封按 other 的公钥密封，但条目挂在 identity 名下——身份错配。
+    // The envelope is sealed with other's public key but the entry hangs under identity — a mismatched identity.
     let envelope =
         persona_core::sync::envelope::seal_group_key(&[1u8; 32], other.key_pair.public_bytes())
             .unwrap();
@@ -69,8 +70,8 @@ fn sync_connect_rejects_envelope_sealed_for_other_device() {
     );
 }
 
-/// SyncConnectRequest.user_gesture 是必填 bool（无缺省）：省略 → 反序列化
-/// 错误（扩展必须显式带手势，popup 点选）。
+/// SyncConnectRequest.user_gesture is a required bool (no default): omitting it →
+/// deserialization error (the extension must carry the gesture explicitly, a popup click).
 #[test]
 fn sync_connect_request_requires_explicit_gesture() {
     let err = serde_json::from_value::<SyncConnectRequest>(serde_json::json!({})).unwrap_err();
@@ -84,8 +85,8 @@ fn sync_connect_request_requires_explicit_gesture() {
     assert!(req.user_gesture);
 }
 
-/// SyncConnectPayload 蛇形 wire 形态往返：扩展侧读 server_url/token/
-/// device_id/device_name/group_key_hex（§17 敏感口径只在 session 内存）。
+/// SyncConnectPayload snake_case wire-shape round trip: the extension reads server_url/token/
+/// device_id/device_name/group_key_hex (per §17, sensitive material stays in session memory only).
 #[test]
 fn sync_connect_payload_round_trips_snake_case() {
     let payload = SyncConnectPayload {
@@ -104,14 +105,14 @@ fn sync_connect_payload_round_trips_snake_case() {
     assert_eq!(back.device_name, "Alice's Laptop");
 }
 
-/// 无 workspace/settings → sync_not_configured（免解锁读 settings 的
-/// 错误分类锚点；run_sync_connect 的 keyring/服务器分支依赖真机
-/// secret service 与真服务器，留在 M6 实机走查覆盖）。
+/// No workspace/settings → sync_not_configured (the error-classification anchor for the
+/// unlock-free settings read; the keyring/server branches of run_sync_connect depend on a
+/// real secret service and a real server and are left to the M6 real-machine walkthrough).
 #[tokio::test]
 async fn sync_connect_reports_not_configured_on_fresh_vault() {
     let (_dir, db_path, _state_dir, _identity) = seeded_bridge().await;
 
-    // seeded_bridge 建的 workspace 行没有 path 列值，find_by_path 落空
+    // The workspace row seeded by seeded_bridge has no path column value, so find_by_path comes up empty
     let err = read_sync_server_url(&db_path).await.unwrap_err();
     assert!(
         err.to_string().starts_with("sync_not_configured"),
@@ -119,9 +120,10 @@ async fn sync_connect_reports_not_configured_on_fresh_vault() {
     );
 }
 
-/// settings 里 sync.server_url 在场时免解锁读出（正路径）。settings
-/// JSON 必须是完整默认形态——row_to_workspace_v2 对解析失败静默回退
-/// 默认值（sync=None），残缺 JSON 会伪装成「未配置」。
+/// When sync.server_url is present in settings it is read without unlocking (happy path).
+/// The settings JSON must be the full default shape — row_to_workspace_v2 silently falls
+/// back to defaults (sync=None) on a parse failure, so truncated JSON would masquerade as
+/// "not configured".
 #[tokio::test]
 async fn sync_connect_reads_server_url_from_workspace_settings() {
     let dir = tempfile::tempdir().unwrap();
@@ -136,8 +138,8 @@ async fn sync_connect_reads_server_url_from_workspace_settings() {
     assert_eq!(url, "http://127.0.0.1:8080");
 }
 
-/// settings.sync.server_url 为空串 = 未配置（与桌面 read_sync_config
-/// 同口径：空白与缺省同义）。
+/// An empty settings.sync.server_url = not configured (same terms as the desktop
+/// read_sync_config: blank and default are synonymous).
 #[tokio::test]
 async fn sync_connect_treats_blank_server_url_as_not_configured() {
     let dir = tempfile::tempdir().unwrap();
@@ -154,9 +156,10 @@ async fn sync_connect_treats_blank_server_url_as_not_configured() {
     );
 }
 
-/// 跨语言 fixture 锚定（M5 批1）：扩展侧 cloudSync.ts 解密+解码的
-/// 对象由 Rust 侧同一 fixture 反向校验——Rust 拆 group 包裹 → 拆快照
-/// → 与 expected 逐字段比对。任何一侧格式漂移都会在此红掉。
+/// Cross-language fixture anchoring (M5 batch 1): the object the extension's cloudSync.ts
+/// decrypts+decodes is reverse-verified against the same fixture on the Rust side — Rust
+/// unwraps the group wrap → unwraps the snapshot → compares field-by-field with expected.
+/// Format drift on either side goes red here.
 #[test]
 fn sync_item_fixture_round_trips_with_rust() {
     for file in ["sync_item_fixture.json", "sync_item_fixture_sparse.json"] {
@@ -214,9 +217,9 @@ fn sync_item_fixture_round_trips_with_rust() {
     }
 }
 
-/// fixture 再生成（改了 SyncItemSnapshot/CredentialData 结构时用）：
+/// Fixture regeneration (use when the SyncItemSnapshot/CredentialData structures change):
 /// `cargo test -p persona-cli emit_sync_item_fixture -- --ignored --nocapture`
-/// 输出两份 JSON 覆盖 `browser/chromium-extension/src/__fixtures__/`。
+/// writes two JSON files over `browser/chromium-extension/src/__fixtures__/`.
 #[test]
 #[ignore = "fixture generator; run with --ignored --nocapture"]
 fn emit_sync_item_fixture() {

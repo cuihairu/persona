@@ -1,5 +1,6 @@
-//! 身份字段编辑：交互菜单、单字段入口与参数直填三条路径，
-//! 以及各字段（类型/描述/邮箱/电话/标签）的编辑实现。
+//! Identity field editing: the three paths (interactive menu, single-field
+//! entry point, direct argument filling) plus the editing implementations for
+//! each field (type/description/email/phone/tags).
 
 use anyhow::Result;
 use colored::*;

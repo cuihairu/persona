@@ -1,4 +1,4 @@
-//! 展示：编辑前的现值清单与保存前的变更摘要（纯打印，不做决策）。
+//! Display: the current-value listing before editing and the change summary before saving (pure printing, no decisions).
 
 use anyhow::Result;
 use colored::*;

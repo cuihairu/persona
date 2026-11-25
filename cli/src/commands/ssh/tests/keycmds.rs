@@ -20,7 +20,7 @@ async fn generate_list_and_list_all_flows() {
     assert!(ui.exhausted());
 
     // Unknown key types are refused before anything is unlocked
-    // (rsa/ecdsa 生成已支持，dsa 之类仍是快失败).
+    // (rsa/ecdsa generation is supported; dsa and the like still fail fast).
     let ui = ScriptedUi::new();
     let err = execute_with(
         ssh_args(SshSubcommand::Generate {
@@ -358,7 +358,7 @@ async fn import_seed_variants_and_rejections() {
 }
 
 // ------------------------------------------------------------------
-// import-file: OpenSSH 私钥文件导入（seed 导入之外的文件通道）
+// import-file: OpenSSH private key file import (the file-based channel besides seed import)
 // ------------------------------------------------------------------
 
 fn write_key_file(dir: &TempDir, name: &str, pem: &str) -> std::path::PathBuf {
@@ -405,7 +405,7 @@ async fn import_file_plain_and_stored_shape() {
     .expect("plain rsa file import works");
     assert!(ui.exhausted());
 
-    // 库内形状：私钥 = 解锁后的 PEM（可再解析、非密文），类型/公钥一致
+    // Stored shape: private key = unlocked PEM (re-parseable, not ciphertext), with matching type/public key
     let creds = alice_credentials(&config, "master-pin").await;
     let ssh_id = creds
         .iter()
@@ -429,9 +429,11 @@ async fn import_file_plain_and_stored_shape() {
     let reparsed = ssh_key::private::PrivateKey::from_openssh(&ssh.private_key).unwrap();
     assert!(!reparsed.key_data().is_encrypted());
 
-    // 名字回退：comment 非空且无 --name 时用 comment；这里给了 --name
-    // 走 label——再导一把不带 --name 的 ed25519 验证 comment/file 回退。
-    // （这把的公钥行在 set_comment 之后才取，解构出的第一个直接丢弃）
+    // Name fallback: when the comment is non-empty and --name is absent, use the
+    // comment; here --name is given so the label is used — import another ed25519
+    // without --name to verify the comment/file fallback.
+    // (Its public key line is fetched after set_comment, so the first destructured
+    // value is discarded.)
     let (pem, _) = openssh_pem(ssh_key::Algorithm::Ed25519);
     let mut key = ssh_key::private::PrivateKey::from_openssh(&pem).unwrap();
     key.set_comment("cui@laptop");
@@ -498,7 +500,7 @@ async fn import_file_encrypted_passphrase_paths() {
         ssh_key::Algorithm::Ed25519,
     )
     .unwrap();
-    // encrypt 返回新的加密实例（不改动原值），必须接住再序列化
+    // encrypt returns a new encrypted instance (does not mutate the original); it must be captured before serializing
     let key = key
         .encrypt(&mut rand_core::UnwrapErr(rand::rngs::SysRng), "hunter2")
         .unwrap();
@@ -506,7 +508,7 @@ async fn import_file_encrypted_passphrase_paths() {
     let key_path = write_key_file(&dir, "id_encrypted", &pem);
     let file = key_path.to_string_lossy().to_string();
 
-    // 受保护但没给 --passphrase → ScriptedUi 补问口令后解锁成功
+    // Protected key without --passphrase -> ScriptedUi prompts for the passphrase and unlocking succeeds
     let ui = ScriptedUi::new().password("hunter2").password("master-pin");
     execute_with(
         ssh_args(SshSubcommand::ImportFile {
@@ -522,7 +524,7 @@ async fn import_file_encrypted_passphrase_paths() {
     .expect("interactive passphrase unlock works");
     assert!(ui.exhausted());
 
-    // --passphrase 直给也通
+    // --passphrase supplied directly works too
     let ui = ScriptedUi::new().password("master-pin");
     execute_with(
         ssh_args(SshSubcommand::ImportFile {
@@ -537,7 +539,7 @@ async fn import_file_encrypted_passphrase_paths() {
     .await
     .expect("flagged passphrase unlock works");
 
-    // 错误口令 → 明确报错（不静默吞）
+    // Wrong passphrase -> explicit error (not silently swallowed)
     let ui = ScriptedUi::new().password("master-pin");
     let err = execute_with(
         ssh_args(SshSubcommand::ImportFile {
@@ -562,7 +564,7 @@ async fn import_file_rejects_garbage_and_missing_files() {
     let dir = TempDir::new().unwrap();
     let config = unlocked_workspace(&dir, "master-pin").await;
 
-    // 不存在的文件
+    // Nonexistent file
     let ui = ScriptedUi::new().password("master-pin");
     let err = execute_with(
         ssh_args(SshSubcommand::ImportFile {
@@ -578,7 +580,7 @@ async fn import_file_rejects_garbage_and_missing_files() {
     .expect_err("missing file must fail");
     assert!(err.to_string().contains("Cannot read key file"));
 
-    // 垃圾内容 / 公钥行当私钥 → 解析层拒绝
+    // Garbage content / a public key line as private key -> rejected by the parsing layer
     let garbage = write_key_file(&dir, "garbage", "not a key at all");
     let ui = ScriptedUi::new().password("master-pin");
     let err = execute_with(
@@ -622,7 +624,7 @@ async fn import_file_rejects_garbage_and_missing_files() {
 }
 
 // ------------------------------------------------------------------
-// generate: 页面内/CLI 生成新密钥对（rsa 走 core 测试，这里不跑 4096 位）
+// generate: in-app/CLI generation of a new keypair (rsa is covered by core tests; no 4096-bit run here)
 // ------------------------------------------------------------------
 
 #[tokio::test]
@@ -633,7 +635,7 @@ async fn generate_stores_keypair_and_applies_name_fallback() {
     let dir = TempDir::new().unwrap();
     let config = unlocked_workspace(&dir, "master-pin").await;
 
-    // 一把带 comment 不带 --name：条目名回退 comment
+    // One key with a comment but no --name: entry name falls back to the comment
     let ui = ScriptedUi::new().password("master-pin");
     execute_with(
         ssh_args(SshSubcommand::Generate {
@@ -669,8 +671,9 @@ async fn generate_stores_keypair_and_applies_name_fallback() {
     };
     assert_eq!(ssh.key_type, "ed25519");
     assert_eq!(ssh.passphrase, None);
-    // ed25519 生成走库内既有约定：BASE64 seed（非 PEM；agent 双格式加载
-    // seed 优先），公钥行以重建 verifying key 为独立裁判
+    // ed25519 generation follows the core's existing convention: BASE64 seed
+    // (not PEM; the agent's dual-format loading prefers the seed), with the
+    // public key line judged independently by reconstructing the verifying key
     let seed = BASE64.decode(&ssh.private_key).unwrap();
     assert_eq!(seed.len(), 32, "ed25519 私钥 = 32B seed");
     use ed25519_dalek::SigningKey;
@@ -684,7 +687,7 @@ async fn generate_stores_keypair_and_applies_name_fallback() {
     );
     assert!(ssh.public_key.ends_with("gen-test"), "comment 进公钥行");
 
-    // 二把带 --name + ecdsa：label 优先
+    // Second key with --name + ecdsa: the label wins
     let ui = ScriptedUi::new().password("master-pin");
     execute_with(
         ssh_args(SshSubcommand::Generate {

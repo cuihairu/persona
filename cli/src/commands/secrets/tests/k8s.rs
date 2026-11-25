@@ -9,9 +9,9 @@ async fn k8s_renders_base64_manifest() {
     let _pw = EnvVar::set("PERSONA_MASTER_PASSWORD", "master-pin");
     let (_dir, config) = seeded_workspace().await;
 
-    // 捕获 stdout：println!/print! 直接写进程 stdout，测试里用
-    // resolve_ref + 序列化层验证（渲染路径与输出路径解耦），这里只
-    // 验证命令本身成功且引用错误会失败。
+    // Capturing stdout: println!/print! writes straight to process stdout, so the tests
+    // verify via resolve_ref + the serialization layer (rendering and output are decoupled);
+    // here we only verify that the command itself succeeds and that a bad reference fails.
     execute_with(
         k8s_args(&["password=work/login/password"]),
         &config,
@@ -32,7 +32,7 @@ async fn k8s_renders_base64_manifest() {
 
 #[test]
 fn k8s_manifest_shape_is_valid() {
-    // 结构层断言：base64 + 字段名 + 可选段省略
+    // Structure-level assertions: base64 + field names + omission of optional sections
     let manifest = K8sSecretManifest {
         apiVersion: "v1",
         kind: "Secret",

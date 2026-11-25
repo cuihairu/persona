@@ -35,7 +35,7 @@ pub async fn execute_use(args: SwitchArgs, config: &CliConfig) -> Result<()> {
     execute_with_reason(args, config, &TerminalUi, top).await
 }
 
-/// 当前建议首位（分身名, reason）；无候选/开库失败返回 None（建议层永不致命）。
+/// The top current suggestion (identity name, reason); returns None when there is no candidate or the vault cannot be opened (the suggestion layer is never fatal).
 async fn suggest_reason_for(config: &CliConfig) -> Option<(String, String)> {
     let signals = ContextSignals::collect();
     let paths = crate::commands::suggest::MapPaths {

@@ -1,4 +1,4 @@
-//! 结果展示：导入摘要预览与冲突报告输出（纯打印，不做决策）。
+//! Result display: the import summary preview and the conflict report output (pure printing, no decisions).
 
 use anyhow::Result;
 use colored::*;

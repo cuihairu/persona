@@ -1,18 +1,21 @@
-//! `persona secrets …`：本地 Secrets 自动化（gap #28 余项三件套）。
+//! `persona secrets …`: local Secrets automation (the remaining gap #28 trio).
 //!
-//! 复用 Connect 的解锁/审计路径（`PersonaService` 直读，解密自动记
-//! `CredentialDecrypted` 审计），提供三种消费形态：
+//! Reuses Connect's unlock/audit path (reads directly via `PersonaService`;
+//! decryption automatically records a `CredentialDecrypted` audit) and offers these
+//! consumption forms:
 //!
-//! - `resolve`：引用 → 明文（脚本基元，一行一值）
-//! - `run`：`--env NAME=REF` 注入子进程环境后执行（shell plugins 通用机制）
-//! - `k8s`：渲染 K8s `Secret` 清单（YAML，`data` 走 base64）到 stdout
-//! - `external`：Terraform `external` provider 协议助手（stdin JSON 查询 →
-//!   stdout JSON 明文；native gRPC provider 需 Go SDK，刻意不做）
+//! - `resolve`: reference → plaintext (a script primitive, one value per line)
+//! - `run`: inject `--env NAME=REF` into the child environment, then execute (the
+//!   generic shell plugins mechanism)
+//! - `k8s`: render a K8s `Secret` manifest (YAML, `data` base64-encoded) to stdout
+//! - `external`: the Terraform `external` provider protocol helper (stdin JSON query →
+//!   stdout JSON plaintext; a native gRPC provider would need the Go SDK, deliberately not done)
 //!
-//! 引用语法统一为 `IDENTITY/ITEM/FIELD`：identity 按名称、item 按凭据名
-//! 精确匹配；`name`/`username`/`url`/`notes` 取元数据（不解密），其余字段
-//! 解密后按类型词汇表取值；`secret` 是各类型主秘密的别名。可选字段未设置
-//! 即报错（不静默给空串）。
+//! The reference syntax is uniformly `IDENTITY/ITEM/FIELD`: identity matched by name
+//! and item matched exactly by credential name; `name`/`username`/`url`/`notes` come
+//! from metadata (no decryption), other fields are decrypted and looked up via the type
+//! vocabulary; `secret` aliases each type's primary secret. An unset optional field
+//! errors out (no silent empty string).
 
 use anyhow::{anyhow, bail, Context, Result};
 use clap::{Args, Subcommand};
@@ -42,41 +45,41 @@ pub struct SecretsArgs {
 
 #[derive(Subcommand)]
 enum SecretsCommand {
-    /// 解析引用并打印明文（一行一值；顺序与参数一致）
+    /// Resolve references and print plaintext (one value per line; order matches the arguments)
     Resolve {
-        /// 引用列表（IDENTITY/ITEM/FIELD）
+        /// The list of references (IDENTITY/ITEM/FIELD)
         #[arg(required = true)]
         refs: Vec<String>,
     },
-    /// 注入环境变量后执行命令（明文只进子进程环境，不进 shell 历史）
+    /// Execute a command with injected environment variables (plaintext only enters the child environment, never the shell history)
     Run {
-        /// NAME=REF 注入项（可多次）
+        /// NAME=REF injection items (repeatable)
         #[arg(long = "env")]
         env: Vec<String>,
-        /// `--` 之后的命令与参数
+        /// The command and arguments after `--`
         #[arg(last = true, required = true)]
         command: Vec<std::ffi::OsString>,
     },
-    /// 渲染 Kubernetes Secret 清单（YAML 到 stdout，供 kubectl apply）
+    /// Render a Kubernetes Secret manifest (YAML to stdout, for kubectl apply)
     K8s {
-        /// Secret 名称
+        /// The Secret name
         #[arg(long)]
         name: String,
-        /// 命名空间（缺省不写该字段，跟随 kubectl 上下文）
+        /// The namespace (omitted by default, following the kubectl context)
         #[arg(long)]
         namespace: Option<String>,
-        /// KEY=REF 键值来源（可多次；至少一项）
+        /// KEY=REF value sources (repeatable; at least one)
         #[arg(long = "key")]
         keys: Vec<String>,
-        /// 附加 label（可多次，KEY=VALUE）
+        /// Extra labels (repeatable, KEY=VALUE)
         #[arg(long)]
         labels: Vec<String>,
-        /// 附加 annotation（可多次，KEY=VALUE）
+        /// Extra annotations (repeatable, KEY=VALUE)
         #[arg(long = "annotation")]
         annotations: Vec<String>,
     },
-    /// Terraform external provider 协议助手：stdin 收 {"NAME":"REF"} 查询，
-    /// stdout 回 {"NAME":"明文"}（错误走 stderr + 非零退出）
+    /// Terraform external provider protocol helper: accepts a {"NAME":"REF"} query on
+    /// stdin and answers {"NAME":"<plaintext>"} on stdout (errors go to stderr + non-zero exit)
     External,
 }
 
@@ -130,7 +133,7 @@ pub(crate) async fn execute_with(
 }
 
 // -----------------------------------------------------------------------
-// 解锁（与 connect.rs 同一条链：惯例 PERSONA_MASTER_PASSWORD env 优先）
+// Unlock (the same chain as connect.rs: by convention the PERSONA_MASTER_PASSWORD env takes priority)
 // -----------------------------------------------------------------------
 
 async fn open_unlocked(config: &CliConfig, ui: &dyn PromptUi) -> Result<PersonaService> {

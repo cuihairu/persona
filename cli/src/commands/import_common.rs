@@ -1,7 +1,9 @@
-//! 导入命令共享的落库逻辑：把确认过的 [`ImportPlan`] 应用到 workspace。
+//! Vault-store logic shared by the import commands: applying a confirmed [`ImportPlan`]
+//! to the workspace.
 //!
-//! `import-1pux` 与 `import-generic` 用同一套"建/复用身份 → 建凭据 →
-//! 补呈现字段"的流程，保证两条导入路径的身份复用与失败中止语义一致。
+//! `import-1pux` and `import-generic` use the same "create/reuse identity → create
+//! credential → fill display fields" flow, so both import paths share consistent
+//! identity-reuse and failure-abort semantics.
 
 use std::collections::HashMap;
 
@@ -22,8 +24,8 @@ pub(crate) struct ApplySummary {
 ///
 /// Same-name identities are reused (reported, never duplicated); the whole
 /// run aborts on the first failure so a partial import can simply be re-run.
-/// `identity_kind` 进身份类型（`IdentityType::Custom`），`container_kind`
-/// 出现在复用日志里（如 "1Password vault"）。
+/// `identity_kind` goes into the identity type (`IdentityType::Custom`); `container_kind`
+/// shows up in the reuse log (e.g. "1Password vault").
 pub(crate) async fn apply_plan(
     service: &PersonaService,
     plan: &ImportPlan,

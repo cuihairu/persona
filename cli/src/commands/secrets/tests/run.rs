@@ -31,7 +31,7 @@ async fn run_resolves_all_refs_before_spawning() {
     let _pw = EnvVar::set("PERSONA_MASTER_PASSWORD", "master-pin");
     let (_dir, config) = seeded_workspace().await;
 
-    // 第二个引用是坏的：子进程不该被启动（探针文件不存在 = 未 spawn）
+    // The second reference is bad: the child must not be launched (the probe file's absence = not spawned)
     let probe =
         std::env::temp_dir().join(format!("persona-secrets-run-probe-{}", std::process::id()));
     let _ = std::fs::remove_file(&probe);
@@ -64,7 +64,7 @@ async fn spawn_with_env_forwards_nonzero_exit_code() {
     assert!(missing.to_string().contains("failed to spawn"), "{missing}");
 }
 
-// ---- run / k8s 入参校验（解锁前的 bail） ----
+// ---- run / k8s input validation (bail before unlock) ----
 
 #[tokio::test]
 async fn run_rejects_empty_command_before_unlock() {
@@ -88,7 +88,7 @@ async fn run_rejects_empty_command_before_unlock() {
 #[allow(clippy::await_holding_lock)]
 async fn top_level_execute_routes_through_terminal_ui() {
     let _guard = env_guard();
-    // PERSONA_MASTER_PASSWORD 优先于 ui 提示：TerminalUi 不会触交互
+    // PERSONA_MASTER_PASSWORD takes priority over the ui prompt: TerminalUi never reaches interaction
     let _pw = EnvVar::set("PERSONA_MASTER_PASSWORD", "master-pin");
     let (_dir, config) = seeded_workspace().await;
     execute(resolve_args(&["work/login/name"]), &config)

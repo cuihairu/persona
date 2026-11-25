@@ -1,5 +1,7 @@
-//! 持久化与校验：身份存在性检查、加载（认证/免密两路）、变更校验
-//! 与保存（按 id 或名称回读后更新，认证工作区走 service）。
+//! Persistence and validation: the identity existence check, loading (the
+//! authenticated and passwordless paths), change validation and saving
+//! (re-read by id or name, then update; authenticated workspaces go through the
+//! service).
 
 use anyhow::{Context, Result};
 use serde_json::Value;

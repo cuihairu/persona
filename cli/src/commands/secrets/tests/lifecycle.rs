@@ -1,6 +1,6 @@
 use super::*;
 
-// ---- 解锁链错误分支 ----
+// ---- Unlock-chain error branches ----
 
 #[tokio::test]
 #[allow(clippy::await_holding_lock)]

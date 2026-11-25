@@ -5,8 +5,9 @@ use crate::utils::prompt::scripted::ScriptedUi;
 use persona_core::models::AuditAction;
 use tempfile::TempDir;
 
-/// 阶段 2 学习记录：开关默认关 → switch 不产生学习行；开 → 同一目录
-/// 哈希下出现记录；学习失败不阻断 switch（降级原则）。
+/// Phase 2 learning records: with the toggle off (the default) → switch produces no learning
+/// row; on → a record appears under the same directory hash; a learning failure does not
+/// block the switch (degradation principle).
 #[tokio::test]
 async fn switch_records_learn_sample_only_when_enabled() {
     use persona_core::context::cwd_hash;
@@ -47,8 +48,9 @@ async fn switch_records_learn_sample_only_when_enabled() {
     assert_eq!(learn.record_count().await.unwrap(), 1);
 }
 
-/// `persona use`：目标 = 当前建议首位时审计带 reason；目标不是候选时
-/// 仍是普通 switch（无 reason 审计）；学习行照常落库。
+/// `persona use`: when the target is the current top suggestion the audit carries the
+/// reason; when the target is not a candidate it is still an ordinary switch (no reason in
+/// the audit); the learning row is stored as usual.
 #[tokio::test]
 async fn use_confirming_top_suggestion_audits_reason() {
     use persona_core::storage::{AuditLogRepository, ContextLearnRepository};
@@ -63,7 +65,7 @@ async fn use_confirming_top_suggestion_audits_reason() {
         learn.set_learn_enabled(true).await.unwrap();
     }
 
-    // 仓库内映射把本目录指到 clienta —— persona use clienta 就是确认。
+    // The in-repo mapping points this directory to clienta — persona use clienta is therefore a confirmation.
     let map_path = dir.path().join(".persona").join("context.toml");
     std::fs::create_dir_all(map_path.parent().unwrap()).unwrap();
     std::fs::write(
@@ -72,7 +74,7 @@ async fn use_confirming_top_suggestion_audits_reason() {
     )
     .unwrap();
 
-    // 建议首位确实是 clienta（与 use 目标一致 → 审计含 reason）。
+    // The top suggestion is indeed clienta (it matches the use target → the audit carries the reason).
     let signals = persona_core::context::ContextSignals {
         cwd: config.workspace.path.clone(),
         repo: Some("github.com/other/repo".to_string()),
@@ -87,7 +89,7 @@ async fn use_confirming_top_suggestion_audits_reason() {
         .unwrap();
     assert_eq!(result.candidates[0].identity, "clienta");
 
-    // execute_use 走 execute_with_reason → perform_switch。
+    // execute_use goes through execute_with_reason → perform_switch.
     execute_with_reason(
         switch_args(Some("clienta"), true),
         &config,
@@ -112,7 +114,7 @@ async fn use_confirming_top_suggestion_audits_reason() {
         audits[0].error_message
     );
 
-    // 目标不是建议首位 → 无 reason 的普通切换。
+    // The target is not the top suggestion → an ordinary switch with no reason.
     execute_with_reason(
         switch_args(Some("alice"), true),
         &config,
@@ -134,7 +136,7 @@ async fn use_confirming_top_suggestion_audits_reason() {
         "mismatched suggestion leaves no reason"
     );
 
-    // 学习行：两次确认都进了同目录学习表。
+    // Learning rows: both confirmations entered the same-directory learning table.
     let learn = ContextLearnRepository::new(db.clone());
     let counts = learn
         .counts_since(

@@ -1,4 +1,4 @@
-//! 会话锁操作：按 ID 手动锁定/解锁会话。
+//! Session lock operations: manually lock/unlock a session by ID.
 
 use anyhow::Result;
 use persona_core::auth::session::SessionManager;

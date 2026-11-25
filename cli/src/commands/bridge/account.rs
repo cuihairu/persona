@@ -1,12 +1,14 @@
 use super::*;
 
-/// 账号域 bearer（静态服务器令牌 / SRP 短期令牌 / 24h 会话令牌）的
-/// keyring service——与桌面 token_store 的 ACCOUNT_SERVICE 同名同键
-/// （条目键 = vault db_path），桌面与桥读写同一枚令牌。
+/// The keyring service for account-domain bearers (static server token / SRP short-term
+/// token / 24h session token) — the same name and key as the desktop token_store's
+/// ACCOUNT_SERVICE (entry key = vault db_path), so the desktop and the bridge read/write
+/// the same token.
 pub(super) const KEYRING_SERVICE_ACCOUNT: &str = "persona-account";
 
-/// 账号令牌仓抽象：生产走 OS keyring；测试注入内存实现（与桌面
-/// token_store 的 TokenStore trait 同构，参数化 service 名的思路一致）。
+/// The account token store abstraction: production goes through the OS keyring; tests inject
+/// an in-memory implementation (isomorphic to the desktop token_store's TokenStore trait,
+/// with the same idea of parameterizing the service name).
 pub(super) trait AccountTokenStore: Send + Sync {
     fn set_token(&self, db_key: &str, token: &str) -> Result<()>;
     fn get_token(&self, db_key: &str) -> Result<Option<String>>;
@@ -37,7 +39,7 @@ impl AccountTokenStore for KeyringAccountTokenStore {
             .map_err(|e| anyhow!("account_keyring_unavailable: {e}"))?;
         match entry.delete_credential() {
             Ok(()) => Ok(()),
-            Err(keyring::Error::NoEntry) => Ok(()), // 幂等
+            Err(keyring::Error::NoEntry) => Ok(()), // idempotent
             Err(e) => Err(anyhow!("account_keyring_unavailable: {e}")),
         }
     }
@@ -52,9 +54,10 @@ pub(super) struct AccountLoginRequest {
     pub(super) user_gesture: bool,
 }
 
-/// `account_login_response`：SRP 编排产物（core `AccountSrpLoginOutcome`
-/// 的展示投影）。令牌本体直写 keyring，不过桥协议下发——扩展只见
-/// 有效期与会话指纹（与桌面 account_srp_login 的响应口径一致）。
+/// `account_login_response`: the product of SRP orchestration (a display projection of core
+/// `AccountSrpLoginOutcome`). The token itself is written straight to the keyring and never
+/// delivered over the bridge protocol — the extension sees only the validity period and the
+/// session fingerprint (the same response terms as the desktop account_srp_login).
 #[derive(Debug, Serialize)]
 pub(super) struct AccountLoginPayload {
     pub(super) expires_in_secs: u64,
@@ -90,7 +93,7 @@ pub(super) async fn run_account_login(
     let api = persona_core::accounts::remote::AccountsApi::new(&server_url).map_err(|e| {
         anyhow!("account_not_configured: invalid account server configuration: {e}")
     })?;
-    // SRP 数学全在 core（口令不出编排模块）；桥只递口令与收编排产物
+    // All SRP math lives in core (the passphrase never leaves the orchestration module); the bridge only passes the passphrase in and receives the orchestration products
     let outcome = api
         .srp_login(account_id, device_name, password)
         .await
@@ -129,7 +132,7 @@ pub(super) async fn run_account_logout(
     let db_key = db_path.to_string_lossy().to_string();
     let bearer = store.get_token(&db_key)?.filter(|t| !t.trim().is_empty());
     let Some(bearer) = bearer else {
-        // 本机已无令牌 = 已退出；幂等成功（与桌面 account_sign_out 同口径）
+        // No token left locally = already signed out; idempotent success (same terms as the desktop account_sign_out)
         return Ok(AccountLogoutPayload {
             revoked_on_server: false,
         });

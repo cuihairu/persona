@@ -1,9 +1,10 @@
 use super::parse::normalize_origin_url;
 use super::*;
 
-/// 收集待导入的 .maFile 路径：`--file` 指向单文件或目录（SDA 常把
-/// 所有 .maFile 放一个目录，另带 manifest.json——按扩展名过滤，目录内
-/// 按文件名排序保证批量导入的确定性）。
+/// Collect the .maFile paths to import: `--file` may point at a single file or
+/// a directory (SDA usually drops all .maFiles in one directory alongside a
+/// manifest.json — filter by extension and sort by file name inside the
+/// directory to keep batch imports deterministic).
 pub(crate) fn collect_ma_file_paths(path: &std::path::Path) -> Result<Vec<PathBuf>> {
     if path.is_file() {
         return Ok(vec![path.to_path_buf()]);
@@ -29,13 +30,15 @@ pub(crate) fn collect_ma_file_paths(path: &std::path::Path) -> Result<Vec<PathBu
     Ok(files)
 }
 
-/// 导入 SDA `.maFile`：单文件或目录批量。
+/// Import SDA `.maFile`s: a single file, or a whole directory in batch.
 ///
-/// 流程：先全部解析（坏文件不碰库，批量时逐个汇报并跳过）→ 解锁库
-/// （既有 re-auth 闸门）→ 逐文件展示 account_name/类型/入库字段/忽略
-/// 字段清单并确认（`--yes` 跳过确认）→ 按 setup-steam 同样的形状落库
-/// （GameToken/steam_guard，另带 identity_secret/device_id）。会话字段
-/// （Session 对象、access_token 等）永不入库，只出现在忽略清单里。
+/// Flow: parse everything first (bad files never touch the vault; in batch mode
+/// each failure is reported individually and skipped) → unlock the vault
+/// (the existing re-auth gate) → show account_name/type/fields to store/ignored
+/// field list per file and confirm (`--yes` skips the prompt) → store in the
+/// same shape as setup-steam (GameToken/steam_guard, plus identity_secret/device_id).
+/// Session fields (the Session object, access_token, etc.) are never stored and
+/// only ever show up in the ignored list.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn import_steam_mafiles(
     config: &CliConfig,
@@ -52,7 +55,7 @@ pub(crate) async fn import_steam_mafiles(
     }
     let origin_url = url.map(|s| normalize_origin_url(&s)).transpose()?;
 
-    // 解析阶段：任何失败都不打开库
+    // Parse phase: no failure may open the vault
     let mut parsed_files: Vec<(PathBuf, persona_core::import_mafile::MaFileImport)> = Vec::new();
     let mut failed: Vec<(PathBuf, anyhow::Error)> = Vec::new();
     for file in &files {

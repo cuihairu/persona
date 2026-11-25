@@ -93,9 +93,10 @@ pub(super) async fn run_sign_psbt(
 
     let psbt_bytes = decode_psbt_input(psbt_b64)?;
 
-    // 单签口径：钱包的任一地址的钥必须持有全部输入。第一把钥失败（错
-    // 口令派生不出任何钥）直接终止；其余钥逐把尝试，按 witness script
-    // 归属校验（核心侧强制）。
+    // Single-signer policy: keys for any of the wallet's addresses must hold every input.
+    // A failure on the first key (a wrong passphrase derives no keys) terminates right away;
+    // the remaining keys are tried one by one, validated by witness script ownership
+    // (enforced on the core side).
     let first_address = &wallet.addresses[0].address;
     let first_key = signing_key_for_address(&wallet, &password, first_address)
         .map_err(|e| anyhow!("Failed to derive signing key (wrong password?): {e}"))?;

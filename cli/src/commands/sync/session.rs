@@ -1,11 +1,12 @@
-//! 会话装配 + 解锁（CLI `persona sync` 的宿主编排）。
+//! Session assembly + unlock (the hosting orchestration of CLI `persona sync`).
 //!
-//! 装配序镜像 desktop `open_sync_session`（`desktop/src-tauri/src/commands/
-//! sync.rs:705`）+ CLI 解锁惯例（`connect.rs::open_unlocked`）：配置段错误
-//! 最先（便宜的错误先报，也不必先解锁）→ keyring 身份/令牌 → 解锁 →
-//! travel 闸采样 → `SyncSession::open`。**不挂捕获缝**——CLI 一进程一命令，
-//! 缝随进程消亡没有意义（与 bridge/sync.rs 注释同一理由）；本命令之外经
-//! CLI 落库的写入由下一轮 `backfill_existing` 幂等补齐。
+//! The assembly order mirrors desktop `open_sync_session` (`desktop/src-tauri/src/commands/
+//! sync.rs:705`) plus the CLI unlock convention (`connect.rs::open_unlocked`): config section
+//! errors first (cheap errors first, and unlocking is not even needed yet) → keyring identity
+//! /token → unlock → travel-gate sampling → `SyncSession::open`. **No capture seam is hung** —
+//! the CLI is one process per command, so a seam dying with the process is meaningless (same
+//! reason as the bridge/sync.rs comment); writes made outside this command through the CLI are
+//! reconciled idempotently by the next round of `backfill_existing`.
 
 use anyhow::{anyhow, Result};
 use persona_core::storage::Database;
@@ -19,12 +20,12 @@ use crate::commands::service;
 use crate::config::CliConfig;
 use crate::utils::prompt::PromptUi;
 
-/// CLI 版会话（HTTP 传输）。
+/// The CLI session (HTTP transport).
 pub(crate) type CliSyncSession = SyncSession<HttpSyncRemote>;
 
-/// 装配同步会话：server_url → token → identity（keyring，免解锁）→ 解锁
-/// → travel 闸采样 → `SyncSession::open`。service 随返回值借出（master
-/// 从它借）。
+/// Assemble the sync session: server_url → token → identity (keyring, no unlock needed)
+/// → unlock → travel-gate sampling → `SyncSession::open`. The service is lent out with the
+/// return value (master is borrowed from it).
 pub(crate) async fn open_sync_session(
     config: &CliConfig,
     ui: &dyn PromptUi,
@@ -48,7 +49,7 @@ pub(crate) async fn open_sync_session(
     db.migrate()
         .await
         .map_err(|e| anyhow!("sync_session_failed: database migration failed: {e}"))?;
-    // travel 闸在装配前采样一次（与桌面 open_sync_session 同语义）
+    // The travel gate is sampled once before assembly (same semantics as the desktop open_sync_session)
     let travel_active = service
         .travel_mode_active()
         .await
@@ -65,8 +66,8 @@ pub(crate) async fn open_sync_session(
     Ok((session, service))
 }
 
-/// 打开库 + 迁移 + 构造 service 并解锁（认证失败/未初始化即报错）。
-/// 主密码解析走 service.rs 惯例（`PERSONA_MASTER_PASSWORD` env 优先）。
+/// Open the vault + migrate + build the service and unlock (errors out on auth failure / not initialized).
+/// Master password resolution follows the service.rs convention (`PERSONA_MASTER_PASSWORD` env takes priority).
 pub(crate) async fn open_unlocked(config: &CliConfig, ui: &dyn PromptUi) -> Result<PersonaService> {
     let db = Database::from_file(config.get_database_path())
         .await

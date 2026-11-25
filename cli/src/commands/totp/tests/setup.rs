@@ -168,8 +168,9 @@ async fn setup_then_generate_code_round_trip() {
     std::env::remove_var("PERSONA_MASTER_PASSWORD");
 }
 
-/// HOTP（RFC 4226）全链路：otpauth://hotp/ 录入 → 入库标记 hotp +
-/// initial_counter → 显式计数器出码；watch 与 --counter 的互斥边界。
+/// HOTP (RFC 4226) full path: entry via otpauth://hotp/ → stored with hotp +
+/// initial_counter markers → code generation with an explicit counter; also the
+/// mutual-exclusion boundary between watch and --counter.
 #[tokio::test]
 async fn setup_then_generate_hotp_code_uses_explicit_counter() {
     let _guard = lock_process_env();
@@ -236,7 +237,7 @@ async fn setup_then_generate_hotp_code_uses_explicit_counter() {
             .into_iter()
             .find(|c| c.credential_type == CredentialType::TwoFactor)
             .expect("HOTP credential stored");
-        // 入库形状：hotp=Some(true) + URI 的 counter 作为初始计数器
+        // Stored shape: hotp=Some(true) + the URI's counter as the initial counter
         match service
             .get_credential_data(&cred.id)
             .await
@@ -254,7 +255,7 @@ async fn setup_then_generate_hotp_code_uses_explicit_counter() {
         cred.id
     };
 
-    // 显式计数器出码（RFC 4226 附录 D 向量由 core 层锁定）
+    // Code generation with an explicit counter (RFC 4226 Appendix D vectors are locked in at the core layer)
     generate_codes(
         &config,
         &crate::utils::prompt::TerminalUi,
@@ -264,11 +265,11 @@ async fn setup_then_generate_hotp_code_uses_explicit_counter() {
     )
     .await
     .expect("counter 1 code generated");
-    // 缺省计数器 = 入库的 initial_counter
+    // Default counter = the stored initial_counter
     generate_codes(&config, &crate::utils::prompt::TerminalUi, id, false, None)
         .await
         .expect("initial counter code generated");
-    // watch 与 HOTP 互斥
+    // watch and HOTP are mutually exclusive
     let err = generate_codes(&config, &crate::utils::prompt::TerminalUi, id, true, None)
         .await
         .expect_err("watch must be rejected for HOTP");
@@ -278,7 +279,7 @@ async fn setup_then_generate_hotp_code_uses_explicit_counter() {
         err
     );
 
-    // --counter 对时间型 TOTP 条目报错，而不是被静默忽略
+    // --counter errors on time-based TOTP entries instead of being silently ignored
     setup_totp(
         &config,
         &crate::utils::prompt::TerminalUi,
@@ -466,8 +467,9 @@ async fn setup_totp_applies_overrides_and_display_name_precedence() {
     std::env::remove_var("PERSONA_MASTER_PASSWORD");
 }
 
-/// Steam Guard 录入端到端：坏密钥快速失败；正常录入后数据/元数据/
-/// URL 绑定齐全，且 Code 子命令可对 GameToken 凭据出码。
+/// Steam Guard entry end-to-end: a bad key fails fast; a normal entry has
+/// data/metadata/URL bindings all in place, and the Code subcommand can
+/// generate codes for GameToken credentials.
 #[tokio::test]
 async fn setup_steam_token_stores_game_token_and_code_subcommand_reads_it() {
     let _guard = lock_process_env();

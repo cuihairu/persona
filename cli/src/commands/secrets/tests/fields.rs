@@ -1,6 +1,6 @@
 use super::*;
 
-// ---- 字段词汇表（纯函数全分支走查） ----
+// ---- Field vocabulary (walking every branch of the pure functions) ----
 
 #[test]
 fn extract_and_field_tables_cover_every_variant() {
@@ -10,19 +10,20 @@ fn extract_and_field_tables_cover_every_variant() {
         let fields = data_fields_of(data);
         assert!(!fields.is_empty(), "{kind} must list its vocabulary");
         for field in fields {
-            // 命中字段且样本全 Some → 必取到值；各类型的值分支全走一遍
+            // A hit with an all-Some sample → a value must be produced; walks every type's value branches
             let value = extract_data_field(data, field)
                 .unwrap_or_else(|e| panic!("{kind}/{field} listed but errored: {e}"));
             assert!(value.is_some(), "{kind}/{field} unset in sample");
         }
-        // 词汇表之外的字段 → 各类型自己的 _ 分支 → Ok(None)
+        // A field outside the vocabulary → each type's own `_` branch → Ok(None)
         assert_eq!(
             extract_data_field(data, "no_such_field").unwrap(),
             None,
             "{kind} unknown field must read as absent"
         );
-        // 主秘密别名必须落在该类型词汇表内；BankCard 无主秘密别名
-        // （resolve 走"无主秘密字段"分支），只查词汇表
+        // The primary secret alias must be inside the type's vocabulary; BankCard has no
+        // primary secret alias (resolve takes the "no primary secret field" branch), so
+        // only the vocabulary is checked
         if let Some(primary) = primary_secret_field(data) {
             assert!(
                 fields.contains(&primary),
@@ -30,7 +31,7 @@ fn extract_and_field_tables_cover_every_variant() {
             );
         }
     }
-    // 无主秘密别名的类型（resolve 会报 no primary secret field）
+    // Types without a primary secret alias (resolve reports no primary secret field)
     let bank_card = samples
         .iter()
         .find(|(k, _)| *k == "bank_card")
@@ -41,7 +42,7 @@ fn extract_and_field_tables_cover_every_variant() {
         "bank_card must have no primary secret alias"
     );
 
-    // 无词汇/无主秘密的类型（Raw 命中两个 catch-all 与未知字段分支）
+    // Types with no vocabulary / no primary secret (Raw hits both catch-alls and the unknown-field branch)
     assert_eq!(data_fields_of(&CredentialData::Raw(vec![])), &[] as &[&str]);
     assert_eq!(primary_secret_field(&CredentialData::Raw(vec![])), None);
     assert_eq!(
@@ -63,7 +64,7 @@ fn extract_data_field_unset_optional_fields_are_errors_not_empty_strings() {
         let err = extract_data_field(&api, field).unwrap_err();
         assert!(format!("{err:#}").contains("is not set"), "{err}");
     }
-    // 非字符串化字段（port 数字 → to_string 分支）也走统一出口
+    // Non-string fields (a port number → the to_string branch) also go through the unified exit
     let mut server = ServerConfigData {
         hostname: "h".into(),
         ip_address: None,
@@ -93,7 +94,7 @@ async fn resolve_metadata_unset_url_and_notes_bail() {
     let mut service = crate::commands::service::new_service(db).await.unwrap();
     service.authenticate_user("master-pin").await.unwrap();
 
-    // deploy（ApiKey）未设置 url / notes：缺省元数据同样拒绝空串
+    // deploy (ApiKey) with url / notes unset: missing metadata likewise rejects an empty string
     for field in ["url", "notes"] {
         let err = resolve_ref(
             &service,
@@ -135,7 +136,7 @@ async fn secret_alias_without_primary_lists_valid_fields() {
         .await
         .unwrap();
 
-    // BankCard 没有主秘密别名：报错要列出合法字段
+    // BankCard has no primary secret alias: the error must list the valid fields
     let err = execute_with(
         resolve_args(&["work/bank/secret"]),
         &config,

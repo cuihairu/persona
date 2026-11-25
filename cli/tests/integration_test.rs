@@ -688,12 +688,12 @@ fn test_ssh_run_injects_agent_socket_from_state_dir() -> Result<()> {
 }
 
 // ---------------------------------------------------------------------------
-// 审计事件上报（PERSONA_SERVER_URL + PERSONA_SERVER_TOKEN）端到端
+// Audit event reporting (PERSONA_SERVER_URL + PERSONA_SERVER_TOKEN) end to end
 // ---------------------------------------------------------------------------
 
 use std::sync::{Arc, Mutex};
 
-/// 单请求上报捕获：请求行 + authorization/content-encoding 头 + body。
+/// Single-request report capture: request line + authorization/content-encoding headers + body.
 struct CapturedRequest {
     request_line: String,
     authorization: String,
@@ -701,7 +701,7 @@ struct CapturedRequest {
     body: String,
 }
 
-/// 头部完整且 body 读满 Content-Length 即收全（上报 JSON body 可能分片）。
+/// The request is fully received once the headers are complete and the body has read up to Content-Length (the reported JSON body may be fragmented).
 fn request_complete(buf: &[u8]) -> bool {
     let Some(pos) = buf.windows(4).position(|w| w == b"\r\n\r\n") else {
         return false;
@@ -720,8 +720,9 @@ fn request_complete(buf: &[u8]) -> bool {
     }
 }
 
-/// 读取并解析一个请求，回 202，把捕获写进共享 log（std 线程版假服务器，
-/// 与 core/src/events/server_sink.rs 的 tokio 版同型）。
+/// Read and parse one request, reply 202, and append the capture to the shared
+/// log (a std-thread fake server, shaped like the tokio version in
+/// core/src/events/server_sink.rs).
 fn serve_one(mut stream: std::net::TcpStream, log: Arc<Mutex<Vec<CapturedRequest>>>) {
     use std::io::{Read, Write};
     let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(2)));
@@ -777,16 +778,17 @@ fn audit_events_reported_when_server_env_configured() -> Result<()> {
     let log = Arc::new(Mutex::new(Vec::<CapturedRequest>::new()));
     let thread_log = log.clone();
     std::thread::spawn(move || {
-        // 测试进程生命周期内逐个 accept；足够收完 init 的上报
+        // Accept one at a time for the test process's lifetime; enough to collect init's reports
         for stream in listener.incoming().flatten() {
             serve_one(stream, thread_log.clone());
         }
     });
 
     let temp_dir = tempdir()?;
-    // init 必须实际建户（-e + --master-password → initialize_user 内部
-    // log_audit）才有审计事件可报；--yes 无 -e 时不构造 service、零事件。
-    // 经 main 尾部 stop() 最终 flush 上报。
+    // init must actually create a user (-e + --master-password → log_audit inside
+    // initialize_user) for there to be audit events to report; --yes without -e
+    // builds no service and emits zero events.
+    // The final flush is reported via the stop() at the end of main.
     Command::cargo_bin("persona")?
         .arg("init")
         .arg("--path")
@@ -817,7 +819,7 @@ fn audit_events_reported_when_server_env_configured() -> Result<()> {
         requests[0].request_line
     );
     assert_eq!(requests[0].authorization, "Bearer dev");
-    // init 批远小于 1 KiB 阈值 → 明文直发（压缩路径由 core 测试覆盖）
+    // The init batch is far below the 1 KiB threshold → sent as plaintext (the compression path is covered by core tests)
     assert!(
         requests[0].content_encoding.is_empty(),
         "small batch must go plaintext, got content-encoding: {}",
@@ -838,7 +840,7 @@ fn event_reporting_disabled_when_token_missing() -> Result<()> {
     let addr = listener.local_addr()?;
 
     let temp_dir = tempdir()?;
-    // 只设 URL 缺 token → warn 并禁用，命令照常成功但没有任何上报
+    // URL set but token missing → warn and disable; the command still succeeds but nothing is reported
     Command::cargo_bin("persona")?
         .arg("init")
         .arg("--path")

@@ -6,8 +6,8 @@ pub(super) struct SyncPushNowRequest {
     pub(super) user_gesture: bool,
 }
 
-/// `sync_push_now_response`：与 core `SyncNowReport` 同字段的桥投影
-/// （核心类型未实现 Serialize，桥侧镜像计数）。
+/// `sync_push_now_response`: a bridge projection sharing the field names of core
+/// `SyncNowReport` (the core type does not implement Serialize, so the bridge mirrors the counts).
 #[derive(Debug, Serialize)]
 pub(super) struct SyncPushNowPayload {
     pub(super) pulled: usize,
@@ -18,12 +18,15 @@ pub(super) struct SyncPushNowPayload {
     pub(super) backfilled: u64,
 }
 
-/// 立即同步（M5 批3：扩展侧新增/编辑走既有 `save_credential` 落主库，
-/// 本 op 把存量+增量推上云）。与桌面 `sync_now` 同一 core 编排
-/// （`SyncSession::open` → backfill → run_cycle），差异只在两点：
-/// - master 密钥来自桥锁态（`PERSONA_MASTER_PASSWORD` 解锁），锁定即拒；
-/// - **不挂捕获缝**——桥一请求一进程，缝随进程消亡没有意义；本请求
-///   之外经桥落库的写入由下一轮 `backfill_existing` 幂等补齐。
+/// Sync now (M5 batch 3: extension-side additions/edits land in the primary vault via the
+/// existing `save_credential`, and this op pushes the backlog + increments up to the cloud).
+/// The same core orchestration as the desktop `sync_now` (`SyncSession::open` → backfill →
+/// run_cycle), differing in only two points:
+/// - the master key comes from the bridge lock state (unlocked via `PERSONA_MASTER_PASSWORD`);
+///   while locked it refuses;
+/// - **no capture seam is hung** — one request per bridge process, so a seam dying with the
+///   process is meaningless; writes made outside this request through the bridge are
+///   reconciled idempotently by the next round of `backfill_existing`.
 pub(super) async fn run_sync_push_now(db_path: &Path) -> Result<SyncPushNowPayload> {
     let (session, service) = open_bridge_sync_session(db_path).await?;
     let master = service
@@ -52,10 +55,11 @@ pub(super) async fn run_sync_push_now(db_path: &Path) -> Result<SyncPushNowPaylo
 pub(super) type BridgeSyncSession =
     persona_core::sync::runtime::SyncSession<persona_core::sync::remote::HttpSyncRemote>;
 
-/// sync_push_now / sync_resolve_conflict 共用的会话装配：配置段错误分类
-/// 最先（便宜的错误先报，也不必先解锁）→ keyring 身份/令牌 → 解锁
-/// （桥锁态）→ travel 闸采样 → `SyncSession::open`。与桌面
-/// `open_sync_session` 同语义；service 随返回值借出（master 从它借）。
+/// The session assembly shared by sync_push_now / sync_resolve_conflict: config-section
+/// error classification first (cheap errors first, and unlocking is not even needed yet) →
+/// keyring identity/token → unlock (bridge lock state) → travel-gate sampling →
+/// `SyncSession::open`. Same semantics as the desktop `open_sync_session`; the service is
+/// lent out with the return value (master is borrowed from it).
 pub(super) async fn open_bridge_sync_session(
     db_path: &Path,
 ) -> Result<(BridgeSyncSession, PersonaService)> {
@@ -74,7 +78,7 @@ pub(super) async fn open_bridge_sync_session(
     let (service, _) = open_unlocked_service(db_path).await?;
     let db = open_db(db_path).await?;
     db.migrate().await?;
-    // travel 闸在装配前采样一次（与桌面 open_sync_session 同语义）
+    // The travel gate is sampled once before assembly (same semantics as the desktop open_sync_session)
     let travel_active = service
         .travel_mode_active()
         .await
@@ -104,15 +108,16 @@ pub(super) struct SyncResolveConflictPayload {
     pub(super) resolved: bool,
 }
 
-/// 冲突裁决（对齐桌面 SyncConflictsModal 的「采纳某版本」语义）：
-/// `adopt_op_id` 是并发副本（同 lamport、异 device）的 op id；采纳后
-/// 其余版本淘汰出视图（重复裁决/未知 op → NotFound，与 core 同话术）。
+/// Conflict resolution (aligning with the desktop SyncConflictsModal's "adopt a version"
+/// semantics): `adopt_op_id` is the op id of a concurrent replica (same lamport, different
+/// device); after adoption the remaining versions are evicted from the view (duplicate
+/// resolution/unknown op → NotFound, the same wording as core).
 pub(super) async fn run_sync_resolve_conflict(
     db_path: &Path,
     item_id: &str,
     adopt_op_id: &str,
 ) -> Result<SyncResolveConflictPayload> {
-    // UUID 解析在会话装配之前（便宜的错误先报，免 keyring 即可锚定）
+    // UUID parsing happens before session assembly (cheap errors first, and classification can be anchored without the keyring)
     let item_uuid = uuid::Uuid::parse_str(item_id)
         .map_err(|_| anyhow!("invalid_payload: item_id is not a UUID"))?;
     let adopt_uuid = uuid::Uuid::parse_str(adopt_op_id)

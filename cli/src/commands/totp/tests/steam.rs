@@ -8,28 +8,28 @@ async fn ma_file_collection_handles_file_dir_and_missing_paths() {
     let file = dir.path().join("one.maFile");
     std::fs::write(&file, b"{}").unwrap();
 
-    // 单文件直通
+    // Single file passes through directly
     assert_eq!(collect_ma_file_paths(&file).unwrap(), vec![file.clone()]);
-    // 目录：列出其中全部 .maFile
+    // Directory: list all .maFiles inside it
     let second = dir.path().join("two.maFile");
     std::fs::write(&second, b"{}").unwrap();
     let mut listed = collect_ma_file_paths(dir.path()).unwrap();
     listed.sort();
     assert_eq!(listed, vec![file, second]);
-    // 不存在的路径
+    // Nonexistent path
     let missing = dir.path().join("nope").join("x.maFile");
     let err = collect_ma_file_paths(&missing).unwrap_err();
     assert!(err.to_string().contains("does not exist"), "{err}");
 
-    // 空目录在 collect 层即报错（因此 import 的 "Nothing to import"
-    // 兜底分支实际不可达，属防御性代码）
+    // An empty directory already errors at the collect layer (so the import
+    // "Nothing to import" fallback branch is actually unreachable, defensive code only)
     let empty = TempDir::new().unwrap();
     let err = collect_ma_file_paths(empty.path()).unwrap_err();
     assert!(err.to_string().contains("No .maFile files found"), "{err}");
 }
 
-/// 解析阶段在解锁库之前：全部文件坏掉时直接报首个失败，
-/// 不触碰 workspace（config 无需真实库）。
+/// The parse phase runs before unlocking the vault: when every file is bad, report
+/// the first failure right away without touching the workspace (config needs no real vault).
 #[tokio::test]
 async fn import_steam_mafiles_reports_first_unparseable_file() {
     let dir = TempDir::new().unwrap();
@@ -57,7 +57,7 @@ async fn import_steam_mafiles_reports_first_unparseable_file() {
     );
 }
 
-/// SDA 形状的 maFile：验证器字段 + Session 会话对象 + 杂项字段。
+/// An SDA-shaped maFile: authenticator fields + a Session object + assorted fields.
 fn sample_mafile_json() -> String {
     r#"{
             "account_name": "alice_steam",
@@ -78,8 +78,9 @@ fn sample_mafile_json() -> String {
     .to_string()
 }
 
-/// 导入端到端：会话字段永不入库；identity_secret/device_id 进加密
-/// 负载；Code 子命令对导入条目按 Steam 类型出码。
+/// Import end-to-end: session fields are never stored; identity_secret/device_id go
+/// into the encrypted payload; the Code subcommand generates codes for imported
+/// entries as the Steam type.
 #[tokio::test]
 async fn import_steam_mafile_stores_verifier_fields_only() {
     let _guard = lock_process_env();
@@ -169,8 +170,9 @@ async fn import_steam_mafile_stores_verifier_fields_only() {
         other => panic!("unexpected data: {:?}", other),
     }
 
-    // 会话内容断言：Session 对象里的高危凭据不得出现在任何入库面
-    // （解密后的负载 + 明文 metadata + username/url）。
+    // Session content assertions: the high-risk credentials inside the Session object
+    // must not appear on any stored surface (decrypted payload + plaintext metadata
+    // + username/url).
     let stored_view = format!(
         "{:?}{:?}{:?}{:?}",
         data, creds[0].metadata, creds[0].username, creds[0].url
@@ -189,7 +191,7 @@ async fn import_steam_mafile_stores_verifier_fields_only() {
     }
     drop(service);
 
-    // 类型分流出码：GameToken 条目走 steam 路由（5 位字母码）
+    // Code generation dispatch by type: GameToken entries go through the steam route (5-letter code)
     generate_codes(
         &config,
         &crate::utils::prompt::TerminalUi,
@@ -203,8 +205,9 @@ async fn import_steam_mafile_stores_verifier_fields_only() {
     std::env::remove_var("PERSONA_MASTER_PASSWORD");
 }
 
-/// 批量导入：坏文件不阻断好文件、退出码报失败；拒绝确认则不入库；
-/// 目录里没有 .maFile、--name 配目录都报错。
+/// Batch import: bad files do not block good ones, and the exit code reports failure;
+/// declining confirmation means nothing is stored; a directory without .maFiles and
+/// --name combined with a directory both error out.
 #[tokio::test]
 async fn import_steam_batch_reports_failures_and_respects_decline() {
     let _guard = lock_process_env();
@@ -215,13 +218,14 @@ async fn import_steam_batch_reports_failures_and_respects_decline() {
     let mafile_dir = dir.path().join("maFiles");
     std::fs::create_dir(&mafile_dir).unwrap();
     std::fs::write(mafile_dir.join("good.maFile"), sample_mafile_json()).unwrap();
-    // 缺 account_name 的坏文件
+    // Bad file missing account_name
     std::fs::write(
         mafile_dir.join("broken.maFile"),
         r#"{"shared_secret": "MDAxMjM0NTY3ODlhYmNkZWZnaGo="}"#,
     )
     .unwrap();
-    // 非 maFile 的 JSON：扩展名过滤本应排除它，但单文件指定时必须拒绝
+    // A JSON file that is not a maFile: the extension filter would normally exclude it,
+    // but when specified as a single file it must be rejected
     std::fs::write(mafile_dir.join("manifest.json"), r#"{"files": []}"#).unwrap();
     {
         let db = Database::from_file(config.get_database_path())
@@ -240,7 +244,7 @@ async fn import_steam_batch_reports_failures_and_respects_decline() {
     }
     std::env::set_var("PERSONA_MASTER_PASSWORD", "master-pin");
 
-    // 批量：好文件导入、坏文件汇报后整体失败（非零退出语义）
+    // Batch: good files are imported, bad files are reported, then the whole thing fails (non-zero exit semantics)
     let err = execute_with(
         TotpArgs {
             command: TotpCommand::ImportSteam {
@@ -261,7 +265,7 @@ async fn import_steam_batch_reports_failures_and_respects_decline() {
         "got: {err}"
     );
 
-    // 尽管整体报失败，好文件已经入库
+    // Despite the overall failure, the good files were stored
     let service = init_service(&config, &crate::utils::prompt::TerminalUi)
         .await
         .unwrap();
@@ -279,7 +283,7 @@ async fn import_steam_batch_reports_failures_and_respects_decline() {
     assert_eq!(creds[0].name, "Steam (alice_steam)");
     drop(service);
 
-    // 目录里只有 manifest.json：扩展名过滤后没有可导入文件
+    // Directory containing only manifest.json: no importable files after the extension filter
     let json_only = dir.path().join("json_only");
     std::fs::create_dir(&json_only).unwrap();
     std::fs::write(json_only.join("manifest.json"), r#"{"files": []}"#).unwrap();
@@ -300,7 +304,7 @@ async fn import_steam_batch_reports_failures_and_respects_decline() {
     .expect_err("directory without .maFile must fail");
     assert!(err.to_string().contains("No .maFile files found"));
 
-    // --name 与目录批量互斥
+    // --name and directory batch are mutually exclusive
     let err = execute_with(
         TotpArgs {
             command: TotpCommand::ImportSteam {
@@ -318,7 +322,7 @@ async fn import_steam_batch_reports_failures_and_respects_decline() {
     .expect_err("--name with a directory must fail");
     assert!(err.to_string().contains("--name is only valid"));
 
-    // 拒绝确认：单个文件解析成功但不落库
+    // Declining confirmation: the single file parses fine but is not stored
     let declined_dir = dir.path().join("declined");
     std::fs::create_dir(&declined_dir).unwrap();
     std::fs::write(
@@ -351,7 +355,7 @@ async fn import_steam_batch_reports_failures_and_respects_decline() {
         .unwrap();
     assert_eq!(creds.len(), 1, "declined file must not be stored");
 
-    // 接受确认后落库
+    // Stored after accepting the confirmation
     execute_with(
         TotpArgs {
             command: TotpCommand::ImportSteam {

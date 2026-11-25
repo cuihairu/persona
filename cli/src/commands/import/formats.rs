@@ -1,5 +1,5 @@
-//! 导入文件格式解析：按扩展名分派 JSON / YAML / CSV，统一产出
-//! `ImportData` 快照。
+//! Import file format parsing: dispatch JSON / YAML / CSV by extension and
+//! produce a uniform `ImportData` snapshot.
 
 use anyhow::{Context, Result};
 use std::path::Path;

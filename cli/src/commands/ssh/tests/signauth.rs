@@ -5,8 +5,9 @@ use super::*;
 // gpg-sign: SSHSIG signing for git commits.
 // ------------------------------------------------------------------
 
-/// 真 ssh-keygen 参照向量（与 core/src/crypto/sshsig.rs 同一份：ed25519
-/// 确定性签名 ⇒ 我们输出正确 ⇔ 与 `ssh-keygen -Y sign` 逐字节一致）。
+/// Real ssh-keygen reference vector (the same one as core/src/crypto/sshsig.rs:
+/// ed25519 signatures are deterministic, so our output is correct iff it is
+/// byte-for-byte identical to `ssh-keygen -Y sign`).
 const REF_SEED: [u8; 32] = [
     0x59, 0xd9, 0x98, 0xd6, 0xdb, 0x19, 0xcc, 0x8f, 0x7f, 0xe2, 0x45, 0xfa, 0x8a, 0x04, 0xe6, 0x10,
     0xd8, 0x84, 0x5d, 0xff, 0x80, 0xdb, 0xec, 0x8d, 0xfc, 0x88, 0x15, 0xe1, 0x8e, 0xa0, 0x83, 0x8d,
@@ -23,7 +24,7 @@ const REF_ARMOR: &str = concat!(
     "-----END SSH SIGNATURE-----\n",
 );
 
-/// 把参照 seed 导入 alice 名下，返回新凭据 id。
+/// Import the reference seed under the given identity and return the new credential id.
 async fn import_reference_key(config: &CliConfig, identity: &str) -> Uuid {
     let ui = ScriptedUi::new().password("master-pin");
     execute_with(
@@ -78,7 +79,7 @@ async fn gpg_sign_output_is_byte_identical_to_ssh_keygen() {
     let msg = dir.path().join("commit-msg");
     std::fs::write(&msg, REF_MESSAGE).unwrap();
 
-    // 默认 -f（保险库唯一 key）+ 默认输出 <file>.sig —— 与 git 调用形状一致
+    // Default -f (the only key in the vault) + default output <file>.sig — the shape git calls it with
     let cred = import_reference_key(&config, "alice").await;
     gpg_sign_via_dispatch(&config, None, &msg, None)
         .await
@@ -90,7 +91,7 @@ async fn gpg_sign_output_is_byte_identical_to_ssh_keygen() {
         "must match ssh-keygen -Y sign byte-for-byte"
     );
 
-    // keyspec = 凭据 UUID → 同样逐字节
+    // keyspec = credential UUID -> likewise byte-for-byte
     gpg_sign_via_dispatch(
         &config,
         Some(cred.to_string()),
@@ -105,7 +106,7 @@ async fn gpg_sign_output_is_byte_identical_to_ssh_keygen() {
     .await
     .expect("signing by credential uuid works");
 
-    // keyspec = 公钥行字面量 / .pub 文件路径
+    // keyspec = public key line literal / .pub file path
     let pub_file = dir.path().join("ref.pub");
     std::fs::write(&pub_file, format!("{REF_PUBLIC_LINE} comment\n")).unwrap();
     for spec in [
@@ -127,7 +128,7 @@ async fn gpg_sign_output_is_byte_identical_to_ssh_keygen() {
         .await
         .expect("keyspec resolves to the reference key");
     }
-    // 非默认 namespace 的产物应当能被 core 的 verify 验过
+    // Output for a non-default namespace should pass core's verify
     let ns_msg = dir.path().join("ns-file");
     std::fs::write(&ns_msg, b"payload").unwrap();
     let ui = ScriptedUi::new().password("master-pin");
@@ -163,7 +164,7 @@ async fn gpg_sign_rejects_bad_mode_keyspec_and_inputs() {
     let msg = dir.path().join("commit-msg");
     std::fs::write(&msg, REF_MESSAGE).unwrap();
 
-    // -Y 只支持 sign（git 不会传别的，但保持与 ssh-keygen 的差异明确）
+    // -Y only supports sign (git never passes anything else, but keep the divergence from ssh-keygen explicit)
     let ui = ScriptedUi::new().password("master-pin");
     let err = execute_with(
         ssh_args(SshSubcommand::GpgSign {
@@ -180,26 +181,26 @@ async fn gpg_sign_rejects_bad_mode_keyspec_and_inputs() {
     .expect_err("non-sign mode must fail");
     assert!(err.to_string().contains("Only `-Y sign`"));
 
-    // 待签文件不存在
+    // File to sign does not exist
     let err = gpg_sign_via_dispatch(&config, None, &dir.path().join("missing"), None)
         .await
         .expect_err("missing file must fail");
     assert!(err.to_string().contains("Cannot read"));
 
-    // 保险库里有两把 key 且未给 -f
+    // Two keys in the vault and no -f given
     import_reference_key(&config, "bob").await;
     let err = gpg_sign_via_dispatch(&config, None, &msg, None)
         .await
         .expect_err("ambiguous vault must fail");
     assert!(err.to_string().contains("pick one with -f"), "{err}");
 
-    // 未知的凭据 UUID
+    // Unknown credential UUID
     let err = gpg_sign_via_dispatch(&config, Some(Uuid::new_v4().to_string()), &msg, None)
         .await
         .expect_err("unknown uuid must fail");
     assert!(err.to_string().contains("not an SSH key"), "{err}");
 
-    // 非 ssh-ed25519 的公钥行
+    // Public key line that is not ssh-ed25519
     let err = gpg_sign_via_dispatch(
         &config,
         Some("ssh-rsa AAAAB3NzaC1yc2E".to_string()),
@@ -212,7 +213,7 @@ async fn gpg_sign_rejects_bad_mode_keyspec_and_inputs() {
         .to_string()
         .contains("neither a credential UUID, nor a readable key file"));
 
-    // 匹配不到任何 vault key 的 ed25519 公钥行
+    // ed25519 public key line matching no vault key
     let err = gpg_sign_via_dispatch(
         &config,
         Some(format!("ssh-ed25519 {}", BASE64.encode([3u8; 51]))),
@@ -226,7 +227,7 @@ async fn gpg_sign_rejects_bad_mode_keyspec_and_inputs() {
         "{err}"
     );
 
-    // 空保险库（所有 identity 的 key 全删）且未给 -f
+    // Empty vault (every identity's keys deleted) and no -f given
     let db = Database::from_file(config.get_database_path())
         .await
         .unwrap();
@@ -272,7 +273,7 @@ async fn gpg_sign_writes_an_ssh_sign_audit_row() {
         .unwrap();
     db.migrate().await.unwrap();
     let repo = persona_core::storage::AuditLogRepository::new(db);
-    // 审计是 inline await 的，直接查即可
+    // The audit write is awaited inline, so the rows can be queried directly
     let rows = repo
         .find_by_action(&persona_core::models::AuditAction::Custom(
             "ssh_sign".to_string(),
@@ -314,20 +315,20 @@ fn authorize_plan_builders_bare_lines_and_quoting() {
     assert!(remove.contains("awk '$2 != \"BBBB\"'"));
     assert!(remove.contains(".persona-tmp"), "tmp rewrite, not mv");
 
-    // blob 会内嵌 awk 双引号程序体——非 base64 字符集必须拒绝
+    // The blob ends up embedded in an awk program body wrapped in double quotes — non-base64 characters must be refused
     assert!(authorized_keys_plan("remove", path, "BB;BB").is_err());
 
     let list = authorized_keys_plan("list", path, "BBBB").unwrap();
     assert!(list.contains("cat \"$HOME/.ssh/authorized_keys\""));
     assert!(list.contains("test -f"));
 
-    // 自定义路径按不可信内容单引号转义
+    // Custom paths are single-quote escaped as untrusted content
     let custom = sh_quote("/srv/keys/a b'c");
     assert_eq!(custom, "'/srv/keys/a b'\\''c'");
     let add_custom = authorized_keys_plan("add", &custom, line).unwrap();
     assert!(add_custom.contains("touch '/srv/keys/a b'\\''c'"));
 
-    // bare 行：去注释/选项，只留 algo + blob；畸形输入原样兜底
+    // Bare line: comments/options stripped, keeping only algo + blob; malformed input falls back verbatim
     assert_eq!(
         bare_public_line("ssh-ed25519 AAAA some comment"),
         "ssh-ed25519 AAAA"
@@ -336,8 +337,8 @@ fn authorize_plan_builders_bare_lines_and_quoting() {
     assert_eq!(bare_public_line("garbage"), "garbage");
 }
 
-/// 假 ssh：把「最后一个参数」（远端脚本）放到沙箱 HOME 里执行——测试
-/// 跑的就是 `authorized_keys_plan` 生成的脚本本身。
+/// Fake ssh: executes the "last argument" (the remote script) inside the sandbox
+/// HOME — the tests run exactly the script that `authorized_keys_plan` generates.
 #[cfg(unix)]
 fn plant_fake_ssh(dir: &TempDir, home: &std::path::Path) -> std::path::PathBuf {
     use std::os::unix::fs::PermissionsExt;
@@ -392,7 +393,7 @@ async fn authorize_round_trip_through_fake_ssh() {
 
     let akey = remote_home.path().join(".ssh/authorized_keys");
 
-    // add → 行写入且与参照公钥完全一致（整形换行）
+    // add -> the line is written and matches the reference public key exactly (with tidied line endings)
     let ui = ScriptedUi::new().password("master-pin");
     run_authorize(&config, &ui, false, false, false, None)
         .await
@@ -402,21 +403,21 @@ async fn authorize_round_trip_through_fake_ssh() {
         REF_PUBLIC_LINE
     );
 
-    // 幂等：再 add 一次仍是同一行、没有重复
+    // Idempotent: adding once more leaves the same single line, with no duplicates
     let ui = ScriptedUi::new().password("master-pin");
     run_authorize(&config, &ui, false, false, false, None)
         .await
         .expect("re-add works");
     assert_eq!(std::fs::read_to_string(&akey).unwrap().lines().count(), 1);
 
-    // list 只读不写
+    // list is read-only, it never writes
     let ui = ScriptedUi::new().password("master-pin");
     run_authorize(&config, &ui, false, true, false, None)
         .await
         .expect("list works");
     assert_eq!(std::fs::read_to_string(&akey).unwrap().lines().count(), 1);
 
-    // remove → 行被删；再 remove 幂等（test -f + awk 空重写）
+    // remove -> the line is deleted; a second remove is idempotent (test -f + awk rewriting an empty file)
     let ui = ScriptedUi::new().password("master-pin");
     run_authorize(&config, &ui, true, false, false, Some(cred))
         .await
@@ -427,7 +428,7 @@ async fn authorize_round_trip_through_fake_ssh() {
         .await
         .expect("re-remove works");
 
-    // 审计行（handler 内 inline await，无需轮询）
+    // Audit rows (awaited inline inside the handler, so no polling is needed)
     let db = Database::from_file(config.get_database_path())
         .await
         .unwrap();
@@ -439,7 +440,7 @@ async fn authorize_round_trip_through_fake_ssh() {
         ))
         .await
         .unwrap();
-    // add ×2 + list + remove ×2 共 5 行
+    // add x2 + list + remove x2 = 5 rows in total
     assert!(
         rows.len() >= 5,
         "every authorize action audited: {}",
@@ -485,14 +486,14 @@ async fn authorize_rejections_and_dry_run() {
         .await
     }
 
-    // 身份名下没有任何 SSH key
+    // No SSH keys under the identity
     let ui = ScriptedUi::new().password("master-pin");
     let err = run_authorize(&config, &ui, "bob", None)
         .await
         .expect_err("keyless identity must fail");
     assert!(err.to_string().contains("has no SSH keys"), "{err}");
 
-    // 两把 key 且未给 --id
+    // Two keys and no --id given
     let key_a = import_reference_key(&config, "alice").await;
     import_reference_key(&config, "alice").await;
     let ui = ScriptedUi::new().password("master-pin");
@@ -501,7 +502,7 @@ async fn authorize_rejections_and_dry_run() {
         .expect_err("ambiguous identity must fail");
     assert!(err.to_string().contains("pick one with --id"), "{err}");
 
-    // 未知 --id
+    // Unknown --id
     let ui = ScriptedUi::new().password("master-pin");
     let err = run_authorize(&config, &ui, "alice", Some(Uuid::new_v4()))
         .await
@@ -511,7 +512,7 @@ async fn authorize_rejections_and_dry_run() {
         "{err}"
     );
 
-    // dry-run：ssh 二进制指向不存在也不报错（不 spawn），真实跑才报
+    // dry-run: even a nonexistent ssh binary does not error (nothing gets spawned); a real run would
     let _ssh = EnvVarGuard::set("PERSONA_SSH_BINARY", dir.path().join("no-such-ssh"));
     let ui = ScriptedUi::new().password("master-pin");
     execute_with(

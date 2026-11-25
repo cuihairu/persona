@@ -1,11 +1,11 @@
 use super::*;
 
-// ---- sync_push_now（协议 v7，M5 批3）----
+// ---- sync_push_now (protocol v7, M5 batch 3) ----
 
-/// sync_push_now 的 user_gesture 门禁：写路径推云，无手势 → 拒
-/// （门禁在会话之后、任何 keyring/网络动作之前）。
+/// The user_gesture gate of sync_push_now: the write path pushes to the cloud; no gesture
+/// → refuse (the gate sits after the session and before any keyring/network action).
 #[tokio::test]
-#[allow(clippy::await_holding_lock)] // 与既有 env 门禁测试同口径：ENV_LOCK 全程互斥
+#[allow(clippy::await_holding_lock)] // same terms as the existing env-gate tests: ENV_LOCK is exclusive for the whole duration
 async fn sync_push_now_requires_user_gesture() {
     let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let (_dir, db_path, state_dir, _identity) = seeded_bridge().await;
@@ -28,10 +28,10 @@ async fn sync_push_now_requires_user_gesture() {
     );
 }
 
-/// sync_resolve_conflict 的 user_gesture 门禁：裁决覆盖落选副本，
-/// 写操作，无手势 → 拒。
+/// The user_gesture gate of sync_resolve_conflict: the resolution overwrites the losing
+/// replica — a write operation; no gesture → refuse.
 #[tokio::test]
-#[allow(clippy::await_holding_lock)] // 与既有 env 门禁测试同口径：ENV_LOCK 全程互斥
+#[allow(clippy::await_holding_lock)] // same terms as the existing env-gate tests: ENV_LOCK is exclusive for the whole duration
 async fn sync_resolve_conflict_requires_user_gesture() {
     let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let (_dir, db_path, state_dir, _identity) = seeded_bridge().await;
@@ -58,8 +58,8 @@ async fn sync_resolve_conflict_requires_user_gesture() {
     );
 }
 
-/// 非 UUID 的 item_id → invalid_payload（解析在会话装配之前，免
-/// keyring/网络即可锚定分类）。
+/// A non-UUID item_id → invalid_payload (parsing happens before session assembly, so the
+/// classification can be anchored without the keyring/network).
 #[tokio::test]
 async fn sync_resolve_conflict_rejects_malformed_ids() {
     let (_dir, db_path, state_dir, _identity) = seeded_bridge().await;
@@ -83,8 +83,8 @@ async fn sync_resolve_conflict_rejects_malformed_ids() {
     assert!(err.to_string().starts_with("invalid_payload"), "got: {err}");
 }
 
-/// 服务器未配置 → sync_not_configured（配置解析在解锁/信封之前，
-/// 免解锁免 keyring 即可锚定分类——与 sync_connect 同口径）。
+/// Server not configured → sync_not_configured (config parsing comes before unlock/envelope,
+/// so the classification can be anchored without unlock or the keyring — the same terms as sync_connect).
 #[tokio::test]
 async fn sync_push_now_fails_closed_when_server_not_configured() {
     let (_dir, db_path, state_dir, _identity) = seeded_bridge().await;
@@ -107,11 +107,12 @@ async fn sync_push_now_fails_closed_when_server_not_configured() {
     );
 }
 
-// ---- 线协议锚定：请求/负载的 serde 行为（run_sync_* 正路径需真 keyring
-// 与同步服务器，本组用直接反/序列化锚定 wire 契约，覆盖 derive 分支）----
+// ---- Wire-protocol anchoring: the serde behavior of requests/payloads (the run_sync_*
+// happy paths need a real keyring and sync server, so this group anchors the wire contract
+// with direct (de)serialization, covering the derive branches) ----
 
-/// SyncPushNowRequest.user_gesture 缺省 false：扩展省略字段即「无手势」，
-/// 与 handle_request 的门禁（user_gesture_required）闭环。
+/// SyncPushNowRequest.user_gesture defaults to false: the extension omitting the field means
+/// "no gesture", closing the loop with handle_request's gate (user_gesture_required).
 #[test]
 fn sync_push_now_request_defaults_gesture_to_false() {
     let req: SyncPushNowRequest = serde_json::from_value(serde_json::json!({})).unwrap();
@@ -125,8 +126,8 @@ fn sync_push_now_request_defaults_gesture_to_false() {
     assert!(req.user_gesture);
 }
 
-/// SyncResolveConflictRequest 三字段解析：两个 UUID 必填，user_gesture
-/// 同 false 缺省（snake_case wire 形态）。
+/// SyncResolveConflictRequest three-field parsing: both UUIDs are required, and
+/// user_gesture likewise defaults to false (snake_case wire shape).
 #[test]
 fn sync_resolve_conflict_request_parses_ids_and_defaults_gesture() {
     let req: SyncResolveConflictRequest =
@@ -139,9 +140,9 @@ fn sync_resolve_conflict_request_parses_ids_and_defaults_gesture() {
     );
 }
 
-/// SyncPushNowPayload 的 Serialize 与 core SyncNowReport 逐字段对齐——
-/// 扩展侧按同名键读计数，键名/顺序漂移在此红掉（响应负载 derive 只在
-/// 会话正路径才被执行，单测锚定）。
+/// SyncPushNowPayload's Serialize is aligned field-by-field with core SyncNowReport — the
+/// extension reads the counts by the same key names, so any key-name/order drift goes red
+/// here (the response payload's derive only runs on the session happy path; unit tests pin it).
 #[test]
 fn sync_push_now_payload_serializes_all_report_fields() {
     let payload = SyncPushNowPayload {
@@ -161,8 +162,9 @@ fn sync_push_now_payload_serializes_all_report_fields() {
     assert_eq!(json["backfilled"], 8);
 }
 
-/// 非 UUID 的 adopt_op_id → invalid_payload：与 item_id 同前置校验
-/// （解析在会话装配之前），但各自独立分支（正路径不可达，免 keyring）。
+/// A non-UUID adopt_op_id → invalid_payload: the same front validation as item_id (parsed
+/// before session assembly), but an independent branch (unreachable on the happy path, no
+/// keyring needed).
 #[tokio::test]
 async fn sync_resolve_conflict_rejects_malformed_adopt_op_id() {
     let (_dir, db_path, state_dir, _identity) = seeded_bridge().await;

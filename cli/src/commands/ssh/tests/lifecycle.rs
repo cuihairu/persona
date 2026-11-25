@@ -196,14 +196,17 @@ fn stop_agent_handles_missing_empty_and_live_pid_files() {
     stop_agent().expect("stop with an empty pid file works");
 
     // A live process is stopped and the state files are cleaned up.
-    // 通过 sh 的 $0 位置传入 "persona-ssh-agent"，让 /proc/<pid>/cmdline
-    // 含 agent 名（否则会按"非 agent 进程"拒绝，无法走到杀进程分支）。
-    // 不用改名软链：本机 coreutils 是按 argv[0] 分发的单二进制，改 argv[0]
-    // 会直接拒绝运行（Security violation）。
-    // 注意必须是复合命令（`sleep 5; :`）：dash/bash 对单一简单命令的 -c
-    // 会 exec 掉 shell（sh -c 'sleep 5' → 进程变 sleep），cmdline 丢失
-    // agent 名，stop_agent 判 Refused 不清文件——一个加载重载机器上的
-    // 时序 flake（本机 /bin/sh 就是 dash）。
+    // Pass "persona-ssh-agent" through sh's $0 so that /proc/<pid>/cmdline
+    // contains the agent name (otherwise the call is refused as a "non-agent
+    // process" and the kill branch is never reached).
+    // Avoid a renamed symlink: local coreutils ship as a single binary
+    // dispatched by argv[0], and changing argv[0] makes it refuse to run
+    // outright (Security violation).
+    // Note the command must be compound (`sleep 5; :`): for a single simple
+    // command, dash/bash -c execs away the shell (sh -c 'sleep 5' turns the
+    // process into sleep), the cmdline loses the agent name, and stop_agent
+    // reports Refused without clearing files — a timing flake on loaded
+    // machines (this machine's /bin/sh is dash).
     let mut child = std::process::Command::new("sh")
         .arg("-c")
         .arg("sleep 5; :")
@@ -666,12 +669,14 @@ async fn list_skips_non_ssh_keys_and_agent_resolution_plants_binary() {
     assert_eq!(resolved, planted);
 }
 
-// ---- 纯函数/只读分支锚定（Windows 上 agent 正路径是命名的管道与
-// 真实守护进程，本节用无 I/O 或只读状态文件的方式覆盖平台分支）----
+// ---- Anchor the pure-function/read-only branches (on Windows the agent's
+// happy path involves a named pipe and a real daemon, so this section covers
+// the platform branches with no I/O or read-only state files) ----
 
-/// format_sock_export_lines 的平台契约：Linux 单行 `export`；Windows
-/// 输出 PowerShell 与 cmd.exe 两族（各带注释头）。纯函数、无 I/O，
-/// 全部平台可跑（Windows 分支由本文件在 CI 上锁定）。
+/// Platform contract of format_sock_export_lines: a single `export` line on
+/// Linux; on Windows it emits both the PowerShell and cmd.exe families (each
+/// with a comment header). Pure function, no I/O, runnable on all platforms
+/// (the Windows branches are pinned down by this file in CI).
 #[test]
 fn format_sock_export_lines_matches_platform_contract() {
     let lines = format_sock_export_lines("/tmp/persona-agent.sock");
@@ -690,9 +695,10 @@ fn format_sock_export_lines_matches_platform_contract() {
     }
 }
 
-/// agent_status：空状态目录 + 无 SSH_AUTH_SOCK → 报「未运行」且成功
-/// （缺文件不是错误）。跨平台：Windows 上 query_target 为空即跳过
-/// 命名管道查询（真实 agent 管道是外部 I/O，不在单测范围）。
+/// agent_status: empty state dir + no SSH_AUTH_SOCK -> reports "not running"
+/// and succeeds (a missing file is not an error). Cross-platform: on Windows an
+/// empty query_target skips the named pipe query (a real agent pipe is external
+/// I/O and out of scope for unit tests).
 #[tokio::test]
 async fn agent_status_reports_not_running_when_state_dir_empty() {
     let _env = lock_process_env();
@@ -706,9 +712,10 @@ async fn agent_status_reports_not_running_when_state_dir_empty() {
         .expect("empty state dir reports not running");
 }
 
-/// agent_status：状态目录有 sock+pid 文件 → 读两份文件并报运行中。
-/// query 落空被静默吞掉（无真实 agent）；「真 agent 有应答」分支由
-/// unix 实机测试覆盖，Windows 命名管道应答属外部 I/O。
+/// agent_status: the state dir has sock+pid files -> reads both and reports
+/// running. A failed query is swallowed silently (no real agent); the
+/// "real agent responds" branch is covered by the unix live tests, and
+/// Windows named pipe responses count as external I/O.
 #[tokio::test]
 async fn agent_status_reads_state_files_when_present() {
     let _env = lock_process_env();

@@ -9,7 +9,7 @@ use super::super::host::current_or_stored_agent_socket;
 use super::super::keys::{decode_seed, encode_ssh_ed25519_public};
 use super::*;
 
-/// `decode_seed` 的两个守卫分支：非法 base64、种子长度不是 32 字节。
+/// Two guard branches of `decode_seed`: invalid base64 and a seed that is not 32 bytes.
 #[test]
 fn decode_seed_rejects_non_base64_and_wrong_length() {
     let key = |private_key: String| SshKeyData {
@@ -187,7 +187,7 @@ fn stop_agent_pid_nonexistent_is_already_gone() {
 #[cfg(windows)]
 #[test]
 fn stop_agent_pid_nonexistent_is_already_gone() {
-    // tasklist 探测不到进程 → 按"陈旧 pidfile"处理（与 Unix 一致）。
+    // tasklist cannot find the process -> treated as a "stale pidfile" (same as on Unix).
     assert_eq!(
         stop_agent_pid("99999999").unwrap(),
         StopOutcome::AlreadyGone
@@ -233,7 +233,7 @@ async fn serve_raw_reply(listener: tokio::net::UnixListener, payload: Vec<u8>) {
 }
 
 /// Mock agent that lies about the response length (u32::MAX), then closes.
-/// 客户端必须在分配前拒绝（BUG-1 同法长度上限），否则会尝试分配 4GiB。
+/// The client must reject before allocating (same length cap as BUG-1), otherwise it would try to allocate 4GiB.
 #[cfg(unix)]
 async fn serve_oversized_length(listener: tokio::net::UnixListener) {
     use byteorder::{BigEndian, ByteOrder};
@@ -271,10 +271,10 @@ async fn query_agent_identities_rejects_oversized_length() {
 #[cfg(unix)]
 #[test]
 fn stop_agent_pid_verification_distinguishes_stale_and_reused() {
-    // 一个必然不存在的 PID：/proc 下无此进程 → None（陈旧 pidfile 判据）。
+    // A PID that surely does not exist: no such process under /proc -> None (the stale pidfile criterion).
     assert_eq!(is_persona_agent_process("999999999"), None);
-    // 自己这个测试进程存在，但不是 persona-ssh-agent → Some(false)
-    // （PID 被复用时的拒绝判据）。
+    // This test process exists but is not persona-ssh-agent -> Some(false)
+    // (the refusal criterion for a reused PID).
     let me = std::process::id().to_string();
     assert_eq!(is_persona_agent_process(&me), Some(false));
 }

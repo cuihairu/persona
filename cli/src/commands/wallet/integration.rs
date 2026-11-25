@@ -1324,7 +1324,7 @@ async fn sign_refuses_address_poisoning_spoof_until_confirmed() {
     .unwrap();
     insert_wallet(&config, &signer).await;
 
-    // 仿冒地址：与钱包自身地址前 6 + 后 6 字符相同、中段不同
+    // Impersonation address: matches the wallet's own address in the first 6 + last 6 characters, differing in the middle
     let own = signer.addresses.first().unwrap().address.clone();
     assert!(own.len() >= 12);
     let spoof = format!(
@@ -1337,7 +1337,7 @@ async fn sign_refuses_address_poisoning_spoof_until_confirmed() {
 
     std::env::set_var("PERSONA_WALLET_PASSWORD", password);
 
-    // 拦截：不输口令即被拒（检查在口令 prompt 之前）
+    // Blocked: refused without a passphrase being typed (the check runs before the passphrase prompt)
     let err = handle_wallet_with(
         tx_args(
             "poison-signer",
@@ -1356,10 +1356,10 @@ async fn sign_refuses_address_poisoning_spoof_until_confirmed() {
     .await
     .expect_err("address-poisoning spoof must be refused");
     assert!(err.to_string().contains("Address-poisoning check refused"));
-    // 内层 PersonaError 文本在 anyhow 的全链显示里（与文件内其他断言同口径）
+    // The inner PersonaError text shows up in anyhow's full-chain display (same terms as the other assertions in this file)
     assert!(format!("{:#}", err).contains("address-poisoning spoof"));
 
-    // 显式确认后放行
+    // Allowed through after an explicit confirmation
     let args = WalletArgs {
         command: WalletCommand::CreateTransaction {
             wallet_identifier: "poison-signer".to_string(),

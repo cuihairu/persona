@@ -1,4 +1,4 @@
-//! 统计与状态看板：策略级统计、系统级统计与当前会话状态展示。
+//! Statistics and status dashboard: per-policy statistics, system-level statistics, and the current session status.
 
 use anyhow::{anyhow, Result};
 use persona_core::auth::session::{AutoLockConfig, SessionManager};

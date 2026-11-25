@@ -18,9 +18,10 @@ pub(crate) async fn generate_key(
             .bold()
     );
 
-    // 生成先行：未知类型在解锁 workspace 之前就报错。ed25519 走库内
-    // 既有约定（BASE64 seed），rsa/ecdsa 走 ssh_generate（明文 PEM，
-    // 封存由 per-item key 负责）——与导入通道的双格式约定一致。
+    // Generate first: unknown key types error out before the workspace is
+    // unlocked. ed25519 uses the core's existing convention (BASE64 seed);
+    // rsa/ecdsa go through ssh_generate (plaintext PEM, sealed by the
+    // per-item key) — matching the dual-format convention of the import path.
     let (ssh_data, public_line, fingerprint) = if key_type == "ed25519" {
         use ed25519_dalek::SigningKey;
         use rand::Rng;
@@ -61,7 +62,7 @@ pub(crate) async fn generate_key(
     let service = ensure_service(config, ui).await?;
     let identity = resolve_identity(&service, identity_name).await?;
 
-    // 条目名回退与 import 通道一致：--name > comment > 既有兜底
+    // Entry name fallback, same as the import path: --name > comment > existing default
     let name = label
         .or_else(|| (!comment.is_empty()).then(|| comment.clone()))
         .unwrap_or_else(|| format!("SSH Key ({})", identity.name));
@@ -249,10 +250,11 @@ pub(crate) async fn import_seed(
     Ok(())
 }
 
-/// 导入私钥文件（`persona ssh import-file --identity … --file ~/.ssh/id_ed25519`）。
-/// 格式自动识别（OpenSSH 容器 / PKCS#8 / PKCS#1 / SEC1，见 core 的
-/// ssh_import）；入库口径：私钥存解锁后的 OpenSSH PEM（per-item key
-/// 封存在 vault 层），公钥行/类型/指纹解析自同一把钥。
+/// Import a private key file (`persona ssh import-file --identity … --file ~/.ssh/id_ed25519`).
+/// The format is auto-detected (OpenSSH container / PKCS#8 / PKCS#1 / SEC1, see
+/// core's ssh_import); storage convention: the private key is stored as the
+/// unlocked OpenSSH PEM (per-item key sealing happens in the vault layer), and
+/// the public line/type/fingerprint are parsed from that same key.
 pub(crate) async fn import_file(
     identity_name: &str,
     file_path: &str,
@@ -265,7 +267,7 @@ pub(crate) async fn import_file(
     let pem = std::fs::read_to_string(file_path)
         .with_context(|| format!("Cannot read key file {file_path}"))?;
 
-    // 先按给定口令解析；密钥受保护但没给口令时交互补问一次
+    // Try the supplied passphrase first; if the key is protected and none was given, ask once interactively
     let imported = match persona_core::crypto::ssh_import::import_private_key_file(
         &pem,
         passphrase.as_deref(),
@@ -283,7 +285,7 @@ pub(crate) async fn import_file(
     let service = ensure_service(config, ui).await?;
     let identity = resolve_identity(&service, identity_name).await?;
 
-    // 条目名回退：--name > 钥匙 comment > 文件名 > 兜底
+    // Entry name fallback: --name > key comment > file name > default
     let file_name = std::path::Path::new(file_path)
         .file_name()
         .map(|s| s.to_string_lossy().to_string());
@@ -339,9 +341,11 @@ pub(crate) async fn export_pubkey(
     }
 }
 
-/// 从保险库收集全部可用作签名的 SSH key：(seed, 公钥行, 凭据 id, 身份 id)。
-/// 解不开（已锁定/损坏）的凭据跳过——不能拿来签的东西不该中断签名流程，
-/// 但如果全军覆没，resolve_signing_key 会以空列表报错。
+/// Collect every SSH key in the vault that can be used for signing:
+/// (seed, public key line, credential id, identity id). Credentials that cannot
+/// be unlocked (locked/corrupt) are skipped — something unusable for signing
+/// should not abort the signing flow, but if all of them fail,
+/// resolve_signing_key errors out on the empty list.
 pub(crate) async fn vault_ssh_keys(
     service: &PersonaService,
 ) -> Result<Vec<([u8; 32], String, Uuid, Uuid)>> {
@@ -368,8 +372,8 @@ pub(crate) async fn vault_ssh_keys(
     Ok(keys)
 }
 
-/// SshKeyData.private_key 是 base64 的 32 字节 ed25519 seed（与
-/// agents/ssh-agent 同一约定）。
+/// SshKeyData.private_key is the base64-encoded 32-byte ed25519 seed (same
+/// convention as agents/ssh-agent).
 pub(crate) fn decode_seed(ssh: &SshKeyData) -> Result<[u8; 32]> {
     let raw = BASE64
         .decode(ssh.private_key.trim().as_bytes())

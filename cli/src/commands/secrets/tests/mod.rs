@@ -1,5 +1,5 @@
 // -----------------------------------------------------------------------
-// 测试：ScriptedUi 缝 + env 串行（connect.rs 同款 fixture）
+// Tests: the ScriptedUi seam + env serialization (same fixture style as connect.rs)
 // -----------------------------------------------------------------------
 
 use super::fields::{data_fields_of, extract_data_field, primary_secret_field};
@@ -46,8 +46,8 @@ fn config_for(dir: &tempfile::TempDir) -> CliConfig {
     config
 }
 
-/// 建带 master 用户的库：work 身份下 password/api_key/totp/ssh/note
-/// 五种凭据，覆盖元数据字段与各类型字段词汇。
+/// Build a vault with a master user: five credentials of type password/api_key/totp/ssh/note
+/// under the work identity, covering metadata fields and each type's field vocabulary.
 async fn seeded_workspace() -> (tempfile::TempDir, CliConfig) {
     let dir = tempfile::tempdir().unwrap();
     let config = config_for(&dir);
@@ -177,8 +177,9 @@ fn k8s_args(keys: &[&str]) -> SecretsArgs {
     }
 }
 
-/// 每种有独立字段词汇的凭据类型一个样本；可选字段全部 Some，
-/// 保证词汇表内每个字段都能取到值（unset 分支由错误路径测试覆盖）。
+/// One sample per credential type with its own field vocabulary; all optional fields
+/// are Some so every field in the vocabulary yields a value (the unset branches are
+/// covered by the error-path tests).
 fn sample_of_each_variant() -> Vec<(&'static str, CredentialData)> {
     vec![
         (
@@ -280,7 +281,7 @@ fn sample_of_each_variant() -> Vec<(&'static str, CredentialData)> {
     ]
 }
 
-/// k8s 各入参校验在解锁前就 bail：config 指向空目录即可。
+/// k8s input validation bails before unlocking: pointing config at an empty directory suffices.
 async fn k8s_validation_run(
     config: &CliConfig,
     name: &str,

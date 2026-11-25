@@ -111,9 +111,10 @@ fn determine_workspace_path(
         return Ok(path);
     }
 
-    // PERSONA_WORKSPACE_PATH 与 config::load 的 env 覆盖同源（--path
-    // 显式优先）：`-y` 不再绕过 env 直落 home 默认，否则 init 写 A 处、
-    // 后续命令按 env 读 B 处
+    // PERSONA_WORKSPACE_PATH shares the same env override source as config::load
+    // (--path wins when explicit): `-y` no longer bypasses the env and falls
+    // straight to the home default, otherwise init writes to one place and
+    // subsequent commands read another via the env
     if let Some(env_path) = crate::config::workspace_path_from_env() {
         return Ok(env_path);
     }
@@ -195,12 +196,15 @@ fn create_workspace_structure(workspace_path: &Path) -> Result<()> {
     Ok(())
 }
 
-/// 写 workspace 配置。**已有配置绝不整体重写为默认值**（merge 语义）：
-/// 重跑 `persona init` 只允许动本次显式拥有的字段（workspace.path；加密
-/// 标志只升不降；--backup-dir 给了才动备份目录），其余用户自定义值原样
-/// 保留。覆写前先落 `config.toml.bak`，正式写入走临时文件 + rename 原子
-/// 替换；已有文件解析失败时不动原文件（保留现场让用户自查，绝不拿默认
-/// 值盖掉它）。
+/// Write the workspace config. **An existing config is never wholesale reset to
+/// defaults** (merge semantics): re-running `persona init` may only touch fields
+/// this run explicitly owns (workspace.path; the encryption flag only moves up,
+/// never down; the backup directory only when --backup-dir was given), and every
+/// other user-customized value is preserved as-is. Before overwriting, a
+/// `config.toml.bak` is written; the real write goes through a temp file +
+/// rename for an atomic replacement. When the existing file fails to parse, the
+/// original is left untouched (preserving the scene for the user to inspect —
+/// never paper over it with defaults).
 fn initialize_config(
     workspace_path: &Path,
     encryption_enabled: bool,
@@ -214,7 +218,7 @@ fn initialize_config(
         let parsed: CliConfig = match toml::from_str(&existing) {
             Ok(parsed) => parsed,
             Err(e) => {
-                // 解析失败不覆盖、不备份后改写：原样保留，交由用户修复。
+                // On a parse failure, do not overwrite or back up then rewrite: keep it as-is and let the user fix it.
                 warn!(
                     "Existing config.toml is invalid ({}); leaving it untouched",
                     e
@@ -227,11 +231,13 @@ fn initialize_config(
                 return Ok(());
             }
         };
-        // 保留用户现值，仅同步本次 init 显式拥有的字段
+        // Keep the user's current values, syncing only the fields this init run explicitly owns
         let mut merged = parsed;
         merged.workspace.path = workspace_path.to_path_buf();
-        // 加密标志只升不降：--encrypted 升 true；未带该 flag 不把加密配置
-        // 降回未加密（库的真实加密态在 DB，配置只是展示层，但也不能说谎）
+        // The encryption flag only moves up, never down: --encrypted raises it to
+        // true; without that flag an encrypted config is not downgraded to
+        // unencrypted (the vault's real encryption state lives in the DB, the config
+        // is only the display layer, but it must not lie either)
         if encryption_enabled {
             merged.security.encryption_enabled = true;
         }
@@ -253,7 +259,7 @@ fn initialize_config(
     let config_content =
         toml::to_string_pretty(&config).context("Failed to serialize configuration")?;
 
-    // 原子替换：先写临时文件再 rename，避免半截配置文件
+    // Atomic replacement: write the temp file first, then rename, to avoid a truncated config file
     let tmp_path = workspace_path.join("config.toml.tmp");
     std::fs::write(&tmp_path, &config_content)
         .with_context(|| format!("Failed to write temporary config: {}", tmp_path.display()))?;
@@ -310,10 +316,13 @@ async fn initialize_database(workspace_path: &Path, master_password: Option<&str
             .await
             .map_err(|e| anyhow::anyhow!("Failed to create PersonaService: {}", e))?;
 
-        // 红线：已有用户的库**绝不**再插第二行 user_auth——新 salt 让
-        // master key 层次错位，旧密码解不开已存凭据（改密走 `persona
-        // passwd`）。用户存在性查询出错时同样 fail-closed（报错而非"当
-        // 空库"），否则多进程并发/库锁超时会被误判成首启，写出幽灵行。
+        // Red line: on a vault that already has users, **never** insert a second
+        // user_auth row — a new salt desynchronizes the master key hierarchy and the
+        // old passphrase can no longer decrypt stored credentials (passphrase changes
+        // go through `persona passwd`). The user-existence query is fail-closed too
+        // (error out rather than "treat as an empty vault"); otherwise multi-process
+        // concurrency or a database-lock timeout would be mistaken for a first boot
+        // and a ghost row would get written.
         let has_users = service
             .has_users()
             .await
@@ -387,8 +396,9 @@ mod tests {
         }
     }
 
-    /// `--path` 显式 > `PERSONA_WORKSPACE_PATH` > home 默认；空白 env 视同
-    /// 未设置（否则会落到空 PathBuf = 当前目录）。
+    /// Explicit `--path` > `PERSONA_WORKSPACE_PATH` > home default; a blank env
+    /// value counts as unset (otherwise it would fall through to an empty PathBuf
+    /// = the current directory).
     #[test]
     fn workspace_path_env_overrides_yes_default_but_not_explicit_path() {
         let (_bridge_guard, _guard) = lock_process_env();
@@ -402,7 +412,7 @@ mod tests {
         };
 
         std::env::set_var("PERSONA_WORKSPACE_PATH", &env_path);
-        // -y 且 ui 队列为空：若实现误走交互/prompt，ScriptedUi 直接 panic
+        // -y with an empty ui queue: if the implementation wrongly goes interactive/prompt, ScriptedUi panics outright
         let got = determine_workspace_path(None, true, &ScriptedUi::new()).unwrap();
         assert_eq!(got, env_path, "env must override the -y home default");
 
@@ -663,7 +673,7 @@ mod tests {
         );
     }
 
-    /// user_auth 行数（幽灵用户检测：重跑 init 不得插第二行）。
+    /// Number of user_auth rows (ghost-user detection: re-running init must never insert a second row).
     async fn user_auth_row_count(path: &Path) -> i64 {
         let db = Database::from_file(path.join("identities.db"))
             .await
@@ -674,8 +684,9 @@ mod tests {
             .unwrap()
     }
 
-    /// 回归（数据丢失级）：重跑 `persona init` 必须 merge 已有配置，
-    /// 用户自定义值不得被默认值覆盖，且覆写前留 `config.toml.bak`。
+    /// Regression (data-loss grade): re-running `persona init` must merge the
+    /// existing config, user-customized values must not be overwritten by defaults,
+    /// and a `config.toml.bak` must be left before overwriting.
     #[tokio::test]
     async fn reinitializing_preserves_custom_config_and_backs_up() {
         let dir = TempDir::new().unwrap();
@@ -687,7 +698,7 @@ mod tests {
             .await
             .expect("first init must succeed");
 
-        // 用户改了三处非默认值（含未加密首启的 security 段）
+        // The user changed three non-default values (including the security section of an unencrypted first boot)
         let config_path = path.join("config.toml");
         let original = std::fs::read_to_string(&config_path).unwrap();
         let customized = original
@@ -700,7 +711,7 @@ mod tests {
         );
         std::fs::write(&config_path, &customized).unwrap();
 
-        // 重跑 init：不带 --encrypted，不得把加密标志从用户值上动掉
+        // Re-run init without --encrypted: the encryption flag must not be moved off the user's value
         let mut second = init_args(true);
         second.path = Some(path.clone());
         second.encrypted = false;
@@ -736,9 +747,10 @@ mod tests {
         );
     }
 
-    /// 回归（数据丢失级）：已有用户的库上重跑 `persona init --master-password`
-    /// 不得插第二行 user_auth（新 salt 会让旧密码解不开已存凭据），
-    /// 已保存凭据与可解密性必须完好。
+    /// Regression (data-loss grade): re-running `persona init --master-password` on
+    /// a vault that already has users must not insert a second user_auth row (a new
+    /// salt would make the old passphrase unable to decrypt stored credentials);
+    /// saved credentials and decryptability must remain intact.
     #[tokio::test]
     async fn reinitializing_an_initialized_vault_never_adds_a_second_user() {
         let dir = TempDir::new().unwrap();
@@ -756,7 +768,7 @@ mod tests {
             "one user after first init"
         );
 
-        // 已保存的密码：建身份 + 凭据
+        // The saved passphrase: create an identity + credential
         let db = Database::from_file(path.join("identities.db"))
             .await
             .unwrap();
@@ -791,7 +803,7 @@ mod tests {
             .await
             .unwrap();
 
-        // 重跑 init 带另一个主密码：不得新建用户、不得毁掉已存凭据
+        // Re-run init with a different master passphrase: must not create a new user or destroy stored credentials
         let mut second = init_args(true);
         second.path = Some(path.clone());
         second.master_password = Some("second-pin".to_string());
@@ -839,7 +851,7 @@ mod tests {
         );
     }
 
-    /// 回归（数据丢失级）：已有配置损坏时绝不拿默认值覆盖它——保留现场。
+    /// Regression (data-loss grade): when an existing config is corrupt, never overwrite it with defaults — preserve the scene.
     #[tokio::test]
     async fn reinitializing_with_an_invalid_config_leaves_it_untouched() {
         let dir = TempDir::new().unwrap();

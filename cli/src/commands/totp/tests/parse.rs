@@ -178,13 +178,14 @@ fn decode_qr_file_reports_images_without_codes() {
     assert!(err.to_string().contains("No QR code detected"));
 }
 
-/// 确定性变异 harness：垃圾字节、截断/伪造的 PNG/JPEG 头、确定性
-/// 噪声载荷。`decode_qr_file` 必须全函数——任何输入要么 Ok 要么 Err，
-/// 绝不 panic（rqrr/image 的历史 panic 面正是本 harness 的目标）。
+/// Deterministic mutation harness: garbage bytes, truncated/forged PNG/JPEG
+/// headers, deterministic noise payloads. `decode_qr_file` must be total — any
+/// input yields either Ok or Err, never a panic (the historical rqrr/image panic
+/// surface is exactly what this harness targets).
 #[test]
 fn decode_qr_file_mutation_harness_is_total() {
     let dir = tempfile::TempDir::new().unwrap();
-    // PNG/JPEG 魔数按各自格式规范的前缀。
+    // PNG/JPEG magic numbers as prefixed by their respective format specs.
     let png_magic: &[u8] = &[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
     let jpeg_magic: &[u8] = &[0xFF, 0xD8, 0xFF, 0xE0];
     let mut cases: Vec<(String, PathBuf)> = Vec::new();
@@ -204,7 +205,7 @@ fn decode_qr_file_mutation_harness_is_total() {
     let mut jpeg_noise = jpeg_magic.to_vec();
     jpeg_noise.extend_from_slice(&[0x55u8; 256]);
     push(&mut cases, "jpeg-magic-plus-noise.jpg", &jpeg_noise);
-    // 有效 PNG 头 + 全零载荷：解码器要么报错要么当纯色图，不得 panic。
+    // Valid PNG header + all-zero payload: the decoder either errors or treats it as a solid-color image; it must not panic.
     let mut png_zero = png_magic.to_vec();
     png_zero.extend_from_slice(&[0x00u8; 24]);
     push(&mut cases, "truncated-noise.png", &png_zero);
@@ -253,7 +254,7 @@ fn parse_otpauth_uri_accepts_hotp_scheme_with_counter() {
     assert_eq!(t.algorithm.as_deref(), Some("SHA1"));
     assert_eq!(t.digits, Some(6));
 
-    // 缺省 counter=0；totp 型 URI 保持 hotp=false。
+    // Default counter=0; a totp-type URI keeps hotp=false.
     let t = parse_otpauth_uri("otpauth://hotp/Example?secret=ABC").unwrap();
     assert_eq!(t.hotp, Some(true));
     assert_eq!(t.counter, None);

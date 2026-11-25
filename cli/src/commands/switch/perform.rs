@@ -76,7 +76,7 @@ pub(crate) async fn perform_switch(
 
     // 3. Audit log workspace enter / identity switched. A `persona use`
     // confirmation of the current top suggestion records the reason —
-    // 设计验收：审计含 reason（只记确认，不记信号本身，§3 隐私边界）。
+    // Design acceptance: the audit carries the reason (only the confirmation is recorded, not the signal itself; the §3 privacy boundary).
     let reason = suggestion
         .filter(|(name, _)| name == target_identity)
         .map(|(_, reason)| reason);
@@ -92,12 +92,13 @@ pub(crate) async fn perform_switch(
         .create(&log)
         .await
         .map_err(|e| anyhow!("Failed to write audit log: {}", e))?;
-    // 该事件直写审计库绕过 service 挂钩，上报链路在这里补发
+    // This event is written straight to the audit vault, bypassing the service hook, so the reporting chain is fired here
     crate::commands::service::emit_audit(&log);
 
-    // 4. Context learning（阶段 2，默认关）：确认落点进本地学习表，供后续
-    // suggest 按「同目录最近使用」排序。降级原则（设计 §10）：学习写入
-    // 失败绝不影响 switch 本身。
+    // 4. Context learning (phase 2, off by default): the confirmation lands in the local
+    // learning table so later suggest runs can order by "most recently used in the same
+    // directory". Degradation principle (design §10): a learning-write failure never
+    // affects the switch itself.
     if let Err(e) = record_learn_sample(target_identity, config).await {
         info!("context learn recording skipped: {e}");
     }
@@ -109,8 +110,9 @@ pub(crate) async fn perform_switch(
     Ok(())
 }
 
-/// 学习表写入（开关联动）：开关关闭时 no-op。目录哈希与 suggest 侧同源
-/// （`config.workspace.path`），主机为当前采集信号。
+/// Learning-table write (wired to the switch): a no-op when the toggle is off. The directory
+/// hash shares its source with the suggest side (`config.workspace.path`), and the host is
+/// the currently collected signal.
 async fn record_learn_sample(identity_name: &str, config: &CliConfig) -> Result<()> {
     let db_path = config.get_database_path();
     let db = Database::from_file(&db_path).await?;

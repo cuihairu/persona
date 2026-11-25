@@ -1,10 +1,10 @@
-//! 自动锁策略命令：CLI 参数面（`AutoLockArgs`/`AutoLockCommand`）。
+//! Auto-lock policy commands: the CLI argument surface (`AutoLockArgs`/`AutoLockCommand`).
 //!
-//! # 模块布局
+//! # Module layout
 //!
-//! 分发与仓储初始化在 [`flow`]，策略 CRUD 在 [`policies`]，用户指派在
-//! [`assignment`]，统计/状态看板在 [`dashboard`]，会话锁操作在
-//! [`session`]，格式化与用例解析在 [`display`]。
+//! Dispatch and vault initialization in [`flow`], policy CRUD in [`policies`], user
+//! assignment in [`assignment`], statistics/status dashboard in [`dashboard`], session lock
+//! operations in [`session`], formatting and use-case parsing in [`display`].
 
 use clap::{Args, Subcommand};
 use persona_core::models::auto_lock_policy::AutoLockSecurityLevel;

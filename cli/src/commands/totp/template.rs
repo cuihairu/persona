@@ -8,9 +8,9 @@ pub(crate) struct TotpTemplate {
     pub(crate) algorithm: Option<String>,
     pub(crate) digits: Option<u8>,
     pub(crate) period: Option<u32>,
-    /// 计数器型 HOTP（RFC 4226）；otpauth://hotp/ 的 URI/QR 与 --hotp 设置
+    /// Counter-based HOTP (RFC 4226); set by an otpauth://hotp/ URI/QR or by --hotp
     pub(crate) hotp: Option<bool>,
-    /// HOTP 起始计数器（URI 的 counter 参数或 --counter）
+    /// Initial HOTP counter (the URI counter parameter or --counter)
     pub(crate) counter: Option<u64>,
 }
 

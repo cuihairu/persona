@@ -7,11 +7,11 @@ use persona_core::PersonaService;
 use super::fields::{data_fields_of, extract_data_field, primary_secret_field};
 
 // -----------------------------------------------------------------------
-// 引用解析与字段提取
+// Reference resolution and field extraction
 // -----------------------------------------------------------------------
 
-/// `IDENTITY/ITEM/FIELD` 三段引用。ITEM 匹配凭据 `name`（同一身份内必须
-/// 唯一，重复名报歧义错误）。
+/// The three-segment `IDENTITY/ITEM/FIELD` reference. ITEM matches the credential `name`
+/// (unique within the same identity; duplicate names produce an ambiguity error).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SecretRef {
     pub identity: String,
@@ -42,11 +42,11 @@ impl SecretRef {
     }
 }
 
-/// 凭据 `name` 元数据字段（不解密即可取）。
+/// The credential `name` metadata field (retrievable without decryption).
 const METADATA_FIELDS: [&str; 4] = ["name", "username", "url", "notes"];
 
-/// 解析一条引用为明文。解密路径自动记 `CredentialDecrypted` 审计（service
-/// 侧既有语义，不重复记）。
+/// Resolve a reference into plaintext. The decryption path automatically records a
+/// `CredentialDecrypted` audit (existing service-side semantics; not recorded twice).
 pub(crate) async fn resolve_ref(
     service: &PersonaService,
     secret_ref: &SecretRef,
@@ -81,7 +81,7 @@ pub(crate) async fn resolve_ref(
         ),
     };
 
-    // 元数据字段不解密
+    // Metadata fields are not decrypted
     let metadata_value: Option<String> = match secret_ref.field.as_str() {
         "name" => Some(credential.name.clone()),
         "username" => match credential.username.clone() {
@@ -108,7 +108,7 @@ pub(crate) async fn resolve_ref(
         .map_err(|e| anyhow!("Failed to decrypt credential: {}", e))?
         .with_context(|| format!("Credential '{}' has no payload", secret_ref.item))?;
 
-    // `secret` 别名 → 该类型主秘密字段
+    // The `secret` alias → the type's primary secret field
     let field = if secret_ref.field == "secret" {
         primary_secret_field(&data).with_context(|| {
             format!(
@@ -131,7 +131,7 @@ pub(crate) async fn resolve_ref(
     })
 }
 
-/// 解析 `NAME=REF` 注入项。
+/// Parse a `NAME=REF` injection item.
 pub(super) fn parse_env_assignments(specs: &[String]) -> Result<Vec<(String, SecretRef)>> {
     specs
         .iter()
@@ -152,8 +152,8 @@ pub(super) fn parse_env_assignments(specs: &[String]) -> Result<Vec<(String, Sec
         .collect()
 }
 
-/// manifest 键名合法性（k8s object key 字符集）。`allow_slash` 用于
-/// label/annotation 的 `prefix/name` 形式；data/对象名不允许斜杠。
+/// Manifest key validity (the k8s object key charset). `allow_slash` covers the
+/// `prefix/name` form of labels/annotations; data keys/object names do not allow slashes.
 pub(super) fn valid_key(key: &str, allow_slash: bool) -> bool {
     !key.is_empty()
         && key.chars().all(|c| {

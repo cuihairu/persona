@@ -1,5 +1,6 @@
-// 本文件所有测试均为 unix 门控（桌面审批走 unix socket）；Windows 下模块
-// 为空，连带门控该导入避免 unused-imports（Windows clippy -D warnings 报红）。
+// Every test in this file is unix-gated (desktop approval goes over a unix socket); on
+// Windows the module is empty, so this import is gated along with it to avoid
+// unused-imports (which would turn Windows clippy -D warnings red).
 #[cfg(unix)]
 use super::*;
 

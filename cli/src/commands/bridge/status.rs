@@ -193,7 +193,7 @@ pub(super) async fn context_suggestion_for_bridge_with(
     parsed: &SuggestionsPayload,
     maps: &BridgeMapPaths,
 ) -> Option<ContextSuggestion> {
-    // 整层开关（与 shell hook / ssh run 同一口径）：非空即关闭。
+    // Layer-wide switch (same policy as the shell hook / ssh run): non-empty means off.
     if std::env::var("PERSONA_NO_CONTEXT")
         .map(|v| !v.is_empty())
         .unwrap_or(false)
