@@ -7,18 +7,18 @@ async fn health_is_unauthenticated_and_free_of_vault_info() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["ok"], true);
     assert_eq!(body["data"]["service"], "persona-connect");
-    // 零库信息:无条目数/身份名/锁定状态之外的字段
+    // Zero vault information: no fields beyond item counts/identity names/lock state
     assert!(body["data"].get("items").is_none());
 }
 
 #[tokio::test]
 async fn missing_malformed_and_unknown_tokens_are_401_same_shape() {
     let fx = fixture().await;
-    // 缺失
+    // Missing
     let (status, body) = send(fx.router.clone(), "GET", "/api/v1/connect/items", &[]).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
     assert_eq!(body["error"]["code"], "unauthorized");
-    // 畸形(非 Bearer)
+    // Malformed (not Bearer)
     let (status, body) = send(
         fx.router.clone(),
         "GET",
@@ -28,7 +28,7 @@ async fn missing_malformed_and_unknown_tokens_are_401_same_shape() {
     .await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
     assert_eq!(body["error"]["code"], "unauthorized");
-    // pconn_ 前缀假值(与缺失同形)
+    // pconn_ -prefixed bogus value (same shape as missing)
     let (status, body) = send(
         fx.router.clone(),
         "GET",
@@ -92,7 +92,7 @@ async fn data_plane_serves_envelope_for_all_endpoints() {
     assert_eq!(body["data"][0]["title"], "login");
     assert_eq!(body["data"][0]["type"], "password");
 
-    // title 精确过滤
+    // Exact title filter
     let (status, body) = send(
         fx.router.clone(),
         "GET",
@@ -116,17 +116,18 @@ async fn data_plane_serves_envelope_for_all_endpoints() {
     let (status, body) = send(fx.router.clone(), "GET", &path, &auth).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["data"]["title"], "login");
-    // 全字段含解密 data(明文密码在响应体内——消费者责任,文档警示)。
-    // data 是 CredentialData 原生 serde 形状:外部标签枚举
-    // {"Password": {…}}(变体名 PascalCase)。
+    // Full fields include decrypted data (the plaintext password sits in the
+    // response body -- the consumer's responsibility, documented as a warning).
+    // data is CredentialData's native serde shape: an externally tagged enum
+    // {"Password": {...}} (variant names in PascalCase).
     assert_eq!(body["data"]["data"]["Password"]["password"], "secret");
 
-    // 不存在的条目 → 404 同形
+    // Nonexistent item -> the same-shaped 404
     let missing = format!("/api/v1/connect/items/{}", Uuid::new_v4());
     let (status, body) = send(fx.router.clone(), "GET", &missing, &auth).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
     assert_eq!(body["error"]["code"], "not_found");
-    // TOTP 对非 TwoFactor 条目 → 404 同形
+    // TOTP against a non-TwoFactor item -> the same-shaped 404
     let totp_path = format!("/api/v1/connect/items/{}/totp", fx.cred_id);
     let (status, body) = send(fx.router, "POST", &totp_path, &auth).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
@@ -156,8 +157,10 @@ async fn revoked_token_is_401_immediately() {
     assert_eq!(body["error"]["code"], "unauthorized");
 }
 
-/// 过期 token（批2 迁移 019）：与吊销同形 401——自动化调用方不能
-/// 仅凭 token 明文读数据，过期与吊销同等失效（不泄漏二者差异）。
+/// Expired token (batch 2 migration 019): a 401 shaped like revocation --
+/// an automated caller must not be able to read data from token plaintext
+/// alone; expiry revokes access just like revocation does (the difference
+/// between the two is never leaked).
 #[tokio::test]
 async fn expired_token_is_401_same_shape_as_revoked() {
     let fx = fixture().await;
@@ -179,9 +182,11 @@ async fn expired_token_is_401_same_shape_as_revoked() {
     assert_eq!(body["error"]["code"], "unauthorized");
 }
 
-/// 纯 use 动词 token（批2）：签名/出码类授权不带来读取能力——数据面
-/// 端点一律同形空列表或 404（不泄漏存在性）；同 scope 加 read 即可读，
-/// 证明拒绝来自动词集而非身份或类型维度。
+/// A pure use-verb token (batch 2): signing/code-emitting style authorization
+/// confers no read capability -- data-plane endpoints uniformly return
+/// same-shaped empty lists or 404s (no existence leak); adding read to the same
+/// scope makes it readable, proving the rejection comes from the verb set, not
+/// the identity or type dimension.
 #[tokio::test]
 async fn use_only_token_reads_nothing_on_any_endpoint() {
     let fx = fixture().await;
@@ -232,7 +237,7 @@ async fn use_only_token_reads_nothing_on_any_endpoint() {
         "use token 不得读条目列表"
     );
 
-    // 单条读取：use token 404 同形（不泄漏存在性）。
+    // Single item read: a use token gets the same-shaped 404 (no existence leak).
     let path = format!("/api/v1/connect/items/{}", fx.cred_id);
     let (status, body) = send(fx.router.clone(), "GET", &path, &use_auth).await;
     assert_eq!(status, StatusCode::NOT_FOUND, "use token 不得读单条");
@@ -249,14 +254,15 @@ async fn locked_vault_is_503_and_does_not_consume_rate() {
         guard.as_mut().unwrap().lock();
     }
     let auth = auth_header(&fx.token);
-    // 锁定期间反复请求都是 503 vault_locked
+    // While locked, repeated requests all get 503 vault_locked
     for _ in 0..5 {
         let (status, body) = send(fx.router.clone(), "GET", "/api/v1/connect/items", &auth).await;
         assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
         assert_eq!(body["error"]["code"], "vault_locked");
     }
-    // 解锁恢复（lock() 清了内存密钥，用盐重新解锁）：锁定期间的请求
-    // 不消耗限额——完整 120 次仍可用
+    // Recovery by unlocking (lock() cleared the in-memory key; re-unlock with the
+    // salt): requests made while locked do not consume quota -- the full 120
+    // requests are still available
     {
         let mut guard = fx.state.service.lock().await;
         guard
@@ -278,7 +284,8 @@ async fn locked_vault_is_503_and_does_not_consume_rate() {
 async fn health_does_not_consume_rate_limit() {
     let fx = fixture().await;
     let auth = auth_header(&fx.token);
-    // health 免认证也不占 token 限额:任意多次后数据面仍全额可用
+    // health is unauthenticated and consumes no token quota either: after any number
+    // of requests the data plane is still at full capacity
     for _ in 0..RATE_LIMIT_PER_MINUTE {
         let (status, _) = send(fx.router.clone(), "GET", "/api/v1/connect/health", &[]).await;
         assert_eq!(status, StatusCode::OK);
@@ -288,19 +295,22 @@ async fn health_does_not_consume_rate_limit() {
 }
 
 // -------------------------------------------------------------------
-// 防线顺序与响应卫生
+// Line-of-defense ordering and response hygiene
 // -------------------------------------------------------------------
 
 #[tokio::test]
 async fn every_response_carries_no_store_and_json_content_type() {
     let fx = fixture().await;
-    // 成功、数据面、以及**错误**响应都必须带 no-store：TOTP 码/字段明文
-    // 一旦进了中间缓存就不该再指望 2xx 那侧记得带头。
-    // 只覆盖**我们生成的**响应。提取器拒绝/路由未命中走 axum 默认响应
-    // （无包络、无 no-store），形状在
-    // `unknown_routes_...`/`query_and_path_filters_...` 里单独钉住。
+    // Success, data-plane, and **error** responses must all carry no-store: once
+    // a TOTP code / field plaintext has reached an intermediate cache, we cannot
+    // rely on the 2xx side remembering to send the header.
+    // This only covers **responses we generate**. Extractor rejections and
+    // unmatched routes fall through to axum's default response (no envelope, no
+    // no-store); their shape is pinned separately in
+    // `unknown_routes_...`/`query_and_path_filters_...`.
     let missing = Uuid::new_v4().to_string();
-    // 第三元 = 是否带合法 token（不带即 401，也是我们的包络）。
+    // Third element = whether a valid token is sent (no token means 401, which is
+    // also our envelope).
     type Case = (&'static str, String, bool);
     let cases: Vec<Case> = vec![
         ("GET", "/api/v1/connect/health".to_string(), false),
@@ -338,8 +348,9 @@ async fn every_response_carries_no_store_and_json_content_type() {
 #[tokio::test]
 async fn absent_host_header_is_421_even_for_health() {
     let fx = fixture().await;
-    // health 免认证，但不免 Host 白名单——防线 1 在所有例外之前。
-    // send_capture 不补 Host → 这条请求根本没有 Host 头。
+    // health is unauthenticated but not exempt from the Host allowlist -- line of
+    // defense 1 comes before every exemption.
+    // send_capture does not fill in Host -> this request has no Host header at all.
     let (status, _, body) =
         send_capture(fx.router.clone(), "GET", "/api/v1/connect/health", &[]).await;
     assert_eq!(status, StatusCode::MISDIRECTED_REQUEST);
@@ -349,9 +360,10 @@ async fn absent_host_header_is_421_even_for_health() {
 #[tokio::test]
 async fn lookalike_hosts_are_421_and_never_treated_as_loopback() {
     let fx = fixture().await;
-    // 全部带合法 token：证明拒绝来自 Host 而不是缺认证。前缀/后缀拼是
-    // DNS rebinding 之外的典型误放行点（`starts_with("127.0.0.1")` 会放过
-    // 127.0.0.1.evil.com）。
+    // All carry a valid token: this proves the rejection comes from Host rather
+    // than from missing authentication. Prefix/suffix splicing is the classic
+    // wrongful-allow point besides DNS rebinding (`starts_with("127.0.0.1")`
+    // would let 127.0.0.1.evil.com through).
     for host in [
         "127.0.0.1.evil.com",
         "127.0.0.1.evil.com:17000",
@@ -360,9 +372,11 @@ async fn lookalike_hosts_are_421_and_never_treated_as_loopback() {
         "notlocal",
         "",
         "127.0.0.2",
-        // IPv6 字面量在 authority 里必须带方括号（RFC 9110 §4.1.2）；
-        // 裸 "::1" 缺括号形式非法，按 ':' 切端口后剩空串 → 拒绝。
-        // （括号形式 "[::1]"/"[::1]:port" 的放行见 alias 测试。）
+        // IPv6 literals in the authority must be bracketed (RFC 9110 §4.1.2);
+        // a bare "::1" is invalid in its bracketless form, and after port
+        // splitting on ':' an empty string remains -> rejected.
+        // (Bracketed forms "[::1]"/"[::1]:port" being allowed are covered by
+        // the alias test.)
         "::1",
     ] {
         let (status, _, body) = send_capture(
@@ -383,16 +397,17 @@ async fn lookalike_hosts_are_421_and_never_treated_as_loopback() {
 #[tokio::test]
 async fn loopback_host_aliases_pass_the_host_guard() {
     let fx = fixture().await;
-    // 不带 token → 401 而不是 421，即 Host 这关已经过了（端口与 IPv6
-    // 方括号形式都必须剥掉再比对）。
+    // No token -> 401 rather than 421, i.e. the Host gate already passed (both the
+    // port and the IPv6 bracket form must be stripped before comparing).
     for host in [
         "127.0.0.1",
         "127.0.0.1:17000",
         "localhost",
         "localhost:17000",
         "[::1]:17000",
-        // 省略端口的括号 IPv6（段尾 ']'）：不能按 ':' 切端口，否则
-        // "[::1]" 剩 "[::" 被误拒——白名单写着 ::1 就该放行
+        // Bracketed IPv6 with an omitted port (trailing ']'): cannot split the port
+        // on ':', otherwise "[::1]" is left as "[::" and wrongly rejected -- the
+        // allowlist says ::1, so it must be allowed through
         "[::1]",
     ] {
         let (status, _, body) = send_capture(
@@ -410,7 +425,8 @@ async fn loopback_host_aliases_pass_the_host_guard() {
 #[tokio::test]
 async fn defenses_are_ordered_host_then_origin_then_auth_then_health() {
     let fx = fixture().await;
-    // 防线 2 先于 health 例外：带 Origin 的 /health 是 403，不是免检 200。
+    // Line of defense 2 comes before the health exemption: /health with an Origin
+    // is a 403, not an unexamined 200.
     let (status, body) = send(
         fx.router.clone(),
         "GET",
@@ -420,7 +436,8 @@ async fn defenses_are_ordered_host_then_origin_then_auth_then_health() {
     .await;
     assert_eq!(status, StatusCode::FORBIDDEN);
     assert_eq!(body["error"]["code"], "origin_forbidden");
-    // 防线 1 先于防线 2：坏 Host + Origin 报 bad_host（421）而非 403。
+    // Line of defense 1 comes before line of defense 2: bad Host + Origin reports
+    // bad_host (421) rather than 403.
     let (status, _, body) = send_capture(
         fx.router.clone(),
         "GET",
@@ -433,7 +450,8 @@ async fn defenses_are_ordered_host_then_origin_then_auth_then_health() {
     .await;
     assert_eq!(status, StatusCode::MISDIRECTED_REQUEST);
     assert_eq!(body["error"]["code"], "bad_host");
-    // 防线 3 先于路由：不存在的路径未认证时是 401，不泄露路由表。
+    // Line of defense 3 comes before routing: an unknown path while unauthenticated
+    // is a 401, so the route table is never leaked.
     let (status, body) = send(fx.router.clone(), "GET", "/api/v1/connect/nonexistent", &[]).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
     assert_eq!(body["error"]["code"], "unauthorized");
@@ -459,8 +477,9 @@ async fn empty_and_non_bearer_credentials_are_401_shaped_like_unknown_tokens() {
         .await;
         assert_eq!(status, StatusCode::UNAUTHORIZED, "value={value:?}");
         assert_eq!(body["error"]["code"], "unauthorized", "value={value:?}");
-        // message 只有两类：格式不合法（缺/畸形）与查无此 token。既不
-        // 泄露「token 存在但被吊销」，也不区分大小写笔误的 scheme。
+        // The message has only two variants: malformed (missing/malformed) and no such
+        // token. Neither reveals "this token exists but was revoked", nor does it
+        // distinguish a case-typo'd scheme.
         let msg = body["error"]["message"].as_str().unwrap_or_default();
         assert!(
             msg == "missing or malformed bearer token" || msg == "invalid token",
@@ -471,8 +490,9 @@ async fn empty_and_non_bearer_credentials_are_401_shaped_like_unknown_tokens() {
 
 #[tokio::test]
 async fn empty_service_slot_is_503_vault_locked_while_health_stays_up() {
-    // 宿主尚未初始化库（service 槽位 None）：数据面按锁定语义处理，
-    // health 仍可用（存活探测不该被库状态拖成 5xx）。
+    // The host has not initialized the DB (service slot None): the data plane is
+    // handled with locked semantics, and health stays available (a liveness probe
+    // should not be dragged into a 5xx by DB state).
     let state = ConnectServerState::new(Arc::new(TokioMutex::new(None)));
     let router = build_router(state.clone());
     let (status, body) = send(
@@ -487,7 +507,8 @@ async fn empty_service_slot_is_503_vault_locked_while_health_stays_up() {
     let (status, body) = send(router, "GET", "/api/v1/connect/health", &[]).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["data"]["service"], "persona-connect");
-    // 没有 token 行可记账 → 限额表必须保持空（否则探测能占满内存）
+    // No token row to account for -> the rate table must stay empty (otherwise a
+    // probe could exhaust memory)
     assert!(state.rates.lock().unwrap().is_empty());
 }
 
@@ -500,8 +521,9 @@ async fn database_failure_is_500_and_leaks_nothing_from_the_cause() {
 
     fx.db.pool().close().await;
 
-    // 鉴权自身查库失败走 guard 的 500 分支——是 internal 不是 401，
-    // 否则 DB 抖动会被消费者当成 token 失效去重签。
+    // An authentication DB lookup failure goes through the guard's 500 branch --
+    // internal, not 401; otherwise a DB wobble would be read as token expiry and
+    // trigger a re-mint by the consumer.
     let (status, body) = send(fx.router.clone(), "GET", "/api/v1/connect/items", &auth).await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
     assert_eq!(body["error"]["code"], "internal");
@@ -513,11 +535,12 @@ async fn database_failure_is_500_and_leaks_nothing_from_the_cause() {
             "500 响应外泄了内部细节: {leaked}"
         );
     }
-    // 同一条 DB 故障路径下 health 仍 200（免鉴权、不落库）。
+    // Under the same DB failure path health still returns 200 (unauthenticated,
+    // does not touch the DB).
     let (status, _) = send(fx.router, "GET", "/api/v1/connect/health", &[]).await;
     assert_eq!(status, StatusCode::OK);
 }
 
 // -------------------------------------------------------------------
-// 限额：固定窗语义
+// Rate limit: fixed-window semantics
 // -------------------------------------------------------------------

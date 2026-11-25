@@ -19,10 +19,10 @@ uuid = { version = "1.6", features = ["v4", "serde"] }
 [dev-dependencies]
 tempfile.workspace = true
 tower = { version = "0.5", features = ["util"] }
-# 过期 token 的端到端契约测试要在真库上改写 expires_at（生产代码不碰
-# 直写 SQL，故只进 dev）；sqlx/chrono 已在 workspace 锁内，不引入新依赖。
+# End-to-end contract tests for expired tokens need to rewrite expires_at on a real
+# DB (production code never writes SQL directly, hence dev-only); sqlx/chrono are already in the workspace lockfile, so no new dependency.
 sqlx = { workspace = true, features = ["chrono"] }
 chrono = { workspace = true }
-# listener 生命周期测试要在真 TCP 上读写 HTTP/1.1 裸请求（io-util 提供
-# AsyncReadExt/AsyncWriteExt）；生产代码不碰这些 trait，故只进 dev。
+# Listener lifecycle tests need to read and write raw HTTP/1.1 requests over real TCP
+# (io-util provides AsyncReadExt/AsyncWriteExt); production code never touches these traits, hence dev-only.
 tokio = { version = "1.35", features = ["io-util", "net"] }

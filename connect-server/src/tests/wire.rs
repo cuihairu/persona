@@ -14,8 +14,10 @@ fn is_vault_locked_walks_the_whole_cause_chain() {
 
 #[tokio::test]
 async fn internal_or_locked_maps_locked_to_503_and_other_errors_to_500() {
-    // 这两个臂经路由不可达：guard 已在鉴权后查过 is_unlocked，鉴权自身
-    // 失败又是另一个 500。作为纵深防御保留，故直调纯函数覆盖。
+    // These two arms are unreachable through the router: the guard already checks
+    // is_unlocked after authentication, and an authentication failure is a
+    // separate 500. They are kept as defense in depth, so the pure functions are
+    // called directly for coverage.
     let locked = anyhow::Error::from(PersonaError::VaultLocked("vault locked".to_string()))
         .context("connect endpoint");
     let (status, body) = response_parts(internal_or_locked(&locked)).await;
@@ -78,7 +80,8 @@ async fn item_type_slug_is_the_scope_vocabulary_with_a_null_floor() {
     assert_eq!(item_type_slug(&cred), json!("totp"));
     cred.credential_type = CredentialType::SecureNote;
     assert_eq!(item_type_slug(&cred), json!("note"));
-    // 不可映射类型走 null 兜底（scope 过滤已挡住，这里防的是将来漏过滤）
+    // Unmappable types fall back to null (scope filtering already blocks them; this
+    // guards against a future missed filter)
     for ty in [
         CredentialType::SshKey,
         CredentialType::CryptoWallet,

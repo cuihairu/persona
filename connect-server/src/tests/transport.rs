@@ -2,7 +2,8 @@ use super::*;
 
 #[tokio::test]
 async fn listener_binds_loopback_serves_defenses_over_tcp_and_releases_on_stop() {
-    // 不需要真 service：listener 生命周期与三防线都不依赖库。
+    // No real service needed: neither the listener lifecycle nor the three lines
+    // of defense depend on a database.
     let service: ArcTokService = Arc::new(TokioMutex::new(None));
     let handle = start_connect_server(service, 0).await.unwrap();
     assert_ne!(handle.port, 0, "端口 0 要回传 OS 分配的真实值");
@@ -24,7 +25,8 @@ async fn listener_binds_loopback_serves_defenses_over_tcp_and_releases_on_stop()
         text.to_lowercase().contains("cache-control: no-store"),
         "响应缺 no-store: {text}"
     );
-    // 三防线不是 oneshot 专属：走 hyper 解析后同样生效
+    // The three lines of defense are not oneshot-specific: they hold after going
+    // through hyper's parsing too
     let text = http_over_tcp(
         handle.port,
         "GET",
@@ -46,7 +48,8 @@ async fn listener_binds_loopback_serves_defenses_over_tcp_and_releases_on_stop()
     )
     .await;
     assert!(text.starts_with("HTTP/1.1 403"), "跨源未拦: {text}");
-    // 数据面在库未初始化（service None）时 503；health 仍 200（真 socket）
+    // The data plane is 503 while the DB is uninitialized (service None); health
+    // still returns 200 (real socket)
     let service: ArcTokService = Arc::new(TokioMutex::new(None));
     let handle2 = start_connect_server(service, 0).await.unwrap();
     let auth = "Authorization: Bearer pconn_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\r\n";
@@ -72,7 +75,7 @@ async fn listener_binds_loopback_serves_defenses_over_tcp_and_releases_on_stop()
     .await;
     assert!(text.starts_with("HTTP/1.1 503"), "未初始化库应 503: {text}");
     assert!(text.contains("vault_locked"), "503 缺错误码: {text}");
-    // 缺 token → 401；真 socket 上的顺序与 oneshot 一致
+    // Missing token -> 401; the order over a real socket matches oneshot
     let text = http_over_tcp(
         handle2.port,
         "GET",
@@ -87,7 +90,8 @@ async fn listener_binds_loopback_serves_defenses_over_tcp_and_releases_on_stop()
     let (port1, port2) = (handle.port, handle2.port);
     handle.stop();
     handle2.stop();
-    // graceful shutdown 后端口不再接受连接（轮询而非 sleep 猜时长）
+    // After graceful shutdown the port accepts no more connections (poll rather
+    // than sleep and guess a duration)
     let stopped = async {
         for _ in 0..100 {
             if TcpStream::connect(std::net::SocketAddr::from(([127, 0, 0, 1], port1)))
@@ -127,10 +131,11 @@ async fn bind_failure_is_propagated_instead_of_silently_retried() {
 }
 
 // -------------------------------------------------------------------
-// unix domain socket 传输
+// unix domain socket transport
 // -------------------------------------------------------------------
 
-/// 经 unix socket 发裸 HTTP/1.1（与 http_over_tcp 同款：无 HTTP 客户端依赖）。
+/// Send raw HTTP/1.1 over a unix socket (same style as http_over_tcp: no HTTP
+/// client dependency).
 #[cfg(unix)]
 async fn http_over_unix(
     path: &std::path::Path,
@@ -151,9 +156,10 @@ async fn http_over_unix(
     String::from_utf8(buf).expect("响应非 UTF-8")
 }
 
-/// unix 传输全生命周期：health 200（含**任意 Host**——该白名单只属
-/// TCP/loopback，unix socket 无名字解析面）→ Origin 403 → 缺 token 401 →
-/// stop 后 socket 文件移除且不可再连。
+/// Full lifecycle of the unix transport: health returns 200 (even for an
+/// **arbitrary Host** -- that allowlist belongs to TCP/loopback only, since a
+/// unix socket has no name-resolution surface) -> Origin 403 -> missing token
+/// 401 -> after stop the socket file is removed and no longer connectable.
 #[cfg(unix)]
 #[tokio::test]
 async fn unix_listener_serves_defenses_and_cleans_up_socket_on_stop() {
@@ -167,12 +173,14 @@ async fn unix_listener_serves_defenses_and_cleans_up_socket_on_stop() {
     assert_eq!(handle.port, 0, "unix 传输没有 TCP 端口");
     assert_eq!(handle.socket_path.as_deref(), Some(path.as_path()));
 
-    // 0600：仅属主可连（unix socket 连接需要写权限）。
+    // 0600: owner-only connectable (a unix socket connection needs write
+    // permission).
     use std::os::unix::fs::PermissionsExt;
     let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
     assert_eq!(mode, 0o600, "socket 文件必须 0600，实际 {:o}", mode);
 
-    // health：Host 白名单在 unix 传输上跳过（evil Host 不再 421）
+    // health: the Host allowlist is skipped on the unix transport (an evil Host no
+    // longer gets a 421)
     let text = http_over_unix(
         &path,
         "GET",
@@ -187,7 +195,7 @@ async fn unix_listener_serves_defenses_and_cleans_up_socket_on_stop() {
     );
     assert!(text.contains("\"ok\":true"), "响应缺包络: {text}");
 
-    // Origin 防线在 unix 传输上原样生效
+    // The Origin line of defense applies unchanged on the unix transport
     let text = http_over_unix(
         &path,
         "GET",
@@ -201,15 +209,17 @@ async fn unix_listener_serves_defenses_and_cleans_up_socket_on_stop() {
         "unix 传输跨源未拦: {text}"
     );
 
-    // token 防线原样生效（库未初始化 → 缺 token 401）
+    // The token line of defense applies unchanged (uninitialized DB -> missing
+    // token is a 401)
     let text = http_over_unix(&path, "GET", "/api/v1/connect/items", "localhost", "").await;
     assert!(
         text.starts_with("HTTP/1.1 401"),
         "unix 传输缺 token 应 401: {text}"
     );
 
-    // stop_and_wait：等 listener 任务完成 = serve 循环退出 + socket 文件
-    // 已删（fire-and-forget 的 stop 会把清理留在进程退出的竞态里）。
+    // stop_and_wait: wait for the listener task to finish = the serve loop exits
+    // and the socket file is deleted (a fire-and-forget stop would leave cleanup
+    // racing with process exit).
     handle.stop_and_wait().await;
     assert!(
         !path.exists(),
@@ -222,15 +232,17 @@ async fn unix_listener_serves_defenses_and_cleans_up_socket_on_stop() {
     );
 }
 
-/// 陈旧残骸接管、活 listener 不劫持（口径同 ssh-agent transport）。
-/// 崩溃残留：socket 文件在、无人监听 → 接管；有人监听 → 报错不抢。
+/// Stale leftovers are taken over; a live listener is never hijacked (same
+/// policy as the ssh-agent transport). Crash leftovers: socket file present,
+/// nobody listening -> take over; someone listening -> error, never steal.
 #[cfg(unix)]
 #[tokio::test]
 async fn unix_listener_takes_over_stale_socket_but_refuses_live_one() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("connect.sock");
 
-    // 造陈旧残骸：bind 后立刻 drop（文件留下，无人监听 = 崩溃形态）
+    // Create a stale leftover: bind then immediately drop (the file remains,
+    // nobody listening = crash form)
     let dead = tokio::net::UnixListener::bind(&path).unwrap();
     drop(dead);
     assert!(path.exists(), "崩溃残骸应留下 socket 文件");
@@ -246,7 +258,8 @@ async fn unix_listener_takes_over_stale_socket_but_refuses_live_one() {
     )
     .await
     .expect("陈旧残骸应被接管");
-    // 活 listener：第二次 bind 同一路径必须报错而非静默劫持
+    // Live listener: a second bind to the same path must error rather than
+    // silently hijack
     let err =
         start_connect_server_with_transport(service, ConnectTransport::Unix { path: path.clone() })
             .await
@@ -258,8 +271,9 @@ async fn unix_listener_takes_over_stale_socket_but_refuses_live_one() {
     handle.stop();
 }
 
-/// peer uid 判定纯函数：同 uid 放行、异 uid 拒绝（fail-closed 的单测
-/// 入口——跨 uid 连接需要第二个真实用户，CI 不具备，判定逻辑在此固化）。
+/// Pure peer uid decision: same uid allowed, different uid rejected (the unit
+/// test entry for fail-closed behavior -- a cross-uid connection would need a
+/// second real user, which CI lacks, so the decision logic is pinned here).
 #[cfg(unix)]
 #[test]
 fn peer_uid_gate_allows_owner_and_rejects_others() {
@@ -268,10 +282,12 @@ fn peer_uid_gate_allows_owner_and_rejects_others() {
     assert!(!peer_allowed(0, 1000), "root 也不是属主");
 }
 
-/// accept 循环的丢弃分支端到端：伪造 owner_uid（自身 +1）模拟异 uid，
-/// 连接在 accept 层被丢弃——请求得不到任何 HTTP 响应（EOF），服务继续
-/// 存活。真实跨 uid 需要第二个用户（CI 不可得），判定纯函数另测；
-/// 此测钉住「丢弃而非接受/挂起」的行为本身。
+/// The accept loop's discard branch, end to end: forge owner_uid (self + 1) to
+/// simulate a different uid; the connection is dropped at the accept layer --
+/// the request gets no HTTP response at all (EOF) and the service keeps living.
+/// A genuine cross-uid case needs a second user (unavailable in CI) and the
+/// decision pure function is tested separately; this test pins the behavior
+/// itself: dropped, not accepted or hung.
 #[cfg(unix)]
 #[tokio::test]
 async fn unix_listener_drops_connections_whose_uid_is_not_the_owner() {
@@ -296,11 +312,13 @@ async fn unix_listener_drops_connections_whose_uid_is_not_the_owner() {
             .await;
     });
 
-    // 连接本身会被内核接受（握手与 accept 层校验无关），随后被丢弃：
-    // 写请求 → 无任何 HTTP 响应。两种断开形状都算「丢弃成功」——
-    // 优雅 EOF（请求已被读走）或 ConnectionReset（请求字节还在内核
-    // 接收队列里，close 时被 RST 丢弃）；共同点是 buf 里没有任何
-    // HTTP 字节 = 没进解析面。
+    // The connection itself is accepted by the kernel (the handshake is unrelated to
+    // the accept-layer check) and then dropped: write a request and get no HTTP
+    // response whatsoever. Either disconnection shape counts as "dropped
+    // successfully" -- a graceful EOF (the request was already read) or
+    // ConnectionReset (the request bytes are still in the kernel receive queue
+    // and get RST'd away on close); the common denominator is that buf holds no
+    // HTTP bytes at all = it never reached the parsing surface.
     let mut stream = tokio::net::UnixStream::connect(&path).await.unwrap();
     stream
         .write_all(
@@ -312,9 +330,11 @@ async fn unix_listener_drops_connections_whose_uid_is_not_the_owner() {
     let read = tokio::time::timeout(Duration::from_secs(3), stream.read_to_end(&mut buf))
         .await
         .expect("被丢弃的连接应快速断开，而非挂起");
-    // EOF（请求被读走）与 RST（请求字节仍在内核队列，close 时被丢弃）
-    // 都是「丢弃成功」——判定并进单表达式：两种时序下同一条判定行恒执行，
-    // 消息变量预计算（多行 assert 的消息参数行只在失败时执行）。
+    // Both EOF (the request was read) and RST (the request bytes are still queued
+    // in the kernel and get dropped on close) count as "dropped successfully" --
+    // so fold the decision into a single expression: that one decision line runs
+    // under either timing, and the message variables are precomputed (a
+    // multi-line assert evaluates its message arguments only on failure).
     let discarded = read.is_ok()
         || matches!(&read, Err(err) if err.kind() == std::io::ErrorKind::ConnectionReset);
     let outcome = format!("{read:?}");
@@ -327,8 +347,9 @@ async fn unix_listener_drops_connections_whose_uid_is_not_the_owner() {
     let _ = shutdown_tx.send(());
 }
 
-/// peer_gate 的凭据不可用分支（fail-closed 兜底层）：Linux 上真实连接
-/// 的 SO_PEERCRED 恒成功，`Err` 路径只能直接喂——拒绝并留痕，不得放行。
+/// peer_gate's credentials-unavailable branch (the fail-closed backstop layer):
+/// on Linux a real connection's SO_PEERCRED always succeeds, so the `Err` path
+/// can only be fed directly -- it must reject and log a trace, never allow.
 #[cfg(unix)]
 #[test]
 fn peer_gate_rejects_when_credentials_are_unavailable() {
@@ -338,21 +359,25 @@ fn peer_gate_rejects_when_credentials_are_unavailable() {
         !UidCheckedListener::<L>::peer_gate(Err(err), 1000),
         "取不到凭据必须按拒绝处理（fail-closed）"
     );
-    // 放行与拒绝的判定同源 peer_allowed（mismatch 路径由 drops 测试端到端覆盖）
+    // The allow/reject decision shares the same source, peer_allowed (the mismatch
+    // path is covered end to end by the drops test)
     assert!(peer_allowed(1000, 1000));
     assert!(!peer_allowed(0, 1000));
 }
 
-/// accept 循环的错误分类与退避（axum serve/listener.rs 同口径）：
-/// 连接类错误立即重试不退避；其余 log + 1s 退避。真实 UnixListener 的
-/// accept 错误在测试里不可复现（确定性 Accept mock 注入错误序列：
-/// Refused → 立即重试；PermissionDenied → 退避；然后交出真实连接）。
+/// The accept loop's error classification and backoff (same policy as axum's
+/// serve/listener.rs): connection-type errors retry immediately without
+/// backoff; everything else logs + backs off for 1s. Real UnixListener accept
+/// errors are not reproducible in tests (a deterministic Accept mock injects
+/// the error sequence: Refused -> immediate retry; PermissionDenied -> backoff;
+/// then hands over the real connection).
 #[cfg(unix)]
 #[tokio::test]
 async fn accept_loop_classifies_errors_retries_and_backs_off() {
     use std::collections::VecDeque;
 
-    /// 注入错误序列、随后交出预 accept 连接的 mock。
+    /// Mock that injects an error sequence and then hands over a pre-accepted
+    /// connection.
     struct FlakyAccept {
         errors: VecDeque<std::io::ErrorKind>,
         ready: Option<(tokio::net::UnixStream, tokio::net::unix::SocketAddr)>,
@@ -370,8 +395,9 @@ async fn accept_loop_classifies_errors_retries_and_backs_off() {
                 .expect("错误序列耗尽后应交出预 accept 的连接"))
         }
         fn local_addr(&self) -> std::io::Result<tokio::net::unix::SocketAddr> {
-            // 测试不调用（axum Serve::local_addr 是显式方法，serve 循环不碰）；
-            // SocketAddr 非 Copy/无 ==，不为它造存储。
+            // Not called by tests (axum Serve::local_addr is an explicit method, the serve
+            // loop never touches it); SocketAddr is not Copy and has no ==, so
+            // no storage is created for it.
             Err(std::io::Error::new(
                 std::io::ErrorKind::Unsupported,
                 "flaky mock has no local addr",
@@ -379,7 +405,8 @@ async fn accept_loop_classifies_errors_retries_and_backs_off() {
         }
     }
 
-    // 预 accept 一条真实连接（客户端配对），mock 负责先吐两个错误。
+    // Pre-accept one real connection (client paired up); the mock's job is to spit
+    // out the two errors first.
     let dir = tempfile::tempdir().unwrap();
     let real = tokio::net::UnixListener::bind(dir.path().join("real.sock")).unwrap();
     let client = tokio::net::UnixStream::connect(dir.path().join("real.sock"))
@@ -387,14 +414,15 @@ async fn accept_loop_classifies_errors_retries_and_backs_off() {
         .unwrap();
     let (server, server_addr) = real.accept().await.unwrap();
     drop(real);
-    // SocketAddr 无 PartialEq/Copy/Clone——移动进 mock 前先取 Debug 文本。
+    // SocketAddr has no PartialEq/Copy/Clone -- capture its Debug text before moving
+    // it into the mock.
     let server_addr_dbg = format!("{server_addr:?}");
 
     let mut checked = UidCheckedListener {
         inner: FlakyAccept {
             errors: VecDeque::from([
-                std::io::ErrorKind::ConnectionRefused, // 连接类 → 立即重试
-                std::io::ErrorKind::PermissionDenied,  // 其余 → 1s 退避
+                std::io::ErrorKind::ConnectionRefused, // connection-type -> retry immediately
+                std::io::ErrorKind::PermissionDenied,  // everything else -> 1s backoff
             ]),
             ready: Some((server, server_addr)),
         },
@@ -413,14 +441,15 @@ async fn accept_loop_classifies_errors_retries_and_backs_off() {
     )
     .await
     .expect("错误序列后应交付连接");
-    // PermissionDenied 走了 1s 退避；ConnectionRefused 不退避。
+    // PermissionDenied took the 1s backoff; ConnectionRefused did not back off.
     let elapsed = started.elapsed();
     assert!(
         elapsed >= Duration::from_millis(900),
         "非连接类错误必须退避 ~1s，实测 {elapsed:?}"
     );
     assert_eq!(format!("{returned_addr:?}"), server_addr_dbg);
-    // mock 的 local_addr（Listener trait 必备）：Flaky 没有真实地址 → Unsupported。
+    // The mock's local_addr (required by the Listener trait): Flaky has no real
+    // address -> Unsupported.
     {
         use axum::serve::Listener as _;
         let err = checked.local_addr().expect_err("Flaky mock 应报无地址");
@@ -430,7 +459,7 @@ async fn accept_loop_classifies_errors_retries_and_backs_off() {
     drop(client);
 }
 
-/// local_addr 透传（axum Serve::local_addr 的被调方）。
+/// local_addr pass-through (the callee of axum Serve::local_addr).
 #[cfg(unix)]
 #[tokio::test]
 async fn unix_listener_local_addr_delegates_to_inner() {
@@ -449,13 +478,14 @@ async fn unix_listener_local_addr_delegates_to_inner() {
     );
 }
 
-/// 端点名超长（unix socket 路径上限 ~108 字节）：bind 失败且路径名
-/// 未占用 → 显式「failed to bind」错误，而非「已有活 listener」误导。
+/// An overlong endpoint name (unix socket path limit ~108 bytes): the bind fails
+/// and the path name is not taken -> an explicit "failed to bind" error, rather
+/// than the misleading "a live listener already exists".
 #[cfg(unix)]
 #[tokio::test]
 async fn unix_listener_bind_error_on_overlong_endpoint_names_the_cause() {
     let dir = tempfile::tempdir().unwrap();
-    let long_name = "n".repeat(200); // 超过 sun_path 的 108 字节上限
+    let long_name = "n".repeat(200); // beyond sun_path's 108-byte limit
     let path = dir.path().join(long_name);
     let service: ArcTokService = Arc::new(TokioMutex::new(None));
     let err = start_connect_server_with_transport(service, ConnectTransport::Unix { path })
@@ -472,8 +502,8 @@ async fn unix_listener_bind_error_on_overlong_endpoint_names_the_cause() {
     );
 }
 
-/// 非 unix 平台（Windows）：Unix 传输创建即报错并给出 TCP 替代指引，
-/// 不 panic、不留半初始化 listener。
+/// Non-unix platforms (Windows): creating a Unix transport errors immediately
+/// with a TCP fallback hint -- no panic, no half-initialized listener left behind.
 #[cfg(not(unix))]
 #[tokio::test]
 async fn unix_transport_is_rejected_on_windows_with_tcp_fallback_hint() {

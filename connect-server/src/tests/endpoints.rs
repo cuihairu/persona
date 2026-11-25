@@ -25,7 +25,8 @@ async fn identity_scoped_token_sees_only_its_identity_and_answers_empty_for_othe
         .collect();
     assert_eq!(titles, vec!["login"], "scope 外身份的条目不得出现在列表");
 
-    // scope 外条目 = 与不存在同形的 404（不区分 403，防探测）
+    // An out-of-scope item = a 404 indistinguishable from nonexistent (no 403 to
+    // leak scope boundaries, anti-probing)
     let missing = format!("/api/v1/connect/items/{}", other_cred);
     let (status, body) = send(fx.router.clone(), "GET", &missing, &auth).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
@@ -38,7 +39,8 @@ async fn identity_scoped_token_sees_only_its_identity_and_answers_empty_for_othe
         "越权与不存在必须同形"
     );
 
-    // 显式请求 scope 外的身份：200 空列表，而不是 403/404
+    // Explicitly requesting an out-of-scope identity: 200 with an empty list,
+    // not 403/404
     let query = format!("/api/v1/connect/items?identity={other}");
     let (status, body) = send(fx.router.clone(), "GET", &query, &auth).await;
     assert_eq!(status, StatusCode::OK);
@@ -47,7 +49,7 @@ async fn identity_scoped_token_sees_only_its_identity_and_answers_empty_for_othe
     let (status, body) = send(fx.router.clone(), "GET", &query, &auth).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["data"].as_array().unwrap().len(), 1);
-    // 身份列表同样按 scope 收敛
+    // The identity list is narrowed by scope as well
     let (status, body) = send(
         fx.router.clone(),
         "GET",
@@ -58,7 +60,7 @@ async fn identity_scoped_token_sees_only_its_identity_and_answers_empty_for_othe
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["data"].as_array().unwrap().len(), 1);
 
-    // 对照组：全 scope token 两条身份都看得见
+    // Control group: an all-scope token sees both identities
     let all = auth_header(&fx.token);
     let (status, body) = send(fx.router.clone(), "GET", "/api/v1/connect/items", &all).await;
     assert_eq!(status, StatusCode::OK);
@@ -97,7 +99,7 @@ async fn type_scoped_token_hides_other_types_on_every_endpoint() {
     let (status, body) = send(fx.router.clone(), "POST", &totp_post, &auth).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
     assert_eq!(body["error"]["code"], "not_found");
-    // 过滤器本身也不给越权数据
+    // The filter itself must not leak out-of-scope data either
     let (status, body) = send(
         fx.router.clone(),
         "GET",
@@ -214,12 +216,13 @@ async fn totp_endpoint_serves_the_current_code_for_a_scoped_twofactor_item() {
     );
     let remaining = body["data"]["remaining_seconds"].as_u64().unwrap();
     assert!((1..=30).contains(&remaining), "剩余秒越界: {remaining}");
-    // 同一周期内两次取码相同（周期边界附近不做断言，避免抖动）
+    // Two requests within the same period return the same code (no assertion
+    // near the period boundary, avoiding flakiness)
     if remaining > 5 {
         let (_, second) = send(fx.router.clone(), "POST", &path, &auth).await;
         assert_eq!(second["data"]["code"], code, "同一周期内码不该变");
     }
-    // 元数据列表里该条目按 scope 词汇表标成 totp
+    // In the metadata list the item is labeled totp per the scope vocabulary
     let (status, body) = send(fx.router, "GET", "/api/v1/connect/items?type=totp", &auth).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["data"][0]["type"], "totp");
@@ -229,7 +232,7 @@ async fn totp_endpoint_serves_the_current_code_for_a_scoped_twofactor_item() {
 async fn query_and_path_filters_are_exact_and_reject_malformed_input() {
     let fx = fixture().await;
     let auth = auth_header(&fx.token);
-    // 组合过滤
+    // Combined filters
     let q = format!(
         "/api/v1/connect/items?identity={}&type=password&title=login",
         fx.identity_id
@@ -237,7 +240,7 @@ async fn query_and_path_filters_are_exact_and_reject_malformed_input() {
     let (status, body) = send(fx.router.clone(), "GET", &q, &auth).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["data"].as_array().unwrap().len(), 1);
-    // title 是精确匹配（大小写敏感），不是子串
+    // title matches exactly (case-sensitive), not as a substring
     let (status, body) = send(
         fx.router.clone(),
         "GET",
@@ -247,7 +250,8 @@ async fn query_and_path_filters_are_exact_and_reject_malformed_input() {
     .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["data"].as_array().unwrap().len(), 0);
-    // 畸形参数：4xx 而不是 500（不能把库/解析细节变成服务器错误）
+    // Malformed parameters: 4xx rather than 500 (DB/parsing details must not
+    // become server errors)
     for path in [
         "/api/v1/connect/items?identity=not-a-uuid",
         "/api/v1/connect/items?type=bogus",
@@ -262,9 +266,11 @@ async fn query_and_path_filters_are_exact_and_reject_malformed_input() {
     }
 }
 
-/// 端点内读到坏行 → 500 `internal`（`internal_or_locked` 的非锁定臂在
-/// 各 handler 的调用点）。这是那条臂唯一能确定性驱动的入口：guard 之后
-/// 再锁库是竞态，而损坏的行是真实故障（vault 文件被截断/密钥轮换半途）。
+/// Reading a broken row inside an endpoint -> 500 `internal` (the
+/// `internal_or_locked` non-locked arm, reached at each handler's call site).
+/// This is the only entry point where that arm can be driven deterministically:
+/// locking the vault after the guard is a race, whereas a corrupt row is a real
+/// failure (truncated vault file / half-finished key rotation).
 #[tokio::test]
 async fn rows_the_endpoint_cannot_read_are_500_internal_without_leaking_the_cause() {
     let fx = fixture().await;
@@ -286,7 +292,8 @@ async fn rows_the_endpoint_cannot_read_are_500_internal_without_leaking_the_caus
     .await;
     let auth = auth_header(&fx.token);
 
-    // ① 身份行的时间戳列坏掉 → 行映射失败 → identities 端点 Err。
+    // (1) Corrupt the identity row's timestamp column -> row mapping fails ->
+    // the identities endpoint errors.
     fx.db
         .execute(&format!(
             "UPDATE identities SET updated_at = 'not-a-timestamp' WHERE id = '{}'",
@@ -305,7 +312,8 @@ async fn rows_the_endpoint_cannot_read_are_500_internal_without_leaking_the_caus
     assert_eq!(body["error"]["code"], "internal");
     assert_eq!(body["error"]["message"], "internal error");
 
-    // ② 密文中间字节翻掉（长度不变，只让 AEAD 校验失败）→ 单条读取 Err。
+    // (2) Flip a mid-ciphertext byte (length preserved, so only AEAD
+    // authentication fails) -> reading a single item errors.
     for id in [fx.cred_id, totp_id] {
         for (num, den, byte) in [(1u32, 3u32, "5a"), (2, 3, "a5")] {
             fx.db
@@ -329,7 +337,8 @@ async fn rows_the_endpoint_cannot_read_are_500_internal_without_leaking_the_caus
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
     assert_eq!(body["error"]["code"], "internal");
 
-    // ③ 列表里任一行读不出来 → 整个列表 500（不静默丢条目）。
+    // (3) If any row in the list cannot be read, the whole list is a 500 (no
+    // silently dropping items).
     fx.db
         .execute(&format!(
             "UPDATE credentials SET updated_at = 'not-a-timestamp' WHERE id = '{broken_list}'"
@@ -340,7 +349,8 @@ async fn rows_the_endpoint_cannot_read_are_500_internal_without_leaking_the_caus
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
     assert_eq!(body["error"]["code"], "internal");
 
-    // 三类内部细节都不许进响应体（只进 tracing 日志）。
+    // None of the three kinds of internal detail may reach the response body (they
+    // belong only in the tracing log).
     let leaked = body.to_string().to_lowercase();
     for forbidden in [
         "decrypt",
@@ -358,16 +368,20 @@ async fn rows_the_endpoint_cannot_read_are_500_internal_without_leaking_the_caus
             "500 响应外泄内部细节: {leaked}"
         );
     }
-    // health 不受库损坏影响（不落库），存活探测必须还活着。
+    // health is unaffected by DB corruption (it does not touch the DB); the
+    // liveness probe must still answer.
     let (status, _) = send(fx.router, "GET", "/api/v1/connect/health", &[]).await;
     assert_eq!(status, StatusCode::OK);
 }
 
-// 说明：四个 handler 里的 `locked_response()` 分支（service 槽位在 guard
-// 查过 is_unlocked 之后、进 handler 之前变成 None）经路由不可确定性触发
-// ——那是纯竞态，且方向安全（503 而非 5xx 泄漏）。故不为其伪造测试，改由
-// `ok_err_and_locked_envelopes_match_the_documented_shape` 直接钉住
-// `locked_response()` 的状态码与错误码，调用点保持纵深防御原样。
+// Note: the `locked_response()` branches in the four handlers (the service slot
+// becomes None after the guard checked is_unlocked but before entering the
+// handler) cannot be triggered deterministically through the router -- that is a
+// pure race, and it fails in the safe direction (503 rather than a 5xx leak). So
+// no test is fabricated for it; instead
+// `ok_err_and_locked_envelopes_match_the_documented_shape` pins
+// `locked_response()`'s status code and error code directly, and the call sites
+// stay as defense in depth.
 
 #[tokio::test]
 async fn unknown_routes_and_methods_404_405_after_authentication() {
@@ -395,13 +409,16 @@ async fn unknown_routes_and_methods_404_405_after_authentication() {
         Some("no-store"),
         "框架 405 同样带 no-store（4xx 默认可缓存）"
     );
-    // 405 的 Allow 头保留（方法协商对调试有价值）
+    // The 405 Allow header is preserved (method negotiation is useful for
+    // debugging)
     assert!(
         headers.get("allow").is_some(),
         "axum 默认 405 的 Allow 头必须保留"
     );
-    // health 只认 GET：免认证例外不是免路由（防止 health 变成通配口）；
-    // 早退路径同样经归一化——免认证不豁免包络
+    // health accepts GET only: the unauthenticated exemption is not a routing
+    // exemption (so health does not become a catch-all); the early-return path
+    // is normalized too -- being unauthenticated does not exempt it from the
+    // envelope
     let (status, headers, body) = send_capture(
         fx.router.clone(),
         "POST",
@@ -415,7 +432,7 @@ async fn unknown_routes_and_methods_404_405_after_authentication() {
         headers.get("cache-control").and_then(|v| v.to_str().ok()),
         Some("no-store")
     );
-    // TOTP 端点只认 POST
+    // The TOTP endpoint accepts POST only
     let path = format!("/api/v1/connect/items/{}/totp", fx.cred_id);
     let (status, _, body) =
         send_capture(fx.router.clone(), "GET", &path, &host_and_auth(&fx.token)).await;
@@ -424,5 +441,5 @@ async fn unknown_routes_and_methods_404_405_after_authentication() {
 }
 
 // -------------------------------------------------------------------
-// 包络/映射纯函数与 listener 生命周期
+// Envelope/mapping pure functions and listener lifecycle
 // -------------------------------------------------------------------

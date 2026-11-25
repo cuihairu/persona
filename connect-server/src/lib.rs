@@ -1,35 +1,45 @@
-//! Connect 本机自动化 HTTP 端点（CONNECT_AUTOMATION_DESIGN DR-1/DR-3/DR-4）。
+//! Local automation HTTP endpoints for Connect (CONNECT_AUTOMATION_DESIGN DR-1/DR-3/DR-4).
 //!
-//! 独立 crate：桌面（DR-1 A1）与 CLI `persona connect serve`（A2）
-//! 两个宿主共用同一 router/三防线/限额实现与同一 core 服务层——
-//! token 存储（工作区库内 `connect_tokens` 表）跨宿主天然互通。
-//! 其余语义见下（模块文档自 desktop 迁移时保持原样）。
+//! A separate crate: the desktop host (DR-1 A1) and the CLI
+//! `persona connect serve` (A2) host share one router / three lines of
+//! defense / rate-limit implementation and the same core service layer --
+//! token storage (the `connect_tokens` table in the workspace DB) is
+//! inherently shared across hosts.
+//! Remaining semantics are below (the module docs were migrated from desktop unchanged).
 //!
-//! listener 内嵌在宿主进程内，双传输（[`ConnectTransport`]）：
-//! - **TCP loopback**（默认）：bind 硬编码 `127.0.0.1`（端口 0 = OS 分配；
-//!   地址无配置面，「拒绝非 loopback 配置」由硬编码天然满足）。
-//! - **Unix domain socket**（`--unix-socket`，仅 unix 平台）：socket 文件
-//!   0600 + accept 层 peer-uid 校验（连不上 ≠ 能通过，uid 不符连接即被丢弃），
-//!   无 TCP 端口；Windows 无此传输，创建即报错。
+//! The listener is embedded in the host process with two transports ([`ConnectTransport`]):
+//! - **TCP loopback** (default): bind is hardcoded to `127.0.0.1` (port 0 = OS-assigned;
+//!   there is no address configuration surface, so "reject non-loopback config" is
+//!   satisfied by the hardcoding).
+//! - **Unix domain socket** (`--unix-socket`, unix platforms only): socket file
+//!   0600 + peer-uid verification at the accept layer (reachable != allowed; a
+//!   connection with a mismatched uid is dropped immediately), no TCP port;
+//!   Windows has no such transport and creation errors out.
 //!
-//! 默认关闭：不开启 = 不创建 listener。
+//! Off by default: not enabled = no listener created.
 //!
-//! 请求管线（每请求）：
-//! 1. Host 头白名单（`127.0.0.1`/`localhost`）→ 否则 421（DNS rebinding）。
-//!    **仅 TCP**：unix socket 无名字解析面，DNS rebinding 不可达，跳过该检查
-//!    （客户端可发任意 Host，如 Go 生态常用的 `http://unix/…`）。
-//! 2. `Origin` 头出现即 403（本机 API 无合法浏览器跨源消费者，CORS 全关）
-//! 3. `/health` 免认证零信息；其余要求 `Authorization: Bearer pconn_…`
-//! 4. token 哈希查库（吊销/未知同形 401，无缓存窗口）
-//! 5. 锁定门禁：未解锁 → 503 `vault_locked`，**不消耗**限额（锁屏重试
-//!    风暴不锁死 token）
-//! 6. 限额：每 token 每分钟 120 请求（固定窗，超限 429；上限写死）
-//! 7. 数据面 scope 过滤（core `connect_*`），scope 外/归档/不存在同形 404
+//! Request pipeline (per request):
+//! 1. Host header allowlist (`127.0.0.1`/`localhost`) -> otherwise 421 (DNS rebinding).
+//!    **TCP only**: a unix socket has no name-resolution surface, DNS rebinding is
+//!    unreachable, so the check is skipped (clients may send any Host, e.g. the
+//!    Go ecosystem's common `http://unix/...`).
+//! 2. A present `Origin` header means 403 (there is no legitimate browser
+//!    cross-origin consumer of a local API; CORS is fully off)
+//! 3. `/health` is unauthenticated and leaks nothing; everything else requires
+//!    `Authorization: Bearer pconn_...`
+//! 4. Token hash DB lookup (revoked/unknown both give an identical 401, no cache window)
+//! 5. Lock gate: not unlocked -> 503 `vault_locked`, which does **not** consume
+//!    quota (a lock-screen retry storm cannot lock out the token)
+//! 6. Rate limit: 120 requests per token per minute (fixed window, 429 when exceeded;
+//!    the limit is hardcoded)
+//! 7. Data-plane scope filtering (core `connect_*`); out-of-scope / archived /
+//!    nonexistent all give an identical 404
 //!
-//! 响应一律 `{"ok":…}` 包络（错误 `{"ok":false,"error":{"code","message"}}`，
-//! 与 server 包络形状对齐）+ `Cache-Control: no-store`（TOTP 码与字段
-//! 明文不进任何中间缓存）。scope 判定与 token 生命周期在 core
-//! （`persona_core::connect`），本模块只做 HTTP 面编排。
+//! Responses always use the `{"ok":...}` envelope (errors
+//! `{"ok":false,"error":{"code","message"}}`, matching the server envelope shape) plus
+//! `Cache-Control: no-store` (TOTP codes and field plaintext never reach any
+//! intermediate cache). Scope decisions and token lifecycle live in core
+//! (`persona_core::connect`); this module only orchestrates the HTTP surface.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -43,31 +53,36 @@ use persona_core::PersonaService;
 use tokio::sync::Mutex as TokioMutex;
 use uuid::Uuid;
 
-/// 每 token 每分钟请求数上限（DR-3：固定窗；上限写死不做配置——
-/// 配置面越大误用面越大）。
+/// Per-token per-minute request cap (DR-3: fixed window; the limit is hardcoded
+/// and not configurable -- a bigger configuration surface is a bigger misuse
+/// surface).
 pub const RATE_LIMIT_PER_MINUTE: u32 = 120;
 
 const RATE_WINDOW: Duration = Duration::from_secs(60);
-/// 速率表清扫阈值：达到该槽位数时清一次窗口已过期的死槽位（token 删除
-/// /更换后的残留条目，慢泄漏上界封顶，audit 批2 #10）。只在每这么多
-/// token 记账时触发一次，O(n) 摊还成本恒定。
+/// Rate-table sweep threshold: when this many slots are present, sweep away
+/// entries whose windows have expired (leftovers after token deletion/rotation,
+/// capping the slow-leak upper bound, audit batch 2 #10). Triggered once per
+/// this many rate accountings, so the amortized O(n) cost stays constant.
 const RATE_SWEEP_THRESHOLD: usize = 16;
 
-/// `Arc<tokio::sync::Mutex<Option<PersonaService>>>` 别名（与 AppState
-/// 的 service 字段同型，命令层 clone 传入）。
+/// Alias for `Arc<tokio::sync::Mutex<Option<PersonaService>>>` (the same type as
+/// AppState's `service` field, cloned in by the command layer).
 pub type ArcTokService = Arc<TokioMutex<Option<PersonaService>>>;
 
-/// Connect listener 的传输层。
+/// Transport layer for the Connect listener.
 ///
-/// - [`ConnectTransport::Tcp`]：loopback TCP（默认；`port` 0 = OS 分配真实端口）。
-/// - [`ConnectTransport::Unix`]：unix domain socket（仅 unix 平台可创建成功；
-///   Windows 上 [`start_connect_server_with_transport`] 直接报错——tokio 无
-///   Windows UnixListener，named pipe 形态是后续议题而非本传输的等价物）。
+/// - [`ConnectTransport::Tcp`]: loopback TCP (default; `port` 0 = OS assigns a
+///   real port).
+/// - [`ConnectTransport::Unix`]: unix domain socket (creation succeeds on unix
+///   platforms only; on Windows [`start_connect_server_with_transport`] errors
+///   outright -- tokio has no Windows UnixListener, and named pipes are a
+///   follow-up topic, not an equivalent of this transport).
 #[derive(Clone, Debug)]
 pub enum ConnectTransport {
-    /// loopback TCP：`127.0.0.1:{port}`（port 0 = OS 分配）。
+    /// loopback TCP: `127.0.0.1:{port}` (port 0 = OS-assigned).
     Tcp { port: u16 },
-    /// unix domain socket：0600 文件权限 + accept 层属主 uid 校验。
+    /// unix domain socket: 0600 file permissions + owner uid verification at the
+    /// accept layer.
     Unix { path: PathBuf },
 }
 
@@ -96,18 +111,25 @@ use unix::{peer_allowed, Accept};
 
 #[derive(Clone)]
 pub struct ConnectServerState {
-    /// 与 AppState 共享的同一 service 槽位（token 校验 + 解锁态门禁）。
+    /// The same service slot shared with AppState (token verification + unlock
+    /// gate).
     pub service: ArcTokService,
-    /// 每 token 固定窗计数：token id → (窗口起点, 已计请求数)。纯内存、
-    /// 进程重启即清——这是宿主保护（防失控轮询拖垮宿主），不是审计。
+    /// Fixed-window counters per token: token id -> (window start, counted
+    /// request count). Purely in-memory and cleared on process restart -- this
+    /// is host protection (a runaway poller must not drag down the host), not
+    /// auditing.
     rates: Arc<Mutex<HashMap<Uuid, (Instant, u32)>>>,
-    /// Host 头白名单（`127.0.0.1`/`localhost`/`::1`）是否强制。
+    /// Whether to enforce the Host header allowlist
+    /// (`127.0.0.1`/`localhost`/`::1`).
     ///
-    /// 该防线针对 DNS rebinding：域名解析到本机 IP + 恶意 Host 打到 loopback
-    /// 端口。unix socket 没有名字解析面（连接打到文件路径，浏览器/域名解析
-    /// 不可达），白名单无防护对象、只剩误拒合法客户端的成本（Go 生态常用
-    /// `Host: unix` 之类的任意值），故 unix 传输跳过；`Origin`/token/限额
-    /// 三条防线在两种传输上原样生效。
+    /// This line of defense targets DNS rebinding: a domain resolving to the
+    /// local IP plus a malicious Host hitting the loopback port. A unix socket has
+    /// no name-resolution surface (connections target a file path, so browser /
+    /// DNS resolution is unreachable), so the allowlist has nothing to protect
+    /// against and only costs wrongly rejected legitimate clients (the Go
+    /// ecosystem routinely sends arbitrary values like `Host: unix`); hence the
+    /// unix transport skips it. The `Origin` / token / rate-limit lines of
+    /// defense apply unchanged on both transports.
     require_loopback_host: bool,
 }
 
@@ -120,7 +142,8 @@ impl ConnectServerState {
         }
     }
 
-    /// unix 传输的 state：跳过 Host 白名单（理由见字段文档）。
+    /// State for the unix transport: skip the Host allowlist (rationale in the field
+    /// docs).
     #[cfg(unix)]
     fn new_unix(service: ArcTokService) -> Self {
         Self {
@@ -129,12 +152,15 @@ impl ConnectServerState {
         }
     }
 
-    /// 固定窗计数：窗口过期则重置为 1；未过期且已满返回 false（429）。
+    /// Fixed-window accounting: reset to 1 when the window has expired; return
+    /// false (429) when it is unexpired and already full.
     fn consume_rate(&self, token_id: Uuid) -> bool {
         let mut rates = self.rates.lock().unwrap_or_else(|p| p.into_inner());
         let now = Instant::now();
-        // 低频清扫：达到阈值时清掉窗口已过期的死槽位，慢泄漏上界封顶。
-        // 阈值内（正常低基数部署）不触发，避免每请求 O(n) 全表扫。
+        // Low-frequency sweep: at the threshold, clear dead slots whose windows have
+        // expired, capping the slow-leak upper bound. Below the threshold (normal
+        // low-cardinality deployments) nothing triggers, avoiding a per-request
+        // O(n) scan of the whole table.
         if rates.len() >= RATE_SWEEP_THRESHOLD {
             rates.retain(|_, (window_start, _)| now.duration_since(*window_start) < RATE_WINDOW);
         }
@@ -151,8 +177,10 @@ impl ConnectServerState {
     }
 }
 
-/// 组装路由 + 三防线/认证/限额 middleware。测试与生产共用（生产经
-/// [`start_connect_server`] bind，测试经 `Router::oneshot` 无网络直驱）。
+/// Assemble routes + the three-lines-of-defense / authentication / rate-limit
+/// middleware. Shared by tests and production (production binds via
+/// [`start_connect_server`]; tests drive it directly via `Router::oneshot`
+/// without a network).
 pub fn build_router(state: ConnectServerState) -> Router {
     Router::new()
         .route("/api/v1/connect/health", get(health))
@@ -164,11 +192,12 @@ pub fn build_router(state: ConnectServerState) -> Router {
         .with_state(state)
 }
 
-/// 启动 Connect listener（loopback TCP，兼容入口）。
+/// Start the Connect listener (loopback TCP, compatibility entry point).
 ///
-/// 等价于 [`start_connect_server_with_transport`] + [`ConnectTransport::Tcp`]。
-/// 返回句柄（实际端口 + 关停通道）；bind 失败（端口被占等）向上传播给调用方
-/// （设置页显式报错，不静默重试）。
+/// Equivalent to [`start_connect_server_with_transport`] + [`ConnectTransport::Tcp`].
+/// Returns a handle (actual port + shutdown channel); bind failure (e.g. port in
+/// use) propagates to the caller (the settings page reports it explicitly, no
+/// silent retry).
 pub async fn start_connect_server(
     service: ArcTokService,
     port: u16,
@@ -176,13 +205,15 @@ pub async fn start_connect_server(
     start_connect_server_with_transport(service, ConnectTransport::Tcp { port }).await
 }
 
-/// 按指定传输启动 Connect listener，返回句柄（TCP：实际端口；unix：
-/// socket 路径）+ 关停通道。bind 失败向上传播，不静默重试。
+/// Start the Connect listener on the given transport; returns a handle (TCP:
+/// actual port; unix: socket path) + shutdown channel. Bind failure propagates,
+/// no silent retry.
 ///
-/// - [`ConnectTransport::Tcp`]：`127.0.0.1:{port}`（0 = OS 分配）。
-/// - [`ConnectTransport::Unix`]：0600 socket 文件 + accept 层属主 uid 校验
-///   （陈旧残骸接管、活 listener 一律报错不劫持，口径同 ssh-agent transport）。
-///   非 unix 平台（Windows）直接报错——见 [`ConnectTransport`] 文档。
+/// - [`ConnectTransport::Tcp`]: `127.0.0.1:{port}` (0 = OS-assigned).
+/// - [`ConnectTransport::Unix`]: 0600 socket file + owner uid verification at the
+///   accept layer (stale leftovers are taken over; a live listener always errors
+///   instead of hijacking, same policy as the ssh-agent transport). Non-unix
+///   platforms (Windows) error outright -- see the [`ConnectTransport`] docs.
 pub async fn start_connect_server_with_transport(
     service: ArcTokService,
     transport: ConnectTransport,
@@ -216,9 +247,10 @@ pub async fn start_connect_server_with_transport(
             #[cfg(not(unix))]
             {
                 let _ = (service, path);
-                // Windows 上 tokio 没有 UnixListener（AF_UNIX 不可移植到本 crate
-                // 的支持面）；named pipe 是另一传输形态，不在此冒充。显式报错，
-                // 调用方（CLI --unix）拿到可执行的替代指引。
+                // On Windows tokio has no UnixListener (AF_UNIX is not portable within this
+                // crate's supported surface); named pipes are a different transport
+                // form and are not faked here. Error out explicitly so the caller
+                // (CLI --unix) gets actionable guidance on alternatives.
                 anyhow::bail!(
                     "unix socket transport is not supported on this platform; \
                      use TCP loopback instead (`persona connect serve` without --unix)"
@@ -228,13 +260,16 @@ pub async fn start_connect_server_with_transport(
     }
 }
 
-/// unix 传输实现（仅 unix 平台编译）。
+/// Unix transport implementation (compiled on unix platforms only).
 ///
-/// 三层本地防护：① socket 文件 0600（bind 后立即收紧，防 umask 残留组/
-/// 其他位）；② accept 层属主 uid 校验（[`UidCheckedListener`]——文件权限
-/// 是内核层，uid 校验兜住权限位被改动/异常场景，fail-closed）；③ HTTP 层
-/// token 认证（两种传输相同）。`Origin`/限额原样生效，Host 白名单跳过
-/// （见 [`ConnectServerState::require_loopback_host`]）。
+/// Three layers of local protection: (1) socket file 0600 (tightened immediately
+/// after bind, guarding against umask leftover group/other bits); (2) owner uid
+/// verification at the accept layer ([`UidCheckedListener`] -- file permissions
+/// are the kernel layer, uid verification covers scenarios where permission bits
+/// were altered or misbehaving, fail-closed); (3) HTTP-layer token
+/// authentication (same on both transports). `Origin`/rate limit apply
+/// unchanged; the Host allowlist is skipped (see
+/// [`ConnectServerState::require_loopback_host`]).
 #[cfg(unix)]
 async fn start_unix(service: ArcTokService, path: PathBuf) -> anyhow::Result<ConnectServerHandle> {
     use std::os::unix::fs::{MetadataExt, PermissionsExt};
@@ -245,15 +280,18 @@ async fn start_unix(service: ArcTokService, path: PathBuf) -> anyhow::Result<Con
         }
     }
 
-    // 先 bind，不预先删除（TOCTOU：exists→remove→bind 之间路径可能被换掉）。
-    // 只有确认旧路径是陈旧残骸（非 socket 或无人监听）才接管；活着的 listener
-    // 一律报错而非静默劫持路径（口径同 ssh-agent transport::bind，实现收口
-    // 在 persona_core::socket::is_stale_socket）。
+    // Bind first, do not pre-delete (TOCTOU: the path could be swapped out between
+    // exists->remove->bind). Only take over once the old path is confirmed stale
+    // (not a socket, or nobody listening); a live listener always errors rather
+    // than silently hijacking the path (same policy as ssh-agent transport::bind,
+    // with the implementation consolidated in
+    // persona_core::socket::is_stale_socket).
     let listener = match tokio::net::UnixListener::bind(&path) {
         Ok(listener) => listener,
         Err(err) => {
-            // 用 symlink_metadata 判「路径名被占用」：存在断链 symlink 时
-            // Path::exists() 跟随链接为 false 会漏掉可接管的残骸。
+            // Use symlink_metadata to detect "the path name is taken": with a broken
+            // symlink present, Path::exists() follows the link, returns false, and
+            // would miss leftover files that can be taken over.
             if path.symlink_metadata().is_err() {
                 anyhow::bail!("failed to bind connect socket {}: {err}", path.display());
             }
@@ -268,11 +306,13 @@ async fn start_unix(service: ArcTokService, path: PathBuf) -> anyhow::Result<Con
         }
     };
 
-    // 0600：bind 创建的 socket 文件权限 = 0777 & ~umask（常见 umask 022 →
-    // 0755，group/other 可见）。立即收紧到仅属主可连（unix socket 连接需要
-    // 写权限，0600 即同用户独占——内核层）。
+    // 0600: permissions of the socket file created by bind = 0777 & ~umask (a
+    // common umask of 022 -> 0755, visible to group/other). Tighten immediately to
+    // owner-only connectability (a unix socket connection needs write permission,
+    // so 0600 means same-user exclusivity -- kernel layer).
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
-    // 属主 = 刚 bind 成功的本进程用户（新鲜文件或接管后重建，见上）。
+    // Owner = the current process user that just bound successfully (a fresh
+    // file, or recreated after taking over a stale path, see above).
     let owner_uid = std::fs::metadata(&path)?.uid();
 
     let listener = UidCheckedListener {
@@ -288,7 +328,8 @@ async fn start_unix(service: ArcTokService, path: PathBuf) -> anyhow::Result<Con
                 let _ = shutdown_rx.await;
             })
             .await;
-        // 正常关停：移除 socket 文件（崩溃残骸由下一次启动按陈旧接管处理）。
+        // Clean shutdown: remove the socket file (leftovers from a crash are handled as
+        // stale paths by the next start).
         let _ = std::fs::remove_file(&cleanup);
     });
     Ok(ConnectServerHandle {
@@ -299,36 +340,45 @@ async fn start_unix(service: ArcTokService, path: PathBuf) -> anyhow::Result<Con
     })
 }
 
-/// 运行中 listener 的句柄。
+/// Handle for a running listener.
 #[derive(Debug)]
 pub struct ConnectServerHandle {
-    /// listener 实际绑定端口（TCP 传输，端口 0 = OS 分配后的真实值）。
-    /// **unix 传输恒为 0**（没有 TCP 端口；端点见 [`Self::socket_path`]）。
+    /// The port the listener actually bound (TCP transport; a configured port of
+    /// 0 is replaced by the OS-assigned value).
+    /// **Always 0 for the unix transport** (there is no TCP port; see
+    /// [`Self::socket_path`] for the endpoint).
     pub port: u16,
-    /// unix 传输的 socket 路径（TCP 传输为 `None`）。
+    /// Socket path for the unix transport (`None` for TCP).
     ///
-    /// 正常关停后 socket 文件已移除；进程崩溃留下的残骸由下一次启动按
-    /// 陈旧接管（`persona_core::socket::is_stale_socket`）处理。
+    /// After a clean shutdown the socket file has been removed; leftovers from a
+    /// process crash are handled by the next start as a stale-path takeover
+    /// (`persona_core::socket::is_stale_socket`).
     pub socket_path: Option<PathBuf>,
     shutdown: tokio::sync::oneshot::Sender<()>,
-    /// listener 任务的收尾凭证（serve 循环结束 + socket 文件清理都在其内）。
+    /// Join handle for the listener task (both the end of the serve loop and the
+    /// socket file cleanup happen inside it).
     closed: tokio::task::JoinHandle<()>,
 }
 
 impl ConnectServerHandle {
-    /// 触发 graceful shutdown（同步发送；listener 任务自行收尾）。
+    /// Trigger graceful shutdown (sends synchronously; the listener task does its
+    /// own cleanup).
     ///
-    /// fire-and-forget：调用方**不等清理完成**。进程随后立即退出时 runtime
-    /// 会直接丢弃未跑完的清理任务（unix 下留陈旧 socket，靠下次启动接管
-    /// 自愈）——进程退出路径请用 [`Self::stop_and_wait`]。
+    /// Fire-and-forget: the caller **does not wait for cleanup to finish**. If
+    /// the process exits right after, the runtime drops the unfinished cleanup
+    /// task (on unix a stale socket is left behind and self-heals via the next
+    /// start's stale-path takeover) -- for process exit paths use
+    /// [`Self::stop_and_wait`].
     pub fn stop(self) {
         let _ = self.shutdown.send(());
     }
 
-    /// 触发 graceful shutdown 并等待 listener 任务完成（含 socket 文件移除）。
+    /// Trigger graceful shutdown and wait for the listener task to finish (including
+    /// socket file removal).
     ///
-    /// 进程退出前的正确收尾：`closed` 完成即保证端口/socket 已释放，不留
-    /// 竞态窗口（fire-and-forget 的 stop 在随后的进程退出下不保证清理）。
+    /// The correct cleanup before process exit: `closed` completing guarantees the
+    /// port/socket has been released, leaving no race window (the fire-and-forget
+    /// `stop` does not guarantee cleanup when the process exits right after).
     pub async fn stop_and_wait(self) {
         let _ = self.shutdown.send(());
         let _ = self.closed.await;
@@ -336,7 +386,7 @@ impl ConnectServerHandle {
 }
 
 // -----------------------------------------------------------------------
-// 包络与错误映射
+// Envelope and error mapping
 // -----------------------------------------------------------------------
 
 #[cfg(test)]

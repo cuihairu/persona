@@ -1,35 +1,45 @@
-//! Connect 本机自动化 HTTP 端点（CONNECT_AUTOMATION_DESIGN DR-1/DR-3/DR-4）。
+//! Local automation HTTP endpoints for Connect (CONNECT_AUTOMATION_DESIGN DR-1/DR-3/DR-4).
 //!
-//! 独立 crate：桌面（DR-1 A1）与 CLI `persona connect serve`（A2）
-//! 两个宿主共用同一 router/三防线/限额实现与同一 core 服务层——
-//! token 存储（工作区库内 `connect_tokens` 表）跨宿主天然互通。
-//! 其余语义见下（模块文档自 desktop 迁移时保持原样）。
+//! A separate crate: the desktop host (DR-1 A1) and the CLI
+//! `persona connect serve` (A2) host share one router / three lines of
+//! defense / rate-limit implementation and the same core service layer --
+//! token storage (the `connect_tokens` table in the workspace DB) is
+//! inherently shared across hosts.
+//! Remaining semantics are below (the module docs were migrated from desktop unchanged).
 //!
-//! listener 内嵌在宿主进程内，双传输（[`ConnectTransport`]）：
-//! - **TCP loopback**（默认）：bind 硬编码 `127.0.0.1`（端口 0 = OS 分配；
-//!   地址无配置面，「拒绝非 loopback 配置」由硬编码天然满足）。
-//! - **Unix domain socket**（`--unix-socket`，仅 unix 平台）：socket 文件
-//!   0600 + accept 层 peer-uid 校验（连不上 ≠ 能通过，uid 不符连接即被丢弃），
-//!   无 TCP 端口；Windows 无此传输，创建即报错。
+//! The listener is embedded in the host process with two transports ([`ConnectTransport`]):
+//! - **TCP loopback** (default): bind is hardcoded to `127.0.0.1` (port 0 = OS-assigned;
+//!   there is no address configuration surface, so "reject non-loopback config" is
+//!   satisfied by the hardcoding).
+//! - **Unix domain socket** (`--unix-socket`, unix platforms only): socket file
+//!   0600 + peer-uid verification at the accept layer (reachable != allowed; a
+//!   connection with a mismatched uid is dropped immediately), no TCP port;
+//!   Windows has no such transport and creation errors out.
 //!
-//! 默认关闭：不开启 = 不创建 listener。
+//! Off by default: not enabled = no listener created.
 //!
-//! 请求管线（每请求）：
-//! 1. Host 头白名单（`127.0.0.1`/`localhost`）→ 否则 421（DNS rebinding）。
-//!    **仅 TCP**：unix socket 无名字解析面，DNS rebinding 不可达，跳过该检查
-//!    （客户端可发任意 Host，如 Go 生态常用的 `http://unix/…`）。
-//! 2. `Origin` 头出现即 403（本机 API 无合法浏览器跨源消费者，CORS 全关）
-//! 3. `/health` 免认证零信息；其余要求 `Authorization: Bearer pconn_…`
-//! 4. token 哈希查库（吊销/未知同形 401，无缓存窗口）
-//! 5. 锁定门禁：未解锁 → 503 `vault_locked`，**不消耗**限额（锁屏重试
-//!    风暴不锁死 token）
-//! 6. 限额：每 token 每分钟 120 请求（固定窗，超限 429；上限写死）
-//! 7. 数据面 scope 过滤（core `connect_*`），scope 外/归档/不存在同形 404
+//! Request pipeline (per request):
+//! 1. Host header allowlist (`127.0.0.1`/`localhost`) -> otherwise 421 (DNS rebinding).
+//!    **TCP only**: a unix socket has no name-resolution surface, DNS rebinding is
+//!    unreachable, so the check is skipped (clients may send any Host, e.g. the
+//!    Go ecosystem's common `http://unix/...`).
+//! 2. A present `Origin` header means 403 (there is no legitimate browser
+//!    cross-origin consumer of a local API; CORS is fully off)
+//! 3. `/health` is unauthenticated and leaks nothing; everything else requires
+//!    `Authorization: Bearer pconn_...`
+//! 4. Token hash DB lookup (revoked/unknown both give an identical 401, no cache window)
+//! 5. Lock gate: not unlocked -> 503 `vault_locked`, which does **not** consume
+//!    quota (a lock-screen retry storm cannot lock out the token)
+//! 6. Rate limit: 120 requests per token per minute (fixed window, 429 when exceeded;
+//!    the limit is hardcoded)
+//! 7. Data-plane scope filtering (core `connect_*`); out-of-scope / archived /
+//!    nonexistent all give an identical 404
 //!
-//! 响应一律 `{"ok":…}` 包络（错误 `{"ok":false,"error":{"code","message"}}`，
-//! 与 server 包络形状对齐）+ `Cache-Control: no-store`（TOTP 码与字段
-//! 明文不进任何中间缓存）。scope 判定与 token 生命周期在 core
-//! （`persona_core::connect`），本模块只做 HTTP 面编排。
+//! Responses always use the `{"ok":...}` envelope (errors
+//! `{"ok":false,"error":{"code","message"}}`, matching the server envelope shape) plus
+//! `Cache-Control: no-store` (TOTP codes and field plaintext never reach any
+//! intermediate cache). Scope decisions and token lifecycle live in core
+//! (`persona_core::connect`); this module only orchestrates the HTTP surface.
 
 use super::ConnectServerState;
 use axum::extract::{Request, State};
@@ -49,8 +59,9 @@ pub(super) fn ok_json<T: serde::Serialize>(data: T) -> Response {
         .into_response()
 }
 
-/// 错误包络。message 只承载对消费者有操作意义的描述——内部细节
-/// （DB/解密错误文本）不外泄，进 tracing 日志。
+/// Error envelope. `message` carries only an actionable description for the
+/// consumer -- internal details (DB/decryption error text) are never leaked and
+/// go to the tracing log instead.
 pub(super) fn err_json(status: StatusCode, code: &str, message: &str) -> Response {
     (
         status,
@@ -67,13 +78,16 @@ pub(super) fn no_store_headers() -> [(&'static str, &'static str); 2] {
     ]
 }
 
-/// 归一化框架自产 4xx：路由未命中（404）、方法不匹配（405）、提取器
-/// 拒绝（400，如 `items/:id` 的非法 UUID）走 axum 默认响应——不经
-/// `{"ok":false,"error":{…}}` 包络、不带 `Cache-Control: no-store`（4xx
-/// 默认可缓存）。本 crate 自产 4xx 恒带 no-store（`err_json` 是唯一生产
-/// 者），故以「4xx 且缺 no-store」识别框架响应：保留状态码与既有响应头
-/// （405 的 `Allow` 有调试价值），补 no-store 并换上包络正文（框架正文
-/// 为空或一行纯文本，直接丢弃）。
+/// Normalize framework-generated 4xx: unmatched route (404), method
+/// mismatch (405), and extractor rejection (400, e.g. a malformed UUID in
+/// `items/:id`) fall through to axum's default response -- no
+/// `{"ok":false,"error":{...}}` envelope and no `Cache-Control: no-store`
+/// (4xx is cacheable by default). This crate's own 4xx always carries no-store
+/// (`err_json` is the only producer), so a "4xx missing no-store" identifies a
+/// framework response: keep the status code and existing response headers
+/// (the 405 `Allow` header has debugging value), add no-store, and swap in the
+/// envelope body (the framework body is empty or a single line of plain text
+/// and is discarded outright).
 async fn normalize_framework_error(response: Response) -> Response {
     let framework = response.status().is_client_error()
         && !response.headers().contains_key(header::CACHE_CONTROL);
@@ -82,7 +96,7 @@ async fn normalize_framework_error(response: Response) -> Response {
     }
     let status = response.status();
     let (mut parts, body) = response.into_parts();
-    // 框架正文极小；无论读取成败都已被消费，统一丢弃
+    // The framework body is tiny; it is consumed either way, so drop it uniformly
     let _ = axum::body::to_bytes(body, 4096).await;
     parts
         .headers
@@ -115,7 +129,7 @@ pub(super) fn is_vault_locked(err: &anyhow::Error) -> bool {
 }
 
 // -----------------------------------------------------------------------
-// 三防线 + 认证 + 限额 middleware
+// Three lines of defense + authentication + rate limiting middleware
 // -----------------------------------------------------------------------
 
 pub(super) async fn guard(
@@ -123,19 +137,22 @@ pub(super) async fn guard(
     mut request: Request,
     next: Next,
 ) -> Response {
-    // 防线 1：Host 头白名单（仅 loopback TCP）。到达 listener 的流量必然
-    // 打到本机端口，Host 的 host 部分仍必须是 loopback 名——DNS rebinding
-    // （evil.com → 127.0.0.1）会带恶意 Host，直接 421。unix socket 无名字
-    // 解析面（见 `require_loopback_host` 字段文档），跳过。
+    // Line of defense 1: Host header allowlist (loopback TCP only). Traffic reaching
+    // the listener necessarily hits a local port, so the host part of Host must
+    // still be a loopback name -- DNS rebinding (evil.com -> 127.0.0.1) brings a
+    // malicious Host, which gets a 421. A unix socket has no name-resolution
+    // surface (see the `require_loopback_host` field docs), so this is skipped.
     if state.require_loopback_host {
         let host_ok = request
             .headers()
             .get(header::HOST)
             .and_then(|v| v.to_str().ok())
             .map(|h| {
-                // 括号 IPv6（RFC 9110 §4.1.2）省略端口时不能按 ':' 切端口：
-                // "[::1]" 会被 rsplit_once 剩 "[::"，白名单里的 ::1 反被误拒。
-                // 仅当整段不以 ']' 结尾（即不是无端口的括号 IPv6）才剥端口。
+                // Bracketed IPv6 (RFC 9110 §4.1.2) with an omitted port must not be split on
+                // ':': rsplit_once would turn "[::1]" into "[::" and wrongly
+                // reject ::1 from the allowlist. Only strip the port when the
+                // whole value does not end in ']' (i.e. it is not a portless
+                // bracketed IPv6 address).
                 let authority = if h.ends_with(']') {
                     h
                 } else {
@@ -154,8 +171,9 @@ pub(super) async fn guard(
         }
     }
 
-    // 防线 2：CORS 全关。Origin 出现即 403（含预检 OPTIONS——不返回任何
-    // Access-Control-Allow-* 头，浏览器侧直接失败）。
+    // Line of defense 2: CORS fully off. A present Origin means 403 (including
+    // preflight OPTIONS -- no Access-Control-Allow-* headers are returned, so the
+    // browser fails outright).
     if request.headers().contains_key(header::ORIGIN) {
         return err_json(
             StatusCode::FORBIDDEN,
@@ -164,13 +182,15 @@ pub(super) async fn guard(
         );
     }
 
-    // health 免认证零信息（存活探测用；不含版本以外任何库状态）。
-    // 归一化同样适用：POST /health 的 405 也该带包络（免认证不豁免路由）。
+    // health is unauthenticated and leaks nothing (for liveness probes; no DB state
+    // beyond the version). Normalization applies here too: the 405 from
+    // POST /health should also carry the envelope (being unauthenticated does
+    // not exempt routes).
     if request.uri().path() == "/api/v1/connect/health" {
         return normalize_framework_error(next.run(request).await).await;
     }
 
-    // 防线 3：token 必需。
+    // Line of defense 3: a token is required.
     let presented = request
         .headers()
         .get(header::AUTHORIZATION)
@@ -186,7 +206,8 @@ pub(super) async fn guard(
         );
     };
 
-    // token 哈希查库（未知/吊销同形 None → 401，防探测）。
+    // Token hash DB lookup (unknown/revoked both give the same None -> 401,
+    // anti-probing).
     let auth = {
         let service_guard = state.service.lock().await;
         match service_guard.as_ref() {
@@ -200,7 +221,8 @@ pub(super) async fn guard(
                     )
                 }
             },
-            // service 未初始化 = 库未就绪，按锁定语义处理（503，不扣限额）
+            // An uninitialized service means the DB is not ready: treat it with locked
+            // semantics (503, quota not consumed)
             None => {
                 return err_json(
                     StatusCode::SERVICE_UNAVAILABLE,
@@ -214,7 +236,8 @@ pub(super) async fn guard(
         return err_json(StatusCode::UNAUTHORIZED, "unauthorized", "invalid token");
     };
 
-    // 锁定门禁在限额计数之前：锁定 503 不扣限额（DR-4）。
+    // The lock gate comes before rate accounting: a locked 503 does not consume
+    // quota (DR-4).
     let unlocked = {
         let service_guard = state.service.lock().await;
         service_guard
@@ -238,11 +261,14 @@ pub(super) async fn guard(
         );
     }
 
-    // token 已鉴权 + 已解锁：把本次请求记为敏感活动——scoped token 即再
-    // 认证（可撤销、有到期、审计在案），桌面端 force_lock_sensitive（敏感
-    // 超时 → 锁会话要求再认证）对 token 面不适用，否则登录 5 分钟后的首个
-    // 读密文请求永久 500 且无再认证入口。机会性刷新：失败仅 debug，不改变
-    // 任何拒绝语义。
+    // Token authenticated + vault unlocked: record this request as sensitive
+    // activity -- a scoped token is re-authentication (revocable, expiring,
+    // audited), so the desktop's force_lock_sensitive (sensitive timeout ->
+    // lock the session and require re-authentication) must not apply to the
+    // token surface, otherwise the first ciphertext read five minutes after
+    // login would 500 forever with no way to re-authenticate. Opportunistic
+    // refresh: on failure only debug-log; it does not change any rejection
+    // semantics.
     {
         let service_guard = state.service.lock().await;
         if let Some(service) = service_guard.as_ref() {

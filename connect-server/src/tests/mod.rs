@@ -18,9 +18,11 @@ struct Fixture {
     token_row_id: Uuid,
     identity_id: Uuid,
     cred_id: Uuid,
-    /// unlock 用的盐（重新解锁恢复会话用——lock() 清内存密钥）。
+    /// Salt used for unlocking (re-unlocking restores the session -- lock() clears
+    /// the in-memory key).
     salt: [u8; 32],
-    /// 连接池句柄：限额/DB 故障路径要能主动 `close()` 掉池子。
+    /// Connection pool handle: the rate-limit / DB failure paths must be able to
+    /// actively `close()` the pool.
     db: Database,
 }
 
@@ -58,8 +60,9 @@ async fn fixture() -> Fixture {
         .await
         .unwrap();
 
-    // service 本体（含内存主密钥）移入共享槽位：数据面经 router 走，
-    // 管理动作（吊销/锁定/解锁）经 state.service 槽位直调。
+    // The service itself (including the in-memory master key) moves into the shared
+    // slot: the data plane goes through the router, while administrative actions
+    // (revocation / lock / unlock) call the state.service slot directly.
     let state = ConnectServerState::new(Arc::new(TokioMutex::new(Some(service))));
     let router = build_router(state.clone());
     Fixture {
@@ -74,8 +77,8 @@ async fn fixture() -> Fixture {
     }
 }
 
-/// 读权限 scope 构造器。`identities`/`item_types` 传空 = 全部（语义见
-/// core `ConnectTokenScope`）。
+/// Read-permission scope constructor. Empty `identities`/`item_types` mean all
+/// (semantics in core's `ConnectTokenScope`).
 fn read_scope(identities: Vec<Uuid>, item_types: Vec<ConnectItemType>) -> ConnectTokenScope {
     ConnectTokenScope {
         identities,
@@ -84,8 +87,9 @@ fn read_scope(identities: Vec<Uuid>, item_types: Vec<ConnectItemType>) -> Connec
     }
 }
 
-/// 同一 service 上再签一个 token：共用 router 与限额表，但按 row.id
-/// 分列计数——用来验「限额是 per-token 而非全局」。
+/// Mint another token on the same service: the router and rate table are
+/// shared, but counters are bucketed per row.id -- this is what verifies "the
+/// rate limit is per token, not global".
 async fn mint_token(fx: &Fixture, label: &str, token_scope: ConnectTokenScope) -> String {
     let guard = fx.state.service.lock().await;
     guard
@@ -152,7 +156,8 @@ fn totp_data() -> CredentialData {
     })
 }
 
-/// 带默认 loopback `Host` 的便捷调用：只关心状态码 + 包络 JSON。
+/// Convenience call with a default loopback `Host`: all that matters is the
+/// status code + envelope JSON.
 async fn send(
     router: Router,
     method: &str,
@@ -166,10 +171,13 @@ async fn send(
     (status, json)
 }
 
-/// 全保真调用：保留响应头，并容忍**非** JSON 正文（防御性：框架
-/// 4xx 已由 `normalize_framework_error` 统一包络，但第三方 layer
-/// 理论上仍可能产非 JSON 正文，解析失败折成 Null 不炸断言）。
-/// `headers` 不自动补 Host——缺 Host 本身就是被测路径。
+/// Full-fidelity call: response headers are preserved, and a **non**-JSON body
+/// is tolerated (defensively: framework 4xx are already enveloped by
+/// `normalize_framework_error`, but a third-party layer could in principle still
+/// produce a non-JSON body; a parse failure collapses to Null rather than
+/// blowing up the assertion).
+/// `headers` does not fill in Host -- a missing Host is itself the path under
+/// test.
 async fn send_capture(
     router: Router,
     method: &str,
@@ -194,9 +202,10 @@ async fn send_capture(
     )
 }
 
-/// 真 TCP 上发一条 HTTP/1.1 请求并读回全部响应文本（`Connection: close`
-/// 保证服务端发完即关，`read_to_end` 不会挂）。用于驱动
-/// [`start_connect_server`] 起的 listener，验证防线不只存在于 oneshot。
+/// Send one HTTP/1.1 request over real TCP and read back the entire response
+/// text (`Connection: close` guarantees the server closes once it has sent
+/// everything, so `read_to_end` cannot hang). Used to drive the listener started
+/// by [`start_connect_server`], verifying the defenses exist beyond oneshot.
 async fn http_over_tcp(port: u16, method: &str, path: &str, host: &str, extra: &str) -> String {
     let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
     let mut stream = TcpStream::connect(addr).await.unwrap();
@@ -215,8 +224,9 @@ fn auth_header(token: &str) -> [(&'static str, String); 1] {
     [("authorization", format!("Bearer {token}"))]
 }
 
-/// `send_capture` 不补 Host，需要 Host + Bearer 的用例走这个（数组元组
-/// 手拼会撞上 `auth_header` 返回的定长数组类型）。
+/// `send_capture` does not fill in Host; cases needing Host + Bearer go through
+/// this instead (hand-assembling an array tuple would clash with the fixed-size
+/// array type returned by `auth_header`).
 fn host_and_auth(token: &str) -> Vec<(&'static str, String)> {
     vec![
         ("host", "127.0.0.1:17000".to_string()),

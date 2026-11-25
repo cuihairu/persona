@@ -12,14 +12,15 @@ fn consume_rate_allows_exactly_the_cap_then_rejects_within_the_window() {
         "第 {} 次必须超限（429）",
         RATE_LIMIT_PER_MINUTE + 1
     );
-    // 计数按 token 分列，不是全局令牌桶
+    // Counts are bucketed per token, not a global token bucket
     assert!(state.consume_rate(Uuid::new_v4()));
 }
 
 #[test]
 fn consume_rate_sweeps_expired_windows_of_dead_tokens() {
     let state = ConnectServerState::new(Arc::new(TokioMutex::new(None)));
-    // 死槽位：窗口已过期的历史 token 条目（token 已删/已换后永不再记账）。
+    // Dead slots: stale token entries whose window has expired (tokens deleted or
+    // rotated are never accounted again).
     let stale = match Instant::now().checked_sub(RATE_WINDOW + Duration::from_secs(1)) {
         Some(at) => at,
         None => {
@@ -30,7 +31,8 @@ fn consume_rate_sweeps_expired_windows_of_dead_tokens() {
             return;
         }
     };
-    // 填到超过清扫阈值（阈值以下不会清——那是正常低基数部署）。
+    // Fill past the sweep threshold (nothing is swept below it -- that is a normal
+    // low-cardinality deployment).
     let mut dead = Vec::new();
     for _ in 0..(RATE_SWEEP_THRESHOLD + 1) {
         let id = Uuid::new_v4();
@@ -41,7 +43,8 @@ fn consume_rate_sweeps_expired_windows_of_dead_tokens() {
             .unwrap()
             .insert(id, (stale, RATE_LIMIT_PER_MINUTE));
     }
-    // 阈值记账顺路清扫：死槽位不留（慢泄漏，audit 批2 #10）。
+    // Accounting at the threshold sweeps along the way: dead slots do not linger
+    // (slow leak, audit batch 2 #10).
     let fresh = Uuid::new_v4();
     assert!(state.consume_rate(fresh));
     let rates = state.rates.lock().unwrap();
@@ -54,8 +57,10 @@ fn consume_rate_sweeps_expired_windows_of_dead_tokens() {
 fn consume_rate_resets_the_counter_when_the_window_elapsed() {
     let state = ConnectServerState::new(Arc::new(TokioMutex::new(None)));
     let id = Uuid::new_v4();
-    // 直接种一个「窗口已过期」的槽位：Instant 是单调时钟，构造过去只能
-    // 靠 checked_sub；机器开机不足一个窗口时长时无法构造，跳过而非误红。
+    // Seed a slot whose window has already expired: Instant is a monotonic clock,
+    // so reaching into the past requires checked_sub; when the machine has been
+    // up for less than one window it cannot be constructed, so skip rather than
+    // report a false failure.
     let stale = match Instant::now().checked_sub(RATE_WINDOW + Duration::from_secs(1)) {
         Some(at) => at,
         None => {
@@ -75,7 +80,8 @@ fn consume_rate_resets_the_counter_when_the_window_elapsed() {
         state.consume_rate(id),
         "过期窗口必须重置计数，否则 token 永久锁死"
     );
-    // 重置后从 1 重新起算 → 整窗预算仍是 120
+    // After the reset the count restarts from 1 -> the whole window budget is
+    // still 120
     for _ in 1..RATE_LIMIT_PER_MINUTE {
         assert!(state.consume_rate(id));
     }
@@ -86,7 +92,8 @@ fn consume_rate_resets_the_counter_when_the_window_elapsed() {
 async fn rejected_requests_leave_the_rate_map_untouched() {
     let fx = fixture().await;
     for _ in 0..20 {
-        // 缺 token / 坏 Origin / 坏 Host / health：全都在记账之前返回。
+        // Missing token / bad Origin / bad Host / health: all of them return before
+        // any accounting.
         send(fx.router.clone(), "GET", "/api/v1/connect/items", &[]).await;
         send(
             fx.router.clone(),
@@ -124,7 +131,8 @@ async fn rejected_requests_leave_the_rate_map_untouched() {
 #[tokio::test]
 async fn authenticated_requests_consume_budget_even_when_input_is_rejected() {
     let fx = fixture().await;
-    // 种到差一次即满：证明计数发生在 guard 内、路由/提取器之前。
+    // Seed the counter one request short of full: this proves accounting happens
+    // inside the guard, before routing/extractors.
     fx.state
         .rates
         .lock()
@@ -160,7 +168,8 @@ async fn rate_limit_is_per_token_not_per_process() {
     let (status, body) = send(fx.router.clone(), "GET", "/api/v1/connect/items", &first).await;
     assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
     assert_eq!(body["error"]["code"], "rate_limited");
-    // 另一个 token 不受牵连（一个失控客户端不能 DoS 其他集成）
+    // The other token is unaffected (a runaway client must not be able to DoS other
+    // integrations)
     let (status, _) = send(
         fx.router.clone(),
         "GET",
@@ -173,5 +182,5 @@ async fn rate_limit_is_per_token_not_per_process() {
 }
 
 // -------------------------------------------------------------------
-// scope 过滤与条目可见性（数据面状态流转）
+// Scope filtering and item visibility (data-plane state transitions)
 // -------------------------------------------------------------------
