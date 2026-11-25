@@ -28,8 +28,9 @@ async fn main() {
         .init()
         .expect("failed to initialize logging");
 
-    // 中转侧数据库（独立于 core 身份库），启动即迁移——只建同步/配对
-    // 面所需的表，events/backups/auth/accounts 面的表一律不建。
+    // Relay-side database (independent of the core identity store): migrate
+    // at startup — create only the tables the sync/pairing surface needs;
+    // never create tables for the events/backups/auth/accounts surfaces.
     let db_path =
         std::env::var("PERSONA_SERVER_DB").unwrap_or_else(|_| "./persona-relay.db".into());
     let pool = state::init_pool(&db_path)
@@ -39,9 +40,11 @@ async fn main() {
         .await
         .expect("failed to run relay migrations");
 
-    // fail-closed（与 persona-server 同口径）：多设备令牌优先，legacy
-    // 单令牌兼容；都未配置则 /api/v1 整体禁用。relay 上 Bearer 只门禁
-    // sync 面（pairing 信箱免认证——配对双方本就没有共享凭证）。
+    // fail-closed (same stance as persona-server): multi-device tokens take
+    // priority, with legacy single-token compatibility; if neither is set,
+    // /api/v1 is disabled wholesale. On the relay, Bearer only guards the
+    // sync surface (the pairing mailbox is unauthenticated — the two pairing
+    // parties have no shared credentials by definition).
     let auth = match std::env::var("PERSONA_SERVER_TOKENS") {
         Ok(spec) if !spec.is_empty() => Some(
             AuthTokens::parse(&spec)
@@ -63,8 +66,10 @@ async fn main() {
         },
     };
 
-    // relay 不带备份/保留设置：备份面与审计面都不在路由里，oplog 保留
-    // 默认 0 = 不清理（纯中继语义——清理意味着放弃对离线设备补发历史）。
+    // Relay carries no backup/retention settings: the backup and audit
+    // surfaces aren't in the routes, and oplog retention defaults to 0 = no
+    // cleanup (pure relay semantics — cleanup means giving up back-filling
+    // history to offline devices).
     let app_state = AppState::new(
         pool,
         auth,
