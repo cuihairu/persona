@@ -69,10 +69,12 @@ async fn audit_sign_with_digest_writes_log_inside_runtime() {
     );
 }
 
-/// audit_sign 复用加载期打开的连接（audit 批2 #9）：Agent 带着已迁移的
-/// Database 时不再每次签名新开 DB + 跑 migrate（热路径锁竞争）。判别器：
-/// 把 PERSONA_DB_PATH 指到垃圾路径——若回落到开库路径会写不进、审计行
-/// 永不出现；走缓存连接则正常落库。
+/// audit_sign reuses the connection opened at load time (audit batch 2 #9):
+/// with an already-migrated Database, the Agent no longer opens the DB + runs
+/// migrate per signature (hot-path lock contention). Discriminator: point
+/// PERSONA_DB_PATH at a garbage path -- falling back to the open-DB path
+/// would fail to write and the audit row would never appear; the cached
+/// connection path persists normally.
 #[tokio::test(flavor = "multi_thread")]
 async fn audit_sign_reuses_loaded_database_connection() {
     let _guard = env_lock();
@@ -102,7 +104,8 @@ async fn audit_sign_reuses_loaded_database_connection() {
         .await
         .unwrap();
 
-    // 垃圾路径：若实现回落 resolve_persona_db_path 开库，写不进。
+    // Garbage path: if the implementation falls back to
+    // resolve_persona_db_path and opens the DB, the write cannot succeed.
     let garbage = dir.path().join("garbage");
     std::fs::create_dir(&garbage).unwrap();
     std::env::set_var("PERSONA_DB_PATH", &garbage);
@@ -113,7 +116,8 @@ async fn audit_sign_reuses_loaded_database_connection() {
         .audit_sign(&identity.id, &cred.id, b"cached-bytes")
         .unwrap();
 
-    // 后台写轮询：走缓存连接才会出现 ssh_sign 行。
+    // Poll for the background write: the ssh_sign row only appears if the
+    // cached connection is used.
     let mut found = false;
     for _ in 0..100 {
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;

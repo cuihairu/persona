@@ -9,9 +9,11 @@ pub struct Agent {
     /// `PERSONA_MASTER_PASSWORD` env var). Consumed by
     /// [`Self::load_keys_from_persona`] so it does not outlive key loading.
     pub(crate) master_password: Option<String>,
-    /// 加载期打开并已迁移的 vault 连接，跨签名复用（audit 批2 #9）：
-    /// 每次签名新开 DB + 跑 migrate 是热路径锁竞争；`None` 时回落
-    /// [`audit_sign_with_digest`] 的按次开库路径（测试键/直接调用）。
+    /// Vault connection opened and migrated at load time, reused across
+    /// signatures (audit batch 2 #9): opening a DB and running migrate on
+    /// every signature is hot-path lock contention; `None` falls back to
+    /// [`audit_sign_with_digest`]'s per-signature open path (test keys /
+    /// direct calls).
     pub(crate) audit_db: Arc<Option<persona_core::Database>>,
 }
 
@@ -99,8 +101,9 @@ impl Agent {
 
         let db = Database::from_file(db_path).await?;
         db.migrate().await?;
-        // 审计复用这条已迁移连接：sign_response 的热路径不再每次开库 +
-        // 跑 migrate（audit 批2 #9）。连接池由 Arc 引用计数保持存活。
+        // Audit reuses this migrated connection: the sign_response hot path
+        // no longer opens the DB + runs migrate on every sign (audit batch 2
+        // #9). The pool stays alive via the Arc reference count.
         self.audit_db = Arc::new(Some(db.clone()));
         let mut service = PersonaService::new(db.clone()).await?;
         let mut unlocked = true;
@@ -128,10 +131,11 @@ impl Agent {
             return Ok(());
         }
         let identities = service.get_identities().await?;
-        // 身份过滤器（PERSONA_AGENT_IDENTITY，`persona ssh add-to-agent
-        // --identity`）：设置后只加载该分身的 SSH 密钥。名字未知时不加载
-        // 任何密钥（fail-closed，绝不回落全量加载——过滤器失配必须显式
-        // 失败，而不是静默扩大注入面）。
+        // Identity filter (PERSONA_AGENT_IDENTITY, `persona ssh add-to-agent
+        // --identity`): when set, only the matching persona's SSH keys are
+        // loaded. If the name is unknown, no keys load at all (fail-closed,
+        // never fall back to a full load -- a filter mismatch must fail
+        // explicitly rather than silently widen the injection surface).
         let identity_filter = std::env::var("PERSONA_AGENT_IDENTITY")
             .ok()
             .map(|v| v.trim().to_string())
@@ -233,9 +237,11 @@ impl Agent {
         // Get target hostname
         let hostname = current_target_host();
 
-        // 统一授权入口（架构校正批1）：agent 密钥的唯一动作是签名且只对
-        // 自己的密钥——越权请求在此拒绝；主机规则/频率/确认计数等条件
-        // 策略仍由下方 PolicyEnforcer 把守（机制层）。
+        // Unified authorization entry (architecture-correction batch 1): the
+        // only action an agent key may take is signing, and only its own key
+        // -- out-of-scope requests are rejected here; conditional policies
+        // such as host rules/rate limits/confirmation counting are still
+        // guarded below by the PolicyEnforcer (mechanism layer).
         let entry = persona_core::authz::authorize(
             &persona_core::authz::AuthzPrincipal::AgentKey {
                 credential_id: key.credential_id,
@@ -265,7 +271,8 @@ impl Agent {
                 .map_err(|_| anyhow!("Policy lock poisoned"))?;
             policy_enforcer.check_and_record_signature(&key.credential_id, hostname.as_deref())?
         };
-        // 裁决统一词汇落审计/日志：与 core/Connect/CLI 同一表达。
+        // The unified decision vocabulary lands in audit/logs: the same
+        // representation as core/Connect/CLI.
         info!("Signature policy decision: {:?}", decision.to_authz());
 
         // Roll back the optimistic policy record taken above. Used on every
@@ -424,9 +431,10 @@ pub(super) fn audit_sign_with_digest(
 }
 
 impl Agent {
-    /// 审计一次签名，优先复用加载期已迁移的 vault 连接（audit 批2 #9）；
-    /// 无缓存连接（测试键路径/直接调用）时回落按次开库的
-    /// [`audit_sign_with_digest`]。
+    /// Audit a signature, preferring the vault connection migrated at load
+    /// time (audit batch 2 #9); with no cached connection (test key path /
+    /// direct calls), fall back to the per-call open of
+    /// [`audit_sign_with_digest`].
     pub(super) fn audit_sign(
         &self,
         identity_id: &uuid::Uuid,

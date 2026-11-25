@@ -101,16 +101,19 @@ mod tests {
         assert_ne!(fp, fingerprint_for_blob(b"other"));
     }
 
-    /// `TtyApprovalHandler::confirm` 全身（spawn_blocking 编排 + join 错误
-    /// 映射 + 决策透传）在无 tty 环境的确定性路径：/dev/tty 打不开 →
-    /// stdin 兜底 → EOF → 空行 → 拒绝。
+    /// The full body of `TtyApprovalHandler::confirm` (spawn_blocking
+    /// orchestration + join error mapping + decision pass-through) on a
+    /// deterministic path in an environment without a tty: /dev/tty cannot
+    /// be opened -> stdin fallback -> EOF -> empty line -> deny.
     #[cfg(unix)]
     #[tokio::test]
     async fn tty_handler_without_tty_surfaces_stdin_eof_as_deny() {
-        // 有控制终端的开发机：prompt_confirm_blocking 会优先打开 /dev/tty
-        // 并阻塞等键盘输入——跳过，不挂起交互会话（daemon.rs 模块文档：
-        // 该路径需要真实终端）。CI 覆盖率容器与无头环境无 /dev/tty，
-        // 本测试在那里全量执行。
+        // On a dev machine with a controlling terminal:
+        // prompt_confirm_blocking prefers opening /dev/tty and blocks
+        // waiting for keyboard input -- skip, to avoid hanging an
+        // interactive session (see the daemon.rs module docs: that path
+        // needs a real terminal). The CI coverage container and headless
+        // environments have no /dev/tty, so the test runs there in full.
         if std::fs::OpenOptions::new()
             .read(true)
             .write(true)
@@ -119,9 +122,10 @@ mod tests {
         {
             return;
         }
-        // stdin 无论测试被如何拉起都重定向到 /dev/null：read_line 确定性
-        // EOF → stdin_confirm_from_line("") → false。套件内没有其他测试读
-        // stdin，进程级 dup2 无扰。
+        // stdin is redirected to /dev/null no matter how the tests are
+        // launched: read_line hits a deterministic EOF ->
+        // stdin_confirm_from_line("") -> false. No other test in the suite
+        // reads stdin, so the process-wide dup2 is harmless.
         use std::os::unix::io::AsRawFd;
         let devnull = std::fs::File::open("/dev/null").expect("open /dev/null");
         unsafe { libc::dup2(devnull.as_raw_fd(), 0) };

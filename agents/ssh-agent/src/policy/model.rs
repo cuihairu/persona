@@ -1,5 +1,5 @@
-//! Policy 配置模型：`SigningPolicy` 顶层（global/key/host 三层）与各
-//! 层默认值。
+//! Policy configuration model: the `SigningPolicy` top level (global/key/
+//! host three layers) and each layer's defaults.
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;

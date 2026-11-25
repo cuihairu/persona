@@ -151,7 +151,8 @@ async fn load_keys_from_persona_identity_filter_unknown_name_loads_nothing() {
     service.initialize_user("master-pin").await.unwrap();
     seed_identity_ssh_key(&mut service, "agent-a", [53u8; 32]).await;
 
-    // 过滤器失配 = 不加载任何密钥（fail-closed），绝不回落全量。
+    // A filter mismatch means no keys are loaded (fail-closed), never a
+    // fallback to the full load.
     std::env::set_var("PERSONA_AGENT_IDENTITY", "ghost");
     let mut agent = Agent::default();
     agent.load_keys_from_persona(&db_path).await.unwrap();
@@ -235,7 +236,8 @@ async fn load_keys_from_persona_skips_invalid_seed_and_pubkey() {
     agent.load_keys_from_persona(&db_path).await.unwrap();
     std::env::remove_var("PERSONA_MASTER_PASSWORD");
     assert_eq!(agent.keys.len(), 2, "bad seed skipped; bad pubkey rebuilt");
-    // 加载顺序不承诺与入库顺序一致，按条目名定位
+    // Load order is not guaranteed to match insertion order, so locate the
+    // entry by name
     let rebuilt = agent
         .keys
         .iter()

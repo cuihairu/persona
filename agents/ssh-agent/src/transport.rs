@@ -76,10 +76,12 @@ pub enum AgentListener {
     },
 }
 
-/// socket 路径上的旧文件是否是可接管的陈旧残骸。
+/// Whether the old file at the socket path is a stale remnant that can be
+/// taken over.
 ///
-/// 实现收口在 core（`persona_core::socket`），connect server 与 ssh-agent
-/// 共用同一口径；此处保留 re-export 维持 `transport::is_stale_socket` 调用面。
+/// The implementation is consolidated in core (`persona_core::socket`), shared
+/// by the connect server and ssh-agent; the re-export is kept here to preserve
+/// the `transport::is_stale_socket` call surface.
 #[cfg(unix)]
 pub use persona_core::socket::is_stale_socket;
 
@@ -87,9 +89,12 @@ impl AgentListener {
     /// Create a new listener
     #[cfg(unix)]
     pub async fn bind(path: &std::path::Path) -> Result<Self> {
-        // 先直接 bind，不预先删除（TOCTOU：exists→remove→bind 之间路径可能
-        // 被换掉）。只有确认旧路径是陈旧残骸（非 socket 或无人监听）才接管，
-        // 活着的 agent 一律报错而非静默劫持路径（无条件删除会连活 socket 一起删）。
+        // Bind directly first, without removing anything up front (TOCTOU: the
+        // path could be swapped between exists->remove->bind). Only take over
+        // once the old path is confirmed to be a stale remnant (not a socket, or
+        // no one listening); a live agent always errors out instead of silently
+        // hijacking the path (unconditional removal would delete a live socket
+        // too).
         match tokio::net::UnixListener::bind(path) {
             Ok(listener) => Ok(AgentListener::Unix(listener)),
             Err(err) if path.exists() => {
@@ -99,7 +104,7 @@ impl AgentListener {
                         path.display()
                     ));
                 }
-                // 陈旧残骸：删掉重试一次。
+                // Stale remnant: remove it and retry once.
                 std::fs::remove_file(path)?;
                 let listener = tokio::net::UnixListener::bind(path)?;
                 Ok(AgentListener::Unix(listener))
@@ -173,10 +178,11 @@ impl AgentListener {
 
 /// Get default agent socket path for the current platform
 ///
-/// 宿主壳（desktop）通过 `PERSONA_AGENT_SOCKET_PATH` 注入稳定路径——写进
-/// `~/.ssh/config` 的 `IdentityAgent` 必须跨重启不变；缺省的 pid 化路径只
-/// 适合一次性 CLI 场景。Windows 的值是稳定管道名（bind 取 `file_name`
-/// 造 `\\.\pipe\{name}`），与 pid 无关。
+/// The host shell (desktop) injects a stable path via
+/// `PERSONA_AGENT_SOCKET_PATH` — the value written into `IdentityAgent` in
+/// `~/.ssh/config` must survive restarts; the default pid-based path only
+/// suits one-shot CLI use. On Windows the value is a stable pipe name (bind
+/// takes `file_name` to build `\\.\pipe\{name}`), independent of pid.
 pub fn default_agent_path() -> std::path::PathBuf {
     if let Some(p) = std::env::var("PERSONA_AGENT_SOCKET_PATH")
         .ok()
@@ -271,20 +277,21 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let sock_path = dir.path().join("live.sock");
 
-        // 第一个 listener 绑定后仍在监听（活 agent）。
+        // The first listener is still listening after binding (a live agent).
         let first = AgentListener::bind(&sock_path).await.unwrap();
 
-        // 第二个 bind 必须失败，而不是把活 socket 删掉劫持。
+        // The second bind must fail rather than delete the live socket and hijack it.
         let err = AgentListener::bind(&sock_path)
             .await
             .err()
             .expect("bind to a live socket must fail");
         assert!(err.to_string().contains("live agent"), "{err}");
 
-        // 第一个 listener 依旧可用。
+        // The first listener is still usable.
         assert!(first.address().ends_with("live.sock"));
         drop(first);
-        // 清理，避免 tempdir 删除残留 socket 时出问题（无妨，但仍显式清）。
+        // Clean up so tempdir removal does not trip over a leftover socket
+        // (harmless either way, but explicit).
         let _ = std::fs::remove_file(&sock_path);
     }
 
@@ -295,11 +302,12 @@ mod tests {
         let sock_path = dir.path().join("stale.sock");
 
         {
-            // 绑定后丢弃，不清理文件：留下一个无人监听的 socket 残骸。
+            // Bind then drop without cleaning up the file: leaves a socket
+            // remnant with no one listening.
             let _listener = AgentListener::bind(&sock_path).await.unwrap();
         }
 
-        // 陈旧残骸应被接管，bind 成功。
+        // The stale remnant should be taken over and bind should succeed.
         let listener = AgentListener::bind(&sock_path).await.unwrap();
         assert!(listener.address().ends_with("stale.sock"));
         drop(listener);

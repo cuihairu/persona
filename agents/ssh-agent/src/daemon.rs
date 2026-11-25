@@ -83,9 +83,11 @@ pub async fn run_agent_with_hooks_and_env(
     biometric: Option<Arc<dyn BiometricProvider>>,
     env_overrides: AgentEnvOverrides,
 ) -> Result<()> {
-    // 日志初始化绝不拦启动：内嵌进 desktop 时宿主壳已先装全局 subscriber
-    // （文件 writer），此处再装只是无害地保持已装的。即便 init 将来出现
-    // 其它失败形态，也不得让它变成 "SSH agent failed to start"。
+    // Logger initialization must never block startup: when embedded in the
+    // desktop app the host shell has already installed a global subscriber
+    // (with a file writer), and installing one here just harmlessly keeps
+    // the existing one. Should init ever fail in some other shape in the
+    // future, it must not turn into "SSH agent failed to start".
     let _ = RedactedLoggerBuilder::new(Level::INFO)
         .include_target(false)
         .with_writer(|| Box::new(AgentLogSink))

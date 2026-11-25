@@ -1,15 +1,19 @@
 use super::*;
 
-/// 签名私钥材料。ed25519 走库内既有约定（`SshKeyData.private_key` =
-/// BASE64(32B seed)）；导入的 OpenSSH 私钥（rsa / ecdsa / ed25519 PEM）
-/// 在加载时解出原始组件，签名时按算法分派。
+/// Private key material used for signing. ed25519 follows the library's
+/// existing convention (`SshKeyData.private_key` = BASE64(32B seed));
+/// imported OpenSSH private keys (rsa / ecdsa / ed25519 PEM) have their
+/// raw components resolved at load time, and signing dispatches by algorithm.
 #[derive(Clone)]
 pub enum SigningKeyMaterial {
-    /// ed25519 seed（既有约定与导入的 PEM 统一归一到这里）。
+    /// ed25519 seed (the existing convention and imported PEMs both
+    /// normalize into this form).
     Ed25519 { seed: [u8; 32] },
-    /// RSA（PKCS#1 v1.5，rsa-sha2-256/512 按 RFC 8332 客户端 flags 分派）。
+    /// RSA (PKCS#1 v1.5; rsa-sha2-256/512 selected by the RFC 8332 client
+    /// flags).
     Rsa(Arc<rsa::RsaPrivateKey>),
-    /// ECDSA NIST P-256（ecdsa-sha2-nistp256，确定性 RFC 6979 签名）。
+    /// ECDSA NIST P-256 (ecdsa-sha2-nistp256, deterministic RFC 6979
+    /// signatures).
     EcdsaP256(p256::ecdsa::SigningKey),
 }
 
@@ -22,17 +26,21 @@ pub struct AgentKey {
     pub credential_id: uuid::Uuid,
 }
 
-/// OpenSSH 公钥单行（`ssh-ed25519 AAAA… [comment]` 等）→ 线格式 blob。
-/// ssh-key 解析器对三种算法统一处理，顺带校验行格式（畸形行返回 None）。
+/// Single-line OpenSSH public key (`ssh-ed25519 AAAA… [comment]` etc.) ->
+/// wire-format blob. The ssh-key parser handles all three algorithms
+/// uniformly and validates the line format in passing (malformed lines
+/// return None).
 pub(super) fn parse_public_line_to_blob(s: &str) -> Option<Vec<u8>> {
     let public = ssh_key::PublicKey::from_openssh(s.trim()).ok()?;
     public.to_bytes().ok()
 }
 
-/// 库内 SshKey 条目 → AgentKey。私钥双格式：既有约定 BASE64(32B seed)
-/// 优先；其余（导入的 OpenSSH PEM，含 rsa/ecdsa）走 PEM 解析。
-/// 公钥行与私钥算法不一致时以解析出的私钥为准重建公钥 blob，避免
-/// 库内字段被改坏后 agent 通告错误公钥。
+/// In-library SshKey entry -> AgentKey. Private keys come in two formats:
+/// the existing BASE64(32B seed) convention takes priority; anything else
+/// (imported OpenSSH PEM, including rsa/ecdsa) goes through PEM parsing.
+/// When the public key line disagrees with the private key's algorithm, the
+/// public blob is rebuilt from the parsed private key, so a corrupted
+/// in-library field cannot make the agent announce a wrong public key.
 pub(super) fn agent_key_from_ssh_data(
     ssh: &persona_core::models::SshKeyData,
     cred: &persona_core::models::Credential,
@@ -41,7 +49,8 @@ pub(super) fn agent_key_from_ssh_data(
     let signing_key =
         parse_signing_key(&ssh.private_key).map_err(|e| anyhow!("credential {}: {e}", cred.id))?;
 
-    // 公钥 blob：优先用库内公钥行；与私钥算法不符/行畸形时从私钥重建
+    // Public blob: prefer the in-library public key line; rebuild it from
+    // the private key when the algorithm mismatches or the line is malformed
     let public_blob = match parse_public_line_to_blob(&ssh.public_key) {
         Some(blob) => blob,
         None => public_blob_from_signing_key(&signing_key)?,
@@ -70,7 +79,8 @@ pub(super) fn agent_key_from_ssh_data(
 }
 
 impl SigningKeyMaterial {
-    /// SSH 线格式算法名（签名 blob 与公钥 blob 共用）。
+    /// SSH wire-format algorithm name (shared by signature blobs and public
+    /// key blobs).
     pub(super) fn algorithm_name(&self) -> &'static str {
         match self {
             SigningKeyMaterial::Ed25519 { .. } => "ssh-ed25519",
@@ -80,11 +90,12 @@ impl SigningKeyMaterial {
     }
 }
 
-/// 私钥文本（BASE64 seed 或 OpenSSH PEM）→ 签名材料。
+/// Private key text (BASE64 seed or OpenSSH PEM) -> signing material.
 pub(super) fn parse_signing_key(private_key: &str) -> Result<SigningKeyMaterial> {
     use ssh_key::private::{KeypairData, PrivateKey};
 
-    // 既有约定：BASE64(32B ed25519 seed)。带 '-' 的 PEM 头不可能过 base64 解码。
+    // Existing convention: BASE64(32B ed25519 seed). A PEM header containing
+    // '-' can never survive base64 decoding.
     if let Ok(bytes) = BASE64.decode(private_key.trim()) {
         if bytes.len() == 32 {
             let mut seed = [0u8; 32];
@@ -155,27 +166,29 @@ fn public_blob_from_signing_key(signing_key: &SigningKeyMaterial) -> Result<Vec<
             let mut blob = Vec::new();
             write_ssh_string(&mut blob, b"ecdsa-sha2-nistp256")?;
             write_ssh_string(&mut blob, b"nistp256")?;
-            // 非压缩 SEC1 点（65B，0x04 || X || Y），SSH 线格式约定
+            // Uncompressed SEC1 point (65B, 0x04 || X || Y), the SSH
+            // wire-format convention
             write_ssh_string(&mut blob, verifying.to_sec1_point(false).as_bytes())?;
             Ok(blob)
         }
     }
 }
 
-/// 公钥 blob 的算法名（第一个 ssh string）。
+/// Algorithm name of a public key blob (the first ssh string).
 pub(super) fn public_key_algorithm(blob: &[u8]) -> Option<String> {
     let mut slice: &[u8] = blob;
     let algo = read_ssh_string(&mut slice).ok()?;
     String::from_utf8(algo).ok()
 }
 
-/// 按算法分派签名并组线格式签名 blob：
-/// string algorithm, string signature。
-/// - ed25519：raw 64B R||S
-/// - RSA（RFC 8332）：客户端 flags 要 sha2-256 用之，其余（含 sha2-512
-///   flag）用 sha2-512；SHA-1 的 `ssh-rsa` 签名不再产出（OpenSSH ≥8.8
-///   已默认禁用，且 SHA-1 签名是弱化路径）
-/// - ECDSA P-256：mpint r || mpint s
+/// Dispatch signing by algorithm and assemble a wire-format signature blob:
+/// string algorithm, string signature.
+/// - ed25519: raw 64B R||S
+/// - RSA (RFC 8332): use sha2-256 when the client flags ask for it, sha2-512
+///   otherwise (including the sha2-512 flag); SHA-1 `ssh-rsa` signatures are
+///   no longer produced (OpenSSH >= 8.8 disables them by default, and SHA-1
+///   signatures are a weakened path)
+/// - ECDSA P-256: mpint r || mpint s
 pub(super) fn build_signature_blob(key: &AgentKey, data: &[u8], flags: u32) -> Result<Vec<u8>> {
     const SSH_AGENT_RSA_SHA2_256: u32 = 2;
 
@@ -208,7 +221,8 @@ pub(super) fn build_signature_blob(key: &AgentKey, data: &[u8], flags: u32) -> R
     Ok(sig_blob)
 }
 
-/// PKCS#1 v1.5 签名（确定性，无 RNG），返回裸签名字节。
+/// PKCS#1 v1.5 signature (deterministic, no RNG), returns the raw signature
+/// bytes.
 fn rsa_sign<D>(
     private: &rsa::RsaPrivateKey,
     algo: &'static str,
@@ -224,7 +238,8 @@ where
     Ok((algo, sig.to_vec()))
 }
 
-/// RFC 4251 mpint：去前导零、高位为 1 时补 0x00、零编码为空串。
+/// RFC 4251 mpint: strip leading zeros, pad a 0x00 when the high bit is 1,
+/// and encode zero as an empty string.
 fn write_mpint(buf: &mut Vec<u8>, bytes: &[u8]) {
     let first = bytes.iter().position(|&b| b != 0).unwrap_or(bytes.len());
     let stripped = &bytes[first..];

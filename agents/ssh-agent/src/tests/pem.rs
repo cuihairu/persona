@@ -32,8 +32,10 @@ async fn pem_rsa_credential_loads_and_signs_rsa_sha2() {
         Some("ssh-rsa")
     );
 
-    // flags=0 → rsa-sha2-512（SHA-1 的 ssh-rsa 不再产出）
-    // 独立裁判：从 PEM 的 n/e 重建 rsa 公钥验签
+    // flags=0 -> rsa-sha2-512 (SHA-1 ssh-rsa signatures are no longer
+    // produced)
+    // Independent referee: rebuild the rsa public key from the PEM's n/e and
+    // verify
     let kp = key.key_data().rsa().unwrap();
     let to_big = |m: &ssh_key::Mpint| rsa::BigUint::from_bytes_be(m.as_positive_bytes().unwrap());
     let rsa_public =
@@ -108,15 +110,16 @@ async fn pem_ecdsa_credential_loads_and_signs_nistp256() {
     let (algo, sig_bytes) = parse_signature_blob(&pkt);
     assert_eq!(algo, "ecdsa-sha2-nistp256");
 
-    // 签名是 mpint r || mpint s（RFC 5656 线格式，不是 DER）
+    // The signature is mpint r || mpint s (RFC 5656 wire format, not DER)
     let mut s: &[u8] = &sig_bytes;
     let r = read_ssh_string(&mut s).unwrap();
     let sig_s = read_ssh_string(&mut s).unwrap();
     assert!(s.is_empty());
     use p256::ecdsa::signature::Verifier;
     use p256::FieldBytes;
-    // mpint 带符号：标量高位为 1 时线格式补 0x00（恰好覆盖这条随机路径），
-    // 重构 32B 标量前先剥掉补位
+    // mpint is signed: when the scalar's high bit is 1 the wire format pads a
+    // 0x00 (this random path happens to exercise it), so strip the padding
+    // before reconstructing the 32B scalar
     let strip_sign_pad = |mut v: Vec<u8>| -> Vec<u8> {
         while v.len() > 32 {
             v.remove(0);
@@ -177,7 +180,8 @@ async fn pem_ed25519_credential_normalizes_to_seed_signing() {
         .unwrap();
     let (algo, sig_bytes) = parse_signature_blob(&pkt);
     assert_eq!(algo, "ssh-ed25519");
-    // 独立裁判：从 PEM 里的 seed 重建 verifying key 验签
+    // Independent referee: rebuild the verifying key from the seed in the
+    // PEM and verify
     let seed = key.key_data().ed25519().unwrap().private.to_bytes();
     let verifying = ed25519_dalek::SigningKey::from_bytes(&seed).verifying_key();
     let sig = ed25519_dalek::Signature::from_slice(&sig_bytes).unwrap();
@@ -198,7 +202,8 @@ async fn encrypted_pem_credential_is_skipped() {
         ssh_key::Algorithm::Ed25519,
     )
     .unwrap();
-    // encrypt 返回加密后的新实例——必须接住，原实例仍是明文
+    // encrypt returns a new encrypted instance -- it must be captured; the
+    // original instance is still plaintext
     let key = key
         .encrypt(&mut rand_core::UnwrapErr(rand::rngs::SysRng), "hunter2")
         .unwrap();
@@ -224,7 +229,8 @@ async fn mismatched_public_line_is_rebuilt_from_private() {
     clear_test_key_env();
     std::env::set_var("PERSONA_MASTER_PASSWORD", "master-pin");
 
-    // ed25519 私钥 + 一把真实但不同的 rsa 公钥行 → 算法不匹配，重建
+    // ed25519 private key + a real but different rsa public key line ->
+    // algorithm mismatch, rebuild
     let key = ssh_key::private::PrivateKey::random(
         &mut rand_core::UnwrapErr(rand::rngs::SysRng),
         ssh_key::Algorithm::Ed25519,

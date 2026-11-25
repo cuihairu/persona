@@ -1,7 +1,9 @@
-//! 策略执行器：`PolicyEnforcer` 装载（TOML 文件/环境变量）、签名裁决
-//! （`check_signature`/`check_and_record_signature`/`rollback_signature`）、
-//! 用量计数与限频状态机（`PolicyState`/`KeyUsageState`/`HostUsageState`）
-//! 与裁决表达 `SignatureDecision`。
+//! Policy enforcer: `PolicyEnforcer` loading (TOML file / environment
+//! variables), signature adjudication
+//! (`check_signature`/`check_and_record_signature`/`rollback_signature`),
+//! usage counting and rate-limit state machines
+//! (`PolicyState`/`KeyUsageState`/`HostUsageState`), and the decision
+//! representation `SignatureDecision`.
 
 use crate::is_host_in_known_hosts;
 use anyhow::Result;
@@ -507,9 +509,12 @@ pub enum SignatureDecision {
 }
 
 impl SignatureDecision {
-    /// 折算到统一授权裁决词汇（架构校正批1）：Denied 与需要交互的变体
-    /// 一一对应。策略逻辑本身不变（主机规则/频率/确认计数仍是本模块
-    /// 的机制层职责），只是对外裁决表达统一到 `persona_core::authz`。
+    /// Convert to the unified authorization decision vocabulary
+    /// (architecture-correction batch 1): Denied maps one-to-one with the
+    /// interaction-required variants. The policy logic itself is unchanged
+    /// (host rules/rate limits/confirmation counting remain this module's
+    /// mechanism-layer responsibility); only the outward decision
+    /// representation is unified onto `persona_core::authz`.
     pub fn to_authz(&self) -> persona_core::authz::AuthzDecision {
         use persona_core::authz::AuthzDecision;
         match self {

@@ -48,7 +48,7 @@ fn make_ed25519_key(comment: &str) -> (AgentKey, ed25519_dalek::VerifyingKey) {
     )
 }
 
-/// 从 AgentKey 里取 ed25519 seed（测试断言用）。
+/// Extract the ed25519 seed from an AgentKey (for test assertions).
 fn key_seed(key: &AgentKey) -> [u8; 32] {
     match &key.signing_key {
         SigningKeyMaterial::Ed25519 { seed } => *seed,
@@ -80,7 +80,8 @@ fn ssh_credential_data(seed: [u8; 32], pub_line: &str) -> persona_core::models::
         passphrase: None,
     })
 }
-/// 测试夹具：建一个身份并挂一枚 SSH 密钥，返回身份 id。
+/// Test fixture: create an identity with one SSH key attached, returns the
+/// identity id.
 async fn seed_identity_ssh_key(
     service: &mut persona_core::PersonaService,
     name: &str,
@@ -251,7 +252,7 @@ async fn seed_vault_with_ssh_credentials(
     }
 }
 
-/// 从签名响应里解出 (算法名, 裸签名字节)。
+/// Parse (algorithm name, raw signature bytes) out of a signature response.
 fn parse_signature_blob(pkt: &[u8]) -> (String, Vec<u8>) {
     assert_eq!(pkt[4], 14u8, "signature response");
     let mut slice: &[u8] = &pkt[5..];
