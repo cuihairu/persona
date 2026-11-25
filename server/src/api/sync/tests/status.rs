@@ -4,12 +4,12 @@ use super::*;
 async fn status_reports_group_head_seq() {
     let router = router().await;
 
-    // 空组：head_seq = 0（不泄存在性之外的任何东西，纯元数据）
+    // Empty group: head_seq = 0 (leaking nothing beyond existence; pure metadata)
     let (status, body) = send(router.clone(), get_req("/api/v1/sync/status")).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["head_seq"], 0);
 
-    // 推 3 条后 head_seq = 3；重复 op（幂等拒收）不涨水位
+    // After pushing 3 entries head_seq = 3; a duplicate op (rejected idempotently) does not raise the water level
     let device = register_device(&router, "laptop").await;
     let item = Uuid::new_v4();
     let ops: Vec<Value> = (0..3)
@@ -40,8 +40,9 @@ async fn status_reports_group_head_seq() {
     assert_eq!(body["head_seq"], 3);
 }
 
-// 压缩后组版本号不回退（§5.5「单调版本号」）：快照点即已覆盖的事实位置，
-// head = max(oplog max, snapshot seq)——oplog 清空后仍报快照水位。
+// The group version must not regress after compaction (§5.5 "monotonic version"): the snapshot point is
+// already the covered position of the facts, and head = max(oplog max, snapshot seq) — once the oplog is
+// emptied it still reports the snapshot's water level.
 #[tokio::test]
 async fn status_head_stays_monotonic_across_snapshot_compression() {
     let (router, _state) = setup(Some(TOKEN)).await;
@@ -77,7 +78,7 @@ async fn status_head_stays_monotonic_across_snapshot_compression() {
     .await;
     assert_eq!(status, StatusCode::OK);
 
-    // oplog 已清空（压缩生效），但组版本号停在快照点不回退
+    // The oplog has been emptied (compaction took effect), but the group version stays at the snapshot point and does not regress
     let (status, body) = send(router, get_req("/api/v1/sync/status")).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["head_seq"], 3);

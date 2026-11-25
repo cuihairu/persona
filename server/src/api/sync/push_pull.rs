@@ -1,8 +1,8 @@
 use super::oplog::{enforce_oplog_retention, validate_op};
 use super::*;
 
-/// POST /sync/oplog：push 本地新 oplog 段。按 op_id 幂等（INSERT OR
-/// IGNORE）；按到达顺序追加，不排序、不裁决。
+/// POST /sync/oplog: push a new local oplog segment. Idempotent by op_id (INSERT OR
+/// IGNORE); appended in arrival order, with no sorting or adjudication.
 pub async fn push(
     State(state): State<AppState>,
     payload: Result<Json<PushRequest>, axum::extract::rejection::JsonRejection>,
@@ -77,7 +77,7 @@ pub async fn push(
     .into_response()
 }
 
-/// GET /sync/oplog?since=cursor：pull 增量（seq 游标分页，沿 events 惯例）。
+/// GET /sync/oplog?since=cursor: pull the increment (seq-cursor pagination, following the events convention).
 pub async fn pull(State(state): State<AppState>, Query(params): Query<PullQuery>) -> Response {
     let limit = match params.limit {
         None => PULL_DEFAULT_LIMIT,
@@ -148,10 +148,11 @@ pub async fn pull(State(state): State<AppState>, Query(params): Query<PullQuery>
             },
         });
     }
-    // 非空页恒返回该页最后一行的游标（与 events 的 has_more 语义有意
-    // 分叉）：sync 客户端（core engine.pull_cycle）按「空页才停」循环，
-    // 游标必须始终指向已处理位置——最后一页处理完即存游标，崩溃重启
-    // 不重拉。空页给 null，客户端 break。
+    // A non-empty page always returns the cursor of its last row (deliberately diverging
+    // from events' has_more semantics): the sync client (core engine.pull_cycle) loops on
+    // "stop only on an empty page", so the cursor must always point at the last processed
+    // position — save the cursor as soon as the final page is handled, and a crash/restart
+    // does not re-pull it. An empty page yields null, and the client breaks.
     let next_cursor = page
         .last()
         .map(|last| encode_cursor(last.get::<i64, _>("seq"), &last.get::<String, _>("op_id")));

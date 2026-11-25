@@ -63,9 +63,9 @@ fn put_op_json(op_id: &str, item_id: &str, lamport: u64, device: &Uuid, tag: &[u
     })
 }
 
-// ---- 并发轮换互斥（§11 开放问题 2：epoch 乐观锁）----
+// ---- Concurrent rotation mutual exclusion (§11 open question 2: optimistic epoch locking) ----
 
-// ---- 库级快照（S2 收口，E2EE_SYNC_DESIGN §5「库级快照与指令压缩」）----
+// ---- Library-level snapshots (S2 closeout, E2EE_SYNC_DESIGN §5 "library snapshots and op compaction") ----
 
 fn put_snapshot_json(seq: i64, device: &Uuid, ciphertext: &str) -> Value {
     json!({
@@ -75,8 +75,8 @@ fn put_snapshot_json(seq: i64, device: &Uuid, ciphertext: &str) -> Value {
     })
 }
 
-/// 双设备路由：laptop=token-a，phone=token-b（S4「仅改自己备注」的
-/// 隔离面需要两个令牌归属才验得了）。
+/// Two-device router: laptop = token-a, phone = token-b (the S4 "own remark only"
+/// isolation surface needs two token identities to be testable).
 async fn two_device_router() -> axum::Router {
     let tokens = crate::auth::AuthTokens::parse("laptop:tok-laptop,phone:tok-phone").unwrap();
     let app = crate::state::AppState::new(
@@ -97,8 +97,8 @@ fn req_with_token(method: &str, uri: &str, token: &str, body: &str) -> axum::htt
     )
 }
 
-/// 双令牌路由用：注册名必须与令牌归属名一致（remark 端点按令牌
-/// 归属的 device_name 定位行）。
+/// For the two-token router: the registration name must match the token identity
+/// (the remark endpoint locates the row by the token's device_name).
 async fn register_device_with_token(router: &axum::Router, name: &str, token: &str) -> Uuid {
     let (status, body) = send(
         router.clone(),
@@ -118,8 +118,8 @@ async fn register_device_with_token(router: &axum::Router, name: &str, token: &s
     Uuid::parse_str(body["device_id"].as_str().unwrap()).unwrap()
 }
 
-/// 成员设备的本地库：同 id 身份行（身份不经 oplog 同步，测试直接对齐）
-/// + 独立主密钥。
+/// A member device's local library: an identity row with the same id (identities are not
+/// synced via the oplog, so tests align them directly) plus an independent master key.
 async fn member_db(
     identity_id: Uuid,
 ) -> (
@@ -143,7 +143,8 @@ async fn member_db(
     (db, master)
 }
 
-/// 断言库中两条凭据名称与密码和 A 侧种子一致（经本机 master 读回）。
+/// Assert that the two stored credentials' names and passwords match the A-side seed
+/// (read back through the local master).
 async fn assert_stored_credentials(
     db: &persona_core::storage::Database,
     master: &persona_core::crypto::encryption::EncryptionService,

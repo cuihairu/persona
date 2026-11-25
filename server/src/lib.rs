@@ -4,10 +4,10 @@
 //! `main.rs` only wires configuration and binds the listener (and is excluded
 //! from coverage measurement).
 //!
-//! 端点：`/`、`/health`、`/metrics` 免认证；`/api/v1/events`（POST 接入 /
-//! GET 查询）与 `/api/v1/backups`（加密备份保管：POST 上传 / GET 列表 /
-//! GET 单个下载 / DELETE）走 Bearer 令牌（未配置即 503 fail-closed），
-//! 见 [`auth`] 与 [`api`]。
+//! Endpoints: `/`, `/health` and `/metrics` are unauthenticated; `/api/v1/events`
+//! (POST ingest / GET query) and `/api/v1/backups` (encrypted backup custody:
+//! POST upload / GET list / GET single download / DELETE) require a Bearer
+//! token (503 fail-closed when unconfigured); see [`auth`] and [`api`].
 
 mod api;
 pub mod auth;
@@ -42,12 +42,14 @@ pub fn build_relay_router(state: AppState) -> Router {
     with_base(api, state)
 }
 
-/// `/api/v1` 全量子路由：events/backups/auth/accounts/sync/pairing。
-/// 请求顺序 payload_size_guard → require_bearer → RequestDecompressionLayer
-/// → 处理器（后 .layer 的在外层）。body 上限：payload_size_guard 按
-/// Content-Length 预检线上字节（gzip 传输的真实上限）；DefaultBodyLimit
-/// 经 extensions 作用于 extractor 读到的 body——放在解压层内层即
-/// "解压后明文"上限（防解压炸弹，兼兜底无 Content-Length 的 chunked 请求）。
+/// Full `/api/v1` sub-routes: events/backups/auth/accounts/sync/pairing.
+/// Request order is payload_size_guard -> require_bearer -> RequestDecompressionLayer
+/// -> handler (a later `.layer` is the outer one). Body limits: payload_size_guard
+/// pre-checks wire bytes by Content-Length (the real cap for gzip transport);
+/// DefaultBodyLimit applies via extensions to the body the extractor reads — placed
+/// inside the decompression layer it becomes the "post-decompression plaintext"
+/// limit (guards against decompression bombs and also covers chunked requests
+/// without Content-Length).
 fn full_api(state: &AppState) -> Router<AppState> {
     Router::new()
         .route("/events", post(api::ingest).get(api::query))
@@ -58,9 +60,10 @@ fn full_api(state: &AppState) -> Router<AppState> {
             auth::require_bearer,
         ))
         .layer(middleware::from_fn(api::payload_size_guard))
-        // 备份子路由：独立中间件栈（层序 size_guard（CL 预检 256 MiB）→
-        // require_bearer → DefaultBodyLimit）。无解压层：密文不可压，且
-        // 避免第二个解压炸弹面；上限即落盘上限（AppState.max_backup_bytes）。
+        // Backup sub-routes: independent middleware stack (layer order: size_guard (CL
+        // pre-check 256 MiB) -> require_bearer -> DefaultBodyLimit). No decompression
+        // layer: ciphertext is incompressible, and it avoids a second decompression-bomb
+        // surface; the limit equals the on-disk limit (AppState.max_backup_bytes).
         .nest(
             "/backups",
             Router::new()
@@ -76,10 +79,11 @@ fn full_api(state: &AppState) -> Router<AppState> {
                     api::size_guard,
                 )),
         )
-        // SRP 设备认证子路由（E2EE 同步轨道阶段 1）：challenge/verify 免
-        // Bearer（它们就是换取令牌的登录步骤）；register 需既有 Bearer
-        // （引导链）。独立中间件栈（在 api 整体 require_bearer 之外），
-        // body 上限 64 KiB——盐/verifier/公开值都远小于此，防异常载荷。
+        // SRP device authentication sub-routes (E2EE sync track, phase 1): challenge/verify
+        // are Bearer-exempt (they are the login steps that obtain the token); register
+        // requires an existing Bearer (bootstrap chain). Independent middleware stack
+        // (outside the api-wide require_bearer), with a 64 KiB body limit — salt/verifier/
+        // public values are all far smaller than that, guarding against abnormal payloads.
         .nest(
             "/auth",
             Router::new()
@@ -94,10 +98,11 @@ fn full_api(state: &AppState) -> Router<AppState> {
                 .route("/verify", post(api::auth_verify))
                 .layer(DefaultBodyLimit::max(64 * 1024)),
         )
-        // 账号体系（M2）：注册/登录（passkey + SRP 兜底）、恢复码、设备授权。
-        // 账号注册免认证；其余走 require_account_bearer——静态 token /
-        // SRP 短期 token / 账号会话令牌（account_sessions 行，仅限归属
-        // 账号自己的路径；这是 M2 的令牌消费方接线，见 auth 模块）。
+        // Account system (M2): registration/login (passkey + SRP fallback), recovery
+        // codes, device authorization. Account registration is unauthenticated; everything
+        // else goes through require_account_bearer — static token / SRP short-lived token /
+        // account session token (an account_sessions row, only on paths belonging to the
+        // owning account; this is M2's token-consumer wiring, see the auth module).
         .nest(
             "/accounts",
             Router::new()
@@ -111,7 +116,7 @@ fn full_api(state: &AppState) -> Router<AppState> {
                     "/{account_id}/passkeys/register",
                     post(api::passkey_register),
                 )
-                // passkey 登录仪式第一步（免 Bearer——这就是登录）
+                // First step of the passkey login ceremony (Bearer-exempt — this IS the login)
                 .route(
                     "/{account_id}/passkeys/login-options",
                     post(api::passkey_login_options),
@@ -178,11 +183,12 @@ fn full_api(state: &AppState) -> Router<AppState> {
         .nest("/pairing", pairing_routes())
 }
 
-/// E2EE 同步子路由（阶段 2 批 3，E2EE_SYNC_DESIGN §5/§6）：密文中继 +
-/// 设备/信封登记。独立中间件栈（在 api 整体 require_bearer 之外）：
-/// 无解压层（密文不可压，兼免第二个解压炸弹面）；body 上限沿 events
-/// 线上限 1 MiB——凭据密文 KB 级，500 条/批足够（附件走备份通道，
-/// 是 §11 v2 议题）。
+/// E2EE sync sub-routes (phase 2 batch 3, E2EE_SYNC_DESIGN §5/§6): ciphertext relay +
+/// device/envelope registration. Independent middleware stack (outside the api-wide
+/// require_bearer): no decompression layer (ciphertext is incompressible, and this avoids
+/// a second decompression-bomb surface); body limit follows the events wire limit of
+/// 1 MiB — credential ciphertext is KB-sized, so 500 per batch is enough (attachments go
+/// through the backup channel, a §11 v2 topic).
 fn sync_routes(state: &AppState) -> Router<AppState> {
     Router::new()
         .route(
@@ -209,10 +215,10 @@ fn sync_routes(state: &AppState) -> Router<AppState> {
         ))
 }
 
-/// 同步组配对中转（S1，docs/sync-group-mode.md）：无账号信箱，无 Bearer
-/// （配对双方本就没有共享凭证）；payload 是客户端加密协议消息（SRP
-/// 公开消息 + AEAD 密文），中转零知识。TTL/队列上限/payload 上限在
-/// handlers 内强制。
+/// Sync-group pairing relay (S1, docs/sync-group-mode.md): an account-less mailbox with
+/// no Bearer (the pairing peers by definition have no shared credentials yet); the payload
+/// is a client-encrypted protocol message (SRP public message + AEAD ciphertext), so the
+/// relay is zero-knowledge. TTL/queue limits/payload limits are enforced in the handlers.
 fn pairing_routes() -> Router<AppState> {
     Router::new()
         .route("/sessions", post(api::pairing_create_session))
@@ -231,10 +237,11 @@ fn pairing_routes() -> Router<AppState> {
         .layer(DefaultBodyLimit::max(api::MAX_BODY_BYTES))
 }
 
-/// 顶层（后 .layer 在外层）：track_metrics 挂在 CORS 内层——preflight
-/// OPTIONS 在 CORS 短路不计数；Router::layer 在路由后运行，MatchedPath
-/// 可用。fallback 同样被该层包裹，404 无 MatchedPath 自然计 "unmatched"
-/// （405 不经任何一层，属有界遗漏）。
+/// Top level (a later `.layer` is the outer one): track_metrics is attached inside
+/// CORS — preflight OPTIONS short-circuits in CORS and is not counted; Router::layer runs
+/// after routing, so MatchedPath is available. The fallback is wrapped by the same layer,
+/// so a 404 without MatchedPath naturally counts as "unmatched" (405 passes through no
+/// layer at all — a bounded omission).
 fn with_base(api: Router<AppState>, state: AppState) -> Router {
     Router::new()
         .route("/", get(root))
@@ -247,8 +254,8 @@ fn with_base(api: Router<AppState>, state: AppState) -> Router {
         .with_state(state)
 }
 
-/// 请求计数：路由模板做 label（无 MatchedPath 时兜底 "unmatched"），
-/// `next.run()` 之后按实际状态码累计。
+/// Request counting: the route template is the label (falls back to "unmatched" when no
+/// MatchedPath exists), accumulated by the actual status code after `next.run()`.
 async fn track_metrics(State(state): State<AppState>, request: Request, next: Next) -> Response {
     let method = request.method().clone();
     let route = request
@@ -263,7 +270,7 @@ async fn track_metrics(State(state): State<AppState>, request: Request, next: Ne
     response
 }
 
-/// GET /metrics：Prometheus 文本，免认证（抓取器惯例，THREAT_MODEL 已登记）。
+/// GET /metrics: Prometheus text, unauthenticated (standard scraper practice, registered in THREAT_MODEL).
 async fn metrics_handler(State(state): State<AppState>) -> Response {
     (
         StatusCode::OK,
@@ -276,8 +283,8 @@ async fn metrics_handler(State(state): State<AppState>) -> Response {
         .into_response()
 }
 
-/// 404 兜底响应体。计数无需在此做：fallback 同样被 Router::layer 包裹，
-/// track_metrics 取不到 MatchedPath 自然落 "unmatched"。
+/// 404 fallback response body. No counting needed here: the fallback is also wrapped by
+/// Router::layer, and track_metrics finds no MatchedPath so it naturally lands on "unmatched".
 async fn not_found() -> impl IntoResponse {
     api::ApiError::not_found()
 }
@@ -301,8 +308,8 @@ pub(crate) mod test_support {
         (build_router(app_state.clone()), app_state)
     }
 
-    /// 保留策略测试装配：`PERSONA_SERVER_*_RETENTION_DAYS` 的测试替身
-    /// （0 = 不清理）。
+    /// Retention-policy test harness: a test stand-in for `PERSONA_SERVER_*_RETENTION_DAYS`
+    /// (0 = no cleanup).
     pub(crate) async fn setup_with_retention(
         token: Option<&str>,
         oplog_days: u32,
@@ -314,9 +321,10 @@ pub(crate) mod test_support {
         (build_router(app_state.clone()), app_state)
     }
 
-    /// 备份端点测试装配：多设备令牌 spec + tempdir 备份目录 + 可调小
-    /// 的字节上限（256 MiB 真实上限不适合逐测试生成）。TempDir 由调用
-    /// 方持有（Router 只存路径，目录被 drop 即清空）。
+    /// Backup-endpoint test harness: multi-device token spec + tempdir backup directory + a
+    /// shrinkable byte limit (generating the real 256 MiB limit per test is not practical).
+    /// The caller owns the TempDir (the Router only stores the path, and dropping the dir
+    /// wipes it).
     pub(crate) async fn setup_with_backups(
         spec: &str,
         max_versions: usize,
@@ -342,13 +350,13 @@ pub(crate) mod test_support {
         let body = axum::body::to_bytes(response.into_body(), usize::MAX)
             .await
             .unwrap();
-        // 纯文本端点（/、/health）解析为 Null；JSON 端点的用例都会断言具体
-        // 字段，若响应意外非 JSON 会以 Null 显形失败。
+        // Plain-text endpoints (/, /health) parse to Null; JSON endpoint cases all assert
+        // specific fields, so an unexpectedly non-JSON response shows up as Null and fails.
         let json = serde_json::from_slice(&body).unwrap_or(serde_json::Value::Null);
         (status, json)
     }
 
-    /// 二进制响应（备份下载）：返回状态码 + 完整 body 字节。
+    /// Binary response (backup download): returns status code + full body bytes.
     pub(crate) async fn send_binary(
         router: Router,
         request: HttpRequest<axum::body::Body>,
@@ -418,7 +426,7 @@ pub(crate) mod test_support {
         )
     }
 
-    /// 下载走二进制响应（send_binary 断言字节与 ETag）。
+    /// Downloads use the binary response (send_binary asserts bytes and ETag).
     pub(crate) fn get_backup_download(id: &str, token: &str) -> HttpRequest<axum::body::Body> {
         HttpRequest::builder()
             .method("GET")
@@ -428,7 +436,7 @@ pub(crate) mod test_support {
             .unwrap()
     }
 
-    /// 单条合法事件 JSON。
+    /// A single valid event as JSON.
     pub(crate) fn event_json(id: &str, action: &str) -> String {
         format!(
             r#"{{"id":"{id}","action":"{action}","resource_type":"user","success":true,"timestamp":"2026-01-01T00:00:00Z"}}"#
@@ -456,7 +464,7 @@ mod tests {
         let (router, _) = setup(None).await;
         let (status, body) = send(router, request("GET", "/health", None, None, "")).await;
         assert!(status.is_success());
-        assert_eq!(body, serde_json::Value::Null); // 纯文本，非 JSON
+        assert_eq!(body, serde_json::Value::Null); // plain text, not JSON
     }
 
     #[tokio::test]
@@ -545,7 +553,7 @@ mod tests {
         assert_eq!(body["events"].as_array().unwrap().len(), 1);
         assert_eq!(body["events"][0]["action"], "login");
 
-        // 计数器联动（/metrics 渲染在后续 commit 接线）
+        // Counter linkage (/metrics rendering was wired in a later commit)
         let (_, ingested, duplicates, rejected, _, _) = app_state.metrics.snapshot();
         assert_eq!((ingested, duplicates, rejected), (1, 0, 0));
     }
@@ -573,10 +581,10 @@ mod tests {
     #[tokio::test]
     async fn http_counters_use_route_templates_and_fallback_counts_404() {
         let (router, app_state) = setup(Some(TOKEN)).await;
-        // 命中路由表：label 是路由模板而非带查询串的实际路径
+        // Hits the route table: the label is the route template, not the actual path with query string
         let (status, _) = send(router.clone(), get_events("/api/v1/events?limit=1", TOKEN)).await;
         assert!(status.is_success());
-        // 路由表外 → fallback 计 "unmatched"
+        // Outside the route table -> the fallback counts "unmatched"
         let (status, body) = send(router, request("GET", "/nope", None, None, "")).await;
         assert_eq!(status, axum::http::StatusCode::NOT_FOUND);
         assert_eq!(body["error"]["code"], "not_found");
@@ -600,8 +608,9 @@ mod tests {
     }
 
     // -------------------------------------------------------------------
-    // persona-relay 路由白名单（交付物 3）：sync/pairing 面在，其余 API
-    // 面整体缺席；基线端点（/、/health、/metrics）与 Bearer 门禁不变。
+    // persona-relay route whitelist (deliverable 3): the sync/pairing surfaces are
+    // present, every other API surface is entirely absent; the baseline endpoints
+    // (/, /health, /metrics) and the Bearer gate are unchanged.
     // -------------------------------------------------------------------
 
     #[tokio::test]
@@ -609,13 +618,13 @@ mod tests {
         let app_state = state::test_state(Some(TOKEN)).await;
         let router = build_relay_router(app_state);
 
-        // 基线端点在（监控探针不变）
+        // Baseline endpoints are present (monitoring probes unchanged)
         for uri in ["/", "/health", "/metrics"] {
             let (status, _) = send(router.clone(), request("GET", uri, None, None, "")).await;
             assert!(status.is_success(), "relay must keep serving {uri}");
         }
 
-        // 同步面可达（Bearer 令牌 + 空库 → head_seq 0）
+        // The sync surface is reachable (Bearer token + empty db -> head_seq 0)
         let (status, body) = send(
             router.clone(),
             request(
@@ -630,8 +639,8 @@ mod tests {
         assert!(status.is_success(), "relay must serve /api/v1/sync/status");
         assert_eq!(body["head_seq"], 0);
 
-        // 非 relay 面整体缺席（404 fallback）——accounts/events/backups/
-        // auth 是 persona-server 全量面，relay 是哑中转，绝不外露。
+        // Non-relay surfaces are entirely absent (404 fallback) — accounts/events/backups/
+        // auth are the full persona-server surface; the relay is a dumb relay and never exposes them.
         for uri in [
             "/api/v1/accounts",
             "/api/v1/accounts/register",

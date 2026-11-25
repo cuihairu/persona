@@ -7,8 +7,8 @@ async fn account_srp_challenge_returns_real_server_public() {
     register_account_srp(&router, &account_id).await;
 
     let (_, salt, server_public) = account_srp_challenge(&router, &account_id).await;
-    // 4096-bit group：B 与 verifier 同为 512B 级（前导零时 511B），
-    // 不再是 verifier 占位。
+    // 4096-bit group: B and the verifier are both on the order of 512B (511B with leading
+    // zeros), no longer a verifier placeholder.
     assert!(
         (400..=512).contains(&server_public.len()),
         "server_public len = {}",
@@ -59,13 +59,13 @@ async fn account_srp_login_round_trip_verifies_client_proof() {
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["expires_in_secs"], 900);
 
-    // 双向认证：server_proof（M2）必须过客户端核验
+    // Mutual authentication: server_proof (M2) must pass client-side verification
     let server_proof = B64.decode(body["server_proof"].as_str().unwrap()).unwrap();
     let session_key = proof.verify_server(&server_proof).unwrap();
     assert!((1..=512).contains(&session_key.len()));
     assert!(session_key.iter().any(|&b| b != 0));
 
-    // DB：15min 会话行落库
+    // DB: the 15min session row is persisted
     let token = body["token"].as_str().unwrap();
     let count: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM account_sessions WHERE account_id = ? AND session_token = ?",
@@ -88,7 +88,7 @@ async fn account_srp_wrong_password_rejected_without_session() {
     assert_eq!(status, StatusCode::UNAUTHORIZED, "{body}");
     assert_eq!(account_session_count(&state, &account_id).await, 0);
 
-    // 1 次失败不触发锁户：正确密码仍可登录
+    // One failure does not trigger lockout: the correct password still logs in
     let (status, body) = attempt_account_srp_login(&router, &account_id, SRP_PASSWORD).await;
     assert_eq!(status, StatusCode::OK, "{body}");
 }
@@ -100,7 +100,7 @@ async fn account_srp_verify_requires_client_proof_field() {
     register_account_srp(&router, &account_id).await;
     let (session_id, _, _) = account_srp_challenge(&router, &account_id).await;
 
-    // 缺 client_proof → 422（serde 反序列化 rejection）
+    // Missing client_proof -> 422 (serde deserialization rejection)
     let (status, body) = send(
         router.clone(),
         request(
@@ -122,7 +122,7 @@ async fn account_srp_verify_rejects_cross_account_session() {
     let a = create_account(&router, "cross-a@example.com").await;
     let b = create_account(&router, "cross-b@example.com").await;
     register_account_srp(&router, &b).await;
-    // b 注册了 SRP 凭据，a 没有——拿 b 的 session 去 a 的 verify 路径
+    // b registered SRP credentials, a did not — take b's session to a's verify path
     let login = srp::SrpClientLogin::new().unwrap();
     let a_pub = login.public_ephemeral().to_vec();
     let (status, resp) = send(
@@ -144,7 +144,7 @@ async fn account_srp_verify_rejects_cross_account_session() {
         .process(SRP_DEVICE, SRP_PASSWORD, &salt, &server_public)
         .unwrap();
 
-    // 正确的 M1，但打到 a 的路径：锁键前缀不匹配 → 401
+    // A correct M1, but sent to a's path: the lock key prefix does not match -> 401
     let (status, body) = send(
         router.clone(),
         request(
@@ -171,12 +171,12 @@ async fn account_srp_five_failures_lock_account() {
         let (status, _) = attempt_account_srp_login(&router, &account_id, "wrong-password").await;
         assert_eq!(status, StatusCode::UNAUTHORIZED);
     }
-    // 锁定期内正确密码同样 423 Locked
+    // During lockout the correct password is also 423 Locked
     let (status, body) = attempt_account_srp_login(&router, &account_id, SRP_PASSWORD).await;
     assert_eq!(status, StatusCode::LOCKED, "{body}");
 }
 
-// ---- passkey 注册：真 attestation 验证 ----
+// ---- Passkey registration: real attestation verification ----
 
 #[tokio::test]
 async fn srp_register_rejects_duplicate_and_bad_fields() {
@@ -186,7 +186,7 @@ async fn srp_register_rejects_duplicate_and_bad_fields() {
     let reg = srp::register_verifier(SRP_DEVICE, SRP_PASSWORD).unwrap();
     let url = format!("/api/v1/accounts/{account_id}/srp/register");
 
-    // 同设备重复注册 → 409
+    // Duplicate registration on the same device -> 409
     let (status, body) = send(
         router.clone(),
         req(
@@ -203,7 +203,7 @@ async fn srp_register_rejects_duplicate_and_bad_fields() {
     .await;
     assert_eq!(status, StatusCode::CONFLICT, "{body}");
 
-    // device_name 空 / 含空白 → 422
+    // Blank device_name / device_name containing whitespace -> 422
     for name in ["", "de vice"] {
         let (status, body) = send(
             router.clone(),
@@ -222,7 +222,7 @@ async fn srp_register_rejects_duplicate_and_bad_fields() {
         assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
     }
 
-    // salt 不是合法 base64 → 422
+    // salt is not valid base64 -> 422
     let (status, body) = send(
         router.clone(),
         req(
@@ -239,7 +239,7 @@ async fn srp_register_rejects_duplicate_and_bad_fields() {
     .await;
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
 
-    // salt 解码后超过 64 字节 → 422
+    // salt exceeds 64 bytes after decoding -> 422
     let (status, body) = send(
         router.clone(),
         req(

@@ -2,8 +2,9 @@ use super::*;
 
 // ---- /sync/devices ----
 
-/// POST /sync/devices：登记设备（公钥 + 设备名）。重名 409——公钥不可被
-/// 静默替换（攻陷 token 后换公钥 = 劫持该设备的信封通道）。
+/// POST /sync/devices: register a device (public key + device name). A duplicate name is 409 —
+/// the public key must not be silently replaced (swapping the key after compromising the token
+/// would hijack that device's envelope channel).
 pub async fn register_device(
     State(state): State<AppState>,
     Json(request): Json<RegisterDeviceRequest>,
@@ -58,7 +59,7 @@ pub async fn register_device(
         .into_response()
 }
 
-/// GET /sync/devices：列出全部已登记设备。
+/// GET /sync/devices: list all registered devices.
 pub async fn list_devices(State(state): State<AppState>) -> Response {
     let rows = match sqlx::query(
         "SELECT id, device_name, public_key, created_at, remark FROM sync_devices ORDER BY created_at, id",
@@ -84,9 +85,9 @@ pub async fn list_devices(State(state): State<AppState>) -> Response {
     (Json(DeviceListResponse { devices })).into_response()
 }
 
-/// PUT /sync/devices/remark：改**自己**的备注（S4 设备面）。目标行由
-/// 令牌归属的设备名锁定（不接 device_id 参数——接口形态上就改不了
-/// 别人的），≤128 字节，空串 = 清除。
+/// PUT /sync/devices/remark: change **your own** remark (S4 device surface). The target row is
+/// pinned to the device name owned by the token (no device_id parameter — it is structurally
+/// impossible to change someone else's), at most 128 bytes, and an empty string clears it.
 pub async fn put_device_remark(
     State(state): State<AppState>,
     Extension(device): Extension<DeviceName>,
@@ -116,19 +117,22 @@ pub async fn put_device_remark(
     }
 }
 
-/// DELETE /sync/devices/:id：吊销设备（删登记与其信封）。幂等；被吊销
-/// 设备已知的 group key 不可追溯撤销（DR-3 诚实边界——由「轮换组密钥」
-/// 闭环，已落地）。生命周期级联（2026-09 吊销闭环）：同名 SRP 登记
-/// （`auth_devices`，以设备名为键）一并删除，其已签发的短期令牌即刻
-/// 失效、未决握手丢弃——被吊销设备不能再用既有凭证继续认证/推送。
+/// DELETE /sync/devices/:id: revoke a device (deletes the registration and its envelope).
+/// Idempotent; a group key already known to the revoked device cannot be retroactively
+/// withdrawn (DR-3 honest boundary — closed out by "rotate the group key", already
+/// implemented). Lifecycle cascade (2026-09 revocation closeout): the same-named SRP
+/// registration (`auth_devices`, keyed by device name) is deleted as well, its issued
+/// short-lived tokens become invalid immediately and pending handshakes are dropped — a
+/// revoked device can no longer keep authenticating/pushing with its existing credentials.
 pub async fn delete_device(State(state): State<AppState>, Path(id): Path<String>) -> Response {
     let device_id = match Uuid::parse_str(&id) {
         Ok(id) => id.to_string(),
         Err(_) => return StatusCode::NO_CONTENT.into_response(),
     };
-    // 同名 = 同设备：SRP 登记与 sync_devices 共用设备名命名。先查名再删
-    // （级联以名为键）；删行顺序安全敏感者先行——SRP 行 → 信封 → 登记，
-    // 中途失败可整体重试（幂等）。
+    // Same name = same device: the SRP registration and sync_devices share device-name
+    // naming. Look the name up before deleting (the cascade is keyed by name); delete the
+    // safety-sensitive rows first — SRP row -> envelope -> registration —
+    // a mid-way failure can be retried as a whole (idempotent).
     let name =
         match sqlx::query_scalar::<_, String>("SELECT device_name FROM sync_devices WHERE id = ?")
             .bind(&device_id)
@@ -156,8 +160,9 @@ pub async fn delete_device(State(state): State<AppState>, Path(id): Path<String>
         Ok(())
     }
     .await;
-    // DB 级联成功后清内存态：既有令牌即刻失效 + 未决握手丢弃（SRP 未
-    // 启用则无内存态可清）
+    // Once the DB cascade succeeds, clear the in-memory state: existing tokens become
+    // invalid immediately + pending handshakes are dropped (if SRP is not enabled there is
+    // no in-memory state to clear)
     if result.is_ok() {
         if let (Some(name), Some(srp)) = (&name, state.srp.as_ref()) {
             let evicted = srp.revoke_device(name);
@@ -174,8 +179,9 @@ pub async fn delete_device(State(state): State<AppState>, Path(id): Path<String>
 
 // ---- /sync/group-keys ----
 
-/// GET /sync/group-keys：全部设备信封。客户端只认自己 device_id 的那条；
-/// 未授权设备取到别人的信封也拆不开（见模块文档 fail-closed）。
+/// GET /sync/group-keys: all device envelopes. Clients only honor the entry for their own
+/// device_id; an unauthorized device cannot open someone else's envelope even if it fetches
+/// it (see the module docs for the fail-closed stance).
 pub async fn get_group_keys(State(state): State<AppState>) -> Response {
     let rows = match sqlx::query(
         "SELECT k.device_id, k.envelope, k.sealed_by, k.created_at
@@ -216,23 +222,26 @@ pub async fn get_group_keys(State(state): State<AppState>) -> Response {
     .into_response()
 }
 
-/// POST /sync/group-key/rotate-begin：轮换互斥点（§11 开放问题 2）。
-/// 乐观锁抢占：epoch 与 if_epoch 相等才 +1（成功 = 获得写信封族的互斥
-/// 窗口）；不相等 = 另一台设备已并发轮换，409 让后到者干净中止（未写
-/// 任何信封、未重包）。epoch 单调递增不复位——重试方重读 group-keys
-/// 拿新基线再来。begin 之后若轮换者崩溃，信封族停留在新旧混合态：与
-/// 既有「轮换中途崩溃」边界一致，重试即重跑（幂等面 = 信封 upsert +
-/// 重包以主库为准）。
+/// POST /sync/group-key/rotate-begin: the rotation mutual-exclusion point (§11 open question 2).
+/// Optimistic-lock preemption: epoch is incremented only if it still equals if_epoch (success =
+/// acquiring the exclusive window for writing the envelope family); otherwise another device has
+/// rotated concurrently, and 409 lets the latecomer abort cleanly (having written no envelopes and
+/// re-sealed nothing). epoch increases monotonically and never resets — a retrier re-reads
+/// group-keys for the new baseline and tries again. If the rotator crashes after begin, the
+/// envelope family is left in a mixed old/new state: consistent with the existing
+/// "crash mid-rotation" boundary, and a retry simply re-runs it (the idempotent surface = envelope
+/// upsert + re-sealing, both judged against the primary store).
 pub async fn rotate_begin(
     State(state): State<AppState>,
-    // 设备名未参与 CAS（互斥对象是全组而非单设备）；持 Extension 保持与
-    // 其他写端点一致的中间件形态（require_bearer 已认证）。
+    // The device name does not take part in the CAS (the mutex covers the whole group, not a
+    // single device); holding the Extension keeps the middleware shape consistent with the
+    // other write endpoints (require_bearer has already authenticated).
     Extension(_device): Extension<DeviceName>,
     Json(request): Json<RotateBeginRequest>,
 ) -> Response {
     let result: Result<Option<u64>, String> = async {
         let mut tx = state.pool.begin().await.map_err(|e| e.to_string())?;
-        // 事务内读当前代数并 CAS：命中才 +1
+        // Read the current generation inside the transaction and CAS: increment only on a hit
         let current: i64 = sqlx::query_scalar(
             "SELECT COALESCE((SELECT epoch FROM sync_group_epoch WHERE id = 1), 0)",
         )
@@ -247,7 +256,8 @@ pub async fn rotate_begin(
             .await
             .map_err(|e| e.to_string())?;
         let next = (current + 1).max(0) as u64;
-        // 显式 commit：事务 drop 即回滚，漏掉等于互斥形同虚设
+        // Commit explicitly: dropping the transaction rolls it back, which would make the
+        // mutual exclusion meaningless
         tx.commit().await.map_err(|e| e.to_string())?;
         Ok(Some(next))
     }
@@ -266,8 +276,8 @@ pub async fn rotate_begin(
     }
 }
 
-/// PUT /sync/group-keys：上传/更新某设备的信封（授权动作 = 既有设备为
-/// 新设备包好并上传；重包轮换 = 覆盖 upsert）。
+/// PUT /sync/group-keys: upload/update a device's envelope (the authorized action = an existing
+/// device seals it for the new device and uploads it; re-sealing during rotation = overwrite upsert).
 pub async fn put_group_key(
     State(state): State<AppState>,
     Extension(device): Extension<DeviceName>,

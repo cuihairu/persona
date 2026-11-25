@@ -1,18 +1,20 @@
-//! SRP 设备认证端点（`/api/v1/auth/*`，E2EE 同步轨道阶段 1）。
+//! SRP device authentication endpoints (`/api/v1/auth/*`, E2EE sync track phase 1).
 //!
-//! 流程（设计稿 E2EE_SYNC_DESIGN DR-2；SRP 数学全部在 core
-//! `auth::srp`，本文件只做 HTTP 编排与准入）：
+//! The flow (design doc E2EE_SYNC_DESIGN DR-2; all SRP math lives in core's
+//! `auth::srp`, this file only does HTTP orchestration and admission):
 //!
-//! 1. `POST /auth/register`（**需既有 Bearer**——静态令牌或已登录的
-//!    SRP 令牌构成引导链）：客户端本地生成 (salt, verifier) 上传，
-//!    服务器存表——密码与 Argon2 派生值永不出机。
-//! 2. `POST /auth/challenge`：客户端带设备名 + 公开值 A；服务器按
-//!    verifier 生成 B，未决握手缓存 120s。
-//! 3. `POST /auth/verify`：客户端带 session_id + 证明 M1；服务器核验
-//!    并签发短期 Bearer 令牌（15 分钟，见 [`crate::auth`]）。
+//! 1. `POST /auth/register` (**requires an existing Bearer** — a static token or an
+//!    already-logged-in SRP token forms the bootstrap chain): the client generates
+//!    (salt, verifier) locally and uploads them; the server stores them — the password
+//!    and its Argon2 derivative never leave the machine.
+//! 2. `POST /auth/challenge`: the client sends the device name + public value A; the
+//!    server generates B from the verifier and caches the pending handshake for 120s.
+//! 3. `POST /auth/verify`: the client sends session_id + proof M1; the server verifies
+//!    and issues a short-term Bearer token (15 minutes, see [`crate::auth`]).
 //!
-//! fail-closed：认证体系未启用（`state.auth` 为 None）时三个端点整体
-//! 503——静态令牌与 SRP 同开同关。锁户：连续 5 次失败锁 15 分钟。
+//! Fail-closed: when the auth system is not enabled (`state.auth` is None) all three
+//! endpoints 503 together — static tokens and SRP are enabled and disabled as one.
+//! Lockout: 5 consecutive failures lock the device for 15 minutes.
 
 use axum::extract::State;
 use axum::http::StatusCode;
@@ -28,19 +30,21 @@ use super::ApiError;
 use crate::auth::{DeviceName, SrpChallengeEntry, SRP_CHALLENGE_TTL};
 use crate::state::AppState;
 
-/// SRP 盐字节上限（实际 32B，留余量拒绝异常大载荷）。
+/// SRP salt byte limit (in practice 32B; headroom is kept to reject abnormally large
+/// payloads).
 const MAX_SALT_BYTES: usize = 64;
-/// verifier 字节上限（4096-bit group 的 N 为 512B，+余量）。
+/// verifier byte limit (the 4096-bit group's N is 512B, plus headroom).
 const MAX_VERIFIER_BYTES: usize = 544;
-/// 公开值上限（客户端 a 为 64B、服务器 B 为 512B 级别，都远小于此）。
+/// Public value limit (client a is 64B, server B is on the order of 512B — both far
+/// below this).
 const MAX_PUBLIC_BYTES: usize = 768;
 
 #[derive(Deserialize)]
 pub struct RegisterRequest {
     device_name: String,
-    /// base64（标准，含 padding）编码的 salt。
+    /// The salt, base64-encoded (standard, with padding).
     salt: String,
-    /// base64 编码的 SRP verifier。
+    /// The SRP verifier, base64-encoded.
     verifier: String,
 }
 
@@ -49,13 +53,14 @@ pub struct RegisterResponse {
     pub device_name: String,
 }
 
-/// POST /api/v1/auth/register —— 引导注册：要求既有 Bearer。
+/// POST /api/v1/auth/register — bootstrap registration: requires an existing Bearer.
 pub async fn register(
     State(state): State<AppState>,
     axum::Extension(operator): axum::Extension<DeviceName>,
     Json(req): Json<RegisterRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
-    // fail-closed 检查:认证体系未启用时注册同样不可用(绑定名仅此用途)
+    // fail-closed check: registration is likewise unavailable when the auth system is
+    // not enabled (the bound name serves this purpose only)
     let _ = state.srp.as_ref().ok_or_else(ApiError::disabled)?;
     let name = validate_device_name(&req.device_name)?;
     let salt = decode_field("salt", &req.salt, MAX_SALT_BYTES)?;
@@ -85,20 +90,21 @@ pub async fn register(
 #[derive(Deserialize)]
 pub struct ChallengeRequest {
     device_name: String,
-    /// base64 编码的客户端公开值 A。
+    /// The client's public value A, base64-encoded.
     client_public: String,
 }
 
 #[derive(Serialize)]
 pub struct ChallengeResponse {
     pub session_id: String,
-    /// base64 编码的盐。
+    /// The salt, base64-encoded.
     pub salt: String,
-    /// base64 编码的服务器公开值 B。
+    /// The server's public value B, base64-encoded.
     pub server_public: String,
 }
 
-/// POST /api/v1/auth/challenge —— 免 Bearer（这本身就是登录的第一步）。
+/// POST /api/v1/auth/challenge — no Bearer required (this is itself the first step of
+/// login).
 pub async fn challenge(
     State(state): State<AppState>,
     Json(req): Json<ChallengeRequest>,
@@ -114,7 +120,8 @@ pub async fn challenge(
     .fetch_optional(&state.pool)
     .await
     .map_err(ApiError::internal)?
-    // 设备不存在与任何其他失败同形（401 无差异信息）——不暴露注册状态
+    // A missing device is shaped like any other failure (401 with no distinguishing
+    // information) — the registration status is not exposed
     .ok_or_else(ApiError::unauthorized)?;
 
     let hc = srp::server_challenge(&row.1).map_err(ApiError::internal)?;
@@ -139,33 +146,37 @@ pub async fn challenge(
 #[derive(Deserialize)]
 pub struct VerifyRequest {
     session_id: String,
-    /// base64 编码的客户端证明 M1。
+    /// The client's proof M1, base64-encoded.
     client_proof: String,
 }
 
 #[derive(Serialize)]
 pub struct VerifyResponse {
-    /// base64 编码的服务器证明 M2（客户端核验通过才算登录成功）。
+    /// The server's proof M2, base64-encoded (login counts as successful only once the
+    /// client has verified it).
     pub server_proof: String,
-    /// 短期 Bearer 令牌（客户端在核验 M2 **之后**才应使用）。
+    /// The short-term Bearer token (the client should use it only **after** verifying M2).
     pub token: String,
     pub expires_in_secs: u64,
 }
 
-/// POST /api/v1/auth/verify —— 免 Bearer；锁户预检 + 失败记账都在这。
+/// POST /api/v1/auth/verify — no Bearer required; the lockout pre-check and failure
+/// accounting both happen here.
 pub async fn verify(
     State(state): State<AppState>,
     Json(req): Json<VerifyRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
     let srp_state = state.srp.as_ref().ok_or_else(ApiError::disabled)?;
 
-    // 未决握手先取走（一次握手一条；TTL 外即不存在）
+    // Take the pending handshake first (one entry per handshake; outside the TTL it
+    // simply does not exist)
     let entry = srp_state
         .take_challenge(&req.session_id)
         .ok_or_else(ApiError::unauthorized)?;
 
     if srp_state.is_locked(&entry.device_name) {
-        // 423 Locked：明确告诉客户端等待，而非模糊 401（对齐本机锁户反馈）
+        // 423 Locked: tell the client plainly to wait rather than an ambiguous 401
+        // (matching the local lockout feedback)
         return Err(ApiError::rejection(
             StatusCode::LOCKED,
             "account locked after repeated failures; retry later",
@@ -196,8 +207,8 @@ pub async fn verify(
     }
 }
 
-/// 设备名规则与 `PERSONA_SERVER_TOKENS` 的名字约束对齐（非空、≤64 字节、
-/// 无空白）。
+/// The device-name rules align with `PERSONA_SERVER_TOKENS`'s name constraints
+/// (non-empty, at most 64 bytes, no whitespace).
 fn validate_device_name(name: &str) -> Result<String, ApiError> {
     let trimmed = name.trim();
     if trimmed.is_empty() || trimmed.len() > 64 || trimmed.chars().any(char::is_whitespace) {
@@ -212,7 +223,8 @@ fn validate_device_name(name: &str) -> Result<String, ApiError> {
     Ok(trimmed.to_owned())
 }
 
-/// base64 字段解码 + 长度上限（无 padding 容忍——客户端可用任一变体）。
+/// base64 field decoding + length cap (padding-tolerant — the client may use either
+/// variant).
 fn decode_field(field: &str, raw: &str, max_bytes: usize) -> Result<Vec<u8>, ApiError> {
     let decoded = B64
         .decode(raw.trim())
@@ -240,7 +252,8 @@ mod tests {
     use base64::Engine as _;
     use persona_core::auth::srp;
 
-    /// 引导链用静态令牌(注册 /auth/register 需要它)。
+    /// The static token used for the bootstrap chain (registering via /auth/register
+    /// requires it).
     const BOOTSTRAP: &str = "bootstrap-token";
     const DEVICE: &str = "test-laptop";
     const PASSWORD: &str = "correct horse battery staple";
@@ -270,8 +283,9 @@ mod tests {
         assert_eq!(body["device_name"], DEVICE);
     }
 
-    /// 完整握手一次;`password` 错误时 verify 落 401(SRP 数学上客户端
-    /// 总能算出 M1,拒绝发生在服务器侧)。
+    /// One full handshake; when `password` is wrong, verify lands on 401 (mathematically
+    /// the client can always compute M1 under SRP, so the rejection happens on the server
+    /// side).
     async fn attempt_login(
         router: &axum::Router,
         password: &str,
@@ -391,7 +405,8 @@ mod tests {
             ),
         )
         .await;
-        // 未注册设备与无效公开值同形:401,不泄露「是否存在该设备」
+        // An unregistered device and an invalid public value are shaped the same: 401,
+        // never leaking "whether that device exists"
         assert_eq!(status, StatusCode::UNAUTHORIZED);
         assert_eq!(resp["error"]["code"], "unauthorized");
     }
@@ -406,7 +421,8 @@ mod tests {
         let token = resp["token"].as_str().unwrap();
         assert_eq!(resp["expires_in_secs"], 900);
 
-        // SRP 签发的短期令牌与静态令牌同权访问受保护端点
+        // The short-term token issued by SRP has the same standing as a static token when
+        // accessing protected endpoints
         let events = format!(r#"{{"events":[{}]}}"#, event_json("e1", "login"));
         let (status, body) = send(router.clone(), post_events(&events, Some(token))).await;
         assert_eq!(status, StatusCode::ACCEPTED, "{body}");
@@ -416,8 +432,8 @@ mod tests {
 
     #[tokio::test]
     async fn server_proof_verifies_on_client_side() {
-        // 双向认证的客户端半边:verify 响应里的 M2 必须通过
-        // SrpClientProof::verify_server 核验,且两侧会话密钥一致
+        // The client half of mutual authentication: the M2 in the verify response must
+        // pass SrpClientProof::verify_server, and both sides' session keys must match
         let (router, _) = setup(Some(BOOTSTRAP)).await;
         register_device(&router).await;
 
@@ -463,10 +479,12 @@ mod tests {
         assert_eq!(status, StatusCode::OK, "{resp}");
         let server_proof = B64.decode(resp["server_proof"].as_str().unwrap()).unwrap();
         let session_key = proof.verify_server(&server_proof).unwrap();
-        // premaster 理论长度 = 群模数字节长度(4096-bit group → 512B),但
-        // srp crate 的大数输出去前导零:共享秘密首字节恰为 0(概率 1/256)
-        // 时是 511B——客户端/服务器拿到同一去零字节,密钥材料不受影响;
-        // 用作密钥材料前由调用方再过 KDF(设计稿:信封加密另走 KDF 链)
+        // The theoretical length of the premaster = the modulus's byte length (4096-bit
+        // group -> 512B), but the srp crate's big-integer output strips leading zeros: when
+        // the shared secret's first byte is exactly 0 (probability 1/256) it is 511B —
+        // client and server receive the same zero-stripped bytes, so the key material is
+        // unaffected; the caller runs it through a KDF before using it as key material
+        // (design doc: envelope encryption takes a separate KDF chain)
         assert!((1..=512).contains(&session_key.len()));
         assert!(
             session_key.iter().any(|&b| b != 0),
@@ -483,7 +501,7 @@ mod tests {
         assert_eq!(status, StatusCode::UNAUTHORIZED);
         assert_eq!(body["error"]["code"], "unauthorized");
 
-        // 1 次失败不触发锁户:正确密码仍可登录
+        // A single failure does not trigger lockout: the correct password still logs in
         let (status, resp) = attempt_login(&router, PASSWORD).await;
         assert_eq!(status, StatusCode::OK, "{resp}");
     }
@@ -497,14 +515,15 @@ mod tests {
             let (status, _) = attempt_login(&router, "wrong-password").await;
             assert_eq!(status, StatusCode::UNAUTHORIZED);
         }
-        // 锁定期内正确密码同样 423 Locked
+        // Within the lockout period the correct password is likewise 423 Locked
         let (status, body) = attempt_login(&router, PASSWORD).await;
         assert_eq!(status, StatusCode::LOCKED, "{body}");
     }
 
     #[tokio::test]
     async fn auth_endpoints_fail_closed_without_tokens() {
-        // TOKENS 未配 = 认证体系整体未启用:SRP 端点同样 503
+        // TOKENS unset = the auth system is not enabled at all: the SRP endpoints are
+        // likewise 503
         let (router, _) = setup(None).await;
         let body = r#"{"device_name":"x","client_public":"AAAA"}"#;
         let (status, resp) = send(
@@ -522,10 +541,11 @@ mod tests {
         assert_eq!(resp["error"]["code"], "api_disabled");
     }
 
-    // ---- 跨端集成：core HttpRemoteAuthProvider ↔ 本 router（真 TCP）----
-    // E2EE_SYNC_DESIGN 阶段 1 验收要点「跨端（CLI↔server）握手集成测试」：
-    // 客户端 wire 编排（remote_http.rs）与服务器三端点在真实 HTTP 栈上
-    // 互通，签发的 SRP token 能过 require_bearer（与静态 token 共存）。
+    // ---- Cross-end integration: core HttpRemoteAuthProvider <-> this router (real TCP) ----
+    // E2EE_SYNC_DESIGN phase 1 acceptance point "cross-end (CLI <-> server) handshake
+    // integration test": the client's wire orchestration (remote_http.rs) and the server's
+    // three endpoints interoperate on a real HTTP stack, and the issued SRP token passes
+    // require_bearer (coexisting with static tokens).
 
     #[tokio::test(flavor = "multi_thread")]
     async fn http_provider_full_round_trip_over_real_tcp() {
@@ -553,12 +573,14 @@ mod tests {
             .unwrap();
         assert!(!outcome.token.is_empty());
         assert_eq!(outcome.expires_in_secs, 900);
-        // premaster 512B（4096-bit group）；指纹 = sha256 hex 64 字符
+        // The premaster is 512B (4096-bit group); the fingerprint = 64 characters of
+        // sha256 hex
         assert_eq!(outcome.session_key.len(), 512);
         assert_eq!(outcome.session_key_fingerprint.len(), 64);
 
-        // SRP 签发的 token 走 require_bearer：静态 TOKENS miss 后查 SRP 表
-        // → 200（token 共存不打断既有链路）
+        // An SRP-issued token goes through require_bearer: after missing the static
+        // TOKENS it consults the SRP table -> 200 (token coexistence does not disturb
+        // the existing chain)
         let probe = reqwest::Client::new()
             .get(format!("http://{addr}/api/v1/events?limit=1"))
             .bearer_auth(&outcome.token)
@@ -567,7 +589,8 @@ mod tests {
             .unwrap();
         assert_eq!(probe.status(), StatusCode::OK, "{probe:?}");
 
-        // 错密码 → 服务器 401（与未注册同形），客户端转 AuthenticationFailed
+        // Wrong password -> the server returns 401 (shaped like unregistered), and the
+        // client converts it to AuthenticationFailed
         let err = provider
             .begin_login(DEVICE)
             .await

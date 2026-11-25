@@ -1,19 +1,24 @@
-//! `/api/v1/sync/*`：E2EE 同步中继（阶段 2 批 3，E2EE_SYNC_DESIGN §5/§6）。
+//! `/api/v1/sync/*`: the E2EE sync relay (phase 2 batch 3, E2EE_SYNC_DESIGN §5/§6).
 //!
-//! 服务器定位 = **纯中继 + 密文保管**：oplog 载荷与 group key 信封全部是
-//! 密文字节，服务器盲存、按到达顺序追加、按游标转发——**不做任何胜负
-//! 判定或合并**（DR-4：让服务器裁决等于把合并语义交给一个我们拒绝信任
-//! 其诚实的组件）。真实性边界：本阶段不校验 op.device_id 与认证身份的
-//! 对应（静态 token 与 SRP token 混用，无统一映射），写入真实性由
-//! Bearer 认证 + 远期「设备私钥签名 oplog」（§11）承担；THREAT_MODEL
-//! 已登记「恶意客户端无法靠服务器根除」。
+//! The server's role = **pure relay + ciphertext custody**: oplog payloads and group key
+//! envelopes are all ciphertext bytes; the server stores them blind, appends them in
+//! arrival order and forwards them by cursor — it performs **no conflict adjudication and
+//! no merging** (DR-4: letting the server arbitrate would hand merge semantics to a
+//! component whose honesty we refuse to trust). Authenticity boundary: this phase does
+//! not validate that op.device_id corresponds to the authenticated identity (static
+//! tokens and SRP tokens are mixed with no unified mapping); write authenticity rests on
+//! Bearer authentication plus the long-term "device-private-key-signed oplog" (§11);
+//! THREAT_MODEL has registered that "a malicious client cannot be eradicated by the
+//! server".
 //!
-//! 认证：整个子路由挂 `require_bearer`——静态令牌与 SRP 短期令牌自然
-//! 兼容（auth.rs 的同一中间件）。
+//! Authentication: the whole sub-router is behind `require_bearer` — static tokens and
+//! SRP short-term tokens are naturally compatible (the same middleware in auth.rs).
 //!
-//! fail-closed 的授权语义：「有信封 = 已授权」。未授权设备 GET 拿得到
-//! 别人的信封，但拆不开（X25519：无对应私钥，tag 校验必失败）——拿不到
-//! group key 也解不开任何条目，由密码学而非服务器 ACL 保证。
+//! Fail-closed authorization semantics: "having an envelope = being authorized". An
+//! unauthorized device can fetch someone else's envelope via GET but cannot open it
+//! (X25519: no matching private key, so tag verification always fails) — without the group
+//! key no entry can be decrypted; this is guaranteed by cryptography rather than by a
+//! server-side ACL.
 
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
@@ -30,12 +35,12 @@ use super::{decode_cursor, encode_cursor, ApiError, ErrorItem};
 use crate::auth::DeviceName;
 use crate::AppState;
 
-/// push 单批条数上限（沿 events 的 500 条惯例，设计稿 §5）。
+/// Per-batch push entry limit (following events' convention of 500, design §5).
 pub(crate) const MAX_BATCH_OPS: usize = 500;
-/// 单条 op 的 ciphertext / wrapped_item_key 解码后字节上限。凭据密文 KB 级；
-/// 更大的载荷（附件）是 §11 开放问题，走 v2 通道。
+/// Per-op decoded byte limit for ciphertext / wrapped_item_key. Credential ciphertext is
+/// KB-scale; larger payloads (attachments) are a §11 open question and take the v2 channel.
 pub(crate) const MAX_PAYLOAD_BYTES: usize = 512 * 1024;
-/// pull 单页默认/最大条数（沿 events 的游标分页惯例）。
+/// Pull page size: default / maximum entries (following events' cursor-pagination convention).
 const PULL_DEFAULT_LIMIT: u32 = 200;
 const PULL_MAX_FETCH: u32 = 500;
 

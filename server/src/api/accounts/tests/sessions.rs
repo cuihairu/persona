@@ -20,7 +20,7 @@ async fn create_session_with_passkey_assertion_round_trip() {
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["expires_in_secs"], 86400);
 
-    // DB：24h 会话行 + last_used_at 触达
+    // DB: 24h session row + last_used_at touched
     let token = body["session_token"].as_str().unwrap();
     let count: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM account_sessions WHERE account_id = ? AND session_token = ?",
@@ -39,7 +39,8 @@ async fn create_session_with_passkey_assertion_round_trip() {
             .unwrap();
     assert!(!last_used.is_empty());
 
-    // 重放：重新 login-options（新挑战）后旧断言的挑战已不匹配 → 401
+    // Replay: after re-running login-options (a new challenge), the old assertion's
+    // challenge no longer matches -> 401
     let (status, body) = send(
         router.clone(),
         request(
@@ -71,7 +72,7 @@ async fn create_session_rejects_tampered_signature() {
     let reg = register_account_passkey(&router, &account_id).await;
     let (client_data, mut out) = login_options_and_assert(&router, &account_id, &reg).await;
 
-    // 翻转签名尾字节
+    // Flip the last byte of the signature
     let last = out.signature_der.len() - 1;
     out.signature_der[last] ^= 0xFF;
 
@@ -96,7 +97,8 @@ async fn create_session_rejects_sign_count_regression() {
     let reg = register_account_passkey(&router, &account_id).await;
     let passkey_id = B64URL.encode(&reg.credential_id);
 
-    // 存量计数器抬到 5：软件认证器断言恒为 0 → 回退 → 401（克隆检测）
+    // Raise the stored counter to 5: the software authenticator's assertion is always 0
+    // -> regression -> 401 (clone detection)
     sqlx::query("UPDATE account_passkeys SET sign_count = 5 WHERE id = ?")
         .bind(&passkey_id)
         .execute(&state.pool)
@@ -122,7 +124,7 @@ async fn login_options_hides_unknown_credentials() {
     let (router, _) = setup_state().await;
     let account_id = create_account(&router, "pk-unknown@example.com").await;
 
-    // 未知凭据 → 401（与"无挑战"同形，不泄露凭据存在性）
+    // Unknown credential -> 401 (same shape as "no challenge", so credential existence is not leaked)
     let (status, body) = send(
         router.clone(),
         request(
@@ -137,7 +139,7 @@ async fn login_options_hides_unknown_credentials() {
     assert_eq!(status, StatusCode::UNAUTHORIZED, "{body}");
 }
 
-// ---- sessions 证据分派：SRP token 臂 ----
+// ---- Session evidence dispatch: SRP token arm ----
 
 #[tokio::test]
 async fn create_session_with_srp_token_evidence() {
@@ -148,7 +150,7 @@ async fn create_session_with_srp_token_evidence() {
     assert_eq!(status, StatusCode::OK, "{body}");
     let srp_token = body["token"].as_str().unwrap().to_owned();
 
-    // 真 SRP token → 24h 会话
+    // A real SRP token -> 24h session
     let (status, body) = send(
         router.clone(),
         req(
@@ -161,7 +163,7 @@ async fn create_session_with_srp_token_evidence() {
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["expires_in_secs"], 86400);
 
-    // 假 token → 401
+    // A forged token -> 401
     let (status, body) = send(
         router.clone(),
         req(
@@ -173,7 +175,7 @@ async fn create_session_with_srp_token_evidence() {
     .await;
     assert_eq!(status, StatusCode::UNAUTHORIZED, "{body}");
 
-    // 跨账号：A 的 token 打到 B 的路径 → 401
+    // Cross-account: A's token against B's path -> 401
     let other = create_account(&router, "sess-other@example.com").await;
     let (status, body) = send(
         router.clone(),
@@ -193,7 +195,7 @@ async fn create_session_rejects_missing_or_double_evidence() {
     let (router, state) = setup_state().await;
     let account_id = create_account(&router, "sess-none@example.com").await;
 
-    // 无证据 → 422
+    // No evidence -> 422
     let (status, body) = send(
         router.clone(),
         req(
@@ -205,7 +207,7 @@ async fn create_session_rejects_missing_or_double_evidence() {
     .await;
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
 
-    // 两种证据同给 → 422
+    // Both pieces of evidence given at once -> 422
     let (status, body) = send(
         router.clone(),
         req(
@@ -226,11 +228,12 @@ async fn create_session_rejects_missing_or_double_evidence() {
     assert_eq!(account_session_count(&state, &account_id).await, 0);
 }
 
-// ---- M2 收口：account_sessions 令牌消费方（require_account_bearer） ----
+// ---- M2 closeout: account_sessions as a token consumer (require_account_bearer) ----
 
-/// 登录兑换链端到端：SRP 登录令牌（15min，account_sessions 行）本身
-/// 即可作账号路由 Bearer——兑换 24h 会话 → 会话令牌驱动账号管理路由
-/// （含活跃触达）→ 吊销自身（登出）→ 再用即 401。
+/// The login exchange chain end to end: the SRP login token (15 min, an
+/// account_sessions row) can itself act as the account-route Bearer — exchange it for
+/// a 24h session -> the session token drives the account-management routes
+/// (including activity touch) -> revoke itself (logout) -> reuse is 401.
 #[tokio::test]
 async fn account_session_tokens_drive_account_routes_end_to_end() {
     let (router, state) = setup_state().await;
@@ -240,8 +243,9 @@ async fn account_session_tokens_drive_account_routes_end_to_end() {
     assert_eq!(status, StatusCode::OK, "{body}");
     let srp_token = body["token"].as_str().unwrap().to_owned();
 
-    // 15 分钟 SRP 令牌作 Bearer + 证据 → 24h 账号会话（此前该流程在
-    // 没有静态令牌的客户端上拿不到 Bearer，兑换链断在第一步）
+    // The 15-minute SRP token as Bearer + evidence -> a 24h account session (previously
+    // this flow could not obtain a Bearer without a static token — the exchange chain
+    // broke at its first step)
     let (status, body) = send(
         router.clone(),
         request(
@@ -265,7 +269,7 @@ async fn account_session_tokens_drive_account_routes_end_to_end() {
     }
     let before = session_activity(&state, &session_token).await;
 
-    // 24h 会话令牌驱动账号管理路由 + last_activity_at 被消费方触达
+    // The 24h session token drives the account-management routes + last_activity_at is touched by the consumer
     let (status, body) = send(
         router.clone(),
         request(
@@ -285,7 +289,7 @@ async fn account_session_tokens_drive_account_routes_end_to_end() {
         "activity should be touched ({before} → {after})"
     );
 
-    // 登出：会话令牌吊销自己 → 204；被吊销的令牌再用即 401
+    // Logout: the session token revokes itself -> 204; reusing the revoked token is 401
     let (status, _) = send(
         router.clone(),
         request(
@@ -312,7 +316,7 @@ async fn account_session_tokens_drive_account_routes_end_to_end() {
     assert_eq!(status, StatusCode::UNAUTHORIZED);
 }
 
-/// 路径归属限定：账号 A 的会话令牌打 B 的账号路径 → 401。
+/// Path-ownership restriction: account A's session token against B's account path -> 401.
 #[tokio::test]
 async fn account_session_token_rejected_on_foreign_account_paths() {
     let (router, _) = setup_state().await;
@@ -337,7 +341,7 @@ async fn account_session_token_rejected_on_foreign_account_paths() {
     assert_eq!(status, StatusCode::UNAUTHORIZED);
 }
 
-/// 过期会话行不认（消费侧 TTL 与签发/证据核验同口径）。
+/// Expired session rows are not honored (the consumer-side TTL matches issuance/evidence verification).
 #[tokio::test]
 async fn expired_account_session_token_is_rejected() {
     let (router, state) = setup_state().await;
@@ -366,8 +370,9 @@ async fn expired_account_session_token_is_rejected() {
     assert_eq!(status, StatusCode::UNAUTHORIZED);
 }
 
-/// 迁移 0007 边界：账号会话不作 sync/events 的 Bearer——require_bearer
-/// 不查 account_sessions，账号路由之外的提权不存在。
+/// Migration 0007 boundary: account sessions are not a Bearer for sync/events —
+/// require_bearer does not consult account_sessions, so no privilege escalation
+/// exists outside the account routes.
 #[tokio::test]
 async fn account_session_token_is_not_accepted_outside_account_routes() {
     let (router, state) = setup_state().await;
@@ -386,7 +391,7 @@ async fn account_session_token_is_not_accepted_outside_account_routes() {
     .await
     .unwrap();
 
-    // 未过期令牌对 sync/events 均无效（require_bearer 无此消费方）
+    // An unexpired token is invalid for sync/events alike (require_bearer has no such consumer)
     for uri in ["/api/v1/sync/devices", "/api/v1/events"] {
         let (status, _) = send(
             router.clone(),
@@ -395,7 +400,7 @@ async fn account_session_token_is_not_accepted_outside_account_routes() {
         .await;
         assert_eq!(status, StatusCode::UNAUTHORIZED, "{uri}");
     }
-    // 同一令牌在其归属账号路径上仍然有效（对照组，确认插入的行可用）
+    // The same token remains valid on its owning account's path (control group confirming the inserted row works)
     let (status, _) = send(
         router.clone(),
         request(

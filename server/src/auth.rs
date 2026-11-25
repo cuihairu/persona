@@ -1,15 +1,19 @@
-//! /api 认证：命名设备 Bearer 令牌集合 + SRP 短期令牌，fail-closed。
+//! /api authentication: a set of named-device Bearer tokens + SRP short-term tokens,
+//! fail-closed.
 //!
-//! `PERSONA_SERVER_TOKENS="laptop:tok1,phone:tok2"` 配置多设备令牌；
-//! 兼容旧 `PERSONA_SERVER_TOKEN`（作为 "default" 设备）。未配置任何令牌
-//! 时 /api 全部 503（禁用优先于认证失败，避免暴露任何可探测差异）；
-//! 已配置时 `require_bearer` 依次尝试静态令牌与 SRP 短期令牌（后者由
-//! `/api/v1/auth/*` 握手签发，E2EE 同步轨道阶段 1），对静态条目做无早退的
-//! 常量时间比较。设备名由命中的令牌推导、客户端不可自报，命中后经
-//! request extensions（[`DeviceName`]）传给处理器。`/`、`/health`、
-//! `/metrics` 免认证。
+//! `PERSONA_SERVER_TOKENS="laptop:tok1,phone:tok2"` configures multi-device tokens;
+//! the legacy `PERSONA_SERVER_TOKEN` is still accepted (as the "default" device). With no
+//! token configured at all, all of /api is 503 (disabled takes precedence over
+//! authentication failure, exposing no probeable difference); when configured,
+//! `require_bearer` tries the static tokens then the SRP short-term tokens in turn (the
+//! latter issued by the `/api/v1/auth/*` handshake, E2EE sync track phase 1), performing an
+//! early-exit-free constant-time comparison against the static entries. The device name is
+//! derived from the winning token and cannot be self-reported by the client; on a hit it is
+//! passed to handlers via request extensions ([`DeviceName`]). `/`, `/health` and
+//! `/metrics` are authentication-free.
 //!
-//! SRP 会话/令牌/锁户状态（[`SrpAuthState`]）全部内存态、有意不持久化。
+//! SRP session/token/lockout state ([`SrpAuthState`]) is entirely in memory and
+//! deliberately not persisted.
 
 use std::collections::HashMap;
 
@@ -24,22 +28,24 @@ use subtle::ConstantTimeEq;
 use crate::api::ApiError;
 use crate::state::AppState;
 
-/// 单个命名设备令牌。
+/// A single named-device token.
 struct DeviceToken {
     device_name: String,
     token: String,
 }
 
-/// 命名设备令牌集合（`PERSONA_SERVER_TOKENS` 的解析结果）。
+/// A set of named-device tokens (the parse result of `PERSONA_SERVER_TOKENS`).
 ///
-/// 设备名在 phase 2 落 devices 表前由令牌归属推导，wire 协议不变。
+/// Until device names land in the devices table in phase 2, they are derived from token
+/// ownership; the wire protocol is unchanged.
 pub struct AuthTokens {
     entries: Vec<DeviceToken>,
 }
 
 impl AuthTokens {
-    /// legacy 单令牌视图：作为 "default" 设备。空串与未配置等价
-    /// （空集合，API 禁用——沿用"配了但配错成空"的过滤语义）。
+    /// The legacy single-token view: acts as the "default" device. An empty string is
+    /// equivalent to unconfigured (empty set, API disabled — keeping the filtering
+    /// semantics of "configured but wrongly, to an empty value").
     pub fn single(token: &str) -> Self {
         if token.is_empty() {
             return Self {
@@ -54,12 +60,13 @@ impl AuthTokens {
         }
     }
 
-    /// 解析 `name:token,name:token`。
+    /// Parses `name:token,name:token`.
     ///
-    /// fail-closed：名字非空、≤64 字节（UTF-8）、不含 `:`/`,`/空白，
-    /// token 非空，设备名不得重复（归属歧义），任何非法条目返回 Err
-    /// （main 启动即错，不允许"配了但配错"形成半可用状态）。空 spec
-    /// 返回空集合（与未配置等价）。
+    /// Fail-closed: names are non-empty, at most 64 bytes (UTF-8), and contain no
+    /// `:`/`,`/whitespace; tokens are non-empty; device names must not repeat (ambiguous
+    /// ownership); any invalid entry returns Err (main errors out at startup — a
+    /// "configured but wrongly" state must not be allowed to become half-usable). An empty
+    /// spec yields an empty set (equivalent to unconfigured).
     pub fn parse(spec: &str) -> Result<Self, String> {
         let mut entries = Vec::new();
         for raw in spec.split(',') {
@@ -83,7 +90,8 @@ impl AuthTokens {
                 ));
             }
             if name.contains(',') || token.contains(',') {
-                // split(',') 已截断的残余在此显式报错（如 "a:b,c" 整体是一条目）
+                // Leftovers already truncated by split(',') are explicitly rejected here
+                // (e.g. "a:b,c" is one whole entry)
                 return Err(format!("条目 {entry:?} 含非法字符 ','"));
             }
             if entries
@@ -104,10 +112,11 @@ impl AuthTokens {
         self.entries.is_empty()
     }
 
-    /// 对全部条目做无早退常量时间比较，返回命中条目的设备名。
+    /// Runs an early-exit-free constant-time comparison over every entry and returns the
+    /// winning entry's device name.
     ///
-    /// 不论是否已命中都遍历完（比较次数恒定），避免按位置泄露哪个
-    /// 条目正确。
+    /// The loop always runs to completion whether or not a hit has occurred (a constant
+    /// number of comparisons), avoiding leaking by position which entry was correct.
     pub fn authenticate(&self, provided: &[u8]) -> Option<&str> {
         let mut matched: Option<&str> = None;
         for entry in &self.entries {
@@ -120,24 +129,28 @@ impl AuthTokens {
     }
 }
 
-/// 认证中间件注入的设备名（由命中的令牌推导，客户端不可自报）。
-/// 备份端点以此归属版本；缺 extension 说明绕过了认证层，提取失败 500。
+/// The device name injected by the authentication middleware (derived from the winning
+/// token; the client cannot self-report it). Backup endpoints attribute versions by this;
+/// a missing extension means the auth layer was bypassed, and extraction fails with 500.
 #[derive(Clone, Debug)]
 pub struct DeviceName(pub String);
 
-/// SRP 会话/令牌/锁户的内存状态（E2EE 同步轨道阶段 1）。
+/// The in-memory state for SRP sessions/tokens/lockouts (E2EE sync track phase 1).
 ///
-/// 全部**有意不持久化**：服务器重启 = 未决握手丢失（客户端重走 challenge）
-/// 且短期令牌失效（客户端重新登录）——认证会话不是数据，落盘只会扩大
-/// 攻击面。与 `AuthTokens` 同生命周期：仅在静态令牌已配置时存在
-/// （fail-closed 对齐——TOKENS 未配 = 认证体系整体未启用）。
+/// Everything is **deliberately not persisted**: a server restart = pending handshakes
+/// are lost (clients re-run challenge) and short-term tokens become invalid (clients log
+/// in again) — authentication sessions are not data, and persisting them would only widen
+/// the attack surface. It shares `AuthTokens`' lifecycle: it exists only when static
+/// tokens are configured (fail-closed alignment — TOKENS unset = the auth system is not
+/// enabled at all).
 pub struct SrpAuthState {
-    /// 未决 challenge：session_id → (设备名, b_priv, a_pub, 过滤时刻)。
-    /// b_priv 与 verifier 一样敏感，只留内存、TTL 到期即弃。
+    /// Pending challenges: session_id -> (device name, b_priv, a_pub, filter moment).
+    /// b_priv is as sensitive as the verifier; it stays in memory only and is dropped when
+    /// its TTL expires.
     challenges: std::sync::Mutex<HashMap<String, SrpChallengeEntry>>,
-    /// 已签发短期令牌：token → (设备名, 过期时刻)。
+    /// Issued short-term tokens: token -> (device name, expiry moment).
     tokens: std::sync::RwLock<HashMap<String, SrpTokenEntry>>,
-    /// 失败计数（锁户）：设备名 → (连续失败次数, 锁定截止)。
+    /// Failure counts (lockout): device name -> (consecutive failures, lockout deadline).
     failures: std::sync::Mutex<HashMap<String, SrpFailureEntry>>,
 }
 
@@ -165,7 +178,8 @@ impl SrpAuthState {
             .insert(id, entry);
     }
 
-    /// 取走一个未过期的 challenge（验证后即从缓存移除——一次握手一条）。
+    /// Take an unexpired challenge (removed from the cache upon verification — one entry
+    /// per handshake).
     pub(crate) fn take_challenge(&self, id: &str) -> Option<SrpChallengeEntry> {
         let mut map = self.challenges.lock().expect("challenge lock");
         Self::prune_challenges(&mut map);
@@ -173,13 +187,13 @@ impl SrpAuthState {
             .filter(|e| e.expires_at > std::time::Instant::now())
     }
 
-    /// 惰性清理：每次触碰缓存时顺带丢掉过期项（无定时任务）。
+    /// Lazy cleanup: every touch of the cache also drops expired entries (no timer task).
     fn prune_challenges(map: &mut HashMap<String, SrpChallengeEntry>) {
         let now = std::time::Instant::now();
         map.retain(|_, e| e.expires_at > now);
     }
 
-    /// 签发短期 Bearer 令牌（随机 ≥256-bit，base64url）。
+    /// Issue a short-term Bearer token (random, at least 256-bit, base64url).
     pub(crate) fn issue_token(&self, device_name: &str) -> String {
         let raw: [u8; 32] = rand::random();
         let token = URL_SAFE_NO_PAD.encode(raw);
@@ -193,7 +207,8 @@ impl SrpAuthState {
         token
     }
 
-    /// 校验短期令牌，命中返回设备名；顺带清过期项。
+    /// Verify a short-term token and return the device name on a hit; expired entries are
+    /// pruned along the way.
     pub fn authenticate_token(&self, token: &str) -> Option<String> {
         let mut map = self.tokens.write().expect("token lock");
         let now = std::time::Instant::now();
@@ -201,9 +216,10 @@ impl SrpAuthState {
         map.get(token).map(|e| e.device_name.clone())
     }
 
-    /// 吊销一台设备的全部未到期短期令牌并丢弃其未决握手（设备生命周期
-    /// 闭环：同步设备被吊销时级联调用——既有令牌**即刻**失效，而非等
-    /// TTL 自然过期）。返回清除的令牌条数。
+    /// Revoke every unexpired short-term token of a device and discard its pending
+    /// handshakes (device-lifecycle closure: invoked in cascade when a sync device is
+    /// revoked — existing tokens become invalid **immediately** rather than waiting for
+    /// the TTL to run out). Returns the number of token entries removed.
     pub fn revoke_device(&self, device_name: &str) -> usize {
         let mut tokens = self.tokens.write().expect("token lock");
         let before = tokens.len();
@@ -217,7 +233,7 @@ impl SrpAuthState {
         removed
     }
 
-    /// 登录失败记账。
+    /// Login failure accounting.
     pub(crate) fn register_failure(&self, device_name: &str) {
         let mut map = self.failures.lock().expect("failure lock");
         let entry = map
@@ -228,7 +244,8 @@ impl SrpAuthState {
             });
         if let Some(until) = entry.locked_until {
             if until > std::time::Instant::now() {
-                return; // 已锁定：窗口内不累计（重置无意义）
+                return; // already locked: no accumulation within the window (resetting is
+                        // pointless)
             }
         }
         entry.count += 1;
@@ -238,7 +255,7 @@ impl SrpAuthState {
         }
     }
 
-    /// 登录成功：清失败计数。
+    /// Login success: clear the failure count.
     pub(crate) fn clear_failures(&self, device_name: &str) {
         self.failures
             .lock()
@@ -246,7 +263,7 @@ impl SrpAuthState {
             .remove(device_name);
     }
 
-    /// 当前是否锁定（verify 入口预检；不产生副作用）。
+    /// Whether currently locked (pre-checked at the verify entry point; no side effects).
     pub(crate) fn is_locked(&self, device_name: &str) -> bool {
         self.failures
             .lock()
@@ -257,16 +274,19 @@ impl SrpAuthState {
     }
 }
 
-/// challenge 缓存存活期：客户端在窗口内完成 verify，过期重走 challenge。
+/// Challenge cache lifetime: the client completes verify within the window; past it, the
+/// client re-runs challenge.
 pub(crate) const SRP_CHALLENGE_TTL: std::time::Duration = std::time::Duration::from_secs(120);
 
-/// 短期令牌 TTL：15 分钟。过期重新 SRP 登录（对齐设计稿「分钟级」）。
+/// Short-term token TTL: 15 minutes. Past it, the client logs in again via SRP (matching
+/// the design doc's "on the order of minutes").
 pub(crate) const SRP_TOKEN_TTL: std::time::Duration = std::time::Duration::from_secs(900);
 
-/// 锁户阈值：连续失败 5 次（对齐本机 user_auth 的 5 次语义）。
+/// Lockout threshold: 5 consecutive failures (matching the local user_auth's semantics
+/// of 5).
 pub(crate) const SRP_MAX_FAILURES: u32 = 5;
 
-/// 锁户时长。
+/// Lockout duration.
 pub(crate) const SRP_LOCKOUT: std::time::Duration = std::time::Duration::from_secs(900);
 
 impl Default for SrpAuthState {
@@ -293,8 +313,9 @@ pub async fn require_bearer(State(state): State<AppState>, req: Request, next: N
         .headers()
         .get(header::AUTHORIZATION)
         .and_then(extract_bearer);
-    // 静态令牌优先（无早退常量时间比较）；未命中且配置了 SRP 时再查
-    // 短期令牌表（哈希表查找——令牌是 ≥256-bit 随机值，无字典可挡）。
+    // Static tokens first (early-exit-free constant-time comparison); on a miss, consult
+    // the short-term token table if SRP is configured (hash-table lookup — the tokens are
+    // random values of at least 256 bits, so there is no dictionary to mount).
     let device = provided.and_then(|token| {
         tokens
             .authenticate(token.as_bytes())
@@ -309,15 +330,17 @@ pub async fn require_bearer(State(state): State<AppState>, req: Request, next: N
     next.run(req).await
 }
 
-/// 账号路由专用 Bearer 中间件（M2：`account_sessions` 令牌消费方）。
+/// The Bearer middleware dedicated to the account routes (M2: the consumer of
+/// `account_sessions` tokens).
 ///
-/// [`require_bearer`] 认得的静态令牌 / SRP 短期令牌行为完全一致；在此
-/// 之外还接受 `account_sessions` 里未过期的账号会话令牌——srp/verify
-/// 签发的 15 分钟令牌与 sessions 端点签发的 24h 令牌——但只放行其归属
-/// 账号自己的路径（`/api/v1/accounts/{account_id}/…`，跨账号一律 401，
-/// 与其他失败同形）。迁移 0007 的边界不变：账号会话不作 sync/events/
-/// backups 的 Bearer——那些路由仍走 [`require_bearer`]（不查
-/// account_sessions）。
+/// It behaves exactly like [`require_bearer`] for the static tokens / SRP short-term
+/// tokens it recognizes; on top of that it also accepts unexpired account session tokens
+/// from `account_sessions` — the 15-minute tokens issued by srp/verify and the 24-hour
+/// tokens issued by the sessions endpoint — but lets them through only on their own
+/// account's paths (`/api/v1/accounts/{account_id}/...`; cross-account is always 401,
+/// shaped like any other failure). The migration-0007 boundary is unchanged: account
+/// sessions do not serve as the Bearer for sync/events/backups — those routes still go
+/// through [`require_bearer`] (which does not consult account_sessions).
 pub async fn require_account_bearer(
     State(state): State<AppState>,
     req: Request,
@@ -330,7 +353,8 @@ pub async fn require_account_bearer(
         .headers()
         .get(header::AUTHORIZATION)
         .and_then(extract_bearer);
-    // 静态/SRP 短期令牌优先（与 require_bearer 同序同语义，无 DB 查询）。
+    // Static/SRP short-term tokens first (same order and semantics as require_bearer,
+    // with no DB query).
     if let Some(device) = provided.and_then(|token| {
         tokens
             .authenticate(token.as_bytes())
@@ -341,8 +365,9 @@ pub async fn require_account_bearer(
         req.extensions_mut().insert(DeviceName(device));
         return next.run(req).await;
     }
-    // 账号会话令牌：行未过期 + 路径 account_id 与归属一致才放行；
-    // 任一不满足都落入统一 401（不泄露行是否存在）。
+    // Account session token: admitted only when the row is unexpired + the path's
+    // account_id matches the owner; failing either falls into the uniform 401 (which does
+    // not leak whether the row exists).
     if let (Some(token), Some(path_account)) = (provided, account_path_id(req.uri().path())) {
         if let Some(owner) = live_account_session_owner(&state, token).await {
             if owner == path_account {
@@ -357,20 +382,23 @@ pub async fn require_account_bearer(
     ApiError::unauthorized().into_response()
 }
 
-/// 本中间件挂载点的路径 → account_id 段（形状不符返回 None，会话令牌
-/// 路径不放行——fail-closed）。
+/// This middleware's mount-point path -> the account_id segment (returns None on a shape
+/// mismatch, and session-token paths are then not admitted — fail-closed).
 ///
-/// axum 0.8 的 `nest` 会剥离前缀再交给内层路由，`/api/v1` 与 `/accounts`
-/// 两级 nest 剥完后中间件看到的是 `/{account_id}/…`——首段即 account_id。
-/// 该形状只用于会话令牌的路径归属比对（首段 ≠ 令牌归属账号 → 401），
-/// 解析偏保守只会造成拒绝，不会放行错账号。
+/// axum 0.8's `nest` strips the prefix before handing off to the inner router; after the
+/// two nesting levels `/api/v1` and `/accounts` are stripped, the middleware sees
+/// `/{account_id}/...` — the first segment is the account_id. The shape is used only for
+/// the session token's path-ownership comparison (first segment not equal to the token's
+/// owning account -> 401); a conservative parse can only cause rejection, never admit the
+/// wrong account.
 fn account_path_id(path: &str) -> Option<&str> {
     let account_id = path.strip_prefix('/')?.split('/').next()?;
     (!account_id.is_empty()).then_some(account_id)
 }
 
-/// 查未过期账号会话的归属 account_id（TTL 判定与签发/证据核验侧同一
-/// 口径：`expires_at > now` 的 RFC3339 串比较）。
+/// Look up the owning account_id of an unexpired account session (the TTL check uses the
+/// same convention as the issuing/evidence-verification side: an RFC3339 string
+/// comparison of `expires_at > now`).
 async fn live_account_session_owner(state: &AppState, token: &str) -> Option<String> {
     sqlx::query_scalar::<_, String>(
         "SELECT account_id FROM account_sessions
@@ -384,7 +412,8 @@ async fn live_account_session_owner(state: &AppState, token: &str) -> Option<Str
     .flatten()
 }
 
-/// 会话令牌消费侧的活跃触达（last_activity_at；失败不阻断请求）。
+/// The consumption-side activity touch for session tokens (last_activity_at; a failure
+/// does not block the request).
 async fn touch_session_activity(state: &AppState, token: &str) {
     let _ = sqlx::query("UPDATE account_sessions SET last_activity_at = ? WHERE session_token = ?")
         .bind(chrono::Utc::now().to_rfc3339())
@@ -393,7 +422,7 @@ async fn touch_session_activity(state: &AppState, token: &str) {
         .await;
 }
 
-/// 解析 `Bearer <token>`：scheme 大小写不敏感，token 精确匹配。
+/// Parse `Bearer <token>`: the scheme is case-insensitive, the token matches exactly.
 fn extract_bearer(value: &HeaderValue) -> Option<&str> {
     let value = value.to_str().ok()?;
     let (scheme, token) = value.split_once(' ')?;
@@ -408,7 +437,8 @@ fn extract_bearer(value: &HeaderValue) -> Option<&str> {
     }
 }
 
-/// 常量时间比较：长度差异并入累计值，全程无早退。
+/// Constant-time comparison: length differences are folded into the accumulator, with no
+/// early exit anywhere.
 pub(crate) fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     let mut acc = (a.len() ^ b.len()) as u8;
     for (x, y) in a.iter().zip(b.iter()) {
@@ -434,8 +464,9 @@ mod tests {
         assert!(constant_time_eq(b"", b""));
     }
 
-    // 吊销闭环（设备生命周期）：revoke_device 清掉该设备全部未到期令牌
-    // 与未决握手，其他设备令牌不受影响；重复吊销 no-op。
+    // Revocation closure (device lifecycle): revoke_device clears all of that device's
+    // unexpired tokens and pending handshakes; other devices' tokens are untouched;
+    // repeated revocation is a no-op.
     #[test]
     fn revoke_device_evicts_tokens_and_challenges_for_that_device_only() {
         use super::{SrpAuthState, SrpChallengeEntry};
@@ -460,7 +491,7 @@ mod tests {
         assert_eq!(srp.authenticate_token(&a2), None);
         assert_eq!(srp.authenticate_token(&b1).as_deref(), Some("phone"));
         assert!(srp.take_challenge("sess-a").is_none());
-        // 重复吊销 no-op
+        // Repeated revocation is a no-op
         assert_eq!(srp.revoke_device("laptop"), 0);
     }
 
@@ -482,15 +513,17 @@ mod tests {
 
     #[test]
     fn parse_rejects_malformed_entries() {
-        // 缺分隔符 / 空名 / 空令牌 / 重复设备名 / 含空白的名或令牌
+        // Missing separator / empty name / empty token / duplicate device name / name or
+        // token containing whitespace
         assert!(AuthTokens::parse("laptop").is_err());
         assert!(AuthTokens::parse(":tok").is_err());
         assert!(AuthTokens::parse("laptop:").is_err());
         assert!(AuthTokens::parse("lap top:tok").is_err());
         assert!(AuthTokens::parse("laptop:to k").is_err());
         assert!(AuthTokens::parse("laptop:tok,laptop:tok2").is_err());
-        // "a:b,c" 被 split(',') 截断成 "a:b"（合法）——残余逗号在条目内
-        // 无法存在，但显式的非法字符检查兜底防御格式变化
+        // "a:b,c" gets truncated by split(',') into "a:b" (legal) — a leftover comma cannot
+        // exist inside an entry, but the explicit illegal-character check is a backstop
+        // against format changes
     }
 
     #[test]
@@ -511,11 +544,13 @@ mod tests {
     #[test]
     fn account_path_id_extracts_the_account_segment_only() {
         use super::account_path_id;
-        // axum 0.8 两级 nest（/api/v1、/accounts）剥完前缀后的挂载点形状
+        // The mount-point shape after axum 0.8's two nesting levels (/api/v1, /accounts)
+        // strip their prefixes
         assert_eq!(account_path_id("/abc/devices"), Some("abc"));
         assert_eq!(account_path_id("/abc"), Some("abc"));
         assert_eq!(account_path_id("/abc/sessions/tok"), Some("abc"));
-        // 空段 / 非 `/` 开头：一律 None（fail-closed；形状偏差只会拒绝）
+        // Empty segment / not starting with `/`: always None (fail-closed; a shape
+        // deviation can only cause rejection)
         assert_eq!(account_path_id("/"), None);
         assert_eq!(account_path_id(""), None);
         assert_eq!(account_path_id("abc/devices"), None);
@@ -523,8 +558,9 @@ mod tests {
 
     #[test]
     fn authenticate_does_not_short_circuit_on_earlier_match() {
-        // 前面的条目命中后仍遍历完：语义上无从直接断言无早退，
-        // 但全部命中路径必须返回第一个命中的设备名。
+        // After an earlier entry hits, the loop still runs to completion: the absence of an
+        // early exit cannot be asserted directly in these semantics, but every hit path
+        // must return the first winning entry's device name.
         let tokens = AuthTokens::parse("a:t1,b:t2").unwrap();
         assert_eq!(tokens.authenticate(b"t1"), Some("a"));
         assert_eq!(tokens.authenticate(b"t2"), Some("b"));

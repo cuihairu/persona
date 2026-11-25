@@ -1,30 +1,36 @@
 use super::*;
 
-// ---- 库级快照（S2 收口，E2EE_SYNC_DESIGN §5「库级快照与指令压缩」）----
-// 单快照：PUT upsert 覆盖（id = 1），事务内删 seq ≤ S 的 ops（与按天
-// retention 同向的压缩，「缩水子集也收敛」口径不变）。GET 供空库新设备
-// bootstrap——retention 删掉的段对新设备是真丢数据（无本地事实源可补），
-// 快照补洞。服务器盲存密文，零知识面不变。
+// ---- Library-level snapshots (S2 closeout, E2EE_SYNC_DESIGN §5 "library snapshots and
+// operation compaction") ----
+// A single snapshot: PUT upserts and overwrites (id = 1), and the transaction deletes the
+// ops with seq <= S (compaction running in the same direction as day-based retention, and
+// the "a shrunken subset still converges" invariant is unchanged). GET serves bootstrap for
+// a new device with an empty store — segments deleted by retention are genuinely lost data
+// for a new device (no local source of truth to fill them from), so the snapshot patches
+// the holes. The server stores ciphertext blind; the zero-knowledge surface is unchanged.
 
-/// 快照包字节上限。整库密文一包（个人凭据库密文 MB 级）；超过说明客户端
-/// 打包失控（或滥用），拒绝而非静默存下——与 oplog 512 KiB/条同一防线思路。
+/// Snapshot package byte limit. One package holds the whole encrypted store (a personal
+/// credential store's ciphertext is MB-sized); going over means the client's packaging has
+/// run away (or is being abused), so reject rather than silently store it — the same line
+/// of defense as the oplog's 512 KiB per entry.
 const MAX_SNAPSHOT_BYTES: usize = 16 * 1024 * 1024;
 
 #[derive(Debug, Deserialize)]
 pub struct PutSnapshotRequest {
-    /// 覆盖位点：先 pull 到 head 再 push ack 后的 seq——快照声称包含
-    /// `seq ≤ S` 的全部效果。
+    /// Coverage position: pull to head first, then the seq after the pushed acks — the
+    /// snapshot claims to contain all effects of `seq <= S`.
     seq: i64,
-    /// 打包设备自报，仅展示（与 oplog 的 device_id 同口径）。
+    /// Self-reported by the packaging device, display only (same convention as the
+    /// oplog's device_id).
     device_id: String,
-    /// base64（STANDARD）——group key 整包加密的 LibrarySnapshotPayload。
+    /// base64 (STANDARD) — a LibrarySnapshotPayload encrypted wholesale with the group key.
     ciphertext: String,
 }
 
 #[derive(Debug, Serialize)]
 struct PutSnapshotResponse {
     seq: i64,
-    /// 本事务内被压缩删除的 oplog 行数（测试与观测用）。
+    /// Number of oplog rows compacted away in this transaction (for tests and observation).
     pruned_ops: u64,
 }
 
@@ -36,10 +42,13 @@ struct SnapshotResponse {
     created_at: String,
 }
 
-/// PUT /sync/snapshot：上传快照。覆盖语义按水位单调收窄——seq 不小于
-/// 现存快照（或尚无快照）才接受（同 seq 重打包幂等覆盖），低于现存水位
-/// 的落后端 409 拒绝：否则「快照回退到旧 S2 + 覆盖区间 ops 已删」会留
-/// 数据洞（bootstrap 拿旧快照起步，S2..S1 的历史既无快照也无 ops）。
+/// PUT /sync/snapshot: upload a snapshot. The overwrite semantics narrow monotonically by
+/// water level — accepted only when seq is not below the stored snapshot (or when none is
+/// stored yet), so re-packaging the same seq overwrites idempotently, while a lagging end
+/// below the stored water level is rejected with 409: otherwise "the snapshot regresses to
+/// the older S2 + the ops in the covered range are already deleted" leaves a data hole
+/// (bootstrap starts from the old snapshot, and the S2..S1 history has neither snapshot nor
+/// ops).
 pub async fn put_snapshot(
     State(state): State<AppState>,
     payload: Result<Json<PutSnapshotRequest>, axum::extract::rejection::JsonRejection>,
@@ -85,12 +94,16 @@ pub async fn put_snapshot(
         return ApiError::payload_too_large_with(MAX_SNAPSHOT_BYTES).into_response();
     }
 
-    // 事务：写快照（单行 upsert，seq 单调闸）+ 压缩覆盖区间 ops。分解失败
-    // 即整体回滚——不允许「快照已换、旧 ops 还在」的中间态（那会让
-    // bootstrap 拿旧快照又重放已进快照的 ops，幂等无害但浪费；真正的危险
-    // 是反向：ops 删了快照没写上，覆盖区间既无快照也无 ops = 数据洞）。
-    // 单调闸压在 upsert 的 WHERE 上（同一写锁内判定，无检查-写竞态）：
-    // 输家 0 行受影响 → 409 回滚，绝不删 ops。
+    // Transaction: write the snapshot (single-row upsert with a monotonic seq gate) + compact
+    // the ops in the covered range. If either step fails, roll the whole thing back — no
+    // intermediate state of "the snapshot was replaced but the old ops are still there"
+    // (that would make bootstrap take the old snapshot and replay ops already inside it,
+    // idempotent and harmless but wasteful; the real danger runs the other way: the ops are
+    // deleted but the snapshot was never written, so the covered range has neither snapshot
+    // nor ops = a data hole).
+    // The monotonic gate sits in the upsert's WHERE clause (decided inside the same write
+    // lock, so there is no check-then-write race): the loser has 0 rows affected -> 409
+    // rollback, and the ops are never deleted.
     let mut tx = match state.pool.begin().await {
         Ok(tx) => tx,
         Err(error) => return ApiError::internal(error).into_response(),
@@ -117,8 +130,9 @@ pub async fn put_snapshot(
         Err(error) => return ApiError::internal(error).into_response(),
     };
     if !won {
-        // 落后水位：现存快照更 ahead，本次上传既不能覆盖也不能压缩——
-        // fail-visible 409，让落后端先 pull 增量再重打包。
+        // Behind the water level: the stored snapshot is more ahead, so this upload can
+        // neither overwrite nor compact — fail-visible 409 so the lagging end pulls the
+        // incremental and re-packages first.
         return ApiError::conflict(
             "snapshot seq is behind the stored snapshot; pull and re-package",
         )
@@ -142,7 +156,8 @@ pub async fn put_snapshot(
     .into_response()
 }
 
-/// GET /sync/snapshot：最新快照（bootstrap 起步包）；尚未上传过 404 absent。
+/// GET /sync/snapshot: the latest snapshot (the bootstrap starter package); 404 absent if
+/// none has been uploaded yet.
 pub async fn get_snapshot(State(state): State<AppState>) -> Response {
     let row = sqlx::query(
         "SELECT seq, device_id, ciphertext, created_at FROM sync_snapshots WHERE id = 1",

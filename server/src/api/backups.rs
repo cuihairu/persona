@@ -1,12 +1,15 @@
-//! `/api/v1/backups`：整库加密备份的保管端点（同步第一阶段）。
+//! `/api/v1/backups`: custody endpoints for whole-database encrypted backups (sync phase 1).
 //!
-//! 服务器只见密文与元数据：客户端把 VACUUM INTO 物理快照 gzip 后按
-//! PERSENC1 加密上传，服务器不可解。POST 流式落盘（边写边算 sha256，
-//! 中途超限即断开并删半成品）；同设备最新版本 sha256 相同则去重
-//! （200 deduplicated）；GET 列表倒序分页、GET 单个下载（ETag=sha256）、
-//! DELETE 先删文件再删行。附件不在 v1 备份内（客户端侧约定，见
-//! THREAT_MODEL）。备份子路由无解压层：密文不可压，也少一个解压炸弹面，
-//! 线上字节上限即落盘上限。
+//! The server sees only ciphertext and metadata: the client gzips its VACUUM INTO physical
+//! snapshot and encrypts it with PERSENC1 before uploading, which the server cannot decrypt.
+//! POST writes to disk as a stream (computing sha256 as it goes, disconnecting and deleting
+//! the half-written file if the limit is exceeded mid-flight); an identical sha256 for the
+//! device's newest version is deduplicated (200 deduplicated); GET lists pages in reverse
+//! order, GET downloads one (ETag = sha256), and DELETE removes the file before the row.
+//! Attachments are not part of a v1 backup (a client-side convention, see THREAT_MODEL).
+//! The backup sub-router has no decompression layer: ciphertext is not compressible, and
+//! that removes one more decompression-bomb surface — the on-the-wire byte limit is the
+//! on-disk limit.
 
 use axum::body::Body;
 use axum::extract::{Path, Query, Request, State};
@@ -27,13 +30,14 @@ use super::{decode_cursor, encode_cursor, ApiError, ErrorItem};
 use crate::auth::DeviceName;
 use crate::state::AppState;
 
-/// 列表分页默认/上限。
+/// Listing pagination: default / upper bound.
 const DEFAULT_LIST_LIMIT: u32 = 20;
 const MAX_LIST_LIMIT: u32 = 100;
 
-/// Content-Length 预检（线上字节=落盘字节，上限取 AppState.max_backup_bytes）。
-/// 超限直接 413，不读 body、不进认证；chunked 无 CL 时由处理器内的
-/// 流式计数兜底。
+/// Content-Length pre-check (on-the-wire bytes = on-disk bytes, capped at
+/// AppState.max_backup_bytes). Over-limit requests go straight to 413 without reading the
+/// body or entering authentication; for chunked requests without a CL, the streaming counter
+/// inside the handler is the backstop.
 pub async fn size_guard(State(state): State<AppState>, req: Request, next: Next) -> Response {
     let limit = state.max_backup_bytes;
     let too_large = req
@@ -79,7 +83,8 @@ pub async fn upload(
         Err(error) => return ApiError::internal(error).into_response(),
     };
 
-    // 边流边写边算：64 KiB 分块落盘，sha256 累计，超限即断开。
+    // Stream, write and hash at once: land it to disk in 64 KiB chunks, accumulate sha256,
+    // and cut the connection as soon as the limit is exceeded.
     let mut hasher = Sha256::new();
     let mut size: u64 = 0;
     let mut exceeded = false;
@@ -122,7 +127,8 @@ pub async fn upload(
     let created_at = now.to_rfc3339();
     let created_at_ms = now.timestamp_millis();
 
-    // 同设备去重：与该设备最新版本 sha256 相同则不落正式存储。
+    // Per-device deduplication: if the sha256 matches the device's newest version,
+    // nothing lands in the official store.
     const LATEST: &str = "SELECT id, device_name, size_bytes, sha256, created_at \
         FROM backups WHERE device_name = ?1 ORDER BY created_at_ms DESC, id DESC LIMIT 1";
     if let Ok(row) = sqlx::query(LATEST)
@@ -148,7 +154,8 @@ pub async fn upload(
         }
     }
 
-    // 半成品转正 + 元数据落库；落库失败则回滚已转正的文件。
+    // Promote the half-written file + persist the metadata; if the metadata write fails,
+    // roll back the promoted file.
     if let Err(error) = tokio::fs::rename(&part_path, &final_path).await {
         discard_file(&part_path).await;
         return ApiError::internal(error).into_response();
@@ -172,7 +179,8 @@ pub async fn upload(
     }
     state.metrics.add_backups_created(1);
 
-    // 全局保留策略（0=不限）：超出上限删最旧版本，文件与行同删。
+    // Global retention policy (0 = unlimited): over the cap, the oldest versions are
+    // removed, file and row together.
     if let Err(error) = enforce_retention(&state).await {
         tracing::warn!(%error, "backup retention sweep failed");
     }
@@ -191,7 +199,8 @@ pub async fn upload(
         .into_response()
 }
 
-/// 删最旧超出保留上限的版本（文件先行；文件已丢失也删行，避免孤儿元数据）。
+/// Delete the oldest versions beyond the retention cap (file first; the row is deleted even
+/// if the file is already gone, to avoid orphan metadata).
 async fn enforce_retention(state: &AppState) -> Result<(), sqlx::Error> {
     let max_versions = state.backup_max_versions as i64;
     if max_versions == 0 {
@@ -275,7 +284,8 @@ pub async fn list(State(state): State<AppState>, Query(params): Query<ListQuery>
         },
     };
 
-    // 倒序（新→旧）：游标 (created_at_ms, id) 严格小于当前位置。
+    // Reverse order (new -> old): the cursor (created_at_ms, id) is strictly below the
+    // current position.
     const SELECT: &str = "SELECT id, device_name, size_bytes, sha256, created_at, created_at_ms \
         FROM backups \
         WHERE (?1 IS NULL OR (created_at_ms, id) < (?1, ?2)) \
@@ -339,7 +349,8 @@ pub async fn download(State(state): State<AppState>, Path(id): Path<String>) -> 
     let file = match tokio::fs::File::open(state.backup_dir.join(content_path)).await {
         Ok(file) => file,
         Err(error) => {
-            // 行在文件丢：元数据与存储失联，按 404 对外，细节进日志。
+            // The row exists but the file is gone: metadata and storage are out of sync;
+            // expose a 404 and log the details.
             tracing::warn!(%error, backup_id = %id, "backup content file missing");
             return ApiError::not_found().into_response();
         }
@@ -371,7 +382,8 @@ pub async fn delete(State(state): State<AppState>, Path(id): Path<String>) -> Re
     };
     let content_path: String = row.try_get("content_path").unwrap_or_default();
 
-    // 文件先行（不存在视为已清理，继续删行；其他失败不删行，保留可重试性）。
+    // File first (missing counts as already cleaned, so the row is still deleted; any
+    // other failure keeps the row, preserving retryability).
     if let Err(error) = tokio::fs::remove_file(state.backup_dir.join(content_path)).await {
         if error.kind() != std::io::ErrorKind::NotFound {
             return ApiError::internal(error).into_response();
@@ -388,7 +400,7 @@ pub async fn delete(State(state): State<AppState>, Path(id): Path<String>) -> Re
     StatusCode::NO_CONTENT.into_response()
 }
 
-// ---- 工具 ----
+// ---- Utilities ----
 
 fn hex_lower(bytes: &[u8]) -> String {
     let mut out = String::with_capacity(bytes.len() * 2);
@@ -399,8 +411,9 @@ fn hex_lower(bytes: &[u8]) -> String {
     out
 }
 
-/// 删半成品/临时文件：NotFound 静默（幂等），其他失败只记日志——调用点
-/// 都在错误响应路径上，删除失败不应掩盖原始错误。
+/// Delete a half-written/temporary file: NotFound is silent (idempotent); other failures
+/// are only logged — every call site is already on an error-response path, so a failed
+/// deletion must not mask the original error.
 async fn discard_file(path: &std::path::Path) {
     if let Err(error) = tokio::fs::remove_file(path).await {
         if error.kind() != std::io::ErrorKind::NotFound {
@@ -416,7 +429,7 @@ mod tests {
 
     #[test]
     fn hex_lower_matches_known_digest() {
-        // sha256("") 的十六进制前 16 字符
+        // The first 16 hex characters of sha256("")
         assert_eq!(&hex_lower(&Sha256::digest(b""))[..16], "e3b0c44298fc1c14");
     }
 }
@@ -465,12 +478,13 @@ mod endpoint_tests {
         assert_eq!(body["size_bytes"], 16);
         assert_eq!(body["sha256"], sha256_hex("vault-snapshot-1"));
 
-        // 设备归属由令牌推导：另一台设备上传同尺寸内容也各自记账
+        // Ownership is derived from the token: another device uploading identical content
+        // still gets its own accounting
         let (status, body) = upload(&router, "vault-snapshot-2", PHONE).await;
         assert_eq!(status, StatusCode::CREATED);
         assert_eq!(body["device_name"], "phone");
 
-        // 密文文件落盘在 {backup_dir}/{id}.persenc
+        // The ciphertext file lands at {backup_dir}/{id}.persenc
         let id = body["id"].as_str().unwrap().to_owned();
         let path = state.backup_dir.join(format!("{id}.persenc"));
         assert!(tokio::fs::try_exists(&path).await.unwrap());
@@ -490,13 +504,15 @@ mod endpoint_tests {
         assert_eq!(second["deduplicated"], true);
         assert_eq!(second["id"], first["id"]);
 
-        // 去重不落新文件、不计数：目录里只有 1 个 .persenc
+        // A dedup hit stores no new file and counts nothing: the directory holds only one
+        // .persenc
         let files = count_persenc(&state.backup_dir).await;
         assert_eq!(files, 1);
         let (_, _, _, _, created, _) = state.metrics.snapshot();
         assert_eq!(created, 1);
 
-        // 另一设备同内容不去重（去重键是设备+sha256）
+        // The same content from another device is not deduplicated (the dedup key is
+        // device + sha256)
         let (status, body) = upload(&router, "same-bytes", PHONE).await;
         assert_eq!(status, StatusCode::CREATED);
         assert_eq!(body["deduplicated"], false);
@@ -505,9 +521,10 @@ mod endpoint_tests {
 
     #[tokio::test]
     async fn upload_rejects_oversized_content_length_without_reading_body() {
-        // CL 预检：416 上限设 16，带 CL 的 32 字节请求在 size_guard 即断
+        // CL pre-check: with the 416 limit set to 16, a 32-byte request with a CL is cut
+        // right at size_guard
         let (router, state, _dir) = setup_with_backups(SPEC, 0, 16).await;
-        let body = "0123456789abcdef0123456789abcdef"; // 32 字节
+        let body = "0123456789abcdef0123456789abcdef"; // 32 bytes
         let (status, error) = upload(&router, body, LAPTOP).await;
         assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
         assert_eq!(error["error"]["code"], "payload_too_large");
@@ -517,12 +534,13 @@ mod endpoint_tests {
 
     #[tokio::test]
     async fn upload_streams_without_content_length_and_aborts_on_limit() {
-        // 无 CL 的流式 body：size_guard 放行，处理器内边写边计数，
-        // 超限中断并删半成品（.part 不残留）。
+        // A streaming body with no CL: size_guard lets it pass, the handler counts while
+        // writing, and exceeding the limit aborts and deletes the half-written file (no
+        // .part residue).
         let (router, state, _dir) = setup_with_backups(SPEC, 0, 16).await;
         let stream = futures::stream::iter(vec![
             Ok::<&[u8], std::io::Error>(b"0123456789abcdef"),
-            Ok(b"0123456789abcdef"), // 第 2 块触顶
+            Ok(b"0123456789abcdef"), // the 2nd chunk hits the cap
             Ok(b"tail-must-not-land"),
         ]);
         let request = axum::http::Request::builder()
@@ -543,16 +561,17 @@ mod endpoint_tests {
     #[tokio::test]
     async fn list_pages_desc_without_gaps_or_duplicates() {
         let (router, _, _dir) = setup_with_backups(SPEC, 0, 1024).await;
-        // 排序键是 (created_at_ms, id)：同毫秒内 tie-breaker 是随机 UUID
-        // （id DESC），v2/v3 同 ms 时顺序 50% 翻车（批 11 的 CI 撞过）。
-        // 单设备串行 push 真实间隔远超 1ms，这里拉开毫秒保证确定性。
+        // The sort key is (created_at_ms, id): within the same millisecond the tie-breaker
+        // is the random UUID (id DESC), and v2/v3 in the same ms flip the order 50% of the
+        // time (batch 11's CI hit this once). A single device's real serial pushes are far
+        // more than 1ms apart; here we space the milliseconds apart for determinism.
         for content in ["v1", "v2", "v3"] {
             tokio::time::sleep(std::time::Duration::from_millis(2)).await;
             let (status, _) = upload(&router, content, LAPTOP).await;
             assert_eq!(status, StatusCode::CREATED);
         }
 
-        // 倒序（新→旧）：v3, v2 | v1
+        // Reverse order (new -> old): v3, v2 | v1
         let (status, page1) = send(
             router.clone(),
             get_backups("/api/v1/backups?limit=2", LAPTOP),
@@ -584,7 +603,7 @@ mod endpoint_tests {
         assert_eq!(ids2.len(), 1);
         assert!(page2["next_cursor"].is_null());
 
-        // 不重不漏
+        // No repeats, no omissions
         assert_eq!(
             ids1.iter()
                 .chain(ids2.iter())
@@ -593,7 +612,7 @@ mod endpoint_tests {
             3
         );
 
-        // 顺序即上传倒序：sha256 比对（v3 最新在最前）
+        // Order equals upload reverse order: sha256 comparison (v3, the newest, first)
         assert_eq!(page1["backups"][0]["sha256"], sha256_hex("v3"));
         assert_eq!(page1["backups"][1]["sha256"], sha256_hex("v2"));
         assert_eq!(page2["backups"][0]["sha256"], sha256_hex("v1"));
@@ -607,7 +626,7 @@ mod endpoint_tests {
             assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{uri}");
             assert_eq!(body["error"]["code"], "validation");
         }
-        // 上限边界 100 合法
+        // The boundary limit of 100 is legal
         let (status, _) = send(router, get_backups("/api/v1/backups?limit=100", LAPTOP)).await;
         assert_eq!(status, StatusCode::OK);
     }
@@ -630,7 +649,7 @@ mod endpoint_tests {
         );
         assert_eq!(*headers.get("content-length").unwrap(), "11");
 
-        // 未知 id → 404（统一错误形状）
+        // Unknown id -> 404 (unified error shape)
         let (status, _, body) =
             send_binary(router, get_backup_download("no-such-id", LAPTOP)).await;
         assert_eq!(status, StatusCode::NOT_FOUND);
@@ -648,7 +667,7 @@ mod endpoint_tests {
         assert_eq!(status, StatusCode::NO_CONTENT);
         assert_eq!(count_persenc(&state.backup_dir).await, 0);
 
-        // 行也没了：列表为空、二次删除 404
+        // The row is gone too: the list is empty and a second delete 404s
         let (status, page) = send(router.clone(), get_backups("/api/v1/backups", LAPTOP)).await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(page["backups"].as_array().unwrap().len(), 0);
@@ -661,10 +680,11 @@ mod endpoint_tests {
 
     #[tokio::test]
     async fn retention_drops_oldest_versions_beyond_limit() {
-        // max_versions=2：传 3 个版本，最旧的 v1（文件+行）被清
+        // max_versions=2: upload 3 versions and the oldest, v1 (file + row), is purged
         let (router, state, _dir) = setup_with_backups(SPEC, 2, 1024).await;
-        // 同毫秒 tie-breaker 是随机 UUID（见 list_pages_desc 的注释）——
-        // 保留清理（删 ASC 首行）与列表顺序都要确定，故拉开毫秒
+        // The same-millisecond tie-breaker is the random UUID (see the comment in
+        // list_pages_desc) — both retention cleanup (deleting the ASC first row) and list
+        // order must be deterministic, hence the spread-out milliseconds
         for content in ["v1", "v2", "v3"] {
             tokio::time::sleep(std::time::Duration::from_millis(2)).await;
             let (status, _) = upload(&router, content, LAPTOP).await;
@@ -675,7 +695,7 @@ mod endpoint_tests {
         assert_eq!(status, StatusCode::OK);
         let backups = page["backups"].as_array().unwrap();
         assert_eq!(backups.len(), 2);
-        // 剩 v3, v2（倒序）
+        // v3, v2 remain (reverse order)
         assert_eq!(backups[0]["sha256"], sha256_hex("v3"));
         assert_eq!(backups[1]["sha256"], sha256_hex("v2"));
         assert_eq!(count_persenc(&state.backup_dir).await, 2);
@@ -690,7 +710,8 @@ mod endpoint_tests {
         let (_, uploaded) = upload(&router, "seed", LAPTOP).await;
         let id = uploaded["id"].as_str().unwrap();
 
-        // 四端点未认证（错令牌）均 401；设备令牌互不通用
+        // All four endpoints with no (or wrong-token) authentication 401; device tokens are
+        // not interchangeable
         for (label, request) in [
             ("POST", post_backup("x", "wrong-token")),
             ("GET list", get_backups("/api/v1/backups", "wrong-token")),
@@ -718,7 +739,8 @@ mod endpoint_tests {
             assert_eq!(body["error"]["code"], "unauthorized", "{label}");
         }
 
-        // laptop 的令牌不能被 phone 冒用出不同归属：上传仍按令牌记账
+        // phone cannot abuse laptop's token to claim a different owner: the upload is still
+        // accounted to the token
         let (status, body) = upload(&router, "cross-device", PHONE).await;
         assert_eq!(status, StatusCode::CREATED);
         assert_eq!(body["device_name"], "phone");

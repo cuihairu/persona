@@ -1,8 +1,9 @@
-//! `POST/GET /api/v1/events`：审计事件批量接入与 SIEM 拉取式查询。
+//! `POST/GET /api/v1/events`: bulk audit-event ingestion and SIEM pull-style queries.
 //!
-//! 事件词汇表与 core 对齐：`action` 是 core `AuditAction` 的 snake_case
-//! 串（未知串按 core `FromStr` 语义由消费方落 `Custom`，这里只做长度
-//! 校验）；`resource_type` 用 `ResourceType::from_str` 严格校验。
+//! The event vocabulary aligns with core: `action` is core's `AuditAction` snake_case
+//! string (an unknown string is folded into `Custom` by the consumer per core's `FromStr`
+//! semantics; here we only check the length); `resource_type` is strictly validated via
+//! `ResourceType::from_str`.
 
 use std::collections::HashMap;
 
@@ -21,7 +22,7 @@ use uuid::Uuid;
 use super::{decode_cursor, encode_cursor, ApiError, ErrorItem};
 use crate::state::AppState;
 
-/// 单批事件上限。
+/// Per-batch event limit.
 pub const MAX_BATCH_SIZE: usize = 500;
 
 const MAX_CURSOR_FETCH: u32 = 1000;
@@ -35,7 +36,8 @@ pub struct IngestRequest {
     events: Vec<IngestEvent>,
 }
 
-/// wire 形状参照 core `AuditLog`；`id` 是客户端幂等键（server 重新分配主键）。
+/// Wire shape follows core's `AuditLog`; `id` is the client's idempotency key (the
+/// server assigns its own primary key).
 #[derive(Deserialize)]
 pub struct IngestEvent {
     id: Option<String>,
@@ -51,7 +53,8 @@ pub struct IngestEvent {
     success: bool,
     error_message: Option<String>,
     metadata: Option<HashMap<String, String>>,
-    /// 客户端时钟，仅存证不可信；排序一律用 server 的 received_at。
+    /// The client's clock, kept for the record but not trusted; ordering always uses the
+    /// server's received_at.
     timestamp: DateTime<Utc>,
 }
 
@@ -72,14 +75,14 @@ pub async fn ingest(
         }
     };
 
-    // 全有或全无：逐条校验全部通过后才开事务写。
+    // All or nothing: the write transaction opens only after every entry validates.
     if let Err(items) = validate(&request.events) {
         tracing::debug!(count = items.len(), "rejecting event batch");
         state
             .metrics
             .add_events_rejected(request.events.len() as u64);
-        // 批级错误（空批/超限）issue 直接作顶层 message；逐条错误给计数摘要，
-        // 细节在 items 里。
+        // A batch-level issue (empty batch / over limit) is used as the top-level
+        // message as-is; per-entry issues get a count summary, with the details in items.
         let message = match items.as_slice() {
             [only] if only.index.is_none() => only.issue.clone(),
             _ => format!("{} invalid event(s) in batch", items.len()),
@@ -87,7 +90,8 @@ pub async fn ingest(
         return ApiError::validation(message, items).into_response();
     }
 
-    // 同批共用一个 received_at：批内游标键单调，翻页顺序与返回顺序一致。
+    // One shared received_at for the whole batch: the in-batch cursor key is monotonic,
+    // so paging order matches return order.
     let received_at = Utc::now();
     match insert_batch(&state.pool, request.events, received_at).await {
         Ok((accepted, duplicates)) => {
@@ -107,10 +111,12 @@ pub async fn ingest(
     }
 }
 
-/// 审计事件副本保留策略（TODO「已知限制：无保留策略」follow-up）：
-/// 按 received_at_ms 滚动删除超过窗口的行（走 idx_audit_events_order
-/// 索引），0 = 不清理（默认）。事件是审计副本而非事实源，清理窗口由
-/// 部署方按自己的 SIEM 摘取周期定。失败仅告警。
+/// Retention policy for the audit event copy (the follow-up to the TODO "known
+/// limitation: no retention policy"): rolling deletion of rows older than the window,
+/// ordered by received_at_ms (using the idx_audit_events_order index); 0 = no cleanup
+/// (the default). Events are an audit copy rather than the source of truth, so the
+/// cleanup window is set by the deployer according to its own SIEM harvesting cadence.
+/// Failure only warns.
 async fn enforce_events_retention(state: &AppState) {
     let days = state.events_retention_days;
     if days == 0 {
@@ -251,8 +257,9 @@ async fn insert_batch(
     events: Vec<IngestEvent>,
     received_at: DateTime<Utc>,
 ) -> Result<(u64, u64), sqlx::Error> {
-    // 不用 INSERT OR IGNORE：那会把 CHECK/NOT NULL 违例也吞成"重复"。
-    // 带 WHERE 冲突目标的 DO NOTHING 只命中部分唯一索引。
+    // Not INSERT OR IGNORE: that would also swallow CHECK/NOT NULL violations as
+    // "duplicates". A DO NOTHING with a WHERE-qualified conflict target matches only the
+    // partial unique index.
     const INSERT: &str = "INSERT INTO audit_events \
         (id, client_event_id, user_id, identity_id, credential_id, session_id, \
          action, resource_type, resource_id, ip_address, user_agent, \
@@ -309,7 +316,7 @@ pub struct EventQuery {
     cursor: Option<String>,
     action: Option<String>,
     success: Option<bool>,
-    /// RFC3339，按 received_at（server 时钟）过滤。
+    /// RFC3339; filters on received_at (the server clock).
     since: Option<DateTime<Utc>>,
 }
 
@@ -369,7 +376,7 @@ pub async fn query(State(state): State<AppState>, Query(params): Query<EventQuer
         },
     };
 
-    // 位置参数一次绑定全量，避免动态拼 SQL。
+    // Bind every positional parameter in one go, avoiding dynamic SQL string building.
     const SELECT: &str =
         "SELECT id, client_event_id, user_id, identity_id, credential_id, session_id, \
         action, resource_type, resource_id, ip_address, user_agent, \
@@ -397,7 +404,8 @@ pub async fn query(State(state): State<AppState>, Query(params): Query<EventQuer
         Err(error) => return ApiError::internal(error).into_response(),
     };
 
-    // 多取 1 行判断是否还有下一页；游标取自最后返回的那行。
+    // Fetch one extra row to detect a further page; the cursor comes from the last
+    // returned row.
     let has_more = rows.len() > limit as usize;
     let next_cursor = if has_more {
         let last = &rows[limit as usize - 1];
@@ -468,7 +476,7 @@ mod endpoint_tests {
     const TOKEN: &str = "test-token";
 
     async fn seed(pool: &sqlx::SqlitePool, ms: i64, id: &str, action: &str, success: bool) {
-        // received_at 基准 2026-01-01T00:00:00Z，ms 为其后毫秒偏移
+        // received_at baseline 2026-01-01T00:00:00Z; ms is the offset in milliseconds after it
         const BASE_MS: i64 = 1_767_225_600_000;
         let received_at = DateTime::from_timestamp_millis(BASE_MS + ms)
             .unwrap()
@@ -504,7 +512,7 @@ mod endpoint_tests {
         let (status, _) = send(router.clone(), post_events(&body, Some(TOKEN))).await;
         assert_eq!(status, axum::http::StatusCode::ACCEPTED);
 
-        // 回拨到窗口外
+        // Roll the row back outside the window
         let stale_ms = (Utc::now() - chrono::Duration::try_days(91).unwrap()).timestamp_millis();
         sqlx::query("UPDATE audit_events SET received_at_ms = ?")
             .bind(stale_ms)
@@ -512,7 +520,8 @@ mod endpoint_tests {
             .await
             .unwrap();
 
-        // 再 ingest 一条（触发清理路径）：旧行被清、新行存活
+        // Ingest one more (exercising the cleanup path): the old row is pruned, the new
+        // row survives
         let body = format!(r#"{{"events":[{}]}}"#, event_json("e-fresh", "logout"));
         let (status, json) = send(router.clone(), post_events(&body, Some(TOKEN))).await;
         assert_eq!(status, axum::http::StatusCode::ACCEPTED);
@@ -625,7 +634,7 @@ mod endpoint_tests {
         assert_eq!(items.len(), 1);
         assert_eq!(items[0]["index"], 1);
         assert_eq!(items[0]["field"], "resource_type");
-        // 全有或全无：合法那条也不能入库
+        // All or nothing: the legitimate entry must not be stored either
         assert_eq!(count(&app_state.pool).await, 0);
     }
 
@@ -636,7 +645,7 @@ mod endpoint_tests {
             r#"{"events":[{"id":"e1","action":"login","resource_type":"user","success":true}]}"#;
         let (status, json) = send(router, post_events(body, Some(TOKEN))).await;
         assert_eq!(status, axum::http::StatusCode::UNPROCESSABLE_ENTITY);
-        assert_eq!(json["error"]["code"], "bad_request"); // serde 缺必填字段 → rejection
+        assert_eq!(json["error"]["code"], "bad_request"); // serde missing a required field -> rejection
     }
 
     #[tokio::test]
@@ -662,7 +671,8 @@ mod endpoint_tests {
     #[tokio::test]
     async fn ingest_body_over_1mib_is_413() {
         let (router, _) = setup(Some(TOKEN)).await;
-        // Content-Length 预检：不读 body，直接 413（小 body + 谎报长度即可测）
+        // Content-Length pre-check: the body is never read, straight to 413 (a small
+        // body with a lying declared length is enough to test it)
         let request = axum::http::Request::builder()
             .method("POST")
             .uri("/api/v1/events")
@@ -675,9 +685,10 @@ mod endpoint_tests {
         assert_eq!(response.status(), axum::http::StatusCode::PAYLOAD_TOO_LARGE);
     }
 
-    /// gzip 批请求构造（测试侧压缩，线上由 core 的 ServerEventSink 压）。
-    /// gzip 是二进制，`Body::from(Vec<u8>)` 承接；Content-Length 由长度
-    /// 自动得出——与线上 payload_size_guard 同口径。
+    /// Builds a gzip batch request (the test side compresses; on the wire core's
+    /// ServerEventSink does it). gzip is binary, so `Body::from(Vec<u8>)` carries it;
+    /// Content-Length is derived from the length automatically — the same convention as
+    /// the wire-side payload_size_guard.
     fn gzipped_request(body: Vec<u8>) -> axum::http::Request<axum::body::Body> {
         axum::http::Request::builder()
             .method("POST")
@@ -718,8 +729,9 @@ mod endpoint_tests {
     #[tokio::test]
     async fn corrupt_gzip_body_is_4xx() {
         let (router, _) = setup(Some(TOKEN)).await;
-        // 头声明 gzip，内容不是 gzip 流——解压层在中途失败，JSON extractor
-        // 读 body 出错形成 rejection
+        // The header claims gzip but the content is not a gzip stream — the
+        // decompression layer fails midway and the JSON extractor's body read errors out
+        // into a rejection
         let request = gzipped_request(b"this is not a gzip stream".to_vec());
         let response = router.oneshot(request).await.unwrap();
         assert!(
@@ -733,11 +745,12 @@ mod endpoint_tests {
     #[tokio::test]
     async fn decompressed_body_over_10mib_is_413() {
         let (router, _) = setup(Some(TOKEN)).await;
-        // 解压炸弹形态：压缩后线上字节远小于 1 MiB（payload_size_guard
-        // 放行），解压后明文超 10 MiB（内层 DefaultBodyLimit 拦截 413）
+        // Decompression-bomb shape: after compression the wire bytes are far below
+        // 1 MiB (payload_size_guard lets it through), while the decompressed plaintext
+        // exceeds 10 MiB (the inner DefaultBodyLimit rejects with 413)
         let huge = format!(
             r#"{{"events":[{{"id":"boom","action":"{}","resource_type":"user","success":true,"timestamp":"2026-01-01T00:00:00Z"}}]}}"#,
-            "x".repeat(11 * 1024 * 1024) // 明文 11 MiB > 10 MiB 上限
+            "x".repeat(11 * 1024 * 1024) // 11 MiB of plaintext > the 10 MiB limit
         );
         assert!(huge.len() > 10 * 1024 * 1024);
         let compressed = gzip(huge.as_bytes());
@@ -749,7 +762,8 @@ mod endpoint_tests {
 
     #[tokio::test]
     async fn ingest_unknown_action_stored_verbatim() {
-        // 未知 action 串按 core FromStr 语义由消费方落 Custom；server 原样存取
+        // An unknown action string is folded into Custom by the consumer per core's
+        // FromStr semantics; the server stores and returns it verbatim
         let (router, app_state) = setup(Some(TOKEN)).await;
         let body = format!(r#"{{"events":[{}]}}"#, event_json("e1", "totally_new"));
         let (status, json) = send(router, post_events(&body, Some(TOKEN))).await;
@@ -768,7 +782,7 @@ mod endpoint_tests {
     async fn ingest_duplicate_client_event_id_counts_as_duplicate() {
         let (router, _) = setup(Some(TOKEN)).await;
 
-        // 同批内重复
+        // Duplicates within a single batch
         let body = format!(
             r#"{{"events":[{},{}]}}"#,
             event_json("e1", "login"),
@@ -779,7 +793,7 @@ mod endpoint_tests {
         assert_eq!(json["accepted"], 1);
         assert_eq!(json["duplicates"], 1);
 
-        // 跨请求重复
+        // Duplicates across requests
         let body = format!(r#"{{"events":[{}]}}"#, event_json("e1", "login"));
         let (status, json) = send(router, post_events(&body, Some(TOKEN))).await;
         assert_eq!(status, axum::http::StatusCode::ACCEPTED);
@@ -879,7 +893,8 @@ mod endpoint_tests {
         assert!(status.is_success());
         let cursor = json["next_cursor"].as_str().unwrap().to_owned();
 
-        // 游标之后插入的新事件同样按序出现在后续页，不回头、不重叠
+        // New events inserted after the cursor appear in order on later pages too — no
+        // going backwards and no overlap
         seed(&app_state.pool, 3000, "p3", "login", true).await;
         let (status, json) = send(
             router,

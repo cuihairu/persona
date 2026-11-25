@@ -1,11 +1,14 @@
 use super::*;
 
-// E2EE_SYNC_DESIGN 阶段 2 批 4 验收「两端收敛测试」：真 HTTP 栈 +
-// 客户端 wire 层（core HttpSyncRemote）+ 两份独立 oplog（各挂
-// SyncEngine）。覆盖：单向 push→pull、双端同 lamport 离线编辑的真
-// 冲突（两端收敛到同一主位 + 双版本保留）、重建 engine 实例（状态全
-// 在库：local_lamport/游标/pending 不随实例走——换主密码零影响同步
-// 的构造性证明：SyncEngine 全链路无主密码参数，实例可弃可换）。
+// E2EE_SYNC_DESIGN phase 2 batch 4 acceptance "two-end convergence test": real HTTP
+// stack + client wire layer (core HttpSyncRemote) + two independent oplogs (each with
+// a SyncEngine attached). Covers: one-way push->pull, a genuine conflict from both
+// ends editing offline at the same lamport (both converge on the same primary slot +
+// both versions kept), and rebuilding an engine instance (all state lives in the
+// library: local_lamport/cursor/pending do not travel with the instance — a
+// constructive proof that changing the master password has zero effect on sync:
+// SyncEngine takes no master-password parameter anywhere, so an instance can be
+// freely discarded and replaced).
 #[tokio::test(flavor = "multi_thread")]
 async fn two_devices_converge_over_real_tcp_conflict_keeps_both_versions() {
     use persona_core::storage::sync_repository::SyncRepository;
@@ -58,7 +61,7 @@ async fn two_devices_converge_over_real_tcp_conflict_keeps_both_versions() {
     let engine_a = engine_for(db_a.clone(), &base, TOKEN, device_a);
     let engine_b = engine_for(db_b, &base, TOKEN, device_b);
 
-    // A 离线写 lamport 1 并 push
+    // A writes lamport 1 offline and pushes
     let item = Uuid::new_v4();
     let a1 = engine_a
         .record_local_change(item, ItemKind::Credential, OpType::Put, payload(0xA1))
@@ -67,7 +70,7 @@ async fn two_devices_converge_over_real_tcp_conflict_keeps_both_versions() {
     assert_eq!(a1.lamport, 1);
     assert_eq!(engine_a.push_cycle().await.unwrap().pushed, 1);
 
-    // B 上线拉到 A1，看到的主位就是 A 的版本
+    // B comes online, pulls A1, and its primary slot is A's version
     let pull = engine_b.pull_cycle().await.unwrap();
     assert_eq!(pull.applied, 1);
     assert_eq!(repo_b.get_state().await.unwrap().local_lamport, 1);
@@ -75,8 +78,9 @@ async fn two_devices_converge_over_real_tcp_conflict_keeps_both_versions() {
     assert_eq!(view_b.primary.as_ref().unwrap().device_id, device_a);
     assert!(view_b.conflicts.is_empty());
 
-    // 双端离线同 lamport 编辑：B 从 lamport 1 出发写 2 并 push；A 不
-    // 知情（没拉过 B2），也从 1 出发写 2——真冲突的典型形态
+    // Both ends edit offline at the same lamport: B writes 2 starting from lamport 1
+    // and pushes; A is unaware (never pulled B2) and also writes 2 starting from 1 —
+    // the canonical shape of a genuine conflict
     let b2 = engine_b
         .record_local_change(item, ItemKind::Credential, OpType::Put, payload(0xB2))
         .await
@@ -84,8 +88,9 @@ async fn two_devices_converge_over_real_tcp_conflict_keeps_both_versions() {
     assert_eq!(b2.lamport, 2);
     assert_eq!(engine_b.push_cycle().await.unwrap().pushed, 1);
 
-    // A 端重建 engine 实例（同一库句柄）：时钟延续正确——下一条仍接
-    // lamport 2（local_lamport 在库不在实例）
+    // Rebuild A's engine instance (same library handle): the clock continues
+    // correctly — the next op still follows lamport 2 (local_lamport lives in the
+    // library, not the instance)
     let engine_a2 = engine_for(db_a, &base, TOKEN, device_a);
     let a2 = engine_a2
         .record_local_change(item, ItemKind::Credential, OpType::Put, payload(0xA2))
@@ -94,14 +99,15 @@ async fn two_devices_converge_over_real_tcp_conflict_keeps_both_versions() {
     assert_eq!(a2.lamport, 2);
     assert_eq!(engine_a2.push_cycle().await.unwrap().pushed, 1);
 
-    // 双端各拉一轮 → 各自 oplog 持有 {A1, B2, A2} 全集
+    // Each end pulls once -> both oplogs hold the full {A1, B2, A2} set
     let pull_a = engine_a2.pull_cycle().await.unwrap();
-    assert_eq!(pull_a.applied, 1); // A1 是自己的本地 op，去重跳过
+    assert_eq!(pull_a.applied, 1); // A1 is its own local op, skipped by dedup
     let pull_b = engine_b.pull_cycle().await.unwrap();
     assert_eq!(pull_b.applied, 1);
 
-    // 收敛断言：两端 oplog 全集一致，主位收敛到同一 op（全序裁决），
-    // 冲突区恰一条，胜者/负者双版本密文都在（数据不丢）
+    // Convergence assertions: both oplogs hold the same full set, the primary slot
+    // converges on the same op (total-order adjudication), the conflict area holds
+    // exactly one entry, and both winner/loser ciphertexts survive (no data loss)
     let ops_a = repo_a.item_ops(item).await.unwrap();
     let ops_b = repo_b.item_ops(item).await.unwrap();
     assert_eq!(ops_a.len(), 3);
@@ -111,11 +117,12 @@ async fn two_devices_converge_over_real_tcp_conflict_keeps_both_versions() {
     let primary_a = view_a.primary.as_ref().unwrap();
     let primary_b = view_b.primary.as_ref().unwrap();
     assert_eq!(primary_a.op_id, primary_b.op_id);
-    assert_eq!(primary_a.device_id, device_a.max(device_b)); // 字典序大者胜
+    assert_eq!(primary_a.device_id, device_a.max(device_b)); // lexicographically larger wins
     assert_eq!(view_a.conflicts.len(), 1);
     assert_eq!(view_b.conflicts.len(), 1);
     assert_eq!(view_a.conflicts[0].op_id, view_b.conflicts[0].op_id);
-    // 双版本密文都可读且可区分（胜者/负者都不丢——数据不丢的落库证明）
+    // Both version ciphertexts are readable and distinguishable (neither winner nor
+    // loser is lost — the stored proof of no data loss)
     let primary_tag = primary_a.payload.as_ref().unwrap().ciphertext[0];
     let conflict_tag = view_a.conflicts[0].payload.as_ref().unwrap().ciphertext[0];
     assert_ne!(primary_tag, conflict_tag);
@@ -123,10 +130,11 @@ async fn two_devices_converge_over_real_tcp_conflict_keeps_both_versions() {
     task.abort();
 }
 
-// SyncAdminApi（core 客户端 wire 层）与 server 契约的真 TCP 对齐测试：
-// handler 语义已由上面的单测覆盖（409/422/级联等），这里验证客户端侧
-// 类型转换（device_id Uuid、public_key [u8;32]、envelope 字节原样往返）
-// 与错误路径（409 message 透传到 Err、幽灵设备 fail-closed）。
+// Real-TCP alignment test of the SyncAdminApi (core client wire layer) against the
+// server contract: handler semantics are already covered by the unit tests above
+// (409/422/cascade etc.); this verifies the client-side type conversions (device_id
+// Uuid, public_key [u8;32], envelope bytes round-tripping verbatim) and the error
+// paths (the 409 message propagates to Err, ghost devices fail closed).
 #[tokio::test(flavor = "multi_thread")]
 async fn admin_api_client_manages_devices_and_group_keys_over_real_tcp() {
     use persona_core::sync::remote::SyncAdminApi;
@@ -142,7 +150,7 @@ async fn admin_api_client_manages_devices_and_group_keys_over_real_tcp() {
 
     let admin = SyncAdminApi::new(&base, TOKEN).unwrap();
 
-    // 注册两台设备
+    // Register two devices
     let laptop_id = admin
         .register_device("laptop", &[7u8; 32])
         .await
@@ -153,7 +161,8 @@ async fn admin_api_client_manages_devices_and_group_keys_over_real_tcp() {
         .expect("register phone");
     assert_ne!(laptop_id, phone_id);
 
-    // 重名 → 409，message 透传到 Err（客户端不吞服务器语义）
+    // Duplicate name -> 409, message propagates to Err (the client does not swallow
+    // server semantics)
     let dup = admin
         .register_device("laptop", &[1u8; 32])
         .await
@@ -163,7 +172,7 @@ async fn admin_api_client_manages_devices_and_group_keys_over_real_tcp() {
         "unexpected error: {dup:#}"
     );
 
-    // 列表：名称 + 公钥字节级还原
+    // List: names + public keys restored byte-for-byte
     let devices = admin.list_devices().await.expect("list devices");
     assert_eq!(devices.len(), 2);
     let laptop = devices
@@ -174,21 +183,22 @@ async fn admin_api_client_manages_devices_and_group_keys_over_real_tcp() {
     assert_eq!(laptop.public_key, [7u8; 32]);
     assert!(!laptop.created_at.is_empty());
 
-    // 起始无信封
+    // No envelopes to start with
     assert!(admin.group_keys().await.expect("empty keys").is_empty());
 
-    // 上传信封（恰 80B）→ 原样取回，sealed_by = AuthTokens::single 的设备名
+    // Upload an envelope (exactly 80B) -> returned verbatim, sealed_by =
+    // AuthTokens::single's device name
     let envelope: Vec<u8> = (0..80).map(|i| i as u8).collect();
     admin
         .put_group_key(laptop_id, &envelope)
         .await
         .expect("put group key");
-    // 幽灵设备 fail-closed → Err
+    // Ghost device fails closed -> Err
     admin
         .put_group_key(Uuid::new_v4(), &[0u8; 80])
         .await
         .expect_err("ghost device must be rejected");
-    // 同设备覆盖（upsert）不报错
+    // Same-device overwrite (upsert) does not error
     admin
         .put_group_key(laptop_id, &[0xAA; 80])
         .await
@@ -200,7 +210,7 @@ async fn admin_api_client_manages_devices_and_group_keys_over_real_tcp() {
     assert_eq!(keys[0].envelope, vec![0xAA; 80]);
     assert_eq!(keys[0].sealed_by, "default");
 
-    // 吊销 laptop：幂等（二次删除同 204）+ 信封级联消失
+    // Revoke laptop: idempotent (the second delete is also a 204) + envelope cascades away
     admin.delete_device(laptop_id).await.expect("revoke laptop");
     admin
         .delete_device(laptop_id)
@@ -218,10 +228,12 @@ async fn admin_api_client_manages_devices_and_group_keys_over_real_tcp() {
     task.abort();
 }
 
-// 首设备自举：全新服务器上第一台设备 join 时无人能授权它（信封由
-// 「既有设备」封出，而此刻不存在既有设备）——bootstrap_group_if_empty
-// 在空组上自建组密钥 + 自封信封，第二台设备起恢复「等既有设备授权」
-// 流程。这是 join 流程能在真机上跑通的前提（阶段 3 演示脚本第一步）。
+// First-device bootstrap: on a fresh server nobody can authorize the first device to
+// join (envelopes are sealed by an "existing device", and none exists yet) —
+// bootstrap_group_if_empty creates the group key and seals its own envelope on an
+// empty group; from the second device on, the normal "wait for an existing device to
+// authorize" flow resumes. This is the prerequisite for the join flow to work on real
+// hardware (step 1 of the phase 3 demo script).
 #[tokio::test(flavor = "multi_thread")]
 async fn admin_api_bootstrap_creates_group_on_fresh_server_and_second_device_still_pends() {
     use persona_core::sync::device::DeviceIdentity;
@@ -239,7 +251,8 @@ async fn admin_api_bootstrap_creates_group_on_fresh_server_and_second_device_sti
 
     let admin = SyncAdminApi::new(&base, TOKEN).unwrap();
 
-    // 首设备：登记后空组自举 → true，且本机能拆开自己的信封
+    // First device: after registering, bootstraps the empty group -> true, and the
+    // device itself can open its own envelope
     let laptop = DeviceIdentity::generate("laptop").unwrap();
     let laptop_id = admin
         .register_device("laptop", laptop.key_pair.public_bytes())
@@ -256,7 +269,8 @@ async fn admin_api_bootstrap_creates_group_on_fresh_server_and_second_device_sti
     let group = open_group_key(&keys[0].envelope, laptop.key_pair.secret_bytes())
         .expect("own envelope opens");
 
-    // 第二台设备：组已非空 → 不自举（false），等首设备授权
+    // Second device: the group is non-empty -> no bootstrap (false), waiting for the
+    // first device to authorize
     let phone = DeviceIdentity::generate("phone").unwrap();
     let phone_id = admin
         .register_device("phone", phone.key_pair.public_bytes())
@@ -268,7 +282,8 @@ async fn admin_api_bootstrap_creates_group_on_fresh_server_and_second_device_sti
         .expect("bootstrap on non-empty group");
     assert!(!bootstrapped);
 
-    // 首设备代授权：拆自己的 group key → 用对方公钥封新信封上传
+    // First-device authorization on the second's behalf: open its own group key ->
+    // seal a new envelope with the other's public key and upload it
     let envelope = seal_group_key(&group, phone.key_pair.public_bytes()).unwrap();
     admin
         .put_group_key(phone_id, &envelope)
@@ -284,10 +299,12 @@ async fn admin_api_bootstrap_creates_group_on_fresh_server_and_second_device_sti
     task.abort();
 }
 
-// group key 轮换全流程（真 TCP，阶段 3d）：A 自举建组并授权 B → A
-// rotate（换信封 + 全量重包）→ 信封集仍恰好覆盖两台授权设备、全部拆出
-// **新** key；随后 B 与后入组的 C 各自开会话拉全量——重包 op 全部可读
-// 物化（旧 key 批次按「严格旧版本」忽略，当前态由重包 op 补齐）。
+// Full group-key rotation flow (real TCP, phase 3d): A bootstraps the group and
+// authorizes B -> A rotates (new envelopes + full re-wrap) -> the envelope set still
+// covers exactly the two authorized devices and both open the **new** key; then B and
+// the late-joining C each open a session and pull everything — all re-wrapped ops are
+// readable and materialize (the old-key batch is ignored as "strictly older versions",
+// and the current state is filled in by the re-wrapped ops).
 #[tokio::test(flavor = "multi_thread")]
 async fn rotate_group_key_swaps_envelopes_and_new_devices_read_rewrapped_ops() {
     use persona_core::crypto::encryption::EncryptionService;
@@ -313,8 +330,9 @@ async fn rotate_group_key_swaps_envelopes_and_new_devices_read_rewrapped_ops() {
     let base = format!("http://{addr}");
     let admin = SyncAdminApi::new(&base, TOKEN).unwrap();
 
-    // A 自举建组；授权 B（旧组密钥信封）。登记后 with_device_id 回填
-    // 服务器分配的 UUID（与桌面版 sync_join 同序）。
+    // A bootstraps the group; B is authorized (old group-key envelope). After
+    // registration, with_device_id backfills the server-assigned UUID (the same
+    // order as the desktop's sync_join).
     let dev_a = DeviceIdentity::generate("rotator-a").unwrap();
     let id_a = admin
         .register_device("rotator-a", dev_a.key_pair.public_bytes())
@@ -345,7 +363,7 @@ async fn rotate_group_key_swaps_envelopes_and_new_devices_read_rewrapped_ops() {
         .await
         .expect("authorize B");
 
-    // A 的本地库：两条凭据 + 真会话（HttpSyncRemote）
+    // A's local library: two credentials + a real session (HttpSyncRemote)
     let db_a = Database::in_memory().await.unwrap();
     db_a.migrate().await.unwrap();
     let owner = Identity::new("seed".to_string(), IdentityType::Personal);
@@ -386,12 +404,13 @@ async fn rotate_group_key_swaps_envelopes_and_new_devices_read_rewrapped_ops() {
         .expect("session A");
     assert_eq!(session_a.backfill_existing(&master_a).await.unwrap(), 2);
 
-    // 轮换：前置 drain（旧 key 批次 2 条）+ 重包（2 条）+ 再 drain
+    // Rotation: leading drain (the old-key batch of 2) + re-wrap (2 ops) + trailing drain
     let report = session_a.rotate_group_key(&master_a, &admin).await.unwrap();
     assert_eq!((report.rewrapped, report.skipped), (2, 0));
     assert_eq!(report.pushed, 4);
 
-    // 信封集：仍恰好两台授权设备，且都拆出**新** key（≠旧 key）
+    // Envelope set: still exactly the two authorized devices, and both open the
+    // **new** key (different from the old key)
     let keys = admin.group_keys().await.unwrap();
     assert_eq!(keys.len(), 2);
     let group_new = open_group_key(
@@ -407,7 +426,8 @@ async fn rotate_group_key_swaps_envelopes_and_new_devices_read_rewrapped_ops() {
     assert_eq!(group_new, group_new_b);
     assert_ne!(group_new, group_old);
 
-    // B（会话开在轮换后 → 只持新 key）拉全量：重包 op 全部物化
+    // B (session opened after rotation -> holds only the new key) pulls everything:
+    // all re-wrapped ops materialize
     let (db_b, master_b) = member_db(owner.id).await;
     let session_b = SyncSession::open(&db_b, &dev_b, &base, TOKEN, Box::new(|| false))
         .await
@@ -419,7 +439,8 @@ async fn rotate_group_key_swaps_envelopes_and_new_devices_read_rewrapped_ops() {
     assert_eq!(report_b.pending_identity, 0);
     assert_stored_credentials(&db_b, &master_b).await;
 
-    // 后入组的 C：授权拿到新 key，拉全量同样全部可读
+    // Late-joining C: authorized with the new key, pulls everything and it is all
+    // readable too
     let dev_c = DeviceIdentity::generate("late-c").unwrap();
     let id_c = admin
         .register_device("late-c", dev_c.key_pair.public_bytes())
@@ -445,13 +466,15 @@ async fn rotate_group_key_swaps_envelopes_and_new_devices_read_rewrapped_ops() {
     task.abort();
 }
 
-/// 轮换中途崩溃 → 重试即重跑自愈（E2EE_SYNC_DESIGN §11-2 收口）：
-/// 模拟「begin 抢到互斥 + 只给一台设备写了新信封就崩溃」——信封族
-/// 停留混合态（A 拆得崩溃轮 key、B 仍是旧信封）。重启后完整
-/// rotate_group_key 重读 epoch 重跑：崩溃轮残留信封被重试轮新信封
-/// 覆盖（信封行不膨胀）、epoch 累计两轮 begin、全组（B 拉全量）收敛
-/// 可解——崩溃轮重包不存在（未发生），残留只影响信封，被 upsert
-/// 幂等覆盖即自愈。
+/// Crashing mid-rotation -> retrying re-runs it and self-heals (E2EE_SYNC_DESIGN §11-2
+/// closeout): simulate "begin wins the mutex + crashes after writing a new envelope for
+/// only one device" — the envelope family is left in a mixed state (A opens the crashed
+/// round's key, B still has the old envelope). After restart, a full rotate_group_key
+/// re-reads the epoch and re-runs: the crashed round's leftover envelope is overwritten
+/// by the retry round's new envelope (envelope rows do not grow), the epoch counts two
+/// begins, and the whole group (B pulls everything) converges and is solvable — the
+/// crashed round's re-wrap never existed (it never happened), the leftover only affects
+/// envelopes, and being idempotently overwritten by the upsert is the self-heal.
 #[tokio::test(flavor = "multi_thread")]
 async fn crashed_mid_rotation_retry_rewrites_envelopes_and_converges() {
     use persona_core::crypto::encryption::EncryptionService;
@@ -478,7 +501,8 @@ async fn crashed_mid_rotation_retry_rewrites_envelopes_and_converges() {
     let base = format!("http://{addr}");
     let admin = SyncAdminApi::new(&base, TOKEN).unwrap();
 
-    // A 自举建组 + 授权 B（与既有 rotate 全流程测试同构）
+    // A bootstraps the group + authorizes B (isomorphic to the existing rotate
+    // full-flow test)
     let dev_a = DeviceIdentity::generate("crashy-a").unwrap();
     let id_a = admin
         .register_device("crashy-a", dev_a.key_pair.public_bytes())
@@ -509,7 +533,7 @@ async fn crashed_mid_rotation_retry_rewrites_envelopes_and_converges() {
         .await
         .unwrap();
 
-    // A 的本地库：两条凭据 + backfill 入账
+    // A's local library: two credentials + backfill accounted
     let db_a = Database::in_memory().await.unwrap();
     db_a.migrate().await.unwrap();
     let owner = Identity::new("seed".to_string(), IdentityType::Personal);
@@ -549,7 +573,8 @@ async fn crashed_mid_rotation_retry_rewrites_envelopes_and_converges() {
         .unwrap();
     assert_eq!(session_a.backfill_existing(&master_a).await.unwrap(), 2);
 
-    // ---- 模拟崩溃半程：begin 抢到互斥，只给 A 写新信封就「崩溃」----
+    // ---- Simulate a mid-crash: begin wins the mutex, writes a new envelope for A
+    // only, then "crashes" ----
     let (keys, epoch) = admin.group_keys_with_epoch().await.unwrap();
     assert_eq!(epoch, 0);
     let authorized: std::collections::HashSet<Uuid> = keys.iter().map(|k| k.device_id).collect();
@@ -563,7 +588,8 @@ async fn crashed_mid_rotation_retry_rewrites_envelopes_and_converges() {
         )
         .await
         .unwrap();
-    // 混合态显形：A 的信封已换崩溃轮 key，B 的信封仍是旧 key
+    // The mixed state is visible: A's envelope now holds the crashed round's key, B's
+    // envelope still holds the old key
     assert_ne!(
         open_group_key(
             &admin
@@ -580,13 +606,14 @@ async fn crashed_mid_rotation_retry_rewrites_envelopes_and_converges() {
         group_old
     );
 
-    // ---- 重启后重试：完整 rotate_group_key 重跑自愈 ----
+    // ---- Retry after restart: a full rotate_group_key re-run self-heals ----
     let report = session_a.rotate_group_key(&master_a, &admin).await.unwrap();
     assert_eq!((report.rewrapped, report.skipped), (2, 0));
     assert_eq!(report.pushed, 4);
 
-    // 信封行不膨胀（仍恰好两台授权设备）；两台拆出的都是重试轮 key
-    // ——既非旧 key，也非崩溃轮 key（残留信封被 upsert 覆盖）
+    // Envelope rows do not grow (still exactly the two authorized devices); both
+    // devices open the retry round's key — neither the old key nor the crashed
+    // round's key (the leftover envelope was overwritten by the upsert)
     let keys_after = admin.group_keys().await.unwrap();
     assert_eq!(keys_after.len(), 2);
     let retried_key_a = open_group_key(
@@ -611,11 +638,12 @@ async fn crashed_mid_rotation_retry_rewrites_envelopes_and_converges() {
     assert_ne!(retried_key_a, group_old);
     assert_ne!(retried_key_a, *crashed_key.as_bytes());
 
-    // epoch 累计两轮 begin（崩溃半程 +1、重试 +1）
+    // The epoch counts two begins in total (crashed halfway +1, retry +1)
     let (_, epoch_after) = admin.group_keys_with_epoch().await.unwrap();
     assert_eq!(epoch_after, 2);
 
-    // 全组收敛：B 新开会话（拆得重试轮 key）拉全量，重包 op 全部物化
+    // Whole-group convergence: B opens a fresh session (opens the retry round's key)
+    // and pulls everything; all re-wrapped ops materialize
     let (db_b, master_b) = member_db(owner.id).await;
     let session_b = SyncSession::open(&db_b, &dev_b, &base, TOKEN, Box::new(|| false))
         .await
@@ -629,10 +657,12 @@ async fn crashed_mid_rotation_retry_rewrites_envelopes_and_converges() {
     task.abort();
 }
 
-// 设备吊销闭环（真 TCP）：同名 SRP 登记随同步设备吊销级联——既有
-// 短期令牌**即刻**失效（不等 15 分钟 TTL），重新登录被拒（与未注册
-// 同形 401）；吊销幂等。THREAT_MODEL「SRP 设备认证端点」已知限制
-// 「auth_devices 无删除路径」由本路径关闭。
+// Device revocation closure (real TCP): the same-named SRP enrollment cascades with
+// the sync device's revocation — existing short-term tokens become invalid
+// **immediately** (not waiting out the 15-minute TTL), and re-login is refused (a 401
+// indistinguishable from unregistered); revocation is idempotent. The THREAT_MODEL
+// "SRP device authentication endpoint" known limitation "auth_devices has no delete
+// path" is closed by this route.
 #[tokio::test(flavor = "multi_thread")]
 async fn revoked_sync_device_loses_srp_access_and_outstanding_tokens() {
     use persona_core::auth::remote_http::HttpRemoteAuthProvider;
@@ -653,7 +683,7 @@ async fn revoked_sync_device_loses_srp_access_and_outstanding_tokens() {
         .await
         .expect("register sync device");
 
-    // 同名 SRP 登记 + 登录拿短期令牌
+    // Same-named SRP enrollment + login to obtain a short-term token
     let provider = HttpRemoteAuthProvider::new(base.clone()).unwrap();
     provider
         .register_device(TOKEN, "laptop", "pw-for-device")
@@ -667,7 +697,7 @@ async fn revoked_sync_device_loses_srp_access_and_outstanding_tokens() {
         .await
         .expect("SRP login");
 
-    // 令牌可用：过 require_bearer 访问 sync 端点
+    // The token works: it passes require_bearer and reaches the sync endpoint
     let client = reqwest::Client::new();
     let probe = client
         .get(format!("{base}/api/v1/sync/devices"))
@@ -677,10 +707,11 @@ async fn revoked_sync_device_loses_srp_access_and_outstanding_tokens() {
         .unwrap();
     assert_eq!(probe.status(), StatusCode::OK, "{probe:?}");
 
-    // 吊销同步设备：级联删 SRP 行 + 即吊内存令牌
+    // Revoke the sync device: cascades the SRP row away + revokes in-memory tokens
+    // immediately
     admin.delete_device(id).await.expect("revoke");
 
-    // 既有令牌即刻 401（不等 TTL）
+    // The existing token is 401 immediately (no waiting for the TTL)
     let probe = client
         .get(format!("{base}/api/v1/sync/devices"))
         .bearer_auth(&outcome.token)
@@ -688,8 +719,9 @@ async fn revoked_sync_device_loses_srp_access_and_outstanding_tokens() {
         .await
         .unwrap();
     assert_eq!(probe.status(), StatusCode::UNAUTHORIZED, "{probe:?}");
-    // 重新 SRP 登录 401（登记行已删——challenge 与未注册同形 401，
-    // 登录链路任一步失败均算闭包成立）
+    // Re-login via SRP is 401 (the enrollment row is gone — the challenge is 401
+    // shaped the same as unregistered, and a failure at any step of the login chain
+    // counts as the closure holding)
     let err = match provider.begin_login("laptop").await {
         Ok(handle) => handle
             .finish("pw-for-device")
@@ -700,7 +732,7 @@ async fn revoked_sync_device_loses_srp_access_and_outstanding_tokens() {
     };
     let err = err.expect("login must fail after revocation");
     assert!(err.contains("HTTP 401"), "{err}");
-    // 二次吊销幂等
+    // A second revocation is idempotent
     admin.delete_device(id).await.expect("revoke twice");
 
     task.abort();

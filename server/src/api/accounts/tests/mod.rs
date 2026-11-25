@@ -28,7 +28,7 @@ fn get_req(uri: &str) -> axum::http::Request<String> {
 fn b64(bytes: &[u8]) -> String {
     B64.encode(bytes)
 }
-// ---- M2 验证链第一批：账号 SRP 真握手 / passkey 真 attestation / sessions 证据 ----
+// ---- First batch of the M2 verification chain: real account SRP handshake / real passkey attestation / session evidence ----
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD as B64URL;
 use persona_core::crypto::passkey;
@@ -77,7 +77,7 @@ async fn register_account_srp(router: &axum::Router, account_id: &str) {
     assert_eq!(status, StatusCode::OK, "{body}");
 }
 
-/// 发起账号 SRP challenge，返回 (session_id, salt, server_public)。
+/// Initiates an account SRP challenge and returns (session_id, salt, server_public).
 async fn account_srp_challenge(
     router: &axum::Router,
     account_id: &str,
@@ -103,8 +103,9 @@ async fn account_srp_challenge(
     )
 }
 
-/// 完整账号 SRP 握手一次；密码错时 verify 落 401（SRP 数学上客户端
-/// 总能算出 M1，拒绝发生在服务器侧的 server_verify）。
+/// Completes a full account SRP handshake once; with a wrong password verify lands on 401 (the
+/// client can always compute M1 in SRP math — the rejection happens at the
+/// server-side server_verify).
 async fn attempt_account_srp_login(
     router: &axum::Router,
     account_id: &str,
@@ -161,9 +162,9 @@ async fn account_passkey_count(state: &crate::state::AppState, account_id: &str)
         .unwrap()
 }
 
-// ---- 账号 SRP：challenge 出真 B、verify 验 client_proof ----
+// ---- Account SRP: challenge emits a real B, verify checks the client_proof ----
 
-/// 走 create-options（返回带服务器挑战的 options JSON）。
+/// Goes through create-options (returns options JSON with the server-issued challenge).
 async fn get_create_options(router: &axum::Router, account_id: &str) -> serde_json::Value {
     let (status, body) = send(
         router.clone(),
@@ -191,7 +192,7 @@ fn create_client_data(challenge: &str) -> String {
     format!(r#"{{"type":"webauthn.create","challenge":"{challenge}","origin":"{ORIGIN}"}}"#)
 }
 
-/// 以服务器签发的挑战完成软件认证器注册（返回注册产物）。
+/// Completes software-authenticator registration using the server-issued challenge (returns the registration artifacts).
 async fn register_account_passkey(
     router: &axum::Router,
     account_id: &str,
@@ -227,7 +228,7 @@ async fn register_account_passkey(
     );
     reg
 }
-/// 走 login-options 并用返回的挑战完成一次断言。
+/// Goes through login-options and completes one assertion using the returned challenge.
 async fn login_options_and_assert(
     router: &axum::Router,
     account_id: &str,

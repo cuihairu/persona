@@ -5,12 +5,12 @@ async fn snapshot_put_get_roundtrip_and_prunes_covered_ops() {
     let (router, state) = setup(Some(TOKEN)).await;
     let device = register_device(&router, "laptop").await;
 
-    // 尚未上传：404 absent（空库 bootstrap 照旧从头拉，语义合流设计稿）
+    // Not uploaded yet: 404 absent (an empty store bootstraps by pulling from the start, as in the design)
     let (status, body) = send(router.clone(), get_req("/api/v1/sync/snapshot")).await;
     assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
     assert_eq!(body["error"]["code"], "absent");
 
-    // 三条 op（seq 1..3）后打包 seq=2：覆盖区间（≤2）在事务内被压缩
+    // After three ops (seq 1..3), package at seq=2: the covered range (<=2) is compacted inside the transaction
     let item = Uuid::new_v4();
     for lamport in 1..=3u64 {
         let op = put_op_json(
@@ -51,21 +51,21 @@ async fn snapshot_put_get_roundtrip_and_prunes_covered_ops() {
     assert_eq!(body["seq"], 2);
     assert_eq!(body["pruned_ops"], 2, "seq ≤ 2 的两条被压缩");
 
-    // 只留 seq > S 的 ops（与 retention 同向的缩水，宽容口径不变）
+    // Only the ops with seq > S remain (a shrink in the same direction as retention; the lenient invariant is unchanged)
     let remaining: i64 = sqlx::query_scalar("SELECT COUNT(1) FROM sync_oplog")
         .fetch_one(&state.pool)
         .await
         .unwrap();
     assert_eq!(remaining, 1);
 
-    // GET 回读字节一致——服务器盲存不解密（零知识面）
+    // GET reads back identical bytes — the server stores them blind and never decrypts (zero-knowledge surface)
     let (status, body) = send(router.clone(), get_req("/api/v1/sync/snapshot")).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["seq"], 2);
     assert_eq!(body["ciphertext"], ciphertext);
     assert_eq!(body["device_id"], device.to_string());
 
-    // 重传（更大 seq 覆盖）：单快照 upsert，旧行不堆积、区间继续压缩
+    // Re-upload (a larger seq overwrites): single-snapshot upsert, no old rows accumulate and the range keeps compacting
     let next = B64.encode(b"v2-snapshot");
     let (status, body) = send(
         router.clone(),
@@ -110,7 +110,8 @@ async fn snapshot_rejects_negative_seq_bad_base64_and_empty_bytes() {
         assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
         assert_eq!(body["error"]["items"][0]["field"], field, "{body}");
     }
-    // 空白 device_id（打包设备自报，仅展示但不许空串——观测字段要有主）
+    // Blank device_id (self-reported by the packaging device, display-only, but a blank string is
+    // disallowed — an observation field must have an owner)
     let mut blank = put_snapshot_json(1, &device, &B64.encode(b"x"));
     blank["device_id"] = json!("   ");
     let (status, body) = send(
@@ -121,20 +122,21 @@ async fn snapshot_rejects_negative_seq_bad_base64_and_empty_bytes() {
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
     assert_eq!(body["error"]["items"][0]["field"], "device_id");
 
-    // 一个也没写进去
+    // Not a single one was written
     let (status, _) = send(router.clone(), get_req("/api/v1/sync/snapshot")).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
 
-// 水位单调闸（E2EE_SYNC_DESIGN §5 测试锚点「并发 PUT 快照，head 单调」）：
-// 落后端 PUT 被拒——否则「快照回退旧 seq + 覆盖区间 ops 已删」= bootstrap
-// 数据洞；同 seq 重打包幂等放行；409 不附带任何 oplog 压缩。
+// Water-level monotonic gate (E2EE_SYNC_DESIGN §5 test anchor "concurrent PUT snapshots, monotonic head"):
+// a lagging end's PUT is rejected — otherwise "the snapshot regresses to the older seq + the ops in the
+// covered range are already deleted" = a bootstrap data hole; re-packaging the same seq is allowed
+// idempotently; a 409 carries no oplog compaction with it.
 #[tokio::test]
 async fn snapshot_stale_put_rejected_and_head_monotonic() {
     let (router, state) = setup(Some(TOKEN)).await;
     let device = register_device(&router, "laptop").await;
 
-    // 三条 op（seq 1..3），A 端打包 seq=2
+    // Three ops (seq 1..3), and end A packages at seq=2
     let item = Uuid::new_v4();
     for lamport in 1..=3u64 {
         let op = put_op_json(
@@ -168,7 +170,7 @@ async fn snapshot_stale_put_rejected_and_head_monotonic() {
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["pruned_ops"], 2);
 
-    // 落后端（水位 1 < 2）PUT → 409，快照与 oplog 都原样
+    // A lagging end (water level 1 < 2) PUTs -> 409, and the snapshot and oplog stay untouched
     let stale = B64.encode(b"stale-snapshot-at-seq-1");
     let (status, body) = send(
         router.clone(),
@@ -190,7 +192,7 @@ async fn snapshot_stale_put_rejected_and_head_monotonic() {
         .unwrap();
     assert_eq!(remaining, 1, "409 路径不附带压缩");
 
-    // 同 seq 重打包幂等放行（覆盖同水位内容，head 不动）
+    // Re-packaging the same seq passes idempotently (overwriting same-water-level content; head is unmoved)
     let v1b = B64.encode(b"repackaged-at-seq-2");
     let (status, body) = send(
         router.clone(),
@@ -208,8 +210,9 @@ async fn snapshot_stale_put_rejected_and_head_monotonic() {
     assert_eq!(body["ciphertext"], v1b);
 }
 
-// 真·并发两路 PUT：无论到达次序如何，最终 head = max(seqs) 且字节归属
-// 高水位者——空表时低者可先立、高者随后覆盖；高者先立时低者 409。
+// Genuinely concurrent PUTs on two paths: whatever the arrival order, the final head = max(seqs)
+// and the bytes belong to the higher water level — on an empty table the lower one can land first
+// and the higher one overwrites it afterwards; if the higher one lands first, the lower one gets 409.
 #[tokio::test]
 async fn snapshot_concurrent_puts_head_monotonic() {
     let (router, _state) = setup(Some(TOKEN)).await;
@@ -234,7 +237,8 @@ async fn snapshot_concurrent_puts_head_monotonic() {
     let ((hi_status, _hi_body), (lo_status, lo_body)) =
         tokio::join!(put(10, hi.clone()), put(8, lo.clone()));
 
-    // 高水位必在库：低者要么被拒（高者先立），要么先立后被覆盖
+    // The high water level must be in the store: the lower one is either rejected (the higher one landed
+    // first) or lands first and gets overwritten afterwards
     assert!(
         (hi_status == StatusCode::OK && lo_status == StatusCode::OK)
             || (hi_status == StatusCode::OK && lo_status == StatusCode::CONFLICT),

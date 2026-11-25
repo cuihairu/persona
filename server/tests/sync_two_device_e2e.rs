@@ -1,10 +1,13 @@
-//! M6 多设备实链走查（离线可完成部分）：真 persona-server router + 两个真
-//! core 客户端（`SyncAdminApi`/`SyncSession<HttpSyncRemote>` + 各自临时库），
-//! 走完 join → 授权 → 单向同步 → 并发编辑真冲突 → 裁决收敛 → 吊销 的全链路。
+//! M6 multi-device real-chain walkthrough (the part completable offline): a real
+//! persona-server router + two real core clients (`SyncAdminApi` /
+//! `SyncSession<HttpSyncRemote>`, each with its own temporary database), walking the whole
+//! chain of join -> authorize -> one-way sync -> concurrent-edit genuine conflict ->
+//! adjudication convergence -> revocation.
 //!
-//! 与 core/src/sync/runtime.rs 的 MemRemote 单测互补：那里锚定引擎逻辑，
-//! 这里锚定 HTTP 线格式与服务器真实现（鉴权、注册、信封、oplog 中继、
-//! epoch）。桌面/插件 UI 走查（截图）仍需实机，见 TODO M6。
+//! Complementary to the MemRemote unit tests in core/src/sync/runtime.rs: those anchor the
+//! engine logic, while this one anchors the HTTP wire format and the server's real
+//! implementation (authentication, registration, envelopes, oplog relaying, epoch). The
+//! desktop/plugin UI walkthrough (screenshots) still needs real hardware; see TODO M6.
 
 use persona_core::crypto::key_hierarchy::KeyHierarchy;
 use persona_core::crypto::EncryptionService;
@@ -34,8 +37,8 @@ use zeroize::Zeroizing;
 const TOKEN_A: &str = "e2e-token-device-a";
 const TOKEN_B: &str = "e2e-token-device-b";
 
-/// 返回 (base_url, TempDir)：TempDir 必须由调用方持有——sqlite 文件随
-/// drop 删除，提前 drop 会让后续请求 500。
+/// Returns (base_url, TempDir): the TempDir must be held by the caller — the sqlite file
+/// is deleted with it on drop, and dropping early would make later requests 500.
 async fn spawn_server() -> (String, sqlx::SqlitePool, tempfile::TempDir) {
     let dir = tempfile::tempdir().unwrap();
     let db_path = dir.path().join("server.db");
@@ -56,9 +59,10 @@ async fn spawn_server() -> (String, sqlx::SqlitePool, tempfile::TempDir) {
     (format!("http://{addr}"), pool.clone(), dir)
 }
 
-/// 一台"设备"：独立临时库 + 独立主密钥。两个库种入同一 identity 行 id
-/// ——快照携带发起方的 identity_id，materialize 找不到该身份就按
-/// pending_identity 跳过，因此双端必须共享同一身份 id。
+/// One "device": its own temporary database + its own master key. Both databases are
+/// seeded with the same identity row id — a snapshot carries the initiator's identity_id,
+/// and materialize skips as pending_identity when it cannot find that identity, so both
+/// ends must share the same identity id.
 struct Device {
     db: Database,
     master: EncryptionService,
@@ -114,7 +118,8 @@ fn snapshot(identity_id: Uuid, name: &str, password: &str) -> SyncItemSnapshot {
     }
 }
 
-/// 本地编辑 → capture 入 oplog（与桌面 service 装配链同一入口）。
+/// Local edit -> capture into the oplog (the same entry point as the desktop service's
+/// assembly chain).
 async fn local_put(
     session: &SyncSession<persona_core::sync::remote::HttpSyncRemote>,
     identity_id: Uuid,
@@ -136,8 +141,8 @@ async fn local_put(
         .await;
 }
 
-/// 注册一台设备并返回（身份，token）。首台设备自举 group key，
-/// 后续设备注册后停在待授权。
+/// Register a device and return (identity, token). The first device bootstraps the group
+/// key; later devices stop at "awaiting authorization" after registering.
 async fn register_device(
     admin: &SyncAdminApi,
     name: &str,
@@ -160,8 +165,9 @@ async fn register_device(
     (identity, device_id)
 }
 
-/// 首台设备授权后续设备：拆自己的信封得 group key，为对方包新信封上传
-/// （与桌面 sync_authorize 同编排）。
+/// The first device authorizes a later one: open its own envelope to get the group key,
+/// then seal and upload a new envelope for the other device (the same orchestration as the
+/// desktop's sync_authorize).
 async fn authorize(admin: &SyncAdminApi, me: &DeviceIdentity, target: Uuid) {
     let keys = admin.group_keys().await.unwrap();
     let own = keys
@@ -180,7 +186,7 @@ async fn authorize(admin: &SyncAdminApi, me: &DeviceIdentity, target: Uuid) {
     admin.put_group_key(target, &sealed).await.unwrap();
 }
 
-/// A 建一个凭据（capture → oplog → push），返回 item_id。
+/// A creates a credential (capture -> oplog -> push) and returns the item_id.
 async fn device_a_creates_item(
     session_a: &SyncSession<persona_core::sync::remote::HttpSyncRemote>,
     device: &Device,
@@ -199,24 +205,24 @@ async fn join_authorize_and_single_direction_sync() {
     let (url, _server_pool, _server_dir) = spawn_server().await;
     let admin_a = SyncAdminApi::new(&url, TOKEN_A).unwrap();
 
-    // 双端共享同一 identity 行 id（materialize 的身份外键）
+    // Both ends share the same identity row id (materialize's identity foreign key)
     let shared_identity = Identity::new("e2e".to_string(), IdentityType::Personal);
     let identity_id = shared_identity.id;
     let a = make_device(identity_id).await;
     let b = make_device(identity_id).await;
 
-    // join：A 自举，B 待授权
+    // Join: A bootstraps, B awaits authorization
     let (identity_a, _device_id_a) = register_device(&admin_a, "device-a", TOKEN_A, true).await;
     let (identity_b, device_id_b) = register_device(&admin_a, "device-b", TOKEN_B, false).await;
 
-    // B 未授权：开不了会话（fail-closed）
+    // B is not authorized: it cannot open a session (fail-closed)
     let pending = SyncSession::open(&b.db, &identity_b, &url, TOKEN_B, no_travel()).await;
     assert!(
         pending.is_err(),
         "device B must not open a session before authorization"
     );
 
-    // A 授权 B，B 重开会话成功
+    // A authorizes B, and B can open a session
     authorize(&admin_a, &identity_a, device_id_b).await;
     let session_a = SyncSession::open(&a.db, &identity_a, &url, TOKEN_A, no_travel())
         .await
@@ -225,10 +231,10 @@ async fn join_authorize_and_single_direction_sync() {
         .await
         .unwrap();
 
-    // A 建凭据并推送
+    // A creates a credential and pushes it
     let item_id = device_a_creates_item(&session_a, &a, "来自A的凭据", "secret-a").await;
 
-    // B 拉取并物化：主库出现同名条目
+    // B pulls and materializes: an entry with the same name appears in the main store
     let report_b = session_b.run_cycle(&b.master).await.unwrap();
     assert!(
         report_b.materialized >= 1,
@@ -269,21 +275,22 @@ async fn concurrent_edits_conflict_then_resolution_converges() {
         .await
         .unwrap();
 
-    // 基线：A 建 v1，B 同步到手（双方 lamport 对齐在 v1）
+    // Baseline: A creates v1, B syncs it down (both lamport clocks aligned on v1)
     let item_id = device_a_creates_item(&session_a, &a, "并发条目", "v1").await;
     let baseline = session_b.run_cycle(&b.master).await.unwrap();
     assert!(baseline.materialized >= 1);
 
-    // 离线并发编辑：双端各改同名条目（同 lamport、不同 device = 真冲突）
+    // Offline concurrent edits: both ends modify the same-named entry
+    // (same lamport, different device = a true conflict)
     local_put(&session_a, identity_id, item_id, "并发条目", "edit-from-A").await;
     local_put(&session_b, identity_id, item_id, "并发条目", "edit-from-B").await;
 
-    // 双方先后上线推拉
+    // Both sides come back online and push/pull in turn
     session_a.run_cycle(&a.master).await.unwrap();
     session_b.run_cycle(&b.master).await.unwrap();
     session_a.run_cycle(&a.master).await.unwrap();
 
-    // 双端都看到真冲突待裁决
+    // Both ends see the true conflict awaiting adjudication
     assert_eq!(
         session_a.conflict_item_count().await.unwrap(),
         1,
@@ -295,8 +302,9 @@ async fn concurrent_edits_conflict_then_resolution_converges() {
         "B must see the concurrent conflict"
     );
 
-    // A 裁决：采纳落选副本（adopt_op_id = copies 里的 op id；谁是 LWW
-    // 胜者由 device_id 字典序随机决定，落选者内容决定断言期望）
+    // A adjudicates: adopt the losing copy (adopt_op_id = the op id from copies;
+    // which side wins LWW is decided by device_id ordering, so the loser's content
+    // determines the assertion expectation)
     let conflicts = session_a.list_conflicts().await.unwrap();
     assert_eq!(conflicts.len(), 1);
     let loser = &conflicts[0].copies[0];
@@ -310,7 +318,7 @@ async fn concurrent_edits_conflict_then_resolution_converges() {
         .await
         .unwrap();
 
-    // 裁决后 A 的主库内容翻转为被采纳副本
+    // After adjudication, A's main-store content flips to the adopted copy
     let a_creds = a.cred_repo.find_by_identity(&identity_id).await.unwrap();
     assert!(
         a_creds.iter().any(|c| c.name == "并发条目"),
@@ -331,7 +339,7 @@ async fn concurrent_edits_conflict_then_resolution_converges() {
         ),
         other => panic!("expected password credential, got {other:?}"),
     }
-    // 收敛：B 再跑一轮，双端不再有未裁决冲突
+    // Convergence: B runs another cycle, and neither end has an unresolved conflict
     session_a.run_cycle(&a.master).await.unwrap();
     session_b.run_cycle(&b.master).await.unwrap();
     assert_eq!(
@@ -359,17 +367,19 @@ async fn revoke_device_drops_envelope_and_blocks_new_sessions() {
     let (identity_b, device_id_b) = register_device(&admin_a, "device-b", TOKEN_B, false).await;
     authorize(&admin_a, &identity_a, device_id_b).await;
 
-    // 吊销前 B 能正常开会话
+    // Before revocation, B can open a session normally
     assert!(
         SyncSession::open(&b.db, &identity_b, &url, TOKEN_B, no_travel())
             .await
             .is_ok()
     );
 
-    // A 吊销 B（与桌面 sync_revoke 同语义：删登记+信封，幂等）
+    // A revokes B (same semantics as desktop sync_revoke: drop the
+    // registration + envelope, idempotent)
     admin_a.delete_device(device_id_b).await.unwrap();
 
-    // 信封随吊销消失：新会话开不出来（fail-closed）
+    // The envelope is gone with the revocation: no new session can open
+    // (fail-closed)
     let fresh_b = make_device(shared_identity.id).await;
     let blocked = SyncSession::open(&fresh_b.db, &identity_b, &url, TOKEN_B, no_travel()).await;
     assert!(
@@ -377,7 +387,7 @@ async fn revoke_device_drops_envelope_and_blocks_new_sessions() {
         "revoked device must not open a new sync session"
     );
 
-    // 设备清单里不再有 B
+    // B no longer appears in the device roster
     let devices = admin_a.list_devices().await.unwrap();
     assert!(
         devices.iter().all(|d| d.id != device_id_b),
@@ -385,8 +395,10 @@ async fn revoke_device_drops_envelope_and_blocks_new_sessions() {
     );
 }
 
-/// S4 设备自备注：各端写各自令牌名下的 remark（无跨设备路径），全员
-/// 可读；空串/纯空白清除；吊销后原设备写不进（404 fail-closed）。
+/// S4 self-service device remarks: each end writes the remark under its own
+/// token (there is no cross-device path), readable by everyone; an empty
+/// string / pure whitespace clears it; after revocation the original device
+/// can no longer write it (404 fail-closed).
 #[tokio::test]
 async fn device_remark_self_service_and_isolation() {
     let (url, _server_pool, _server_dir) = spawn_server().await;
@@ -396,13 +408,14 @@ async fn device_remark_self_service_and_isolation() {
     let (_identity_a, _device_id_a) = register_device(&admin_a, "device-a", TOKEN_A, true).await;
     let (_identity_b, device_id_b) = register_device(&admin_b, "device-b", TOKEN_B, false).await;
 
-    // 各写各的（服务端 trim 规整后回显）
+    // Each writes its own (the server trims it and echoes it back)
     let stored_a = admin_a.set_device_remark("  书房的主力机  ").await.unwrap();
     assert_eq!(stored_a, "书房的主力机", "server must trim the remark");
     let stored_b = admin_b.set_device_remark("口袋里的备用机").await.unwrap();
     assert_eq!(stored_b, "口袋里的备用机");
 
-    // 清单双向可见，值各归各（B 的写入动不了 A 的行）
+    // The roster is visible in both directions, each value staying its own
+    // (B's write cannot touch A's row)
     let names: Vec<(String, String)> = admin_a
         .list_devices()
         .await
@@ -416,7 +429,7 @@ async fn device_remark_self_service_and_isolation() {
         "both remarks must be visible with their own values, got {names:?}"
     );
 
-    // 纯空白 = 清除
+    // Pure whitespace = clear
     assert_eq!(admin_b.set_device_remark("   ").await.unwrap(), "");
     let b_row = admin_b
         .list_devices()
@@ -427,7 +440,8 @@ async fn device_remark_self_service_and_isolation() {
         .unwrap();
     assert_eq!(b_row.remark, "", "whitespace must clear the remark");
 
-    // 吊销 B 后其令牌写不进 remark（登记行已删 → 404 absent）
+    // After B is revoked, its token cannot write a remark (the
+    // registration row is gone → 404 absent)
     admin_a.delete_device(device_id_b).await.unwrap();
     let err = admin_b.set_device_remark("复活").await.unwrap_err();
     assert!(
@@ -436,11 +450,15 @@ async fn device_remark_self_service_and_isolation() {
     );
 }
 
-// 快照起步 + 点后增量 == 全量重放（E2EE_SYNC_DESIGN §5 测试锚点）：
-// 双真 TCP 设备，B 初同步走快照路径——A 推满阈值（>1000 ops）触发
-// run_cycle 尾部的打包上传（真实生产触发路径，无测试专用旁路），服务器
-// 事务内压缩覆盖区间；B 首轮 pulled==0 且物化全量 = 只能来自快照装包
-// （全量重放路径必然 pulled==1001），水位落在覆盖位点；点后增量照常续拉。
+// Snapshot bootstrap + post-snapshot increments == full replay (E2EE_SYNC_DESIGN
+// §5 test anchor): two real TCP devices, and B's first sync takes the snapshot
+// path — A pushes past the threshold (>1000 ops) to trigger the packaged upload
+// at the tail of run_cycle (the real production trigger path, with no
+// test-only shortcut), and the server compresses the covered range inside the
+// transaction; B's first round has pulled==0 yet materializes everything, which
+// can only come from the snapshot package (the full-replay path would inevitably
+// give pulled==1001), with the watermark landing on the coverage point;
+// post-snapshot increments then continue as usual.
 #[tokio::test]
 async fn snapshot_bootstrap_plus_increment_converges_over_real_tcp() {
     let (url, _server_pool, _server_dir) = spawn_server().await;
@@ -461,9 +479,10 @@ async fn snapshot_bootstrap_plus_increment_converges_over_real_tcp() {
         .await
         .unwrap();
 
-    // A 推满 1001 条（> UPLOAD_THRESHOLD_OPS=1000）：push 每周期一批
-    // （≤500），跑到待推清零——最后一个周期越过阈值触发打包上传（服务器
-    // 压缩 seq ≤ 1001 全部 ops）
+    // A pushes all 1001 entries (> UPLOAD_THRESHOLD_OPS=1000): push sends one
+    // batch per cycle (≤500) until nothing is pending — the final cycle crosses
+    // the threshold and triggers the packaged upload (the server then compresses
+    // all ops with seq ≤ 1001)
     for i in 1..=1001 {
         local_put(
             &session_a,
@@ -484,7 +503,8 @@ async fn snapshot_bootstrap_plus_increment_converges_over_real_tcp() {
     }
     assert_eq!(total_pushed, 1001, "all ops must reach the server");
 
-    // B 首轮同步：bootstrap 装快照起步，pull 零增量、物化全量
+    // B's first sync: bootstrap installs the snapshot, pull sees zero
+    // increments and materializes everything
     let report_b = session_b.run_cycle(&b.master).await.unwrap();
     assert_eq!(
         report_b.pulled, 0,
@@ -505,7 +525,8 @@ async fn snapshot_bootstrap_plus_increment_converges_over_real_tcp() {
     );
     assert_eq!(status_b.behind, 0);
 
-    // 快照装包内容与 A 主库逐条一致（抽全量名字 + 抽一条解密比对）
+    // The snapshot package contents match A's main store entry by entry
+    // (compare the full name set, plus decrypt one entry and compare)
     let mut b_names: Vec<String> = b
         .cred_repo
         .find_by_identity(&identity_id)
@@ -537,7 +558,8 @@ async fn snapshot_bootstrap_plus_increment_converges_over_real_tcp() {
         other => panic!("expected password credential, got {other:?}"),
     }
 
-    // 点后增量：A 追加一条，B 照常续拉（游标在覆盖位点，只拿新段）
+    // Post-snapshot increment: A appends one entry and B keeps pulling as
+    // usual (the cursor sits at the coverage point, so only the new range arrives)
     local_put(
         &session_a,
         identity_id,
@@ -586,8 +608,10 @@ async fn passkey_put_and_delete_sync_between_devices() {
         .await
         .unwrap();
 
-    // A 注册 passkey（capture 语义与 service.create_passkey_full 同构）：
-    // 私钥信封 = item key 封存的标量，快照携带语义字段，item key 包 group 信封
+    // A registers the passkey (capture semantics mirror
+    // service.create_passkey_full): the private-key envelope = the scalar sealed
+    // with the item key, the snapshot carries the semantic fields, and the item
+    // key is wrapped in a group envelope
     let item_id = Uuid::new_v4();
     let item_key = EncryptionService::generate_key();
     let scalar = EncryptionService::generate_key();
@@ -622,8 +646,9 @@ async fn passkey_put_and_delete_sync_between_devices() {
     let report = session_a.run_cycle(&a.master).await.unwrap();
     assert_eq!(report.pushed, 1, "passkey put should push to the server");
 
-    // B 拉取物化：passkeys 表出现同 id 行，item key 重包到 B 的主密钥，
-    // 私钥信封照常可解
+    // B pulls and materializes: a row with the same id appears in the passkeys
+    // table, the item key is re-wrapped to B's master key, and the private-key
+    // envelope still decrypts normally
     let report_b = session_b.run_cycle(&b.master).await.unwrap();
     assert!(
         report_b.materialized >= 1,
@@ -642,7 +667,7 @@ async fn passkey_put_and_delete_sync_between_devices() {
         .unwrap();
     assert_eq!(scalar_out.as_slice(), scalar.as_slice());
 
-    // A 删除 → tombstone → B 主库行消失
+    // A deletes → tombstone → B's main-store row disappears
     session_a
         .capture()
         .capture(item_id, ItemKind::Passkey, OpType::Delete, None, None)

@@ -12,9 +12,10 @@ pub(super) fn validate_op(index: usize, op: &WireOp) -> Vec<ErrorItem> {
     check("op_id", parse_uuid(&op.op_id).map(|_| ()));
     check("item_id", parse_uuid(&op.item_id).map(|_| ()));
     check("device_id", parse_uuid(&op.device_id).map(|_| ()));
-    // lamport 的两端存储列都是 i64：超界值经 `as i64` 截断成负数入库，
-    // 客户端 `as u64` 读回膨胀值后 LWW 全序被钉死、本地时钟 MAX() 防回
-    // 退卡死（audit 批2 #6）。i64::MAX 以内原样放行。
+    // Both ends store lamport in an i64 column: an out-of-range value is truncated to a
+    // negative number on insert via `as i64`, and when the client reads it back with
+    // `as u64` the inflated value pins the LWW total order and deadlocks the local clock's
+    // MAX() anti-regression guard (audit round 2 #6). Values within i64::MAX pass through.
     check(
         "lamport",
         if op.lamport <= i64::MAX as u64 {
@@ -76,13 +77,15 @@ fn parse_uuid(raw: &str) -> Result<Uuid, String> {
     Uuid::parse_str(raw).map_err(|_| "must be a UUID".to_string())
 }
 
-/// server 侧 oplog 保留策略（E2EE_SYNC_DESIGN §11 开放问题 3 收口）：
-/// 按 received_at 滚动删除超过保留窗口的中继行，0 = 不清理（默认，
-/// 保持纯中继现状）。窗口语义 = 放弃向「离线超过窗口」的设备补发历史
-/// 的责任：游标重置重拉会拿到缩水子集（LWW 对子集仍收敛，缺失部分靠
-/// 各端本地事实源与重推幂等补齐——客户端 push 队列持底稿，重推同 op_id
-/// 经 INSERT OR IGNORE 原样重建）。清理失败仅告警：增长治理不是中继
-/// 正确性的前置条件。
+/// Server-side oplog retention policy (the closeout of E2EE_SYNC_DESIGN §11 open question 3):
+/// rolling deletion, by received_at, of relay rows older than the retention window; 0 = no
+/// cleanup (the default, preserving the current pure-relay behavior). The window semantics
+/// mean giving up the responsibility to re-send history to devices "offline beyond the
+/// window": a cursor reset and re-pull returns a shrunken subset (LWW still converges on a
+/// subset, and the missing parts are filled from each end's local source of truth plus
+/// idempotent re-push — the client's push queue holds the draft, and re-pushing the same
+/// op_id rebuilds it verbatim via INSERT OR IGNORE). Cleanup failure only warns: growth
+/// governance is not a precondition of relay correctness.
 pub(super) async fn enforce_oplog_retention(state: &AppState) {
     let days = state.oplog_retention_days;
     if days == 0 {

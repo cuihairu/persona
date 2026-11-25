@@ -1,4 +1,4 @@
-//! /api 子路由：统一错误形状、请求体守卫与事件端点。
+//! /api sub-routers: the unified error shape, request-body guards and the events endpoint.
 
 mod accounts;
 mod auth;
@@ -37,19 +37,21 @@ pub use sync::{
     status as sync_status,
 };
 
-/// 请求体上限（线上字节）。带 Content-Length 的请求由
-/// `payload_size_guard` 预检直接给出确定性 413——这是压缩传输的真实
-/// 上限；`DefaultBodyLimit` 对 /events 作用于解压后明文（见
-/// [`MAX_DECOMPRESSED_BODY_BYTES`]）。
+/// Request body limit (on-the-wire bytes). Requests carrying Content-Length are
+/// pre-checked by `payload_size_guard` for a deterministic 413 — this is the real limit
+/// for compressed transport; `DefaultBodyLimit` applies to /events on the decompressed
+/// plaintext (see [`MAX_DECOMPRESSED_BODY_BYTES`]).
 pub const MAX_BODY_BYTES: usize = 1024 * 1024;
 
-/// 解压后明文上限（防解压炸弹）。理论最大合法批：500 条 × 逐字段上限
-/// ≈ 9.5 MiB，10 MiB 留余量。位于 `RequestDecompressionLayer` 内层的
-/// `DefaultBodyLimit` 作用于解压后的 body，同时也兜底 chunked 请求
-///（该路径无 Content-Length，线上预检跳过）。
+/// Decompressed plaintext limit (decompression-bomb defense). Theoretical largest
+/// legitimate batch: 500 entries x per-field limits ~= 9.5 MiB, so 10 MiB leaves headroom.
+/// The `DefaultBodyLimit` nested inside `RequestDecompressionLayer` applies to the
+/// decompressed body and also covers chunked requests (no Content-Length on that path, so
+/// the wire pre-check is skipped).
 pub const MAX_DECOMPRESSED_BODY_BYTES: usize = 10 * 1024 * 1024;
 
-/// Content-Length 预检：超限直接 413，不读 body、不进认证。
+/// Content-Length pre-check: over-limit requests get an immediate 413 without reading the
+/// body and without entering authentication.
 pub async fn payload_size_guard(req: Request, next: Next) -> Response {
     let too_large = req
         .headers()
@@ -64,9 +66,9 @@ pub async fn payload_size_guard(req: Request, next: Next) -> Response {
     }
 }
 
-/// 统一错误形状：`{"error":{"code","message","items":[...]}}`。
+/// Unified error shape: `{"error":{"code","message","items":[...]}}`.
 ///
-/// 内部 `Box` 保持 `Result<_, ApiError>` 体积小（避免 clippy::result_large_err）。
+/// The inner `Box` keeps `Result<_, ApiError>` small (avoids clippy::result_large_err).
 #[derive(Debug)]
 pub struct ApiError(Box<ApiErrorInner>);
 
@@ -90,7 +92,7 @@ struct ErrorDetail {
     items: Vec<ErrorItem>,
 }
 
-/// 批量校验的逐条错误定位。
+/// Per-entry error pinpointing for batch validation.
 #[derive(Debug, Serialize)]
 pub(crate) struct ErrorItem {
     pub(crate) index: Option<usize>,
@@ -117,7 +119,7 @@ impl ErrorItem {
 }
 
 impl ApiError {
-    /// 422：批量校验失败（附逐条 items）。
+    /// 422: batch validation failed (with per-entry items).
     pub fn validation(message: impl Into<String>, items: Vec<ErrorItem>) -> Self {
         Self::new(
             StatusCode::UNPROCESSABLE_ENTITY,
@@ -127,12 +129,13 @@ impl ApiError {
         )
     }
 
-    /// 400/415：JSON 反序列化等请求层错误（沿用 axum rejection 的状态码）。
+    /// 400/415: request-layer errors such as JSON deserialization (reuses axum
+    /// rejection's status code).
     pub fn rejection(status: StatusCode, message: impl Into<String>) -> Self {
         Self::new(status, "bad_request", message, Vec::new())
     }
 
-    /// 401：缺/错 Bearer 令牌（附 WWW-Authenticate）。
+    /// 401: missing or wrong Bearer token (with WWW-Authenticate).
     pub fn unauthorized() -> Self {
         let mut error = Self::new(
             StatusCode::UNAUTHORIZED,
@@ -144,7 +147,7 @@ impl ApiError {
         error
     }
 
-    /// 503：未配置 PERSONA_SERVER_TOKEN，fail-closed。
+    /// 503: PERSONA_SERVER_TOKEN not configured, fail-closed.
     pub fn disabled() -> Self {
         Self::new(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -154,8 +157,8 @@ impl ApiError {
         )
     }
 
-    /// 413：请求体超限（events 线路上限 [`MAX_BODY_BYTES`]；备份上限
-    /// 由 backups::size_guard 按 AppState.max_backup_bytes 自行构造）。
+    /// 413: request body over limit (events' wire limit is [`MAX_BODY_BYTES`]; the backup
+    /// limit is built by backups::size_guard from AppState.max_backup_bytes).
     pub fn payload_too_large() -> Self {
         Self::new(
             StatusCode::PAYLOAD_TOO_LARGE,
@@ -165,7 +168,7 @@ impl ApiError {
         )
     }
 
-    /// 413：请求体超限（自定义上限，备份路径用）。
+    /// 413: request body over limit (custom limit, used by the backup path).
     pub fn payload_too_large_with(limit_bytes: usize) -> Self {
         Self::new(
             StatusCode::PAYLOAD_TOO_LARGE,
@@ -175,12 +178,13 @@ impl ApiError {
         )
     }
 
-    /// 409：资源已存在（如 sync 设备重名——公钥不可被静默替换）。
+    /// 409: the resource already exists (e.g. a duplicate sync device name — the public
+    /// key must not be silently replaced).
     pub fn conflict(message: impl Into<String>) -> Self {
         Self::new(StatusCode::CONFLICT, "conflict", message, Vec::new())
     }
 
-    /// 404：路由表外（fallback 兜底）。
+    /// 404: not in the route table (the fallback).
     pub(crate) fn not_found() -> Self {
         Self::new(
             StatusCode::NOT_FOUND,
@@ -190,13 +194,14 @@ impl ApiError {
         )
     }
 
-    /// 404：资源不存在（路由在，当前没有可返回的资源——如尚未上传的
-    /// 库级快照）。与 fallback 的 not_found 同状态不同 code，客户端可辨。
+    /// 404: the resource does not exist (the route is there but there is nothing to
+    /// return yet — e.g. a library snapshot that has never been uploaded). Same status as
+    /// the fallback's not_found but a different code, so clients can tell them apart.
     pub fn absent(message: impl Into<String>) -> Self {
         Self::new(StatusCode::NOT_FOUND, "absent", message, Vec::new())
     }
 
-    /// 500：内部错误，细节只进日志不外泄。
+    /// 500: internal error; details go to the logs only and are never exposed.
     pub fn internal(error: impl std::fmt::Display) -> Self {
         tracing::error!(%error, "internal server error");
         Self::new(
@@ -238,11 +243,12 @@ impl IntoResponse for ApiError {
     }
 }
 
-// ---- 稳定游标编解码（events/backups/oplog 的分页共用）----
-// base64url("v1:{毫秒时间戳}:{行 id}")，无 padding。编解码本体在
-// persona_core::sync::cursor——core engine 要把本地游标解回 seq 得到
-// 「本机已同步水位」（sync-group-mode §二.5.5），格式单一真相源在 core；
-// 这里只保留 ApiError 包装的旧签名，三个调用点不用动。
+// ---- Stable cursor codec (shared by events/backups/oplog pagination) ----
+// base64url("v1:{millisecond timestamp}:{row id}"), unpadded. The codec itself lives in
+// persona_core::sync::cursor — the core engine needs to decode a local cursor back into
+// a seq to get "this machine's synced water level" (sync-group-mode §II.5.5), so the
+// single source of truth for the format lives in core; here we keep only the old
+// ApiError-wrapped signature so the three call sites need no change.
 
 pub(crate) fn encode_cursor(ms: i64, id: &str) -> String {
     persona_core::sync::cursor::encode_cursor(ms, id)
@@ -273,8 +279,8 @@ mod tests {
     fn cursor_rejects_garbage() {
         assert!(decode_cursor("not-a-cursor").is_err());
         assert!(decode_cursor("").is_err());
-        // base64url 可解但不是 v1 前缀 / 缺 id / 缺毫秒
+        // base64url-decodable but not a v1 prefix / missing id / missing milliseconds
         assert!(decode_cursor("aXY6").is_err());
-        assert!(decode_cursor("djE6MTIz").is_err()); // "v1:123" 无 id 段
+        assert!(decode_cursor("djE6MTIz").is_err()); // "v1:123" has no id segment
     }
 }

@@ -24,7 +24,8 @@ async fn main() {
         .init()
         .expect("failed to initialize logging");
 
-    // 服务器侧事件库（与 core 身份库无关），启动即迁移。
+    // The server-side event database (unrelated to core's identity database); migrated
+    // right at startup.
     let db_path =
         std::env::var("PERSONA_SERVER_DB").unwrap_or_else(|_| "./persona-server.db".into());
     let pool = state::init_pool(&db_path)
@@ -34,9 +35,11 @@ async fn main() {
         .await
         .expect("failed to run server migrations");
 
-    // fail-closed：多设备令牌优先（PERSONA_SERVER_TOKENS="laptop:tok1,..."），
-    // legacy PERSONA_SERVER_TOKEN 兼容为 "default" 设备；都未配置则 /api
-    // 整体禁用。TOKENS 配了但格式非法 => 启动即错（不允许半可用状态）。
+    // fail-closed: multi-device tokens take precedence
+    // (PERSONA_SERVER_TOKENS="laptop:tok1,..."); the legacy PERSONA_SERVER_TOKEN is
+    // accepted as the "default" device; with neither configured, /api is disabled
+    // entirely. TOKENS configured but malformed => startup fails immediately (a
+    // half-usable state is not allowed).
     let auth = match std::env::var("PERSONA_SERVER_TOKENS") {
         Ok(spec) if !spec.is_empty() => Some(
             AuthTokens::parse(&spec)
@@ -54,7 +57,8 @@ async fn main() {
         },
     };
 
-    // 备份落盘目录：默认 db 同目录 backups/（容器内即 /data/backups）。
+    // Backup on-disk directory: defaults to backups/ next to the database (inside a
+    // container, that is /data/backups).
     let backup_dir = std::env::var("PERSONA_SERVER_BACKUP_DIR")
         .ok()
         .filter(|s| !s.is_empty())
@@ -75,8 +79,9 @@ async fn main() {
                 .expect("PERSONA_SERVER_BACKUP_MAX_VERSIONS must be a non-negative integer")
         })
         .unwrap_or(0);
-    // 保留策略（0 = 不清理 = 默认）：oplog 窗口须 ≥ 最慢设备离线周期
-    // （E2EE_SYNC_DESIGN §11-3）；events 窗口按 SIEM 摘取周期定。
+    // Retention policies (0 = no cleanup = the default): the oplog window must cover the
+    // slowest device's offline cycle (E2EE_SYNC_DESIGN §11-3); the events window follows
+    // the SIEM harvesting cadence.
     let oplog_retention_days: u32 = std::env::var("PERSONA_SERVER_OPS_RETENTION_DAYS")
         .ok()
         .map(|value| {

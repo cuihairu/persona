@@ -1,7 +1,8 @@
-//! 进程内计数器：HTTP 请求（方法 + 路由模板 + 状态码）与事件接入。
+//! In-process counters: HTTP requests (method + route template + status code) and event ingestion.
 //!
-//! 有意不引 metrics 框架：计数维度有界（路由来自路由表 + "unmatched"），
-//! `render()` 手写 Prometheus 文本格式，由 `/metrics` 端点（lib.rs）暴露。
+//! Deliberately no metrics framework: the counted dimensions are bounded
+//! (routes come from the route table plus "unmatched"), and `render()`
+//! hand-writes the Prometheus text format, exposed by the `/metrics` endpoint (lib.rs).
 
 use std::collections::HashMap;
 use std::sync::{Mutex, MutexGuard};
@@ -14,11 +15,11 @@ struct HttpKey {
     status: u16,
 }
 
-/// `snapshot()` 的返回形状（测试专用，别名避免 clippy::type_complexity）。
+/// Return shape of `snapshot()` (test-only alias that avoids clippy::type_complexity).
 #[cfg(test)]
 type HttpSnapshot = (Vec<(String, String, u16, u64)>, u64, u64, u64, u64, u64);
 
-/// Prometheus label 值转义：`\`、`"`、换行（先转反斜杠，避免二次转义）。
+/// Escapes Prometheus label values: `\`, `"`, newline (backslashes first, to avoid double escaping).
 fn escape_label_value(value: &str) -> String {
     value
         .replace('\\', "\\\\")
@@ -97,10 +98,11 @@ impl Metrics {
         self.started_at.elapsed().as_secs_f64()
     }
 
-    /// Prometheus 文本格式（`text/plain; version=0.0.4`）。
+    /// Prometheus text format (`text/plain; version=0.0.4`).
     ///
-    /// 锁内拼串：计数维度有界（路由表 + "unmatched"），渲染开销可忽略；
-    /// HTTP 行按键排序保证输出确定性（便于测试断言与 diff）。
+    /// Builds the string under the lock: the counted dimensions are bounded
+    /// (route table + "unmatched"), so rendering overhead is negligible;
+    /// HTTP lines are sorted by key to guarantee deterministic output (easier to assert and diff in tests).
     pub fn render(&self) -> String {
         let counters = self.lock();
         let mut http: Vec<_> = counters.http.iter().collect();
@@ -179,8 +181,9 @@ impl Metrics {
         self.start_time_unix
     }
 
-    /// 锁中毒只可能发生在持锁线程 panic 时；计数器丢一次渲染可接受，
-    /// 直接取回内部值继续用。
+    /// Lock poisoning can only happen when the lock-holding thread panics;
+    /// dropping one render of the counters is acceptable, so take back the
+    /// inner value and keep using it.
     fn lock(&self) -> MutexGuard<'_, Counters> {
         self.counters
             .lock()

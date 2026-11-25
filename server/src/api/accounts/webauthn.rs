@@ -1,22 +1,25 @@
 use super::*;
 
-/// 账号 WebAuthn 未决挑战缓存（内存态，TTL 120s，一次性）。
+/// Account WebAuthn pending-challenge cache (in-memory, TTL 120s, single use).
 ///
-/// 与设备域 SRP 挑战（[`crate::auth::SrpAuthState`]）同一设计纪律：
-/// 挑战不落盘——服务器重启 = 在途仪式作废，客户端重走 options。按
-/// account_id 键控（一个账号同时至多一条未决挑战，新挑战覆盖旧挑战），
-/// register 与 authenticate 两种仪式各自配对消费，错配即弃（防拿注册
-/// 挑战去断言、拿断言挑战去注册）。
+/// Same design discipline as the device-domain SRP challenges
+/// ([`crate::auth::SrpAuthState`]): challenges are never persisted — a server
+/// restart invalidates any in-flight ceremony and the client re-requests
+/// options. Keyed by account_id (at most one pending challenge per account at
+/// a time; a new challenge overwrites the old one), and the register and
+/// authenticate ceremonies each consume their own challenge — a mismatched
+/// ceremony is discarded (prevents using a registration challenge to assert,
+/// or an assertion challenge to register).
 pub struct AccountWebauthnState {
     entries: std::sync::Mutex<HashMap<String, WebauthnChallengeEntry>>,
 }
 
-/// 挑战所属的仪式类型；消费时必须与签发时一致。
+/// The ceremony type a challenge belongs to; consumption must match issuance.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum WebauthnCeremony {
-    /// credential creation（passkey_register 消费）
+    /// Credential creation (consumed by passkey_register)
     Register,
-    /// credential get（login-options → sessions 断言验证消费）
+    /// Credential get (consumed by the login-options -> sessions assertion verification)
     Authenticate,
 }
 
@@ -27,7 +30,7 @@ struct WebauthnChallengeEntry {
     expires_at: Instant,
 }
 
-/// 账号 WebAuthn 挑战存活期（对齐设备域 `SRP_CHALLENGE_TTL`）。
+/// Account WebAuthn challenge lifetime (aligned with the device-domain `SRP_CHALLENGE_TTL`).
 const ACCOUNT_WEBAUTHN_CHALLENGE_TTL: Duration = Duration::from_secs(120);
 
 impl AccountWebauthnState {
@@ -37,7 +40,7 @@ impl AccountWebauthnState {
         }
     }
 
-    /// 签发挑战（同账号覆盖式——新仪式开始即废弃上一条）。
+    /// Issues a challenge (overwriting per account — starting a new ceremony invalidates the previous one).
     pub(super) fn store(
         &self,
         account_id: &str,
@@ -58,8 +61,9 @@ impl AccountWebauthnState {
         );
     }
 
-    /// 取走未过期且仪式匹配的挑战（一次性；仪式不匹配不消费——留给
-    /// 真正的消费者，避免用 register 请求恶意烧掉待用 login 挑战）。
+    /// Takes an unexpired, ceremony-matching challenge (single use; a ceremony
+    /// mismatch does not consume it — it is left for the real consumer, preventing
+    /// a register request from maliciously burning a pending login challenge).
     pub(super) fn take(
         &self,
         account_id: &str,
@@ -76,7 +80,7 @@ impl AccountWebauthnState {
         }
     }
 
-    /// 惰性清理：每次触碰时顺带丢弃过期项（无定时任务）。
+    /// Lazy cleanup: expired entries are dropped opportunistically on every touch (no background task).
     fn prune(map: &mut HashMap<String, WebauthnChallengeEntry>) {
         let now = Instant::now();
         map.retain(|_, e| e.expires_at > now);
@@ -103,7 +107,7 @@ mod webauthn_state_tests {
             WebauthnCeremony::Register,
         );
 
-        // 仪式不匹配：不消费，留给真正的 register 消费者。
+        // Ceremony mismatch: not consumed, left for the real register consumer.
         assert_eq!(state.take("acct", WebauthnCeremony::Authenticate), None);
         let (challenge, rp_id) = state
             .take("acct", WebauthnCeremony::Register)
@@ -111,7 +115,7 @@ mod webauthn_state_tests {
         assert_eq!(challenge, "challenge-1");
         assert_eq!(rp_id, "example.com");
 
-        // 一次性：取走即失效。
+        // Single use: taking it invalidates it.
         assert_eq!(state.take("acct", WebauthnCeremony::Register), None);
     }
 
@@ -124,9 +128,9 @@ mod webauthn_state_tests {
             "example.com".to_string(),
             WebauthnCeremony::Register,
         );
-        // 别的账号取不到。
+        // Another account cannot take it.
         assert_eq!(state.take("other", WebauthnCeremony::Register), None);
-        // 过期即不存在。
+        // Expired means nonexistent.
         let mut map = state.entries.lock().unwrap();
         for entry in map.values_mut() {
             entry.expires_at = std::time::Instant::now() - std::time::Duration::from_secs(1);
@@ -195,8 +199,9 @@ pub async fn passkey_create_options(
         )
     })?;
 
-    // 挑战落内存缓存（120s TTL、一次性）：register 端点消费时与
-    // clientDataJSON.challenge 严格比对，杜绝客户端自选挑战（重放）。
+    // The challenge goes into the in-memory cache (120s TTL, single use): when the
+    // register endpoint consumes it, it is compared strictly against
+    // clientDataJSON.challenge, ruling out client-chosen challenges (replay).
     state.account_webauthn.store(
         &account_id,
         challenge.clone(),
@@ -260,8 +265,9 @@ pub async fn passkey_register(
         .map_err(ApiError::internal)?
         .ok_or_else(ApiError::not_found)?;
 
-    // 挑战必须来自本账号的 create-options（一次性）：没有在途仪式 = 401
-    //（统一无差异信息，不区分"没发起过/已过期/已用过"）。
+    // The challenge must come from this account's create-options (single use): no
+    // in-flight ceremony = 401 (uniform, non-differential message — it does not
+    // distinguish "never started / expired / already used").
     let Some((challenge, rp_id)) = state
         .account_webauthn
         .take(&account_id, WebauthnCeremony::Register)
@@ -290,8 +296,9 @@ pub async fn passkey_register(
             )
         })?;
 
-    // 传输层错误（base64/超限）422；密码学验证失败统一 401——不回显
-    // 验证内部细节（挑战/origin/签名哪个环节失败只进日志）。
+    // Transport-layer errors (base64 / over limit) are 422; cryptographic verification
+    // failures are uniformly 401 — no echoing of verification internals (which stage failed,
+    // challenge/origin/signature, only goes to the logs).
     let attestation_object = decode_b64url_field(
         "attestationObject",
         attestation_object_claim,
@@ -317,14 +324,15 @@ pub async fn passkey_register(
         ApiError::unauthorized()
     })?;
 
-    // 客户端声称的 credentialId 必须与 attested credential data 一致
-    //（防止张冠李戴：拿 A 凭据的 id 注册 B 凭据的公钥）。
+    // The credentialId claimed by the client must match the attested credential data
+    // (prevents swapping identities: registering credential B's public key under
+    // credential A's id).
     if credential_id_claim != verified.credential_id {
         tracing::warn!(account = %account_id, "claimed credentialId does not match attestation");
         return Err(ApiError::unauthorized());
     }
 
-    // 表设计（0007）：id 列即 credential_id 的 base64url 串。
+    // Table design (0007): the id column is the base64url string of credential_id.
     let passkey_id = URL_SAFE_NO_PAD.encode(&verified.credential_id);
     let now = Utc::now().to_rfc3339();
 
@@ -355,20 +363,21 @@ pub async fn passkey_register(
     Ok(Json(serde_json::json!({ "passkey_id": passkey_id })))
 }
 
-/// WebAuthn 载荷字段上限（线上解码后字节）。
-/// attestation object：CBOR 包 authData（37 + 2 + ≤1023 credId + COSE ≈ 200），
-/// 8 KiB 留足余量；clientDataJSON 是小 JSON；断言侧 authData 37 字节头、
-/// 签名 DER 70-72 字节。
+/// WebAuthn payload field limits (decoded wire bytes).
+/// Attestation object: CBOR wrapping authData (37 + 2 + at most 1023 credId + COSE ~ 200),
+/// so 8 KiB leaves plenty of headroom; clientDataJSON is a small JSON; the assertion-side
+/// authData has a 37-byte header and a 70-72-byte DER signature.
 const MAX_ATTESTATION_BYTES: usize = 8 * 1024;
 pub(super) const MAX_CLIENT_DATA_BYTES: usize = 2 * 1024;
 pub(super) const MAX_AUTHENTICATOR_DATA_BYTES: usize = 768;
 pub(super) const MAX_SIGNATURE_BYTES: usize = 768;
 const MAX_CREDENTIAL_ID_BYTES: usize = 1023;
 
-/// base64url 解码（WebAuthn 惯例）+ 常见变体兜底（带 padding 的
-/// base64url、标准 base64），超限拒绝。与 [`decode_field`] 的差别只在
-/// 优先字符集：WebAuthn 字段一律 base64url，标准 base64 兜底容忍
-/// 中间层做错变换的客户端。
+/// base64url decoding (the WebAuthn convention) + fallbacks for common variants
+/// (padded base64url, standard base64), rejecting anything over the limit. The only
+/// difference from [`decode_field`] is the preferred alphabet: WebAuthn fields are
+/// always base64url, with standard base64 as the fallback tolerating clients whose
+/// middle layer applied the wrong transformation.
 pub(super) fn decode_b64url_field(
     field: &str,
     raw: &str,
@@ -398,7 +407,7 @@ pub(super) fn decode_b64url_field(
 
 #[derive(Deserialize)]
 pub struct PasskeyLoginOptionsRequest {
-    /// 凭据 id（注册时返回的 passkey_id，即 base64url(credential_id)）
+    /// Credential id (the passkey_id returned at registration, i.e. base64url(credential_id))
     pub credential_id: String,
 }
 
@@ -428,8 +437,8 @@ pub async fn passkey_login_options(
         ));
     }
 
-    // rp_id 以注册时存下的为准（挑战锚点），未知凭据/无 rp_id 的存根行
-    // 一律 401 不泄露存在性。
+    // rp_id follows the value stored at registration (the challenge anchor); unknown
+    // credentials and stub rows without rp_id all return 401 without leaking existence.
     let row = sqlx::query("SELECT rp_id FROM account_passkeys WHERE id = ? AND account_id = ?")
         .bind(credential_id)
         .bind(&account_id)

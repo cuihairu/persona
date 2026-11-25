@@ -85,14 +85,16 @@ pub async fn account_srp_challenge(
     .fetch_optional(&state.pool)
     .await
     .map_err(ApiError::internal)?
-    // 凭据不存在与任何其他失败同形（401 无差异信息）——不泄露注册状态
+    // A missing credential has the same shape as any other failure (401, no differential
+    // information) — registration status is not leaked.
     .ok_or_else(ApiError::unauthorized)?;
     let (salt, verifier) = row;
 
     let hc = srp::server_challenge(&verifier).map_err(ApiError::internal)?;
     let session_id = Uuid::new_v4().to_string();
-    // 复用设备域 SrpAuthState 的未决握手缓存；锁户键带账号前缀，与
-    // 设备域（auth_devices）的失败记账互不干扰，verify 时校验归属。
+    // Reuses the device-domain SrpAuthState pending-handshake cache; the lockout key is
+    // prefixed with the account so its failure accounting does not interfere with the
+    // device domain (auth_devices), and ownership is checked at verify time.
     srp_state.store_challenge(
         session_id.clone(),
         SrpChallengeEntry {
@@ -111,9 +113,10 @@ pub async fn account_srp_challenge(
     }))
 }
 
-/// 账号域锁户键：SrpAuthState 的失败记账以"设备名"为键，账号域用
-/// `account:{account_id}:{device_name}` 与设备域隔离（verify 时校验
-/// 前缀防跨账号串用 session_id）。
+/// Account-domain lockout key: SrpAuthState's failure accounting is keyed by "device name",
+/// so the account domain uses `account:{account_id}:{device_name}` to stay isolated from the
+/// device domain (the prefix is checked at verify time to prevent cross-account
+/// session_id reuse).
 fn account_lock_key(account_id: &str, device_name: &str) -> String {
     format!("account:{account_id}:{device_name}")
 }
@@ -122,7 +125,7 @@ fn account_lock_key(account_id: &str, device_name: &str) -> String {
 #[derive(Deserialize)]
 pub struct AccountSrpVerifyRequest {
     pub session_id: String,
-    /// base64 编码的客户端证明 M1。
+    /// The base64-encoded client proof M1.
     pub client_proof: String,
 }
 
@@ -145,13 +148,14 @@ pub async fn account_srp_verify(
     let Json(req) = payload.map_err(|r| ApiError::rejection(r.status(), r.body_text()))?;
     let srp_state = state.srp.as_ref().ok_or_else(ApiError::disabled)?;
 
-    // 未决握手先取走（一次握手一条；TTL 外即不存在）
+    // Take the pending handshake first (one handshake per challenge; outside the TTL it is as if it never existed)
     let entry = srp_state
         .take_challenge(&req.session_id)
         .ok_or_else(ApiError::unauthorized)?;
 
-    // 挑战必须属于路径里的账号：锁键是 account:{id}:{name}，前缀不匹配
-    // = 拿别账号的 session_id 串门。
+    // The challenge must belong to the account in the path: the lock key is
+    // account:{id}:{name}, and a prefix mismatch means someone is borrowing
+    // another account's session_id.
     if !entry
         .device_name
         .starts_with(&format!("account:{account_id}:"))

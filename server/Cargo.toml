@@ -7,67 +7,67 @@ license.workspace = true
 description = "Optional sync server for Persona (zero-knowledge architecture)"
 
 [dependencies]
-# 核心库
+# Core library
 persona-core = { path = "../core" }
 
-# Web框架
+# Web framework
 axum.workspace = true
 tower = { workspace = true, features = ["util"] }
 tower-http = { workspace = true, features = ["decompression-gzip"] }
 
-# 数据库
+# Database
 sqlx.workspace = true
 
-# 序列化
+# Serialization
 serde.workspace = true
 serde_json.workspace = true
 
-# 异步运行时
+# Async runtime
 tokio.workspace = true
 
-# 日志
+# Logging
 tracing.workspace = true
 tracing-subscriber.workspace = true
 
-# 错误处理
+# Error handling
 anyhow.workspace = true
 thiserror.workspace = true
 
-# 时间处理
+# Time handling
 chrono.workspace = true
 
 # UUID
 uuid.workspace = true
 
-# 游标编码（/api/v1/events 的 next_cursor）
+# Cursor encoding (next_cursor for /api/v1/events)
 base64.workspace = true
 
-# SRP 设备认证（auth/srp.rs 复用 core 封装）+ 短期令牌随机源
+# SRP device authentication (auth/srp.rs reuses the core wrapper) + random source for short-lived tokens
 num-bigint.workspace = true
 rand.workspace = true
 
-# Bearer 令牌常量时间比较
+# Constant-time comparison for Bearer tokens
 subtle.workspace = true
 
-# 账号恢复码 Argon2id hash（accounts.rs hash_recovery_code/verify_recovery_code_hash）
+# Argon2id hash for account recovery codes (hash_recovery_code/verify_recovery_code_hash in accounts.rs)
 argon2.workspace = true
 hex.workspace = true
 
-# 备份端点：sha256 边写边算（去重键/ETag）、流式 body 读写、下载 ReaderStream
+# Backup endpoints: sha256 computed as bytes are written (dedupe key/ETag), streaming body read/write, ReaderStream for downloads
 sha2.workspace = true
 futures.workspace = true
 tokio-util.workspace = true
 
-# 环境变量（.env）
+# Environment variables (.env)
 dotenvy = "0.15"
 
 [dev-dependencies]
-# 跨端集成测试：OplogCapture 的 item_key 参数是 Zeroizing<[u8; 32]>
+# Cross-crate integration tests: OplogCapture's item_key parameter is Zeroizing<[u8; 32]>
 zeroize.workspace = true
 tempfile.workspace = true
-# 测试构造 gzip 请求体（生产解压在 tower-http，压缩仅测试侧需要）
+# Tests build gzip request bodies (production decompression lives in tower-http; compression is only needed on the test side)
 flate2.workspace = true
-# 跨端集成测试：core HttpRemoteAuthProvider ↔ 本 router 真 TCP（阶段 1
-# 验收要点「跨端握手集成测试」）
+# Cross-crate integration tests: core HttpRemoteAuthProvider <-> this router over real TCP (phase 1
+# acceptance criterion "cross-crate handshake integration test")
 reqwest.workspace = true
 persona-core = { path = "../core", features = ["remote-auth"] }

@@ -6,7 +6,7 @@ async fn passkey_registration_stores_attested_material() {
     let account_id = create_account(&router, "passkey-alice@example.com").await;
     let reg = register_account_passkey(&router, &account_id).await;
 
-    // DB：真 COSE 公钥 + rp_id 锚点 + 计数器（不再是无密钥存根行）
+    // DB: a real COSE public key + rp_id anchor + counter (no longer a keyless stub row)
     let row = sqlx::query(
         "SELECT public_key, rp_id, sign_count, transports FROM account_passkeys WHERE id = ?",
     )
@@ -26,7 +26,7 @@ async fn passkey_register_without_create_options_rejected() {
     let (router, state) = setup_state().await;
     let account_id = create_account(&router, "passkey-noch@example.com").await;
 
-    // 没发起过 create-options：客户端自造挑战 → 401
+    // create-options was never issued: a client-made-up challenge -> 401
     let client_data = create_client_data("client-made-up-challenge");
     let reg = passkey::register_passkey(RP_ID, ORIGIN, client_data.as_bytes(), false).unwrap();
     let (status, body) = send(
@@ -57,7 +57,7 @@ async fn passkey_register_with_stale_challenge_rejected() {
     let (router, state) = setup_state().await;
     let account_id = create_account(&router, "passkey-stale@example.com").await;
 
-    // 拿了挑战 A，却用过期/别的挑战 B 造 clientData → 401
+    // Took challenge A, but built clientData with a stale/other challenge B -> 401
     let _options = get_create_options(&router, &account_id).await;
     let client_data = create_client_data("b3RoZXItY2hhbGxlbmdl");
     let reg = passkey::register_passkey(RP_ID, ORIGIN, client_data.as_bytes(), false).unwrap();
@@ -92,7 +92,7 @@ async fn passkey_register_credential_id_mismatch_rejected() {
     let options = get_create_options(&router, &account_id).await;
     let client_data = create_client_data(options["challenge"].as_str().unwrap());
     let reg = passkey::register_passkey(RP_ID, ORIGIN, client_data.as_bytes(), false).unwrap();
-    // 声称的 credentialId 与 attested 数据不一致（张冠李戴）→ 401
+    // The claimed credentialId does not match the attested data (identity swap) -> 401
     let (status, body) = send(
         router.clone(),
         request(
@@ -116,7 +116,7 @@ async fn passkey_register_credential_id_mismatch_rejected() {
     assert_eq!(account_passkey_count(&state, &account_id).await, 0);
 }
 
-// ---- passkey 登录：login-options 挑战 + sessions 断言验证 ----
+// ---- Passkey login: login-options challenge + sessions assertion verification ----
 
 #[tokio::test]
 async fn create_options_rejects_invalid_user_handle() {
@@ -159,8 +159,8 @@ async fn passkey_register_rejects_malformed_payload() {
         }
     };
 
-    // 缺 credentialId / 缺 attestationObject → 422（每轮都要新挑战：
-    // take 一次性消费发生在字段校验之前）
+    // Missing credentialId / missing attestationObject -> 422 (a fresh challenge is needed
+    // each round: take's single-use consumption happens before field validation)
     let _ = get_create_options(&router, &account_id).await;
     let (status, body) = post(json!({
         "attestation_response": {"attestationObject": "AA"},
@@ -177,7 +177,7 @@ async fn passkey_register_rejects_malformed_payload() {
     .await;
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
 
-    // attestationObject 不是合法 base64 → 422
+    // attestationObject is not valid base64 -> 422
     let _ = get_create_options(&router, &account_id).await;
     let (status, body) = post(json!({
         "attestation_response": {"credentialId": "AA", "attestationObject": "!!"},
@@ -186,7 +186,7 @@ async fn passkey_register_rejects_malformed_payload() {
     .await;
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
 
-    // attestationObject 解码后超过 8 KiB → 422
+    // attestationObject exceeds 8 KiB after decoding -> 422
     let _ = get_create_options(&router, &account_id).await;
     let (status, body) = post(json!({
         "attestation_response": {
@@ -206,9 +206,10 @@ async fn passkey_register_duplicate_credential_conflicts() {
     let (router, state) = setup_state().await;
     let account_id = create_account(&router, "pk-dupcred@example.com").await;
 
-    // 直接向 webauthn 状态 store 同一挑战两次：同一份完整可验证的
-    // attestation 载荷提交两次，第二次 INSERT 撞 credential_id UNIQUE → 409
-    // （挑战须是合法 base64url——软件认证器侧会校验）
+    // Store the same challenge twice directly in the webauthn state: submitting the same
+    // fully verifiable attestation payload twice makes the second INSERT hit the
+    // credential_id UNIQUE constraint -> 409
+    // (the challenge must be valid base64url — the software-authenticator side validates it)
     let challenge = B64URL.encode(b"fixed-duplicate-challenge");
     let client_data = create_client_data(&challenge);
     let reg = passkey::register_passkey(RP_ID, ORIGIN, client_data.as_bytes(), false).unwrap();

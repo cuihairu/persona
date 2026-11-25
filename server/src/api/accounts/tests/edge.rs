@@ -1,6 +1,6 @@
 use super::*;
 
-// ---- 校验与错误分支：各 handler 的 422/404/409 形状 ----
+// ---- Validation and error branches: 422/404/409 shapes for each handler ----
 
 #[test]
 fn webauthn_state_default_is_empty() {
@@ -33,7 +33,7 @@ async fn recovery_code_verify_rejects_bad_format() {
     let account_id = create_account(&router, "rc-bad@example.com").await;
     let url = format!("/api/v1/accounts/{account_id}/recovery-codes/verify");
 
-    // 长度不是 32 → 422
+    // Length is not 32 -> 422
     let (status, body) = send(
         router.clone(),
         req("POST", &url, &json!({"code": "abc"}).to_string()),
@@ -41,7 +41,7 @@ async fn recovery_code_verify_rejects_bad_format() {
     .await;
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
 
-    // 32 位但不是 hex → 422
+    // 32 chars but not hex -> 422
     let (status, body) = send(
         router.clone(),
         req("POST", &url, &json!({"code": "z".repeat(32)}).to_string()),
@@ -67,7 +67,7 @@ async fn authorize_device_rejects_unknown_and_mismatched() {
     let device_id = body["device_id"].as_str().unwrap().to_string();
     let url = format!("/api/v1/accounts/{account_id}/devices");
 
-    // 未注册的 sync device → 422
+    // Unregistered sync device -> 422
     let (status, body) = send(
         router.clone(),
         req(
@@ -79,7 +79,7 @@ async fn authorize_device_rejects_unknown_and_mismatched() {
     .await;
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
 
-    // public_key 不是合法 base64 → 422
+    // public_key is not valid base64 -> 422
     let (status, body) = send(
         router.clone(),
         req(
@@ -91,7 +91,7 @@ async fn authorize_device_rejects_unknown_and_mismatched() {
     .await;
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
 
-    // public_key 与注册时不符 → 422
+    // public_key does not match the one at registration -> 422
     let (status, body) = send(
         router.clone(),
         req(
@@ -128,7 +128,7 @@ async fn sessions_reject_blank_srp_token_and_challengeless_assertion() {
     let account_id = create_account(&router, "sess-blank@example.com").await;
     let url = format!("/api/v1/accounts/{account_id}/sessions");
 
-    // 空白 srp_token → 401
+    // Blank srp_token -> 401
     let (status, body) = send(
         router.clone(),
         req("POST", &url, &json!({"srp_token": "   "}).to_string()),
@@ -136,7 +136,7 @@ async fn sessions_reject_blank_srp_token_and_challengeless_assertion() {
     .await;
     assert_eq!(status, StatusCode::UNAUTHORIZED, "{body}");
 
-    // 没走 login-options 的断言（无在途挑战可消费）→ 401
+    // Assertion without going through login-options (no in-flight challenge to consume) -> 401
     let (status, body) = send(
         router.clone(),
         req(
@@ -162,7 +162,7 @@ async fn sessions_reject_malformed_assertion_fields() {
     let passkey_id = B64URL.encode(&reg.credential_id);
     let url = format!("/api/v1/accounts/{account_id}/sessions");
 
-    // 挑战一次性消费，每个畸形载荷前都要重发 login-options
+    // The challenge is consumed once, so login-options must be re-issued before each malformed payload
     async fn fresh_login_options(router: &axum::Router, account_id: &str, passkey_id: &str) {
         let (status, body) = send(
             router.clone(),
@@ -178,7 +178,7 @@ async fn sessions_reject_malformed_assertion_fields() {
         assert_eq!(status, StatusCode::OK, "{body}");
     }
 
-    // client_data_json 不是 base64 → 422
+    // client_data_json is not base64 -> 422
     fresh_login_options(&router, &account_id, &passkey_id).await;
     let (status, body) = send(
         router.clone(),
@@ -195,7 +195,7 @@ async fn sessions_reject_malformed_assertion_fields() {
     .await;
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
 
-    // authenticator_data 不是 base64 → 422
+    // authenticator_data is not base64 -> 422
     fresh_login_options(&router, &account_id, &passkey_id).await;
     let (status, body) = send(
         router.clone(),
@@ -215,7 +215,7 @@ async fn sessions_reject_malformed_assertion_fields() {
     .await;
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
 
-    // clientData origin 与声明不符 → parse 拒绝 → 401
+    // clientData origin does not match the declared one -> parse rejects -> 401
     fresh_login_options(&router, &account_id, &passkey_id).await;
     let evil =
         r#"{"type":"webauthn.get","challenge":"x","origin":"https://evil.example"}"#.to_string();

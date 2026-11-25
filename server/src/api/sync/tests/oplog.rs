@@ -1,6 +1,6 @@
 use super::*;
 
-// ---- server 侧 oplog 保留策略（§11 开放问题 3 收口）----
+// ---- Server-side oplog retention policy (§11 open question 3 closeout) ----
 
 #[tokio::test]
 async fn oplog_retention_prunes_over_window_and_repush_rebuilds() {
@@ -34,7 +34,7 @@ async fn oplog_retention_prunes_over_window_and_repush_rebuilds() {
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["accepted"], 2);
 
-    // 第一条回拨到窗口外
+    // Roll the first entry back outside the window
     let stale_received_at = (Utc::now() - chrono::Duration::try_days(31).unwrap())
         .to_rfc3339_opts(SecondsFormat::Millis, true);
     sqlx::query("UPDATE sync_oplog SET received_at = ? WHERE lamport = 1")
@@ -43,7 +43,7 @@ async fn oplog_retention_prunes_over_window_and_repush_rebuilds() {
         .await
         .unwrap();
 
-    // 再 push（触发清理路径）：fresh 重推 = duplicates，不新增
+    // Push again (exercising the cleanup path): re-pushing fresh = duplicates, nothing new
     let (status, body) = send(
         router.clone(),
         req(
@@ -57,7 +57,7 @@ async fn oplog_retention_prunes_over_window_and_repush_rebuilds() {
     assert_eq!(body["accepted"], 0);
     assert_eq!(body["duplicates"], 1);
 
-    // pull 只剩窗口内的 fresh
+    // Pull: only the in-window fresh op remains
     let (_, body) = send(router.clone(), get_req("/api/v1/sync/oplog")).await;
     let ops = body["ops"].as_array().unwrap();
     assert_eq!(ops.len(), 1);
@@ -67,7 +67,8 @@ async fn oplog_retention_prunes_over_window_and_repush_rebuilds() {
         .render()
         .contains("persona_sync_ops_pruned_total 1"));
 
-    // 协同语义：被清的 op 重推 → op_id 幂等重建（游标重置重拉不丢底稿）
+    // Cooperative semantics: re-pushing a pruned op rebuilds it idempotently by op_id
+    // (a cursor reset + full re-pull loses no drafts)
     let (status, body) = send(
         router.clone(),
         req(
@@ -106,7 +107,7 @@ async fn oplog_retention_zero_keeps_everything() {
     .await;
     assert_eq!(body["accepted"], 1, "{status}");
 
-    // 回拨到很远再 push 触发清理路径：0 = 不清理，行仍在
+    // Roll far back and push to exercise the cleanup path: 0 = no cleanup, the row stays
     sqlx::query("UPDATE sync_oplog SET received_at = '2000-01-01T00:00:00.000Z'")
         .execute(&state.pool)
         .await
@@ -141,16 +142,17 @@ async fn oplog_retention_zero_keeps_everything() {
         .contains("persona_sync_ops_pruned_total 0"));
 }
 
-/// oplog 逐字段校验臂（kind 边界 / 超大 payload / 未知 op 动词 /
-/// 坏 rfc3339 时间戳）、坏 JSON 正文、pull 的 limit 边界与坏游标、
-/// 以及「payload 两列部分为空」的损坏行读取。
+/// Per-field validation arms of the oplog (kind boundaries / oversized payload /
+/// unknown op verb / malformed rfc3339 timestamp), a malformed JSON body, pull's
+/// limit boundaries and bad cursor, and reading a corrupted row whose payload is
+/// only partially populated (one of the two columns empty).
 #[tokio::test]
 async fn oplog_validation_and_pull_error_arms() {
     let (router, state) = crate::test_support::setup(Some(TOKEN)).await;
     let device = register_device(&router, "laptop").await;
     let item = Uuid::new_v4().to_string();
 
-    // 每个坏字段单独一条请求：422 且 items 指向对应字段
+    // One request per bad field: 422 and items pointing at the offending field
     let oversized = b64(&vec![0u8; MAX_PAYLOAD_BYTES + 1]);
     let bad_op = |mutate: &dyn Fn(&mut Value)| {
         let mut op = put_op_json(&Uuid::new_v4().to_string(), &item, 1, &device, &[0u8; 4]);
@@ -191,7 +193,7 @@ async fn oplog_validation_and_pull_error_arms() {
         );
     }
 
-    // 坏 JSON 正文 → 400（沿 events 端点的 rejection 口径）
+    // Malformed JSON body -> 400 (same rejection convention as the events endpoint)
     let (status, body) = send(
         router.clone(),
         req("POST", "/api/v1/sync/oplog", "not json at all"),
@@ -200,7 +202,7 @@ async fn oplog_validation_and_pull_error_arms() {
     assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
     assert_eq!(body["error"]["code"], "bad_request");
 
-    // pull limit：0 与超 PULL_MAX_FETCH 都 422
+    // Pull limit: both 0 and above PULL_MAX_FETCH are 422
     for limit in ["0", "501"] {
         let (status, body) = send(
             router.clone(),
@@ -211,7 +213,7 @@ async fn oplog_validation_and_pull_error_arms() {
         assert_eq!(body["error"]["message"], "invalid limit");
     }
 
-    // pull 坏游标 → 422 invalid cursor（与 events 同一编解码口径）
+    // Pull with a bad cursor -> 422 invalid cursor (same codec as events)
     let (status, body) = send(
         router.clone(),
         get_req("/api/v1/sync/oplog?since=not-a-cursor"),
@@ -220,8 +222,9 @@ async fn oplog_validation_and_pull_error_arms() {
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
     assert_eq!(body["error"]["message"], "invalid cursor");
 
-    // 损坏行：ciphertext 有值而 wrapped_item_key 为 NULL → 500 internal
-    // （半行密文对客户端不可用，不能静默丢弃或折成 4xx）
+    // Corrupted row: ciphertext set but wrapped_item_key NULL -> 500 internal
+    // (a half-ciphertext row is unusable to clients; it must not be silently
+    // dropped or folded into a 4xx)
     sqlx::query(
         "INSERT INTO sync_oplog
             (op_id, item_id, kind, op, lamport, device_id, timestamp,
@@ -239,8 +242,9 @@ async fn oplog_validation_and_pull_error_arms() {
     assert_eq!(body["error"]["code"], "internal");
 }
 
-/// 保留策略清理失败仅告警不打断写入（增长治理不是中继正确性的前置
-/// 条件）：触发器让 retention 的 DELETE 报错，push 仍 200 且 op 落库。
+/// A retention cleanup failure only warns and never blocks writes (growth governance
+/// is not a precondition of relay correctness): a trigger makes retention's DELETE
+/// error out, yet push still returns 200 and the op lands in the store.
 #[tokio::test]
 async fn oplog_retention_delete_failure_does_not_block_push() {
     let (router, state) = crate::test_support::setup_with_retention(Some(TOKEN), 1, 0).await;
@@ -310,13 +314,14 @@ async fn oplog_push_pull_round_trip_with_cursor() {
     assert_eq!(body["accepted"], 3);
     assert_eq!(body["duplicates"], 0);
 
-    // 第一页 limit=2 → 2 条 + next_cursor（指向第 2 行）
+    // First page limit=2 -> 2 entries + next_cursor (pointing at row 2)
     let (status, body) = send(router.clone(), get_req("/api/v1/sync/oplog?limit=2")).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["ops"].as_array().unwrap().len(), 2);
     let cursor = body["next_cursor"].as_str().unwrap().to_string();
 
-    // since 游标续拉 → 剩 1 条；非空页恒返回游标（指向第 3 行）
+    // Continuing with the since cursor -> 1 entry left; a non-empty page always
+    // returns a cursor (pointing at row 3)
     let (status, body) = send(
         router.clone(),
         get_req(&format!("/api/v1/sync/oplog?since={cursor}")),
@@ -327,7 +332,8 @@ async fn oplog_push_pull_round_trip_with_cursor() {
     assert_eq!(rest.len(), 1);
     let last_cursor = body["next_cursor"].as_str().unwrap().to_string();
 
-    // 从最后一行游标再拉 → 空页 + null 游标（客户端循环的停点）
+    // Pulling again from the last row's cursor -> empty page + null cursor
+    // (the client loop's stop point)
     let (status, body) = send(
         router.clone(),
         get_req(&format!("/api/v1/sync/oplog?since={last_cursor}")),
@@ -337,7 +343,7 @@ async fn oplog_push_pull_round_trip_with_cursor() {
     assert_eq!(body["ops"].as_array().unwrap().len(), 0);
     assert!(body["next_cursor"].is_null());
 
-    // 载荷 b64 round-trip
+    // Payload b64 round-trip
     let payload = rest[0]["payload"].as_object().unwrap();
     let ciphertext = B64.decode(payload["ciphertext"].as_str().unwrap()).unwrap();
     assert_eq!(ciphertext.len(), 8);
@@ -361,7 +367,7 @@ async fn oplog_push_is_idempotent_by_op_id() {
         (Some(1), Some(0))
     );
 
-    // 同批原样重推（网络重试）：全量 duplicates，库不重复
+    // Re-push the same batch verbatim (network retry): all duplicates, no rows repeated
     let (_, body) = send(
         router.clone(),
         req("POST", "/api/v1/sync/oplog", &body_text),
@@ -382,7 +388,7 @@ async fn oplog_rejects_oversized_batch_and_malformed_ops() {
     let device = register_device(&router, "laptop").await;
     let item = Uuid::new_v4().to_string();
 
-    // 501 条 → 422
+    // 501 entries -> 422
     let flood: Vec<Value> = (0..501)
         .map(|_| put_op_json(&Uuid::new_v4().to_string(), &item, 1, &device, &[0u8; 4]))
         .collect();
@@ -397,7 +403,8 @@ async fn oplog_rejects_oversized_batch_and_malformed_ops() {
     .await;
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
 
-    // 单条多字段错误带 index：[0] 缺 payload 的 put、[1] delete 带 payload
+    // Per-entry multi-field errors carry index: [0] a put missing payload,
+    // [1] a delete carrying payload
     let bad_ops = json!({"ops": [
         {"op_id": Uuid::new_v4().to_string(), "item_id": item, "kind": "credential",
          "op": "put", "lamport": 1, "device_id": device.to_string(),
@@ -421,7 +428,7 @@ async fn oplog_rejects_oversized_batch_and_malformed_ops() {
         .iter()
         .any(|i| i["index"] == 1 && i["field"] == "payload"));
 
-    // 非 UUID 的 op_id → 逐条 422
+    // A non-UUID op_id -> per-entry 422
     let bad_uuid = json!({"ops": [
         {"op_id": "not-a-uuid", "item_id": item, "kind": "credential",
          "op": "put", "lamport": 1, "device_id": device.to_string(),
@@ -436,10 +443,12 @@ async fn oplog_rejects_oversized_batch_and_malformed_ops() {
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
 }
 
-/// 服务器 = 纯中继的直接断言：给一个含明文魔数的「密文」push 上去，
-/// lamport 超过 i64::MAX 的 op 拒收（audit 批2 #6）：服务器 lamport 列是
-/// i64，无校验时 `as i64` 把 ≈u64::MAX 的恶意值回绕成负数入库，客户端
-/// `as u64` 读回膨胀值——LWW 全序被钉死、本地时钟 MAX() 防回退卡死。
+/// Direct assertion that the server is a pure relay: a "ciphertext" containing a
+/// plaintext magic value is pushed up, and ops with lamport above i64::MAX are
+/// rejected (audit round 2 #6): the server's lamport column is i64; without the
+/// check, `as i64` wraps a malicious ~u64::MAX value into a negative on insert,
+/// and the client reads the inflated value back with `as u64` — pinning the LWW
+/// total order and deadlocking the local clock's MAX() anti-regression guard.
 #[tokio::test]
 async fn oplog_rejects_lamport_above_i64_max() {
     let router = router().await;
@@ -467,7 +476,7 @@ async fn oplog_rejects_lamport_above_i64_max() {
         );
     }
 
-    // 边界值 i64::MAX 合法放行（存储列就是 i64）。
+    // The boundary value i64::MAX is allowed through (the storage column is i64).
     let ops = json!({"ops": [put_op_json(
         &Uuid::new_v4().to_string(),
         &item,
@@ -480,8 +489,9 @@ async fn oplog_rejects_lamport_above_i64_max() {
     assert_eq!(body["accepted"], 1);
 }
 
-/// 数据库行里该魔数只出现在 ciphertext 列——服务器没有（也不可能有）
-/// 任何明文副本列。真正的明文泄露面为空。
+/// In the database row the magic value appears only in the ciphertext column — the
+/// server has no (and cannot have any) plaintext copy column. The real plaintext
+/// leakage surface is empty.
 #[tokio::test]
 async fn server_stores_only_ciphertext() {
     let (router, app_state) = crate::test_support::setup(Some(TOKEN)).await;
@@ -509,8 +519,8 @@ async fn server_stores_only_ciphertext() {
     assert_eq!(rows.len(), 1);
     let row = &rows[0];
     let stored: Vec<u8> = row.get("ciphertext");
-    assert_eq!(stored, magic); // 密文列 == 客户端上传字节（中继保真）
-                               // 其余任何列都不含该魔数
+    assert_eq!(stored, magic); // ciphertext column == client-uploaded bytes (relay fidelity)
+                               // no other column contains the magic value
     for column in ["op_id", "item_id", "kind", "device_id"] {
         let text: String = row.get(column);
         assert!(
@@ -521,8 +531,10 @@ async fn server_stores_only_ciphertext() {
     assert!(row.get::<Option<String>, _>("timestamp").is_some());
 }
 
-/// 服务器不做胜负判定（DR-4）：同 item 同 lamport 异 device 的两条
-/// 真冲突 op 原样双存、pull 原样双回——裁决权完全在客户端。
+/// The server does not arbitrate conflicts (DR-4): two genuinely conflicting ops for
+/// the same item with the same lamport but different devices are stored verbatim as a
+/// pair and returned verbatim as a pair on pull — adjudication belongs entirely to
+/// the client.
 #[tokio::test]
 async fn server_does_not_arbitrate_conflicts() {
     let router = router().await;

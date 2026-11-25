@@ -1,25 +1,25 @@
 use super::*;
 
-/// passkey 断言证据（login-options 挑战 + authenticator 签名）。
+/// Passkey assertion evidence (login-options challenge + authenticator signature).
 #[derive(Deserialize)]
 pub struct PasskeyAssertionRequest {
-    /// 注册时返回的 passkey_id（= base64url(credential_id)）
+    /// The passkey_id returned at registration (= base64url(credential_id))
     pub credential_id: String,
-    /// base64url 编码的 clientDataJSON
+    /// base64url-encoded clientDataJSON
     pub client_data_json: String,
-    /// 客户端声明的 origin（须与 clientDataJSON 一致且匹配 rp_id）
+    /// The origin claimed by the client (must match clientDataJSON and the rp_id)
     pub origin: String,
-    /// base64url 编码的 authenticator data
+    /// base64url-encoded authenticator data
     pub authenticator_data: String,
-    /// base64url 编码的 DER 签名
+    /// base64url-encoded DER signature
     pub signature: String,
 }
 
 #[derive(Deserialize)]
 pub struct CreateAccountSessionRequest {
-    /// SRP 兜底登录证据：srp/verify 签发的 15 分钟令牌。
+    /// SRP fallback login evidence: the 15-minute token issued by srp/verify.
     pub srp_token: Option<String>,
-    /// passkey 登录证据：对 login-options 挑战的断言。
+    /// Passkey login evidence: an assertion over the login-options challenge.
     pub passkey_assertion: Option<PasskeyAssertionRequest>,
 }
 
@@ -34,7 +34,7 @@ pub async fn create_account_session(
 ) -> Result<impl IntoResponse, ApiError> {
     let Json(req) = payload.map_err(|r| ApiError::rejection(r.status(), r.body_text()))?;
 
-    // 恰好一种证据：没有 = 422；两种同给 = 422（语义不明，不猜）。
+    // Exactly one piece of evidence: none = 422; both given = 422 (ambiguous semantics, don't guess).
     match (&req.srp_token, &req.passkey_assertion) {
         (Some(token), None) => verify_srp_evidence(&state, &account_id, token).await?,
         (None, Some(assertion)) => verify_passkey_evidence(&state, &account_id, assertion).await?,
@@ -73,7 +73,7 @@ pub async fn create_account_session(
     })))
 }
 
-/// SRP 证据：令牌必须是本账号未过期的 account_sessions 行。
+/// SRP evidence: the token must be an unexpired account_sessions row for this account.
 async fn verify_srp_evidence(
     state: &AppState,
     account_id: &str,
@@ -99,15 +99,16 @@ async fn verify_srp_evidence(
     Ok(())
 }
 
-/// passkey 证据：login-options 挑战（一次性）+ clientData 挑战比对 +
-/// 签名验证 + sign_count 单调性；通过后更新计数器与 last_used_at。
+/// Passkey evidence: the login-options challenge (single use) + clientData challenge
+/// comparison + signature verification + sign_count monotonicity; on success the counter
+/// and last_used_at are updated.
 async fn verify_passkey_evidence(
     state: &AppState,
     account_id: &str,
     assertion: &PasskeyAssertionRequest,
 ) -> Result<(), ApiError> {
-    // 挑战必须来自本账号的 login-options（一次性）；消费失败即 401，
-    // 客户端重走 login-options。
+    // The challenge must come from this account's login-options (single use); consumption
+    // failure means 401, and the client re-runs login-options.
     let Some((challenge, rp_id)) = state
         .account_webauthn
         .take(account_id, WebauthnCeremony::Authenticate)
@@ -139,8 +140,9 @@ async fn verify_passkey_evidence(
     )?;
     let signature = decode_b64url_field("signature", &assertion.signature, MAX_SIGNATURE_BYTES)?;
 
-    // 挑战比对：verify_assertion 不看 clientDataJSON 内容，这里锚定
-    // 服务器签发的挑战（防断言重放/客户端自选挑战）。
+    // Challenge comparison: verify_assertion does not inspect clientDataJSON, so the
+    // server-issued challenge is anchored here (guards against assertion replay and
+    // client-chosen challenges).
     let parsed =
         passkey::parse_client_data(&client_data_bytes, CLIENT_DATA_TYPE_GET, &assertion.origin)
             .map_err(|e| {
@@ -164,9 +166,10 @@ async fn verify_passkey_evidence(
         ApiError::unauthorized()
     })?;
 
-    // sign_count 单调性（克隆检测）：存量非 0 时新值必须更大；两端同为 0
-    // 是合法的"无计数器 authenticator"（软件认证器即如此），放行。
-    // verify_assertion 已保证 authenticator_data ≥ 37 字节。
+    // sign_count monotonicity (clone detection): when the stored value is non-zero the new
+    // one must be greater; both being 0 is a legitimate "counterless authenticator"
+    // (software authenticators work this way), so it is allowed.
+    // verify_assertion already guarantees authenticator_data is at least 37 bytes.
     let new_count = u32::from_be_bytes([
         authenticator_data[33],
         authenticator_data[34],

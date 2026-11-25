@@ -1,8 +1,9 @@
-//! 共享应用状态与服务器侧数据库初始化。
+//! Shared application state and server-side database initialization.
 //!
-//! server 库与 core 的身份库完全独立：这里只跑 `server/migrations`
-//! 下的迁移，不复用 `persona_core::storage::Database`（那会带上全套
-//! 身份 schema）。
+//! The `server` crate is fully independent of core's identity storage:
+//! only the migrations under `server/migrations` are run here; it does not
+//! reuse `persona_core::storage::Database` (which would pull in the entire
+//! identity schema).
 
 use crate::auth::{AuthTokens, SrpAuthState};
 use crate::metrics::Metrics;
@@ -13,45 +14,46 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-/// 备份上传上限（线上字节 = 落盘字节：备份子路由无解压层）。
+/// Backup upload limit (wire bytes = bytes on disk: the backup sub-routes have no decompression layer).
 pub const MAX_BACKUP_BYTES: usize = 256 * 1024 * 1024;
 
-/// 全局共享状态（Clone；内部全是 Arc/连接池）。
+/// Globally shared state (Clone; everything inside is Arc/pools).
 #[derive(Clone)]
 pub struct AppState {
     pub pool: SqlitePool,
     pub metrics: Arc<Metrics>,
-    /// `None` => /api 整体禁用（fail-closed：未配置任何设备令牌）。
+    /// `None` => the whole /api is disabled (fail-closed: no device tokens configured).
     pub auth: Option<Arc<AuthTokens>>,
-    /// SRP 会话/短期令牌状态。与 `auth` 同生命周期（静态令牌未配置 =
-    /// 认证体系整体未启用 = SRP 端点同样禁用）。
+    /// SRP session/short-lived token state. Shares `auth`'s lifetime (static
+    /// tokens unconfigured = auth subsystem entirely disabled = SRP endpoints disabled too).
     pub srp: Option<Arc<SrpAuthState>>,
-    /// 账号 WebAuthn 未决挑战（passkey 注册/登录仪式），内存态、TTL 120s。
-    /// 无条件构造（不随 `auth` 门禁）：账号注册流本身免 Bearer。
+    /// Account WebAuthn pending challenges (passkey registration/login ceremonies), in-memory with TTL 120s.
+    /// Constructed unconditionally (not gated by `auth`): the account registration flow itself is Bearer-exempt.
     pub account_webauthn: Arc<crate::api::AccountWebauthnState>,
-    /// 备份文件落盘目录（POST 写、GET 下载读；`{dir}/{id}.persenc`）。
+    /// Directory where backup files are written (POST writes, GET downloads; `{dir}/{id}.persenc`).
     pub backup_dir: PathBuf,
-    /// 保留版本数上限；0 = 不限（PERSONA_SERVER_BACKUP_MAX_VERSIONS）。
+    /// Max number of retained versions; 0 = unlimited (PERSONA_SERVER_BACKUP_MAX_VERSIONS).
     pub backup_max_versions: usize,
-    /// 备份上传字节上限（生产恒 [`MAX_BACKUP_BYTES`]；测试调小以覆盖
-    /// 流式中断路径，256 MiB 的真实上限不适合逐测试生成）。
+    /// Backup upload byte limit (always [`MAX_BACKUP_BYTES`] in production; tests shrink it to cover
+    /// the mid-stream abort path — generating 256 MiB per test is not practical).
     pub max_backup_bytes: usize,
-    /// sync oplog 保留天数（按 received_at 滚动清理）；0 = 不清理
-    /// （PERSONA_SERVER_OPS_RETENTION_DAYS）。默认 0 保持纯中继语义——
-    /// 清理意味着放弃向「离线超过窗口」设备补发历史的责任，须显式开启。
+    /// sync oplog retention in days (rolling cleanup by received_at); 0 = no cleanup
+    /// (PERSONA_SERVER_OPS_RETENTION_DAYS). The default 0 preserves pure relay semantics —
+    /// cleanup means giving up on re-sending history to devices "offline beyond the window", so it must be enabled explicitly.
     pub oplog_retention_days: u32,
-    /// 审计事件副本保留天数（按 received_at_ms 滚动清理）；0 = 不清理
-    /// （PERSONA_SERVER_EVENTS_RETENTION_DAYS）。
+    /// Audit event copy retention in days (rolling cleanup by received_at_ms); 0 = no cleanup
+    /// (PERSONA_SERVER_EVENTS_RETENTION_DAYS).
     pub events_retention_days: u32,
-    /// uptime 起点（单调时钟）。
+    /// Uptime origin (monotonic clock).
     pub started_at: Instant,
-    /// `process_start_time_seconds` 用（Unix 秒）。
+    /// Used for `process_start_time_seconds` (Unix seconds).
     pub start_time_unix: i64,
 }
 
 impl AppState {
     pub fn new(pool: SqlitePool, auth: Option<AuthTokens>, metrics: Arc<Metrics>) -> Self {
-        // 空集合与未配置等价：API 禁用，避免"配了但配错成空"形成半开状态。
+        // An empty set is equivalent to unconfigured: the API is disabled,
+        // avoiding a half-open state from "configured but wrongly set to empty".
         let auth = auth.filter(|tokens| !tokens.is_empty()).map(Arc::new);
         let srp = auth.as_ref().map(|_| Arc::new(SrpAuthState::new()));
         let start_time_unix = SystemTime::now()
@@ -74,14 +76,14 @@ impl AppState {
         }
     }
 
-    /// 覆盖备份落盘目录与保留策略（main 从 env 读入；测试用 tempdir）。
+    /// Overrides the backup directory and retention policy (main reads from env; tests use a tempdir).
     pub fn with_backup_settings(mut self, dir: PathBuf, max_versions: usize) -> Self {
         self.backup_dir = dir;
         self.backup_max_versions = max_versions;
         self
     }
 
-    /// 覆盖 oplog/events 保留天数（main 从 env 读入；0 = 不清理）。
+    /// Overrides oplog/events retention in days (main reads from env; 0 = no cleanup).
     pub fn with_retention_settings(mut self, oplog_days: u32, events_days: u32) -> Self {
         self.oplog_retention_days = oplog_days;
         self.events_retention_days = events_days;
@@ -89,13 +91,14 @@ impl AppState {
     }
 }
 
-/// 按路径打开连接池：不存在则建库（mode=rwc），WAL + 5s busy_timeout。
+/// Opens a connection pool at the given path: creates the database if missing (mode=rwc), WAL + 5s busy_timeout.
 pub async fn init_pool(path: &str) -> anyhow::Result<SqlitePool> {
     let options = SqliteConnectOptions::from_str(&format!("sqlite:{path}?mode=rwc"))?
         .create_if_missing(true)
         .journal_mode(SqliteJournalMode::Wal)
         .busy_timeout(Duration::from_secs(5))
-        // server 侧表不建外键（远端事件无本地父实体可引用），关闭以省 PRAGMA 开销
+        // server-side tables define no foreign keys (remote events have no local parent entity to
+        // reference); turned off to save the PRAGMA overhead
         .foreign_keys(false);
     let pool = SqlitePoolOptions::new()
         .max_connections(5)
@@ -104,23 +107,25 @@ pub async fn init_pool(path: &str) -> anyhow::Result<SqlitePool> {
     Ok(pool)
 }
 
-/// 运行 `server/migrations`（sqlx 编译期内嵌，重复执行幂等）。
+/// Runs `server/migrations` (embedded by sqlx at compile time; re-running is idempotent).
 pub async fn run_migrations(pool: &SqlitePool) -> anyhow::Result<()> {
     sqlx::migrate!("./migrations").run(pool).await?;
     Ok(())
 }
 
-/// persona-relay 只建同步/配对面所需的迁移版本号（0004 设备/信封/oplog、
-/// 0005 oplog 索引、0006 组纪元、0009 配对信箱、0010 快照、0011 设备备注）。
-/// **今后给 sync/pairing 面新增迁移必须同步把版本号补进这里**——
+/// Migration versions needed to build only the sync/pairing surfaces that
+/// persona-relay requires (0004 devices/envelope/oplog, 0005 oplog indexes,
+/// 0006 group epoch, 0009 pairing inbox, 0010 snapshots, 0011 device notes).
+/// **Any new migration added to the sync/pairing surfaces must add its version here as well** —
 /// [`crate::state::tests::relay_migration_versions_cover_every_sync_pairing_migration`]
-/// 守住（按 SQL 内容抓，不靠文件名）。
+/// enforces this (matched by SQL content, not by file name).
 const RELAY_MIGRATION_VERSIONS: &[i64] = &[4, 5, 6, 9, 10, 11];
 
-/// 运行 relay 子集迁移：只建同步/配对面表，不建 events/backups/auth/
-/// accounts 面（persona-relay 是哑中转）。`ignore_missing` 兼容曾被完整
-/// persona-server 迁移过的同一 db——那些版本（1/2/3/7/8）已在
-/// `_sqlx_migrations` 里但 relay 的集合不认识，不忽略即启动即错。
+/// Runs the relay subset of migrations: creates only the sync/pairing tables,
+/// not the events/backups/auth/accounts surfaces (persona-relay is a dumb relay).
+/// `ignore_missing` keeps compatibility with a db previously migrated by full
+/// persona-server — those versions (1/2/3/7/8) are already recorded in
+/// `_sqlx_migrations` but unknown to relay's set, and startup would fail without ignoring them.
 pub async fn run_relay_migrations(pool: &SqlitePool) -> anyhow::Result<()> {
     let all = sqlx::migrate!("./migrations");
     let mut relay = sqlx::migrate::Migrator::with_migrations(
@@ -136,8 +141,9 @@ pub async fn run_relay_migrations(pool: &SqlitePool) -> anyhow::Result<()> {
 
 #[cfg(test)]
 pub(crate) async fn test_pool() -> SqlitePool {
-    // sqlx 对 `sqlite::memory:` 自动生成 shared-cache 随机名：
-    // 池内多连接共享同一库，且每个 pool 相互独立（天然测试隔离）。
+    // sqlx auto-generates a shared-cache random name for `sqlite::memory:`:
+    // multiple connections in the pool share one database, and each pool is
+    // independent (natural test isolation).
     let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
     run_migrations(&pool).await.unwrap();
     pool
@@ -191,8 +197,8 @@ mod tests {
         n > 0
     }
 
-    /// relay 迁移子集：同步/配对面表在，events/backups/auth/accounts 面
-    /// 表不在；重复执行幂等。
+    /// Relay migration subset: sync/pairing tables exist, events/backups/auth/accounts
+    /// tables do not; re-running is idempotent.
     #[tokio::test]
     async fn relay_migrations_create_only_sync_and_pairing_tables() {
         let dir = tempfile::tempdir().unwrap();
@@ -230,13 +236,14 @@ mod tests {
             );
         }
 
-        // 幂等
+        // idempotent
         run_relay_migrations(&pool).await.unwrap();
     }
 
-    /// 同一 db 先被完整 persona-server 迁移过（版本 1/2/3/7/8 已记录在
-    /// _sqlx_migrations），relay 再跑子集不能报 missing——`ignore_missing`
-    /// 的回归锚（换库/降级部署的兼容路径）。
+    /// A db previously migrated by full persona-server (versions 1/2/3/7/8 already
+    /// recorded in _sqlx_migrations) must not make relay's subset report missing —
+    /// regression anchor for `ignore_missing` (compatibility path for database
+    /// swaps / downgraded deployments).
     #[tokio::test]
     async fn relay_migrations_tolerate_a_full_server_db() {
         let dir = tempfile::tempdir().unwrap();
@@ -247,9 +254,9 @@ mod tests {
         run_relay_migrations(&pool).await.unwrap();
     }
 
-    /// 迁移是否**定义**（CREATE/ALTER/DROP/建索引于）一张 relay 面表。
-    /// 只认 DDL 主体，不认引用：0007 的 `REFERENCES sync_devices(id)` 是
-    /// 账号面外键引用，不是 relay 面表定义——relay 不需要它。
+    /// Whether a migration **defines** (CREATE/ALTER/DROP/indexes) a relay-surface table.
+    /// Only DDL bodies count, not references: 0007's `REFERENCES sync_devices(id)` is an
+    /// account-surface foreign key reference, not a relay-surface table definition — relay does not need it.
     fn defines_relay_table(sql: &str, table: &str) -> bool {
         sql.contains(&format!("create table if not exists {table}"))
             || sql.contains(&format!("create table {table}"))
@@ -259,10 +266,10 @@ mod tests {
             || sql.contains(&format!("drop table {table}"))
     }
 
-    /// 守门：今后新增任何**定义** sync/pairing 表的迁移，必须同步补进
-    /// [`RELAY_MIGRATION_VERSIONS`]（按 DDL 主体抓，不靠文件名、不认外键
-    /// 引用）；反向核对 relay 集合里每个版本都在全量集合中且确实定义
-    /// relay 面表（relay 集合过时 = 这里抓）。
+    /// Gate: any future migration that **defines** a sync/pairing table must also be added to
+    /// [`RELAY_MIGRATION_VERSIONS`] (matched by DDL body, not by file name, and ignoring foreign key
+    /// references); the reverse check verifies every version in the relay set exists in the full
+    /// set and really does define a relay-surface table (a stale relay set is caught here).
     #[test]
     fn relay_migration_versions_cover_every_sync_pairing_migration() {
         let all = sqlx::migrate!("./migrations");
@@ -309,7 +316,7 @@ mod tests {
 
     #[tokio::test]
     async fn in_memory_pool_shares_one_database_across_connections() {
-        // 回归 sqlx 内存库语义：两个独立连接必须看到同一个库。
+        // Regression test for sqlx in-memory db semantics: two independent connections must see the same database.
         let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
         let mut first = pool.acquire().await.unwrap();
         let mut second = pool.acquire().await.unwrap();
