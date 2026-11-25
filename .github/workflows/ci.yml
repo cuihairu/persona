@@ -44,7 +44,7 @@ jobs:
             target
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
       - name: Install cargo-llvm-cov
-        uses: taiki-e/install-action@v2.90.5
+        uses: taiki-e/install-action@v2.90.8
         with:
           tool: cargo-llvm-cov
       - name: fmt
@@ -115,7 +115,7 @@ jobs:
       # own process and force-kills slow ones (.config/nextest.toml: 60s marked
       # slow, 240s terminated), so hung tests are reported by name while the rest
       # still finish.
-      - uses: taiki-e/install-action@v2.90.5
+      - uses: taiki-e/install-action@v2.90.8
         with:
           tool: cargo-nextest
       - name: test (nextest, per-test timeout)
