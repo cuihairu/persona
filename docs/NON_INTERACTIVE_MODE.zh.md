@@ -358,24 +358,24 @@ for cred in credentials:
 **最佳实践：**
 
 1. **使用 CI/CD 机密管理：**
-   - GitHub Actions：`${{ secrets.PERSONA_MASTER_PASSWORD }}`
+   - GitHub Actions：<code v-pre>${{ secrets.PERSONA_MASTER_PASSWORD }}</code>
    - GitLab CI：`$MASTER_PASSWORD`（受保护变量）
    - Jenkins：`credentials('persona-master-password')`
 
 2. **使用后清除环境变量：**
 
-   ```bash
-   unset PERSONA_MASTER_PASSWORD
-   ```
+```bash
+unset PERSONA_MASTER_PASSWORD
+```
 
 3. **使用受限权限的临时文件：**
 
-   ```bash
-   echo "$MASTER_PASSWORD" > /tmp/pw
-   chmod 600 /tmp/pw
-   PERSONA_MASTER_PASSWORD=$(cat /tmp/pw) persona export ...
-   rm /tmp/pw
-   ```
+```bash
+echo "$MASTER_PASSWORD" > /tmp/pw
+chmod 600 /tmp/pw
+PERSONA_MASTER_PASSWORD=$(cat /tmp/pw) persona export ...
+rm /tmp/pw
+```
 
 4. **避免日志泄露：**
    - 禁用 shell 历史：`set +o history`
