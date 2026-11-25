@@ -5,9 +5,11 @@
 
 use super::*;
 
-/// init_service 的可触发错误臂：垃圾 DB 文件在迁移时暴露（sqlx 连接是
-/// 惰性的，打开不报错）、无法创建的路径在连接时暴露；同一 vault 连续输错
-/// 5 次后，正确密码也只得到账号锁定。
+/// The triggerable error arms of init_service: a junk DB file is exposed by
+/// migration (sqlx connections are lazy, so opening it reports nothing) and an
+/// uncreatable path is exposed at connection time; after 5 consecutive wrong
+/// attempts on the same vault, even the correct password only yields an
+/// account lockout.
 #[tokio::test]
 async fn init_service_degrades_loudly_on_bad_db_and_account_lockout() {
     let app = mock_app();
@@ -17,7 +19,7 @@ async fn init_service_degrades_loudly_on_bad_db_and_account_lockout() {
     // Leak the TempDir: the vault keeps the file open for the whole test.
     std::mem::forget(dir);
 
-    // 垃圾文件不是合法 sqlite：连接惰性成功，迁移时才失败。
+    // A junk file is not valid sqlite: the connection succeeds lazily and only migration fails.
     std::fs::write(&bad_path, "this is not a sqlite database").unwrap();
     let resp = init_service(
         InitRequest {
@@ -39,7 +41,7 @@ async fn init_service_degrades_loudly_on_bad_db_and_account_lockout() {
         resp.error
     );
 
-    // 打不开的路径（目录不存在）→ 连接失败。
+    // An unopenable path (directory does not exist) -> connection failure.
     let resp = init_service(
         InitRequest {
             master_password: "correct-horse".to_string(),
@@ -60,7 +62,7 @@ async fn init_service_degrades_loudly_on_bad_db_and_account_lockout() {
         resp.error
     );
 
-    // 真实 vault：5 次失败触发账号锁定（第 6 次即使密码正确也拒绝）。
+    // A real vault: 5 failures trigger the account lockout (the 6th attempt is rejected even with the correct password).
     let init_with = |password: &str| {
         init_service(
             InitRequest {
@@ -89,8 +91,8 @@ async fn init_service_degrades_loudly_on_bad_db_and_account_lockout() {
         Some("Account is locked due to too many failed attempts")
     );
 }
-/// 锁定态下所有"直调 service"的命令都会得到 SERVICE_LOCKED 错误码
-/// （map_persona_error → error_with_code 臂）。
+/// While locked, every command that "calls the service directly" gets the
+/// SERVICE_LOCKED error code (the map_persona_error -> error_with_code arm).
 #[tokio::test]
 async fn locked_service_error_code_matrix() {
     use base64::Engine as _;
@@ -104,7 +106,7 @@ async fn locked_service_error_code_matrix() {
         .unwrap();
     assert_eq!(resp.error_code.as_deref(), Some("SERVICE_LOCKED"));
 
-    // configure_auto_lock 锁定时仍允许（core 不做 ensure_unlocked）
+    // configure_auto_lock is still allowed while locked (core does no ensure_unlocked)
     let resp = configure_auto_lock(
         AutoLockConfigRequest {
             inactivity_timeout_secs: 300,
@@ -118,8 +120,9 @@ async fn locked_service_error_code_matrix() {
     .unwrap();
     assert!(resp.success, "{:?}", resp.error);
 
-    // start_auto_lock_monitoring 锁定时也允许（core 无 ensure_unlocked，
-    // 监控本身不泄密）；stop 一并驱动。
+    // start_auto_lock_monitoring is likewise allowed while locked (core has no
+    // ensure_unlocked, and the monitoring itself leaks nothing); stop is driven
+    // along with it.
     let resp = start_auto_lock_monitoring(app.state::<AppState>())
         .await
         .unwrap();
@@ -129,7 +132,7 @@ async fn locked_service_error_code_matrix() {
         .unwrap();
     assert!(resp.success, "{:?}", resp.error);
 
-    // health_scan（含 check_breaches=true 的 checker 构造分支）
+    // health_scan (including the checker-construction branch with check_breaches=true)
     let resp = health_scan(
         Some(HealthScanRequest {
             min_password_score: None,
@@ -143,7 +146,7 @@ async fn locked_service_error_code_matrix() {
     .unwrap();
     assert_eq!(resp.error_code.as_deref(), Some("SERVICE_LOCKED"));
 
-    // passkey 家族（request 先经 UUID/解码检查，用合法输入深入到 service）
+    // The passkey family (the request first passes UUID/decode checks, so legal input reaches deep into the service)
     let resp = passkey_self_test(uuid::Uuid::new_v4().to_string(), app.state::<AppState>())
         .await
         .unwrap();
@@ -160,7 +163,7 @@ async fn locked_service_error_code_matrix() {
             identity_id: uuid::Uuid::new_v4().to_string(),
             rp_id: "example.com".to_string(),
             origin: "https://example.com".to_string(),
-            // 合法 base64 的 client_data（锁定错误在 service 调用层触发）
+            // Legal base64 client_data (the locked error fires at the service-call layer)
             client_data_json_b64: base64::engine::general_purpose::STANDARD
                 .encode(br#"{"challenge":"c"}"#),
             user_handle_b64: None,
@@ -174,7 +177,7 @@ async fn locked_service_error_code_matrix() {
     .unwrap();
     assert_eq!(resp.error_code.as_deref(), Some("SERVICE_LOCKED"));
 
-    // reveal_credential_secret（凭据不存在也会先撞 ensure_unlocked）
+    // reveal_credential_secret (a nonexistent credential also hits ensure_unlocked first)
     let resp = reveal_credential_secret(
         RevealSecretRequest {
             credential_id: uuid::Uuid::new_v4().to_string(),
@@ -187,8 +190,9 @@ async fn locked_service_error_code_matrix() {
     .unwrap();
     assert_eq!(resp.error_code.as_deref(), Some("SERVICE_LOCKED"));
 }
-/// init_service 的 db_path=None 默认分支：落在 XDG 数据目录的 persona/
-/// 子目录下，而非真实用户目录。
+/// The db_path=None default branch of init_service: it lands under the
+/// persona/ subdirectory of the XDG data directory, not the real user
+/// directory.
 #[tokio::test]
 async fn init_service_default_db_path_uses_xdg_data_dir() {
     let xdg = tempfile::tempdir().unwrap();
@@ -281,7 +285,7 @@ async fn init_service_reauthenticates_existing_user_and_rejects_wrong_password()
 async fn reauth_verify_surfaces_db_errors_from_garbage_vault() {
     let app = app_with_garbage_db_service().await;
 
-    // 坏库下 authenticate_user 查不到用户表 → Err → map_persona_error 分流。
+    // With a bad db, authenticate_user cannot find the user table -> Err -> map_persona_error routes it.
     let resp = reauth_verify(
         ReauthRequest {
             master_password: "correct-horse".to_string(),
@@ -321,8 +325,8 @@ async fn reauth_gate_round_trip_through_configure_and_reauth_verify() {
         .unwrap();
     let cred_id = resp.data.expect("credential created").id;
 
-    // 公开配置 API 打开闸门：1 秒敏感窗口。修复前这个开关只改了超时
-    // 副本，管理器从不感知——闸门从未生效。
+    // The public configuration API opens the gate: a 1-second sensitive window. Before the fix this switch only touched a copy of the timeout
+    // the manager never saw — the gate never took effect.
     let resp = configure_auto_lock(
         AutoLockConfigRequest {
             inactivity_timeout_secs: 900,
@@ -336,8 +340,9 @@ async fn reauth_gate_round_trip_through_configure_and_reauth_verify() {
     .unwrap();
     assert!(resp.success, "{:?}", resp.error);
 
-    // reauth_verify（authenticate_user）建 session，并把登录本身记为
-    // 一次敏感验证 → 刚认证的用户直接过闸。
+    // reauth_verify (authenticate_user) builds a session and records the login
+    // itself as a sensitive verification -> a freshly authenticated user passes
+    // the gate straight through.
     let resp = reauth_verify(
         ReauthRequest {
             master_password: "correct-horse".to_string(),
@@ -364,7 +369,7 @@ async fn reauth_gate_round_trip_through_configure_and_reauth_verify() {
         resp
     );
 
-    // 窗口过后：专用错误码 REAUTH_REQUIRED（分流前端弹再认证 modal）。
+    // After the window: the dedicated error code REAUTH_REQUIRED (routed so the frontend pops the re-auth modal).
     tokio::time::sleep(std::time::Duration::from_millis(1300)).await;
     let resp = reveal_credential_secret(
         RevealSecretRequest {
@@ -387,7 +392,7 @@ async fn reauth_gate_round_trip_through_configure_and_reauth_verify() {
     let resp = get_auto_lock_status(state.clone()).await.unwrap();
     assert!(resp.data.expect("status").needs_reauth);
 
-    // 再认证 → 恢复放行。
+    // Re-authenticating -> release resumes.
     let resp = reauth_verify(
         ReauthRequest {
             master_password: "correct-horse".to_string(),
@@ -415,12 +420,13 @@ async fn init_service_surfaces_password_change_required_code() {
     let app = mock_app();
     let db_path = init_service_ok(&app, "master-pw-123").await;
 
-    // 锁掉会话，模拟“下次解锁”场景；flag 短路发生在密码验证之前
+    // Lock the session to simulate the "next unlock" scenario; the flag short-circuit happens before password verification
     let resp = lock_service(app.state::<AppState>()).await.unwrap();
     assert!(resp.success, "{:?}", resp.error);
 
-    // 经仓储置位（生产置位路径在 core 策略引擎里，此处直驱存储），
-    // 只验证命令层把 AuthResult::PasswordChangeRequired 翻译成机器可读码
+    // Set via the repository (production sets it inside core's policy engine;
+    // here the store is driven directly), only verifying that the command layer
+    // translates AuthResult::PasswordChangeRequired into a machine-readable code
     let db = persona_core::storage::Database::from_file(&db_path)
         .await
         .unwrap();
@@ -452,8 +458,8 @@ async fn init_service_surfaces_password_change_required_code() {
 }
 #[tokio::test]
 async fn init_service_injects_state_biometric_provider() {
-    // force_fail provider：默认 Mock 恒通过——若注入生效，service 层
-    // authenticate_biometric 必须失败
+    // force_fail provider: the default Mock always passes — if the injection
+    // takes effect, the service layer's authenticate_biometric must fail
     let app = mock_app_with_biometric(
         mock_provider(true, true),
         Arc::new(InMemoryTokenStore::default()),

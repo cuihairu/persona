@@ -23,12 +23,12 @@ async fn biometric_status_reports_disabled_without_entry() {
         .unwrap();
     assert!(resp.success, "{:?}", resp.error);
     let status = resp.data.unwrap();
-    // provider 可用 + keyring 可达（Ok(None)）但条目不存在
+    // provider available + keyring reachable (Ok(None)) but no entry exists yet
     assert!(status.available);
     assert!(!status.enabled);
     assert_eq!(status.platform, crate::biometric::platform_name());
 
-    // 配置后 enabled 翻转；显式 db_path 参数与 state 路径同键
+    // after configuration enabled flips; the explicit db_path arg shares the same key as the state path
     store.set(&db_path, "master-pw-123").unwrap();
     let resp = biometric_status(None, app.state::<AppState>())
         .await
@@ -51,7 +51,7 @@ async fn biometric_enable_rejects_wrong_password_without_writing() {
     .unwrap();
     assert!(!resp.success);
     assert_eq!(resp.error.as_deref(), Some("Invalid master password"));
-    // 先证密码后弹框：密码错了连 ceremony 都不弹，更不写 keyring
+    // password first, then the dialog: a wrong password means no ceremony is even shown, and nothing is written to keyring
     assert_eq!(store.get(&db_path).unwrap(), None);
 }
 #[tokio::test]
@@ -71,7 +71,7 @@ async fn biometric_enable_ceremony_then_writes_entry() {
     assert!(resp.success, "{:?}", resp.error);
     let status = resp.data.unwrap();
     assert!(status.available && status.enabled);
-    // 托管的正是验证过的主密码（键 = db_path，一库一钥匙）
+    // what gets escrowed is the verified master password (key = db_path, one key per vault)
     assert_eq!(
         store.get(&db_path).unwrap().as_deref(),
         Some("correct-horse")
@@ -101,7 +101,7 @@ async fn biometric_enable_ceremony_failure_writes_nothing() {
     let app = mock_app_with_biometric(mock_provider(true, true), store.clone());
     let db_path = init_service_ok(&app, "correct-horse").await;
 
-    // ceremony 失败在命令边界转 Ok(ApiResponse::error)（不逃逸），零写入
+    // a ceremony failure converts to Ok(ApiResponse::error) at the command boundary (does not escape), with zero writes
     let resp = biometric_enable(
         BiometricEnableRequest {
             master_password: "correct-horse".to_string(),
@@ -115,7 +115,7 @@ async fn biometric_enable_ceremony_failure_writes_nothing() {
 }
 #[tokio::test]
 async fn biometric_enable_requires_unlocked_service() {
-    // 未初始化：直接拒绝
+    // Not initialized: rejected outright
     let app = mock_app_with_biometric(
         mock_provider(true, false),
         Arc::new(InMemoryTokenStore::default()),
@@ -131,7 +131,7 @@ async fn biometric_enable_requires_unlocked_service() {
     assert!(!resp.success);
     assert_eq!(resp.error.as_deref(), Some("Service not initialized"));
 
-    // 锁定：启用是解锁会话里的敏感配置操作
+    // Locked: enabling is a sensitive configuration operation within an unlocked session
     let app = mock_app_with_biometric(
         mock_provider(true, false),
         Arc::new(InMemoryTokenStore::default()),
@@ -197,7 +197,7 @@ async fn biometric_unlock_unlocks_via_init_service() {
     .await
     .unwrap();
     assert!(resp.success, "{:?}", resp.error);
-    // 响应体是裸 bool——托管密码从未出进程（类型上就不含）
+    // The response body is a bare bool — the escrowed password never leaves the process (it is not in the type at all)
     assert_eq!(resp.data, Some(true));
 
     let resp = is_service_unlocked(app.state::<AppState>()).await.unwrap();
@@ -209,13 +209,13 @@ async fn biometric_unlock_unlocks_via_init_service() {
 }
 #[tokio::test]
 async fn biometric_unlock_without_entry_skips_ceremony_and_reports_reset() {
-    // force_fail provider：若真弹了框，结果会是 Err(String) 而非带码错误
+    // force_fail provider: if a dialog were really shown, the result would be Err(String) rather than a coded error
     let app = mock_app_with_biometric(
         mock_provider(true, true),
         Arc::new(InMemoryTokenStore::default()),
     );
     init_service_ok(&app, "correct-horse").await;
-    // 从锁定态出发：无条目时必须既不弹框也不解锁
+    // Start from the locked state: with no entry it must neither show a dialog nor unlock
     lock_service(app.state::<AppState>()).await.unwrap();
 
     let resp = biometric_unlock(
@@ -230,7 +230,7 @@ async fn biometric_unlock_without_entry_skips_ceremony_and_reports_reset() {
         resp.error_code.as_deref(),
         Some(crate::error::CODE_BIOMETRIC_RESET)
     );
-    // 没弹框也没解锁
+    // No dialog was shown and no unlock happened
     let resp = is_service_unlocked(app.state::<AppState>()).await.unwrap();
     assert_eq!(resp.data, Some(false));
 }
@@ -239,7 +239,7 @@ async fn biometric_unlock_stale_entry_self_heals() {
     let store = Arc::new(InMemoryTokenStore::default());
     let app = mock_app_with_biometric(mock_provider(true, false), store.clone());
     let db_path = init_service_ok(&app, "correct-horse").await;
-    // 直接塞一条错密码条目：模拟桌面外（CLI）改密后的陈旧托管
+    // Plant an entry with the wrong password: simulates a stale escrow after a password change made outside the desktop (via the CLI)
     store.set(&db_path, "stale-password").unwrap();
     lock_service(app.state::<AppState>()).await.unwrap();
 
@@ -255,7 +255,7 @@ async fn biometric_unlock_stale_entry_self_heals() {
         resp.error_code.as_deref(),
         Some(crate::error::CODE_BIOMETRIC_RESET)
     );
-    // 条目当场删除（防止反复点指纹累计失败计数锁户）且仍锁定
+    // The entry is deleted on the spot (so repeated biometric taps cannot accumulate failure counts and lock the account out), and the service is still locked
     assert_eq!(store.get(&db_path).unwrap(), None);
     let resp = is_service_unlocked(app.state::<AppState>()).await.unwrap();
     assert_eq!(resp.data, Some(false));
@@ -277,7 +277,7 @@ async fn biometric_unlock_fails_closed_when_provider_unavailable() {
     .unwrap();
     assert!(!resp.success);
     assert!(resp.error.unwrap().contains("not available"));
-    // 条目保留（不可用 ≠ 陈旧），解锁屏报错但可改用主密码登录
+    // The entry is kept (unavailable is not the same as stale); the unlock screen reports an error but the master password can still be used to log in
     assert_eq!(
         store.get(&db_path).unwrap().as_deref(),
         Some("correct-horse")
@@ -300,13 +300,14 @@ async fn biometric_enable_keyring_write_failure_reports_and_leaves_no_half_state
     )
     .await
     .unwrap();
-    // ceremony 通过但 keyring 写失败：明确报错（提示含 keyring）
+    // The ceremony passed but the keyring write failed: a clear error (mentioning keyring)
     assert!(!resp.success);
     assert!(resp.error.unwrap().contains("keyring write failed"));
     assert_eq!(inner.get("any").unwrap(), None);
 }
-/// 包裹链 enable：keyring 落的是密文 blob（门禁层密码条目不落盘），
-/// status 报 hardware-bound。
+/// Wrapping-chain enable: what keyring stores is a ciphertext blob (the
+/// gate-layer password entry is never persisted), and status reports
+/// hardware-bound.
 #[tokio::test]
 async fn biometric_wrap_enable_stores_ciphertext_blob() {
     let gate_store = Arc::new(InMemoryTokenStore::default());
@@ -333,15 +334,15 @@ async fn biometric_wrap_enable_stores_ciphertext_blob() {
     assert!(status.available && status.enabled);
     assert_eq!(status.wrap_tier, "hardware-bound");
 
-    // blob 是密文：base64 可解、magic 为 BIOWRAP1、且绝不能是明文密码
+    // The blob is ciphertext: decodable base64, magic BIOWRAP1, and definitely not the plaintext password
     let blob = wrap_store.get(&db_path).unwrap().expect("wrap blob stored");
     assert_ne!(blob, "correct-horse");
     let raw = base64_decode(&blob);
     assert_eq!(&raw[..8], b"BIOWRAP1");
-    // 门禁层密码条目不落盘（两类互斥）
+    // The gate-layer password entry is never persisted (the two classes are mutually exclusive)
     assert_eq!(gate_store.get(&db_path).unwrap(), None);
 }
-/// 包裹链 unlock 全闭环：enable → lock → unlock，服务恢复且数据可读。
+/// Wrapping-chain unlock full loop: enable -> lock -> unlock, the service recovers and data is readable.
 #[tokio::test]
 async fn biometric_wrap_unlock_round_trip() {
     let wrap_store = Arc::new(InMemoryTokenStore::default());
@@ -372,9 +373,10 @@ async fn biometric_wrap_unlock_round_trip() {
     let resp = is_service_unlocked(app.state::<AppState>()).await.unwrap();
     assert_eq!(resp.data, Some(true));
 }
-/// 注册集漂移（换指纹）：unlock 报 BIOMETRIC_RESET、blob 当场删除，
+/// Enrollment drift (fingerprints swapped): unlock reports BIOMETRIC_RESET and
+/// the blob is deleted on the spot,
 ///
-/// 主密码登录不受影响。
+/// while master password login is unaffected.
 #[tokio::test]
 async fn biometric_wrap_enrollment_change_resets_to_master_password() {
     let wrap_store = Arc::new(InMemoryTokenStore::default());
@@ -392,7 +394,7 @@ async fn biometric_wrap_enrollment_change_resets_to_master_password() {
     .unwrap();
     assert!(resp.success, "{:?}", resp.error);
 
-    // 用户在系统侧换了指纹
+    // The user swapped fingerprints on the system side
     wrapper.rotate_enrollment();
     lock_service(app.state::<AppState>()).await.unwrap();
 
@@ -408,12 +410,12 @@ async fn biometric_wrap_enrollment_change_resets_to_master_password() {
         resp.error_code.as_deref(),
         Some(crate::error::CODE_BIOMETRIC_RESET)
     );
-    // blob 当场删除（旧包裹永不再试），服务仍锁定
+    // The blob is deleted on the spot (the old wrapping is never retried), and the service stays locked
     assert_eq!(wrap_store.get(&db_path).unwrap(), None);
     let resp = is_service_unlocked(app.state::<AppState>()).await.unwrap();
     assert_eq!(resp.data, Some(false));
 
-    // 回退链终态：主密码照常登录
+    // End state of the fallback chain: the master password still logs in as usual
     let resp = init_service(
         InitRequest {
             master_password: "correct-horse".to_string(),
@@ -426,8 +428,9 @@ async fn biometric_wrap_enrollment_change_resets_to_master_password() {
     .unwrap();
     assert!(resp.success, "{:?}", resp.error);
 }
-/// 用户在系统弹框点取消：报 BIOMETRIC_CANCELLED、blob 保留、仍锁定
-/// （取消不是失败，不删包裹不提示错误）。
+/// The user clicks cancel in the system dialog: reports BIOMETRIC_CANCELLED,
+/// the blob is kept, and the service stays locked (cancelling is not a failure:
+/// the wrapping is not deleted and no error is surfaced).
 #[tokio::test]
 async fn biometric_wrap_user_cancel_keeps_blob() {
     let wrap_store = Arc::new(InMemoryTokenStore::default());
@@ -460,14 +463,15 @@ async fn biometric_wrap_user_cancel_keeps_blob() {
         resp.error_code.as_deref(),
         Some(crate::error::CODE_BIOMETRIC_CANCELLED)
     );
-    // 包裹仍有效（下次还能解），服务仍锁定
+    // The wrapping is still valid (it can still be unwrapped next time), and the service stays locked
     assert!(wrap_store.get(&db_path).unwrap().is_some());
     let resp = is_service_unlocked(app.state::<AppState>()).await.unwrap();
     assert_eq!(resp.data, Some(false));
 }
-/// blob 被改写（非 base64 / 信封损坏）：报 BIOMETRIC_RESET 并自删，
+/// The blob has been tampered with (not base64 / corrupted envelope): reports
+/// BIOMETRIC_RESET and deletes itself,
 ///
-/// 不累计失败计数、不锁户。
+/// without accumulating failure counts or locking the account.
 #[tokio::test]
 async fn biometric_wrap_corrupted_blob_resets() {
     for corrupt in ["!!!not-base64!!!", "QUJDRA=="] {
@@ -477,7 +481,7 @@ async fn biometric_wrap_corrupted_blob_resets() {
             wrap_store.clone(),
         );
         let db_path = init_service_ok(&app, "correct-horse").await;
-        // 伪造条目：第一种连 base64 都不是，第二种是合法 base64 但非信封
+        // Forged entries: the first is not even base64, the second is valid base64 but not an envelope
         wrap_store.set(&db_path, corrupt).unwrap();
         lock_service(app.state::<AppState>()).await.unwrap();
 
@@ -497,8 +501,9 @@ async fn biometric_wrap_corrupted_blob_resets() {
         assert_eq!(wrap_store.get(&db_path).unwrap(), None);
     }
 }
-/// 改密后包裹 blob 失效：旧 blob 解出的是 stale key，改密联动必须删
-/// blob（用户重新启用），status 回到未启用。
+/// The wrapping blob becomes invalid after a password change: the old blob
+/// unwraps to a stale key, so the password-change coupling must delete the blob
+/// (the user re-enables), and status returns to disabled.
 #[tokio::test]
 async fn biometric_wrap_invalidated_on_password_change() {
     let wrap_store = Arc::new(InMemoryTokenStore::default());
@@ -530,14 +535,14 @@ async fn biometric_wrap_invalidated_on_password_change() {
     .await
     .unwrap();
     assert!(resp.success, "{:?}", resp.error);
-    // blob 已删：status 回到未启用，前端隐藏指纹按钮
+    // The blob has been deleted: status returns to disabled and the frontend hides the biometric button
     assert_eq!(wrap_store.get(&db_path).unwrap(), None);
     let resp = biometric_status(None, app.state::<AppState>())
         .await
         .unwrap();
     assert!(!resp.data.unwrap().enabled);
 }
-/// spike 命令在 Linux 上报 Unsupported（探针是 Security.framework 调用）。
+/// The spike command reports Unsupported on Linux (the probe is a Security.framework call).
 #[tokio::test]
 async fn biometric_wrap_spike_unsupported_off_macos() {
     let resp = biometric_wrap_spike().await.unwrap();
@@ -549,7 +554,7 @@ async fn biometric_wrap_spike_unsupported_off_macos() {
         assert!(resp.error.unwrap().contains("only available on macOS"));
     }
 }
-/// TPM spike 命令在非 Windows 上报 Unsupported（探针是 NCrypt 调用）。
+/// The TPM spike command reports Unsupported off Windows (the probe is an NCrypt call).
 #[tokio::test]
 async fn biometric_tpm_spike_unsupported_off_windows() {
     let resp = biometric_tpm_spike().await.unwrap();

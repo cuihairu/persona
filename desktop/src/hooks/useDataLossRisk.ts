@@ -1,34 +1,40 @@
 import { useCallback, useEffect, useState } from 'react';
 import { personaAPI } from '@/utils/api';
 
-/** 数据丢失风险档位（设计稿 §6.5 / TODO S5-b）。
- * - `high`：已入同步组但仅本机一台设备、且从未导出过备份——「设备全丢=库全丢」
- * - `medium`：同上但已绑定账号（有账号找回路径，警示降一档）
- * - `none`：未入组（本地库本就不跨设备，不在此警示面管辖）/ 已有第二台
- *   设备 / 已导出过备份——警示自动解除 */
+/** Data-loss risk tiers (design §6.5 / TODO S5-b).
+ * - `high`: already in a sync group but this machine is the only device and no
+ *   backup has ever been exported — "lose the device, lose the vault"
+ * - `medium`: same as above but an account is bound (there is an account
+ *   recovery path, so the warning drops one tier)
+ * - `none`: not in a group (a local vault never spans devices, so it is outside
+ *   this warning's remit) / a second device already exists / a backup has been
+ *   exported — the warning clears automatically */
 export type DataLossRiskLevel = 'none' | 'high' | 'medium';
 
 export interface DataLossRisk {
-  /** 任一状态源读取失败 → true（警示静默隐藏，不误报） */
+  /** True when any status source fails to read (the warning hides silently, no false alarm) */
   loading: boolean;
-  /** 同步组已入组 */
+  /** Already joined a sync group */
   joined: boolean;
-  /** 组内设备数（含本机；≤1 = 单设备高危） */
+  /** Device count in the group (including this one; <=1 = single-device high risk) */
   deviceCount: number;
-  /** 本机导出过加密备份（settings.backup 凭证在场） */
+  /** An encrypted backup was exported from this machine (the settings.backup credential is present) */
   hasBackup: boolean;
-  /** 已绑定账号（账号模式警示降一档） */
+  /** An account is bound (account mode drops the warning one tier) */
   hasAccount: boolean;
-  /** 跨设备同步偏好开关是否开启（settings.sync_methods；读取失败按安全侧
-   * true——宁可少提示「可重新开启」，不误报）。**只读偏好，不决定档位**：
-   * 数据是否在组内是 keyring 事实，不受偏好开关改写。 */
+  /** Whether the cross-device sync preference switch is on (settings.sync_methods;
+   * a read failure degrades to the safe-side true — better to under-mention
+   * "can be re-enabled" than to misreport). **A read-only preference; it does not
+   * decide the tier**: whether the data is in a group is a keyring fact that a
+   * preference switch cannot rewrite. */
   crossDeviceSyncEnabled: boolean;
   level: DataLossRiskLevel;
   refresh: () => Promise<void>;
 }
 
-/** 纯函数：档位判定（测试锚点）。解除条件（TODO S5-b ③）：
- * 第二台设备到位或已导出备份 → none；账号绑定只降档不解除。 */
+/** Pure function: tier decision (test anchor). Release conditions (TODO S5-b 3):
+ * a second device in place or a backup exported -> none; binding an account only
+ * lowers the tier, it does not release it. */
 export function computeDataLossRisk(input: {
   joined: boolean;
   deviceCount: number;
@@ -40,9 +46,10 @@ export function computeDataLossRisk(input: {
   return input.hasAccount ? 'medium' : 'high';
 }
 
-/** 数据丢失警示状态源：同步组状态 + 设备清单 + workspace settings
- * （backup 凭证 / 账号绑定）三路并行读取。任一路失败按安全侧降级
- * （未入组 → none），宁可少报不误报。 */
+/** Status source for the data-loss warning: sync group status + device list +
+ * workspace settings (backup credential / account binding) read in parallel.
+ * Any failing path degrades to the safe side (not in a group -> none), so it
+ * under-reports rather than misreports. */
 export function useDataLossRisk(): DataLossRisk {
   const [state, setState] = useState<Omit<DataLossRisk, 'refresh'>>({
     loading: true,
@@ -67,7 +74,7 @@ export function useDataLossRisk(): DataLossRisk {
       const settings = settingsResp.success ? settingsResp.data : undefined;
       const hasBackup = Boolean(settings?.backup);
       const hasAccount = Boolean(settings?.account);
-      // 偏好开关只读展示（不决定档位）；读取失败按安全侧 true（宁可少提示）
+      // The preference switch is read-only display (it does not decide the tier); a read failure degrades to the safe-side true (prefer under-mentioning)
       const crossDeviceSyncEnabled = settings?.sync_methods?.cross_device_sync ?? true;
       setState({
         loading: false,
@@ -79,7 +86,7 @@ export function useDataLossRisk(): DataLossRisk {
         level: computeDataLossRisk({ joined, deviceCount, hasBackup, hasAccount }),
       });
     } catch {
-      // 读取失败静默隐藏警示（同 SyncGroupSection 口径），不制造误报
+      // A failed read hides the warning silently (same rule as SyncGroupSection), avoiding false alarms
       setState((prev) => ({ ...prev, loading: false, level: 'none' }));
     }
   }, []);

@@ -6,11 +6,11 @@ interface AddAddressModalProps {
   password: string;
   setPassword: (value: string) => void;
   onGenerate: () => void;
-  /** 关闭并清空密码（父层负责） */
+  /** Closes and clears the password (parent's responsibility) */
   onClose: () => void;
 }
 
-/** 加地址弹窗：输入钱包密码派生新地址 */
+/** Add-address modal: the wallet password derives a new address */
 const AddAddressModal: React.FC<AddAddressModalProps> = ({
   walletName,
   password,

@@ -15,13 +15,13 @@ import { useReauth } from '@/hooks/useReauth';
 import ReauthModal from '@/components/ReauthModal';
 import type { Passkey } from '@/types';
 
-/** 表格行：passkey + 所属身份名（列表跨全部身份合并，与 CLI `persona passkey list` 一致） */
+/** Table row: passkey + the name of its identity (the list is merged across all identities, matching the CLI `persona passkey list`) */
 interface PasskeyRow {
   passkey: Passkey;
   identityName: string;
 }
 
-/** base64/base64url → hex（与 CLI passkey show / 导出 JSON 的展示格式一致） */
+/** base64/base64url → hex (same display format as the CLI passkey show / exported JSON) */
 const b64ToHex = (b64: string): string => {
   try {
     const binary = atob(b64.replace(/-/g, '+').replace(/_/g, '/'));
@@ -31,7 +31,7 @@ const b64ToHex = (b64: string): string => {
     }
     return hex;
   } catch {
-    return b64; // 解码失败按原样展示
+    return b64; // A decode failure is shown as-is
   }
 };
 
@@ -39,9 +39,11 @@ const formatDate = (iso?: string): string =>
   iso ? new Date(iso).toLocaleDateString() : '—';
 
 /**
- * Passkey 管理页：跨全部身份列出保险库中的 passkeys（只读元数据），
- * 行点击进详情可自检（本地签名+验签往返）、导出私钥（export_allowed 门禁 +
- * 可能要求重新认证）、删除。创建走浏览器桥接 + 桌面审批链路，不在本页。
+ * Passkey management page: lists the passkeys in the vault across all identities
+ * (read-only metadata). Clicking a row opens the detail view, where a self test
+ * (local sign + verify round trip), private key export (export_allowed gate, which may
+ * also require re-authentication) and deletion are offered. Creation goes through the
+ * browser bridge + desktop approval path and is not on this page.
  */
 const PasskeyPanel: React.FC = () => {
   const { t } = useTranslation();
@@ -172,11 +174,11 @@ const PasskeyPanel: React.FC = () => {
 interface PasskeyDetailModalProps {
   row: PasskeyRow;
   onClose: () => void;
-  /** 删除成功后回调（父级刷新列表并关闭弹窗） */
+  /** Callback after a successful delete (the parent refreshes the list and closes the dialog) */
   onDeleted: () => void;
 }
 
-/** 详情弹窗：全字段展示 + 自检 / 导出 / 删除（敏感动作走 REAUTH_REQUIRED → ReauthModal → 重试一次） */
+/** Detail dialog: all fields displayed + self test / export / delete (sensitive actions go through REAUTH_REQUIRED → ReauthModal → one retry) */
 const PasskeyDetailModal: React.FC<PasskeyDetailModalProps> = ({ row, onClose, onDeleted }) => {
   const { t } = useTranslation();
   const { passkey } = row;
@@ -191,7 +193,7 @@ const PasskeyDetailModal: React.FC<PasskeyDetailModalProps> = ({ row, onClose, o
   const selfTestRetryRef = useRef(false);
   const exportRetryRef = useRef(false);
 
-  // 导出值自动隐藏倒计时（照 RevealSecretButton 的 autoHide 模式）
+  // Auto-hide countdown for the exported value (following RevealSecretButton's autoHide pattern)
   useEffect(() => {
     if (exportCountdown === null) return;
     if (exportCountdown <= 0) {
@@ -254,7 +256,7 @@ const PasskeyDetailModal: React.FC<PasskeyDetailModalProps> = ({ row, onClose, o
       } else if (res.error_code === 'SERVICE_LOCKED') {
         setExportError(t('common.serviceLocked'));
       } else {
-        // 含 export_allowed=false 的 "Passkey export is disabled..."（无专用 error_code）
+        // Includes the "Passkey export is disabled..." case for export_allowed=false (no dedicated error_code)
         setExportError(res.error ?? t('passkey.exportFailed'));
       }
     } catch (e) {
@@ -361,7 +363,7 @@ const PasskeyDetailModal: React.FC<PasskeyDetailModalProps> = ({ row, onClose, o
             </div>
           </dl>
 
-          {/* 自检：本地签名 + 验签往返（与 RP 相同的检查） */}
+          {/* Self test: local sign + verify round trip (the same check as an RP) */}
           <div className="border-t border-gray-200 dark:border-gray-700 pt-3 space-y-2">
             <div className="flex items-center gap-2">
               <button
@@ -387,7 +389,7 @@ const PasskeyDetailModal: React.FC<PasskeyDetailModalProps> = ({ row, onClose, o
             </div>
           </div>
 
-          {/* 导出私钥（hex）；export_allowed=false 时禁用 */}
+          {/* Export the private key (hex); disabled when export_allowed=false */}
           <div className="border-t border-gray-200 dark:border-gray-700 pt-3 space-y-2">
             <div className="flex items-center gap-2">
               <button

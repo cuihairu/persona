@@ -93,13 +93,15 @@ describe('utils/helpers', () => {
     const mockCrypto = {
       getRandomValues: (arr: Uint8Array) => {
         for (let i = 0; i < arr.length; i++) arr[i] = 0;
-        // 62 % 88 = 62 → 落在追加的 symbols 段首（charset[62] === '!')
+        // 62 % 88 = 62 → lands at the start of the appended symbols segment (charset[62] === '!')
         arr[0] = 62;
         return arr;
       },
     };
-    // jsdom 的 window.crypto 是 getter-only（无 setter），直接赋值会被静默忽略，
-    // 导致用真随机数、断言偶发失败。必须走 defineProperty 才真正替换。
+    // jsdom's window.crypto is getter-only (no setter); a plain assignment is
+    // silently ignored, so real randomness is used and assertions fail
+    // intermittently. It must be replaced via defineProperty to actually take
+    // effect.
     Object.defineProperty(window, 'crypto', { value: mockCrypto, configurable: true });
 
     const password = generateSecurePassword(24, true);

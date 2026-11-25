@@ -1,9 +1,12 @@
-//! 打包配置回归测试（tauri.conf.json + 自定义 NSIS 模板）。
+//! Packaging configuration regression tests (tauri.conf.json + the custom
+//! NSIS template).
 //!
-//! Windows 安装器的升级语义（默认静默卸载旧版、保留用户数据）落在
-//! 配置与模板文件里，Linux 本机无法编译 NSIS 验证 —— 至少用这些断言
-//! 防止配置/模板被悄悄回退。完整说明与 Windows 机器上的验收清单见
-//! docs/WINDOWS_INSTALLER.md。
+//! The Windows installer's upgrade semantics (default silent uninstall of the
+//! old version, user data preserved) live in the config and template files,
+//! and NSIS cannot be compiled to verify them on a Linux machine — these
+//! assertions at least prevent the config/template from quietly regressing.
+//! For the full explanation and the acceptance checklist on a Windows
+//! machine, see docs/WINDOWS_INSTALLER.md.
 
 use serde_json::Value;
 
@@ -18,9 +21,10 @@ fn nsis_bundle_config_pins_install_mode_and_custom_template() {
     let nsis = conf["bundle"]["windows"]["nsis"]
         .as_object()
         .expect("bundle.windows.nsis must stay configured (docs/WINDOWS_INSTALLER.md)");
-    // installMode=both：重装检测同时覆盖历史 per-user / per-machine 安装
+    // installMode=both: reinstall detection covers both legacy per-user and
+    // per-machine installs
     assert_eq!(nsis["installMode"], "both", "installMode must stay 'both'");
-    // 自定义模板路径（相对 tauri.conf.json 所在目录）必须存在
+    // The custom template path (relative to tauri.conf.json's directory) must exist
     assert_eq!(
         nsis["template"], "nsis/installer.nsi",
         "custom installer template must stay wired"
@@ -37,7 +41,8 @@ fn nsis_bundle_config_pins_install_mode_and_custom_template() {
 fn custom_nsis_template_keeps_persona_upgrade_diffs() {
     let nsi = manifest_file("nsis/installer.nsi");
 
-    // 定制 1)：升级路径默认勾选"卸载后安装"，且旧卸载器加 /S 静默执行
+    // Customization 1): the upgrade path defaults to "uninstall before
+    // installing" checked, and the old uninstaller runs /S silently
     assert!(
         nsi.contains("Persona 定制 1)"),
         "silent-uninstall diff marker missing from installer.nsi"
@@ -46,13 +51,16 @@ fn custom_nsis_template_keeps_persona_upgrade_diffs() {
         nsi.contains("StrCpy $R1 \"$R1 /S\""),
         "old uninstaller must be invoked with /S (silent, data-preserving)"
     );
-    // 重装页第一个单选钮（卸载后安装）默认选中 —— 基线模板行为，防误删
+    // The reinstall page's first radio button (uninstall before installing)
+    // defaults to checked — baseline template behavior, guarded against
+    // accidental deletion
     assert!(
         nsi.contains("SendMessage $R2 ${BM_SETCHECK} ${BST_CHECKED} 0"),
         "reinstall page must keep 'uninstall before installing' as default-checked"
     );
 
-    // 定制 2)：完全静默（/S）安装同样先卸载旧版
+    // Customization 2): a fully silent (/S) install also uninstalls the old
+    // version first
     assert!(
         nsi.contains("Persona 定制 2)"),
         "silent-mode diff marker missing from installer.nsi"
@@ -60,25 +68,30 @@ fn custom_nsis_template_keeps_persona_upgrade_diffs() {
     assert!(nsi.contains("Call UninstallPreviousSilent"));
     assert!(nsi.contains("Function UninstallPreviousSilent"));
 
-    // 基线模板的关键锚点仍在（升级 @tauri-apps/cli 后重放差异时的对照）
+    // The baseline template's key anchors are still there (the reference used
+    // when replaying the diffs after upgrading @tauri-apps/cli)
     assert!(nsi.contains("!define INSTALLMODE \"{{install_mode}}\""));
     assert!(nsi.contains(
         "!define UNINSTKEY \"Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\${PRODUCTNAME}\""
     ));
-    // 数据安全：仅当用户勾选"删除应用数据"或 /PURGE 显式清除且非更新模式才清 AppData。
-    // LogicLib 的 If/OrIf/AndIf 每个都必须独立成行——同一行内联 `${OrIf}`
-    // 会让 makensis 因宏参数数量不匹配中止（2026-09-28 每日构建 Windows
-    // bundle 实测挂 installer.nsi），这里连换行一起钉住。
+    // Data safety: AppData is cleared only when the user checks "delete app
+    // data", or /PURGE explicitly requests it, and it is not an update mode.
+    // Each of LogicLib's If/OrIf/AndIf must sit on its own line — inlining
+    // `${OrIf}` on the same line makes makensis abort on a macro argument
+    // count mismatch (the 2026-09-28 daily build's Windows bundle failed
+    // installer.nsi in practice), so the line breaks are pinned along with
+    // it.
     assert!(
         nsi.contains("${If} $DeleteAppDataCheckboxState = 1\n  ${OrIf} $PurgeMode = 1"),
         "OrIf must be on its own line (LogicLib multi-line condition)"
     );
-    // /PURGE 静默彻底清除参数必须被解析
+    // The /PURGE silent full-purge flag must be parsed
     assert!(
         nsi.contains("${GetOptions} $CMDLINE \"/PURGE\" $PurgeMode"),
         "silent purge flag must be supported"
     );
-    // 且解析必须位于 /UPDATE 块之外（嵌套进去会让单独 /PURGE 静默失效）
+    // And the parse must sit outside the /UPDATE block (nesting it there
+    // would silently break a standalone /PURGE)
     let update_strcpy = nsi
         .find("StrCpy $UpdateMode 1")
         .expect("update flag must be parsed");
@@ -92,14 +105,17 @@ fn custom_nsis_template_keeps_persona_upgrade_diffs() {
     );
 }
 
-/// CLI ≥2.12 的 utils.nsh 契约（2026-10-03 每日构建 Windows 腿实锤）：
-/// tauri-bundler 在 staging 强制写入 CLI 内嵌的 utils.nsh（不受自定义模板
-/// 控制），其 CheckIfAppIsRunning 改用 Restart Manager 宏——本模板必须
-/// include `Win\RestartManager.nsh`，且两处调用点传完整二进制路径（新宏
-/// 按路径注册文件）。缺 include 时 makensis 直接报 "macro named
-/// RestartManager_StartSession not found"（run 37155098351）。已按真实
-/// 2.12.1 utils.nsh + nsis_tauri_utils.dll 在本机 makensis 复现旧模板失败
-/// /新模板编译通过（2026-10-04）。升级 CLI 换基线时此契约需重核。
+/// The utils.nsh contract for CLI >= 2.12 (proven on the 2026-10-03 daily
+/// build's Windows leg): tauri-bundler force-writes the CLI's embedded
+/// utils.nsh during staging (not controlled by the custom template), and its
+/// CheckIfAppIsRunning switches to Restart Manager macros — so this template
+/// must include `Win\RestartManager.nsh`, and both call sites must pass the
+/// full binary path (the new macros register files by path). Without the
+/// include, makensis reports "macro named RestartManager_StartSession not
+/// found" straight away (run 37155098351). Reproduced locally with the real
+/// 2.12.1 utils.nsh + nsis_tauri_utils.dll against makensis: old template
+/// fails / new template compiles (2026-10-04). This contract needs re-checking
+/// when the CLI baseline is upgraded.
 #[test]
 fn custom_nsis_template_satisfies_cli_utils_nsh_contract() {
     let nsi = manifest_file("nsis/installer.nsi");
@@ -118,12 +134,14 @@ fn custom_nsis_template_satisfies_cli_utils_nsh_contract() {
     );
 }
 
-/// 卸载不删 vault 数据（docs/UNINSTALL.md 的承诺）：
-/// NSIS 模板里所有递归删除（`RmDir /r`）必须只指向 `${BUNDLEID}`
-/// 缓存目录（WebView 缓存 + 日志），vault 所在的 `%APPDATA%\persona`
-/// （`default_db_path`，与 BUNDLEID 无关）绝不允许出现在任何删除指令
-/// 里。升级路径的静默卸载（/S）没有确认页 => 勾选框恒未勾 => 连缓存
-/// 目录都不会被清；vault 目录则任何路径都删不到。
+/// Uninstall never deletes vault data (the promise in docs/UNINSTALL.md):
+/// every recursive deletion (`RmDir /r`) in the NSIS template must target
+/// only the `${BUNDLEID}` cache directory (WebView cache + logs), and the
+/// `%APPDATA%\persona` directory holding the vault (`default_db_path`,
+/// unrelated to BUNDLEID) must never appear in any deletion command. The
+/// upgrade path's silent uninstall (/S) has no confirmation page => the
+/// checkbox is never ticked => not even the cache directory gets cleared;
+/// the vault directory is unreachable from every path.
 #[test]
 fn nsis_uninstall_never_targets_vault_data_dir() {
     let nsi = manifest_file("nsis/installer.nsi");
@@ -131,8 +149,9 @@ fn nsis_uninstall_never_targets_vault_data_dir() {
     let recursive_rmdirs: Vec<&str> = nsi
         .lines()
         .filter(|line| {
-            // 精确匹配递归标志 `/r `（`/REBOOTOK` 也以 /R 开头，但它只
-            // 是重启时删除、目标仍是 $INSTDIR 安装残留，不在本断言范围）
+            // Match the recursive flag `/r ` exactly (`/REBOOTOK` also starts
+            // with /R, but it only deletes on reboot, and its target is still
+            // $INSTDIR install leftovers, outside this assertion's scope)
             line.trim_start()
                 .to_ascii_lowercase()
                 .starts_with("rmdir /r ")
@@ -150,12 +169,13 @@ fn nsis_uninstall_never_targets_vault_data_dir() {
         );
     }
 
-    // vault 路径（`dirs::data_dir()/persona`）不得成为任何删除/移除指令
-    // 的目标；删除指令 = 行首 RMDir/RmDir 或 Delete（忽略注释行）。
+    // The vault path (`dirs::data_dir()/persona`) must not become the target
+    // of any delete/remove command; deletion command = RMDir/RmDir at line
+    // start or Delete (comment lines ignored).
     for line in nsi.lines() {
         let trimmed = line.trim_start();
         if trimmed.starts_with(';') {
-            continue; // 注释里提及 vault 路径是允许的（说明文档）
+            continue; // Mentioning the vault path in a comment is allowed (documentation)
         }
         let upper = trimmed.to_ascii_uppercase();
         let is_delete_cmd = upper.starts_with("RMDIR")

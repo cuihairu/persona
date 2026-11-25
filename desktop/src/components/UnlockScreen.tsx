@@ -16,10 +16,12 @@ const UnlockScreen: React.FC<UnlockScreenProps> = ({ onUnlock }) => {
   const [showPassword, setShowPassword] = useState(false);
   const [dbPath, setDbPath] = useState('');
   const [useCustomPath, setUseCustomPath] = useState(false);
-  // 强制改密弹窗需要旧密码预填（提交过的那次输入）；轮换提交后收起弹窗
+  // The forced rotation modal needs the old password prefilled (the input that
+  // was submitted); the modal collapses after the rotation is submitted
   const [submittedPassword, setSubmittedPassword] = useState('');
   const [rotationSubmitted, setRotationSubmitted] = useState(false);
-  // biometric 状态（available+enabled 才渲染指纹按钮）；null = 未配置/查询失败
+  // biometric status (the fingerprint button renders only when available+enabled);
+  // null = not configured / lookup failed
   const [biometric, setBiometric] = useState<BiometricStatus | null>(null);
   const [biometricBusy, setBiometricBusy] = useState(false);
 
@@ -33,7 +35,8 @@ const UnlockScreen: React.FC<UnlockScreenProps> = ({ onUnlock }) => {
 
   const effectiveDbPath = useCustomPath ? dbPath : undefined;
 
-  // mount / 自定义路径变更时查 status（防抖 200ms：每键一击不轰 keyring 探测）
+  // Query status on mount / when the custom path changes (debounced 200ms: one
+  // keystroke per probe instead of hammering the keyring lookup)
   useEffect(() => {
     let cancelled = false;
     const timer = setTimeout(() => {
@@ -43,7 +46,7 @@ const UnlockScreen: React.FC<UnlockScreenProps> = ({ onUnlock }) => {
           if (!cancelled && resp.success && resp.data && resp.data.enabled) {
             setBiometric(resp.data);
           } else if (!cancelled) {
-            // 未配置 / 后端判断不可用：无指纹按钮（fail-closed 静默降级）
+            // Not configured / backend says unavailable: no fingerprint button (fail-closed silent degradation)
             setBiometric(null);
           }
         })
@@ -69,8 +72,9 @@ const UnlockScreen: React.FC<UnlockScreenProps> = ({ onUnlock }) => {
     }
   };
 
-  // 指纹解锁：成功直接进应用（后端已建会话）；RESET 后条目已删，刷新
-  // status 隐藏按钮；其余错误由 hook 的 error 驱动错误条
+  // Fingerprint unlock: on success go straight into the app (the backend has
+  // already created the session); after a RESET the entry is gone, so refresh
+  // the status to hide the button; other errors drive the error bar via the hook
   const handleBiometricUnlock = async () => {
     setBiometricBusy(true);
     try {
@@ -85,7 +89,7 @@ const UnlockScreen: React.FC<UnlockScreenProps> = ({ onUnlock }) => {
     }
   };
 
-  // 轮换完成：用新密码重新 init 建会话（成功后 App 切走，本屏卸载）
+  // Rotation done: re-init with the new password to establish a session (on success App switches away and this screen unmounts)
   const handleRotationDone = async (newPassword: string) => {
     setRotationSubmitted(true);
     const ok = await initializeService(newPassword, useCustomPath ? dbPath : undefined);
@@ -198,7 +202,7 @@ const UnlockScreen: React.FC<UnlockScreenProps> = ({ onUnlock }) => {
             </button>
           </form>
 
-          {/* biometric 解锁（配置过才渲染；REJECT 路径走上方通用错误条） */}
+          {/* biometric unlock (rendered only when configured; the REJECT path goes through the generic error bar above) */}
           {biometric && biometric.available && biometric.enabled && (
             <button
               type="button"

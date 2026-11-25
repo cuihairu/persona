@@ -6,9 +6,10 @@ import path from "path";
 export default defineConfig(async () => ({
   plugins: [react()],
 
-  // 更新检测的渠道元信息（src/utils/updateCheck.ts 读 __PERSONA_BUILD__）。
-  // desktop-build.yml（每日构建）注入 nightly + commit + 构建时间；未来的
-  // 发版流水线注入 release；本地不注入 → dev（不参与版本比对）。
+  // Update-check channel metadata (src/utils/updateCheck.ts reads __PERSONA_BUILD__).
+  // desktop-build.yml (the daily build) injects nightly + commit + build time; a future
+  // release pipeline injects release; local builds inject nothing → dev (excluded from
+  // version comparison).
   define: {
     __PERSONA_BUILD__: JSON.stringify({
       channel: process.env.VITE_UPDATE_CHANNEL ?? "dev",

@@ -22,19 +22,19 @@ import { CATEGORY_TYPES, filterLabel } from './sidebarNav';
 import FaviconImg from './FaviconImg';
 import { useFavicons } from '@/hooks/useFavicons';
 
-/** 筛选条件（各维度为空 = 不过滤；多维度之间 AND） */
+/** Filter criteria (an empty dimension = no filtering; multiple dimensions AND together) */
 export interface CredentialFilter {
   query?: string;
-  /** 选中类型集合（空 = 全部类型） */
+  /** Selected type set (empty = all types) */
   types?: Set<string>;
-  /** 选中标签集合（空 = 全部标签） */
+  /** Selected tag set (empty = all tags) */
   tags?: Set<string>;
-  /** 选中身份（空/缺省 = 当前身份的条目） */
+  /** Selected identity (empty/absent = entries of the current identity) */
   identityId?: string;
   favoritesOnly?: boolean;
 }
 
-/** 本地筛选凭据列表（纯函数，便于单测） */
+/** Filter the credential list locally (a pure function, for unit testing) */
 export const filterCredentials = (
   credentials: Credential[],
   { query, types, tags, identityId, favoritesOnly }: CredentialFilter,
@@ -58,19 +58,21 @@ interface CredentialListProps {
 }
 
 /**
- * 主区左栏：条目列表（行内复制）。搜索在侧栏大搜索框（写同一个 store 字段），
- * 本组件只负责"当前筛选 → 结果集 → 选中"这条链；详情面板由父级（App）
- * 监听 store 选中态渲染在列表右侧，窄屏（<lg）下隐藏。
+ * Left column of the main area: the entry list (with inline copy). Search lives
+ * in the sidebar's big search box (writing the same store field); this component
+ * only owns the "current filter → result set → selection" chain. The detail pane
+ * is rendered to the right of the list by the parent (App), which watches the
+ * store selection; hidden below the lg breakpoint.
  */
 const CredentialList: React.FC<CredentialListProps> = ({ onCreateCredential }) => {
   const { t } = useTranslation();
   const { credentials, currentIdentity } = usePersonaService();
-  // flag 开时批量预取列表页 favicon（纯缓存读；miss 不触发抓取）
+  // Batch-prefetch favicons for the list page when the flag is on (pure cache reads; a miss never triggers a fetch)
   useFavicons(credentials.map((c) => c.url));
   const sidebarFilter = useAppStore((s) => s.sidebarFilter);
   const resetSidebarFilter = useAppStore((s) => s.resetSidebarFilter);
   const identities = useAppStore((s) => s.identities);
-  // 搜索词在 store（见 appStore 注释）：与选中/侧栏筛选同批更新，避免注入中间帧
+  // The search term lives in the store (see the appStore comment): updated in the same batch as selection/sidebar filters, avoiding injected intermediate frames
   const searchQuery = useAppStore((s) => s.credentialSearchQuery);
   const setCredentialSearchQuery = useAppStore((s) => s.setCredentialSearchQuery);
   const pendingSelection = useAppStore((s) => s.pendingCredentialSelection);
@@ -78,13 +80,13 @@ const CredentialList: React.FC<CredentialListProps> = ({ onCreateCredential }) =
   const selectedCredentialId = useAppStore((s) => s.selectedCredentialId);
   const setSelectedCredentialId = useAppStore((s) => s.setSelectedCredentialId);
 
-  // 选中提升进 store（全局 ⌘E 复制用户名需要），对象从列表派生
+  // Selection is lifted into the store (global ⌘E copy-username needs it), derived from the list
   const selectedCredential = useMemo(
     () => credentials.find((c) => c.id === selectedCredentialId) ?? null,
     [credentials, selectedCredentialId],
   );
 
-  // 侧栏筛选（单选）→ CredentialFilter 纯派生；搜索词独立叠加（AND）
+  // Sidebar filter (single-select) → pure CredentialFilter derivation; the search term stacks on top independently (AND)
   const treeFilter = useMemo<CredentialFilter>(() => {
     switch (sidebarFilter.kind) {
       case 'all':
@@ -99,14 +101,14 @@ const CredentialList: React.FC<CredentialListProps> = ({ onCreateCredential }) =
       case 'identity':
         return { identityId: sidebarFilter.value };
       default:
-        // 工具/通行密钥视图不渲染本组件
+        // The tools/passkeys views do not render this component
         return {};
     }
   }, [sidebarFilter]);
 
   const filteredCredentials = useMemo(() => {
     const result = filterCredentials(credentials, { query: searchQuery, ...treeFilter });
-    // 「最近使用」是排序视图而不是筛选：最近访问过的在前，从未访问的沉底
+    // "Recently used" is a sort view, not a filter: most recently accessed first, never-accessed sinks to the bottom
     if (sidebarFilter.kind !== 'recent') return result;
     return [...result].sort((a, b) => {
       const at = a.last_accessed ? Date.parse(a.last_accessed) : null;
@@ -119,19 +121,21 @@ const CredentialList: React.FC<CredentialListProps> = ({ onCreateCredential }) =
   }, [credentials, searchQuery, treeFilter, sidebarFilter.kind]);
 
   const handleCredentialClick = (credential: Credential) => {
-    // 选中即写入 store（全局 ⌘E 复制用户名需要）；详情数据由 App 监听
-    // store 选中变化统一加载，这里不再触碰 IPC（避免双取）
+    // Selection is written straight into the store (global ⌘E copy-username needs
+    // it); detail data is loaded centrally by App watching the store selection, so
+    // no IPC happens here (avoids double fetching)
     setSelectedCredentialId(credential.id);
   };
 
-  // 切身份后旧选中项悬空：清空右栏选中与搜索词
+  // After switching identity the old selection dangles: clear the right-pane selection and the search term
   useEffect(() => {
     setSelectedCredentialId(null);
     setCredentialSearchQuery('');
   }, [currentIdentity?.id, setSelectedCredentialId, setCredentialSearchQuery]);
 
-  // 筛选（搜索词 / 侧栏分类）变化后选中项不再可见时清详情面板：
-  // 1Password 语义——筛选是导航动作，不保留与结果集脱节的详情
+  // When a filter (search term / sidebar category) change makes the selection
+  // invisible, clear the detail pane: 1Password semantics — filtering is a
+  // navigation action and does not keep a detail disconnected from the result set
   const isSelectionVisible =
     !selectedCredentialId ||
     filteredCredentials.some((c) => c.id === selectedCredentialId);
@@ -141,21 +145,25 @@ const CredentialList: React.FC<CredentialListProps> = ({ onCreateCredential }) =
     }
   }, [isSelectionVisible, selectedCredentialId, setSelectedCredentialId]);
 
-  // 全局搜索跨身份跳转：目标身份的凭据就绪后注入选中并清除 pending
-  // （声明在清选中 effect 之后；凭据异步加载完成会再次触发本 effect）
+  // Global-search cross-identity navigation: once the target identity's credentials
+  // are ready, inject the selection and clear pending (declared after the
+  // clear-selection effect; async credential loading re-triggers this effect)
   useEffect(() => {
     if (!pendingSelection || pendingSelection.identityId !== currentIdentity?.id) return;
     const target = credentials.find((c) => c.id === pendingSelection.credentialId);
     if (!target) {
-      // 列表已归属目标身份（首元素校验，排除换身份后旧列表尚未替换的中间态）
-      // 而目标不在其中（已删除）：pending 作废防残留
+      // The list already belongs to the target identity (checked via the first
+      // element, ruling out the intermediate state where an identity switch has not
+      // yet replaced the old list) but the target is not in it (deleted): void the
+      // pending to prevent leftovers
       if (credentials.length > 0 && credentials[0].identity_id === pendingSelection.identityId) {
         clearPendingCredentialSelection();
       }
       return;
     }
-    // 清本地搜索词与侧栏筛选：保证跳转目标可见（否则注入的选中
-    // 会被上面的"筛选不可见清选中"effect 立即清掉）
+    // Clear the local search term and sidebar filter so the jump target is visible
+    // (otherwise the injected selection is immediately cleared by the
+    // "filter hides selection → clear" effect above)
     setCredentialSearchQuery('');
     resetSidebarFilter();
     handleCredentialClick(target);
@@ -177,7 +185,7 @@ const CredentialList: React.FC<CredentialListProps> = ({ onCreateCredential }) =
 
   return (
     <div className="flex h-full min-h-0 flex-col" data-testid="credential-list">
-      {/* 列表头：当前筛选名 + 计数 + 新建（1Password 式列表头） */}
+      {/* List header: current filter name + count + create (a 1Password-style header) */}
       <div className="flex items-center gap-3 border-b border-secondary-200 px-4 py-2.5 dark:border-gray-800">
         <div className="min-w-0">
           <h2 className="truncate text-[15px] font-semibold text-secondary-900 dark:text-secondary-50">
@@ -193,7 +201,7 @@ const CredentialList: React.FC<CredentialListProps> = ({ onCreateCredential }) =
         </button>
       </div>
 
-      {/* 条目行：单列、紧凑、选中即整行填充 */}
+      {/* Entry rows: single column, compact, and selecting fills the whole row */}
       <div
         className={clsx(
           'min-h-0 flex-1 overflow-y-auto p-2',
@@ -225,7 +233,7 @@ const CredentialList: React.FC<CredentialListProps> = ({ onCreateCredential }) =
               const IconComponent = getCredentialIcon(credential.credential_type);
               const selected = selectedCredential?.id === credential.id;
               return (
-                // 行内有行内复制按钮，禁用 <button> 嵌套：li role="button" + 键盘处理
+                // The row holds an inline copy button, and nested <button> is disallowed: li role="button" + keyboard handling
                 <li
                   key={credential.id}
                   role="button"
@@ -234,7 +242,7 @@ const CredentialList: React.FC<CredentialListProps> = ({ onCreateCredential }) =
                   data-testid={`credential-row-${credential.id}`}
                   onClick={() => handleCredentialClick(credential)}
                   onKeyDown={(e) => {
-                    // 焦点在行内复制按钮上时不触发选中
+                    // Do not trigger selection while focus is on the inline copy button
                     if (e.target !== e.currentTarget) return;
                     if (e.key === 'Enter' || e.key === ' ') handleCredentialClick(credential);
                   }}

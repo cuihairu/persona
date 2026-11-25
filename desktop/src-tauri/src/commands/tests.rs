@@ -2,7 +2,8 @@ use super::*;
 use persona_core::models::Identity;
 
 async fn setup_wallet_test_db() -> (tempfile::TempDir, Database, Identity) {
-    // 委托共享夹具（test_support.rs），避免每套测试重建样板
+    // Delegate to the shared fixture (test_support.rs) instead of
+    // rebuilding the boilerplate in every test suite
     let fixture = crate::test_support::test_db().await;
     (fixture._dir, fixture.db, fixture.identity)
 }
@@ -93,7 +94,7 @@ async fn wallet_delete_removes_wallet_from_repository() {
 }
 
 // -------------------------------------------------------------------------
-// extract_secret_field：字段 × 类型矩阵
+// extract_secret_field: the field x type matrix
 // -------------------------------------------------------------------------
 
 fn password_data() -> CredentialData {
@@ -128,7 +129,7 @@ fn reveal_extracts_ssh_key_and_flags_missing_passphrase() {
         "-----BEGIN"
     );
     assert!(extract_secret_field(&data, "ssh_passphrase").is_err());
-    // 跨类型取 password 必须失败
+    // Requesting "password" across types must fail
     assert!(extract_secret_field(&data, "password").is_err());
 }
 
@@ -207,7 +208,7 @@ fn item_password_guard_gates_wallet_seed_material_only() {
         ..guarded_data
     });
 
-    // 未设条目密码：三个种子字段全部放行
+    // No item password set: all three seed fields pass through
     for f in [
         "wallet_mnemonic",
         "wallet_private_key",
@@ -219,7 +220,7 @@ fn item_password_guard_gates_wallet_seed_material_only() {
         );
     }
 
-    // 设了条目密码：缺参 → REQUIRED；对 → 放行；错 → WRONG
+    // Item password set: missing -> REQUIRED; correct -> allow; wrong -> WRONG
     for f in [
         "wallet_mnemonic",
         "wallet_private_key",
@@ -239,7 +240,8 @@ fn item_password_guard_gates_wallet_seed_material_only() {
         assert_eq!(code, crate::error::CODE_ITEM_PASSWORD_WRONG);
     }
 
-    // 非保护字段（登录密码视角的 password）与非钱包类型不受影响
+    // Unguarded fields (a login password's "password") and non-wallet types
+    // are unaffected
     let password =
         CredentialData::Password(persona_core::models::credential::PasswordCredentialData {
             password: "pw".to_string(),
@@ -262,7 +264,7 @@ fn reveal_raw_requires_utf8_and_unknown_field_fails() {
 }
 
 // -------------------------------------------------------------------------
-// build_health_scan_config：扫描参数解析
+// build_health_scan_config: scan parameter parsing
 // -------------------------------------------------------------------------
 
 #[test]
@@ -291,7 +293,7 @@ fn health_scan_request_overrides_each_field() {
     assert_eq!(c.expiry_warning_days, 7);
     assert_eq!(c.stale_after_days, 90);
 
-    // 前端可以只传部分字段，其余回落默认值
+    // The frontend may send only some fields; the rest fall back to defaults
     let partial: HealthScanRequest =
         serde_json::from_value(serde_json::json!({ "min_password_score": 1 })).unwrap();
     let c = build_health_scan_config(&partial);
@@ -308,19 +310,19 @@ fn health_scan_request_overrides_each_field() {
 
 #[test]
 fn health_scan_check_breaches_flag_parses_with_default_off() {
-    // 缺省 = 不查泄露库
+    // Default = do not check the breach database
     let absent: HealthScanRequest = serde_json::from_value(serde_json::json!({})).unwrap();
     assert_eq!(absent.check_breaches, None);
 
     let on: HealthScanRequest =
         serde_json::from_value(serde_json::json!({ "check_breaches": true })).unwrap();
     assert_eq!(on.check_breaches, Some(true));
-    // flag 不影响扫描配置本体
+    // The flag does not affect the scan config itself
     assert_eq!(build_health_scan_config(&on), HealthScanConfig::default());
 }
 
 // -------------------------------------------------------------------------
-// build_audit_query：过滤参数解析
+// build_audit_query: filter parameter parsing
 // -------------------------------------------------------------------------
 
 #[test]
@@ -371,14 +373,15 @@ fn audit_query_parses_action_time_and_rejects_garbage() {
             limit: None,
         }
     };
-    // 未知动作名按 core 语义解析为 Custom（查询合法，结果为空），不报错
+    // An unknown action name parses to Custom under core's semantics (the
+    // query is valid, just returns nothing) rather than erroring
     assert!(build_audit_query(&bad).is_ok());
     bad.action = None;
     bad.identity_id = Some("not-a-uuid".to_string());
     assert!(build_audit_query(&bad).is_err());
 }
 
-/// parse_network 的全部别名臂（大小写不敏感，未知值 → Custom）。
+/// Every alias arm of parse_network (case-insensitive; unknown value -> Custom).
 #[test]
 fn parse_network_covers_every_alias_arm() {
     use persona_core::models::wallet::BlockchainNetwork;
@@ -414,17 +417,18 @@ fn parse_network_covers_every_alias_arm() {
         ),
     ];
     for (input, expected) in cases {
-        // to_lowercase 在函数内做，输入大小写自由。
+        // to_lowercase happens inside the function, so input casing is free.
         let got = parse_network(&input.to_lowercase())
             .unwrap_or_else(|e| panic!("parse_network({input}) errored: {e}"));
         assert_eq!(&got, expected, "arm for {input}");
     }
-    // 直接传原样输入（不做预 lowercase）再验一次未知臂路径。
+    // Pass raw input directly (no pre-lowercasing) to exercise the unknown-arm
+    // path once more.
     let custom = parse_network("FancyChain").unwrap();
     assert_eq!(custom, BlockchainNetwork::Custom("fancychain".to_string()));
 }
 
-/// serialize_wallet_address 的全部 AddressType 标签臂 + 余额缺省。
+/// Every AddressType label arm of serialize_wallet_address + the missing balance.
 #[test]
 fn serialize_wallet_address_covers_every_address_type() {
     use persona_core::models::wallet::{AddressType, WalletAddress};
@@ -461,8 +465,9 @@ fn serialize_wallet_address_covers_every_address_type() {
     assert_eq!(custom.address_type, "nft-vault");
 }
 
-/// 一次性丢钥匙（本机 ssh-keygen 生成、无口令），钉住 inspect IPC 的
-/// DTO 形状与指纹口径；加密钥解锁路径在 core 的 ssh_import 测试覆盖。
+/// A throwaway key (generated with local ssh-keygen, unencrypted) that pins
+/// down the inspect IPC DTO shape and fingerprint convention; the encrypted
+/// key unlock path is covered by core's ssh_import tests.
 const INSPECT_FIXTURE_PEM: &str = "-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW\nQyNTUxOQAAACDTgnxCrm1hgMlxbs5yYX4cnGwrKT9YHCAVXEvB83667wAAAJgs0sOrLNLD\nqwAAAAtzc2gtZWQyNTUxOQAAACDTgnxCrm1hgMlxbs5yYX4cnGwrKT9YHCAVXEvB83667w\nAAAEA0dGcgt7qKc5Defecn7TTt7fquyTe6FpXVeshCU6jx49OCfEKubWGAyXFuznJhfhyc\nbCspP1gcIBVcS8HzfrrvAAAAFHBlcnNvbmEtZGVza3RvcC10ZXN0AQ==\n-----END OPENSSH PRIVATE KEY-----\n";
 
 #[tokio::test]

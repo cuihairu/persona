@@ -98,8 +98,9 @@ async fn credential_commands_round_trip_search_favorite_and_totp() {
         .unwrap();
     assert!(resp.data.unwrap().is_empty());
 }
-/// G1.5：创建表单路径——CredentialDataRequest::GameToken 经 create_credential
-/// 命令入库，读回 GameToken 变体并出码（steam_guard）。
+/// G1.5: the create-form path — CredentialDataRequest::GameToken goes through
+/// the create_credential command into the db, and reads back as a GameToken
+/// variant and produces a code (steam_guard).
 #[tokio::test]
 async fn create_credential_accepts_game_token_request() {
     let (app, identity_id) = app_with_identity().await;
@@ -120,7 +121,7 @@ async fn create_credential_accepts_game_token_request() {
     assert!(resp.success, "{:?}", resp.error);
     let cred = resp.data.expect("game token credential created");
 
-    // 读回：数据是 GameToken 变体（JSON 里不回传 secret_key）。
+    // Read back: the data is a GameToken variant (secret_key is never sent back in JSON).
     let resp = get_credential_data(cred.id.clone(), app.state::<AppState>())
         .await
         .unwrap();
@@ -133,7 +134,7 @@ async fn create_credential_accepts_game_token_request() {
     assert_eq!(data.data["account_name"], "player_one");
     assert!(data.data.get("secret_key").is_none());
 
-    // steam_guard 出码经统一调度器。
+    // steam_guard code generation goes through the unified scheduler.
     let resp = get_totp_code(cred.id.clone(), app.state::<AppState>())
         .await
         .unwrap();
@@ -147,9 +148,10 @@ async fn create_credential_accepts_game_token_request() {
         .unwrap();
     assert!(resp.success, "{:?}", resp.error);
 }
-/// 1Password 对齐 A 批：Secure Note 创建表单路径——
-/// CredentialDataRequest::SecureNote 经 create_credential 入库，credential_type
-/// 为真实 SecureNote 变体，读回正文逐字保留（per-item key 加密往返）。
+/// 1Password alignment batch A: the Secure Note create-form path —
+/// CredentialDataRequest::SecureNote goes through create_credential into the db,
+/// credential_type is a real SecureNote variant, and the body reads back
+/// verbatim (a per-item key encryption round trip).
 #[tokio::test]
 async fn create_credential_accepts_secure_note_request() {
     let (app, identity_id) = app_with_identity().await;
@@ -166,7 +168,7 @@ async fn create_credential_accepts_secure_note_request() {
     assert!(resp.success, "{:?}", resp.error);
     let cred = resp.data.expect("secure note created");
 
-    // 读回：类型标签与正文都保留（多行内容不被折叠）。
+    // Read back: both the type label and the body are kept (multiline content is not collapsed).
     let resp = get_credential_data(cred.id.clone(), app.state::<AppState>())
         .await
         .unwrap();
@@ -176,7 +178,7 @@ async fn create_credential_accepts_secure_note_request() {
     assert_eq!(data.credential_type, "SecureNote");
     assert_eq!(data.data["note"], "1111-2222\n3333-4444");
 
-    // 列表读回：credential_type 落库往返不退化为 Custom。
+    // List read back: credential_type survives the db round trip without degrading to Custom.
     let resp = get_credentials_for_identity(identity_id, app.state::<AppState>())
         .await
         .unwrap();
@@ -191,14 +193,15 @@ async fn create_credential_accepts_secure_note_request() {
         .unwrap();
     assert!(resp.success, "{:?}", resp.error);
 }
-/// 1Password 对齐 B 批：Identity / Software License 创建表单路径——
-/// 两类 CredentialDataRequest 经 create_credential 入库，credential_type
-/// 为真实变体，读回字段逐字保留（per-item key 加密往返），不退化为 Custom。
+/// 1Password alignment batch B: the Identity / Software License create-form
+/// path — both CredentialDataRequest kinds go through create_credential into the
+/// db, credential_type is a real variant, and the read-back fields are kept
+/// verbatim (a per-item key encryption round trip) without degrading to Custom.
 #[tokio::test]
 async fn create_credential_accepts_identity_and_license_requests() {
     let (app, identity_id) = app_with_identity().await;
 
-    // Identity：证件号等敏感字段全量读回（get_credential_data 走敏感门禁）。
+    // Identity: sensitive fields such as the document number are read back in full (get_credential_data goes through the sensitive gate).
     let mut req = password_credential_request(&identity_id);
     req.name = "Passport (main)".to_string();
     req.credential_type = "Identity".to_string();
@@ -236,7 +239,7 @@ async fn create_credential_accepts_identity_and_license_requests() {
     assert_eq!(data.data["address"], "1 Main St\nBeijing");
     assert_eq!(data.data["seats"], serde_json::Value::Null);
 
-    // SoftwareLicense：license_key 读回、seats 数值往返。
+    // SoftwareLicense: license_key reads back and seats round trips as a number.
     let mut req = password_credential_request(&identity_id);
     req.name = "JetBrains All Products".to_string();
     req.credential_type = "SoftwareLicense".to_string();
@@ -268,7 +271,7 @@ async fn create_credential_accepts_identity_and_license_requests() {
     assert_eq!(data.data["seats"], serde_json::json!(3));
     assert_eq!(data.data["order_number"], serde_json::Value::Null);
 
-    // 列表读回：两个 credential_type 落库往返不退化为 Custom。
+    // List read back: both credential_type values survive the db round trip without degrading to Custom.
     let resp = get_credentials_for_identity(identity_id, app.state::<AppState>())
         .await
         .unwrap();
@@ -290,9 +293,10 @@ async fn create_credential_accepts_identity_and_license_requests() {
         .unwrap();
     assert!(resp.success, "{:?}", resp.error);
 }
-/// 桌面稳定化：编辑凭据闭环——update_credential 改元数据、
-/// update_credential_data 换密文 payload（复用原 item key，wrapped key 不变），
-/// 两路读回逐字校验；不存在的 id 报错。
+/// Desktop stabilization: the credential-editing closed loop —
+/// update_credential changes metadata and update_credential_data swaps the
+/// ciphertext payload (reusing the original item key, the wrapped key stays
+/// unchanged); both read back are verified verbatim; a nonexistent id errors.
 #[tokio::test]
 async fn update_credential_metadata_and_payload_round_trip() {
     let (app, identity_id) = app_with_identity().await;
@@ -305,7 +309,7 @@ async fn update_credential_metadata_and_payload_round_trip() {
     let created = resp.data.expect("credential created");
     assert_eq!(created.username.as_deref(), Some("alice"));
 
-    // 元数据编辑：改名 + username/notes/tags 更新（url 传空串 = 清空）。
+    // A metadata edit: rename + updating username/notes/tags (passing an empty string for url = clearing it).
     let resp = update_credential(
         UpdateCredentialRequest {
             id: created.id.clone(),
@@ -329,7 +333,7 @@ async fn update_credential_metadata_and_payload_round_trip() {
     assert_eq!(meta.notes.as_deref(), Some("edited note"));
     assert_eq!(meta.tags, vec!["work".to_string()]);
 
-    // payload 编辑：换密码（复用原 item key 重封）。
+    // A payload edit: changing the password (re-sealed with the original item key).
     let resp = update_credential_data(
         UpdateCredentialDataRequest {
             credential_id: created.id.clone(),
@@ -349,10 +353,11 @@ async fn update_credential_metadata_and_payload_round_trip() {
         payload.name, "Renamed login",
         "metadata survives payload edit"
     );
-    // item key 复用不变量（wrapped key 字节不动）在 core 层专测断言；
-    // SerializableCredential 不回传密钥材料，命令层不重复覆盖。
+    // The item-key reuse invariant (the wrapped key bytes stay put) is asserted
+    // in a dedicated core-layer test; SerializableCredential does not send back
+    // key material, so the command layer does not duplicate that coverage.
 
-    // 读回：新密码逐字保留、元数据编辑结果都在。
+    // Read back: the new password is kept verbatim and the metadata edits are all present.
     let resp = get_credential_data(created.id.clone(), app.state::<AppState>())
         .await
         .unwrap();
@@ -377,7 +382,7 @@ async fn update_credential_metadata_and_payload_round_trip() {
     assert_eq!(stored.username.as_deref(), Some("newuser"));
     assert_eq!(stored.notes.as_deref(), Some("edited note"));
 
-    // 不存在的 id：两命令都显式报错。
+    // A nonexistent id: both commands error explicitly.
     let ghost = uuid::Uuid::new_v4().to_string();
     let resp = update_credential(
         UpdateCredentialRequest {
@@ -416,8 +421,9 @@ async fn update_credential_metadata_and_payload_round_trip() {
         .unwrap();
     assert!(resp.success, "{:?}", resp.error);
 }
-/// 1Password 对齐 B 批：item history——创建与 favorite 切换自动落历史行，
-/// get_credential_history 返回时间线（新版本在前）与字段级 diff。
+/// 1Password alignment batch B: item history — creating and toggling
+/// favorite write history rows automatically, and get_credential_history returns
+/// the timeline (newest first) with field-level diffs.
 #[tokio::test]
 async fn credential_history_tracks_create_and_favorite_toggle() {
     let (app, identity_id) = app_with_identity().await;
@@ -430,8 +436,9 @@ async fn credential_history_tracks_create_and_favorite_toggle() {
     assert!(resp.success, "{:?}", resp.error);
     let cred = resp.data.expect("credential created");
 
-    // 初始：created (v1) + 紧随的元数据补写 updated (v2)——
-    // 桌面 create 命令是 create-then-update 架构，两次写库即两条真实历史
+    // Initially: created (v1) + the immediately following metadata top-up
+    // updated (v2) — the desktop create command is create-then-update by
+    // architecture, so two db writes are two real history entries
     let resp = get_credential_history(cred.id.clone(), app.state::<AppState>())
         .await
         .unwrap();
@@ -440,7 +447,7 @@ async fn credential_history_tracks_create_and_favorite_toggle() {
     assert_eq!(history.len(), 2);
     assert_eq!(history[0].change_type, "updated");
     assert_eq!(history[0].version, 2);
-    // 补写 diff = 表单的 url/username/notes/tags 四个元数据字段
+    // The top-up diff = the four metadata fields of the form: url/username/notes/tags
     assert_eq!(history[0].changes.len(), 4);
     assert!(history[0]
         .changes
@@ -449,7 +456,7 @@ async fn credential_history_tracks_create_and_favorite_toggle() {
     assert_eq!(history[1].change_type, "created");
     assert_eq!(history[1].version, 1);
 
-    // favorite 切换 → updated 行，diff 只含 is_favorite
+    // Toggling favorite -> an updated row whose diff contains only is_favorite
     let resp = toggle_credential_favorite(cred.id.clone(), app.state::<AppState>())
         .await
         .unwrap();
@@ -472,8 +479,9 @@ async fn credential_history_tracks_create_and_favorite_toggle() {
         .unwrap();
     assert!(resp.success, "{:?}", resp.error);
 }
-/// restore-to-version：元数据回滚到目标版本并落 restored 历史行；
-/// 秘密不回滚（历史快照不含密文）。
+/// restore-to-version: metadata rolls back to the target version and a
+/// restored history row is written; secrets are not rolled back (the history
+/// snapshot holds no ciphertext).
 #[tokio::test]
 async fn restore_credential_version_reverts_metadata() {
     let (app, identity_id) = app_with_identity().await;
@@ -486,7 +494,7 @@ async fn restore_credential_version_reverts_metadata() {
     assert!(resp.success, "{:?}", resp.error);
     let cred = resp.data.expect("credential created");
 
-    // 再改一次元数据 → 多一个版本
+    // Edit the metadata once more -> one more version
     let resp = update_credential(
         UpdateCredentialRequest {
             id: cred.id.clone(),
@@ -503,7 +511,7 @@ async fn restore_credential_version_reverts_metadata() {
     .unwrap();
     assert!(resp.success, "{:?}", resp.error);
 
-    // 恢复到 v1（创建态）：表单补写与改名一并回滚
+    // Restore to v1 (the created state): the form top-up and the rename roll back together
     let resp = restore_credential_version(cred.id.clone(), 1, app.state::<AppState>())
         .await
         .unwrap();
@@ -524,7 +532,7 @@ async fn restore_credential_version_reverts_metadata() {
     );
     assert!(history[1].restorable);
 
-    // 未知版本 → 业务错误而非 panic
+    // An unknown version -> a business error rather than a panic
     let resp = restore_credential_version(cred.id.clone(), 99, app.state::<AppState>())
         .await
         .unwrap();
@@ -536,8 +544,8 @@ async fn restore_credential_version_reverts_metadata() {
         .unwrap();
     assert!(resp.success, "{:?}", resp.error);
 }
-/// create_credential 的 credential_type/security_level 字符串臂矩阵，
-/// 以及 url/username/notes/tags 的归一化臂。
+/// The matrix of credential_type/security_level string arms of
+/// create_credential, plus the normalization arms of url/username/notes/tags.
 #[tokio::test]
 async fn create_credential_type_and_security_level_matrix() {
     let (app, identity_id) = app_with_identity().await;
@@ -556,7 +564,7 @@ async fn create_credential_type_and_security_level_matrix() {
         },
     };
 
-    // credential_type 的非 Password 臂（Password/TwoFactor 已有测试覆盖）。
+    // The non-Password arms of credential_type (Password/TwoFactor already have test coverage).
     for type_str in [
         "CryptoWallet",
         "SshKey",
@@ -582,7 +590,7 @@ async fn create_credential_type_and_security_level_matrix() {
         assert_eq!(cred.notes.as_deref(), Some("kept"));
         assert_eq!(cred.tags, vec!["a".to_string(), "b".to_string()]);
 
-        // security_level 的其余臂 + 未知值回落 Medium。
+        // The remaining arms of security_level + an unknown value falling back to Medium.
         for (level, expected) in [("High", "High"), ("Low", "Low"), ("Bogus", "Medium")] {
             let mut req = base("Levels", type_str, level);
             req.name = format!("Levels-{type_str}-{level}");
@@ -599,14 +607,15 @@ async fn create_credential_type_and_security_level_matrix() {
         assert!(resp.success, "{:?}", resp.error);
     }
 
-    // 坏 identity UUID 在 get_credentials_for_identity 上同样失败关闭。
+    // A bad identity UUID also fails closed on get_credentials_for_identity.
     let resp = get_credentials_for_identity("not-a-uuid".to_string(), app.state::<AppState>())
         .await
         .unwrap();
     assert_eq!(resp.error.as_deref(), Some("Invalid UUID format"));
 }
-/// get_credential_data 对全部 8 种 CredentialData 变体输出正确的类型标签。
-/// BankCard/ServerConfig 没有对应的命令层请求变体，直接经 service 构造。
+/// get_credential_data emits the right type label for all 8 CredentialData
+/// variants. BankCard/ServerConfig have no corresponding command-layer request
+/// variant, so they are constructed via the service directly.
 #[tokio::test]
 async fn get_credential_data_returns_type_labels_for_all_variants() {
     use persona_core::models::credential::{BankCardData, ServerConfigData};
@@ -614,7 +623,7 @@ async fn get_credential_data_returns_type_labels_for_all_variants() {
     let (app, identity_id) = app_with_identity().await;
     let identity_uuid = uuid::Uuid::parse_str(&identity_id).unwrap();
 
-    // 经命令层建 6 种（Password/CryptoWallet/SshKey/ApiKey/TwoFactor/Raw）。
+    // Build 6 of them through the command layer (Password/CryptoWallet/SshKey/ApiKey/TwoFactor/Raw).
     let request_for = |name: &str, data: CredentialDataRequest| CreateCredentialRequest {
         identity_id: identity_id.clone(),
         name: name.to_string(),
@@ -690,7 +699,7 @@ async fn get_credential_data_returns_type_labels_for_all_variants() {
         ids.push((resp.data.expect("created").id, name.to_string()));
     }
 
-    // BankCard/ServerConfig 直经 service 建（命令层请求枚举没有这两种）。
+    // BankCard/ServerConfig are built via the service directly (the command-layer request enum has neither of these).
     {
         let state = app.state::<AppState>();
         let guard = state.service.lock().await;
@@ -729,7 +738,7 @@ async fn get_credential_data_returns_type_labels_for_all_variants() {
         }
     }
 
-    // 逐一读回：类型标签与存储变体一一对应。
+    // Read each one back: the type labels correspond one-to-one with the stored variants.
     for (id, _) in &ids {
         let resp = get_credential_data(id.clone(), app.state::<AppState>())
             .await
@@ -752,7 +761,7 @@ async fn get_credential_data_returns_type_labels_for_all_variants() {
             wrapper.credential_type
         );
     }
-    // 8 个凭据的标签合计必须覆盖全部 8 种。
+    // The labels of the 8 credentials together must cover all 8 kinds.
     let mut labels = std::collections::HashSet::new();
     for (id, _) in &ids {
         let resp = get_credential_data(id.clone(), app.state::<AppState>())
@@ -762,21 +771,22 @@ async fn get_credential_data_returns_type_labels_for_all_variants() {
     }
     assert_eq!(labels.len(), 8, "all 8 variant labels covered: {labels:?}");
 
-    // 坏 UUID 仍是格式错误。
+    // A bad UUID is still a format error.
     let resp = get_credential_data("nope".to_string(), app.state::<AppState>())
         .await
         .unwrap();
     assert_eq!(resp.error.as_deref(), Some("Invalid UUID format"));
 }
-/// 锁定态下凭据/身份命令的 service 错误臂（这批臂输出普通错误消息，
-/// 不映射错误码）+ 审计三命令的映射错误码臂。
+/// The service-error arms of the credential/identity commands while locked
+/// (this batch of arms emits an ordinary error message and does not map to an
+/// error code) + the mapped-error-code arms of the three audit commands.
 #[tokio::test]
 async fn locked_service_credential_error_surface() {
     let (app, identity_id) = app_with_identity().await;
     let existing = uuid::Uuid::new_v4().to_string();
     lock_service(app.state::<AppState>()).await.unwrap();
 
-    // update_identity 的 get_identity Err 臂。
+    // The get_identity Err arm of update_identity.
     let resp = update_identity(
         UpdateIdentityRequest {
             id: existing.clone(),
@@ -801,7 +811,7 @@ async fn locked_service_credential_error_surface() {
         resp.error
     );
 
-    // toggle_credential_favorite 的 get_credential Err 臂。
+    // The get_credential Err arm of toggle_credential_favorite.
     let resp = toggle_credential_favorite(existing.clone(), app.state::<AppState>())
         .await
         .unwrap();
@@ -815,7 +825,7 @@ async fn locked_service_credential_error_surface() {
         resp.error
     );
 
-    // delete_credential 的 delete Err 臂。
+    // The delete Err arm of delete_credential.
     let resp = delete_credential(existing.clone(), app.state::<AppState>())
         .await
         .unwrap();
@@ -829,7 +839,7 @@ async fn locked_service_credential_error_surface() {
         resp.error
     );
 
-    // 审计三命令的 query/statistics/cleanup Err 臂。
+    // The query/statistics/cleanup Err arms of the three audit commands.
     let resp = audit_query(
         AuditQueryRequest {
             user_id: None,
@@ -852,7 +862,7 @@ async fn locked_service_credential_error_surface() {
     let resp = audit_cleanup(30, app.state::<AppState>()).await.unwrap();
     assert_eq!(resp.error_code.as_deref(), Some("SERVICE_LOCKED"));
 
-    // 解锁恢复后统计可正常返回（保证上面的失败只来自锁定）。
+    // After unlocking and recovering, statistics return normally (proving the failures above came only from being locked).
     let resp = reauth_verify(
         ReauthRequest {
             master_password: "correct-horse".to_string(),
@@ -864,7 +874,7 @@ async fn locked_service_credential_error_surface() {
     assert!(resp.success, "{:?}", resp.error);
     let resp = audit_statistics(app.state::<AppState>()).await.unwrap();
     assert!(resp.success, "{:?}", resp.error);
-    // identity_id 仍在（上述操作都失败回滚）。
+    // The identity_id is still there (all the operations above failed and rolled back).
     let resp = get_identities(app.state::<AppState>()).await.unwrap();
     assert!(resp.data.unwrap().iter().any(|i| i.id == identity_id));
 }
@@ -934,7 +944,7 @@ async fn credential_commands_surface_db_errors_from_garbage_vault() {
         resp.error
     );
 
-    // totp 与其他命令同纪律：基础设施错误落 Ok(ApiResponse::error)。
+    // totp follows the same discipline as the other commands: an infrastructure error lands as Ok(ApiResponse::error).
     let resp = get_totp_code(bogus.clone(), state.clone()).await.unwrap();
     assert!(!resp.success);
     assert!(
@@ -964,7 +974,7 @@ async fn credential_commands_surface_db_errors_from_garbage_vault() {
         resp.error
     );
 
-    // 扫描靠 repo 拉全量凭据，坏库必须给出错误报告（Ok 包错误体）。
+    // The scan relies on the repo pulling every credential, so a bad db must yield an error report (an Ok wrapping an error body).
     let resp = health_scan(None, state).await.unwrap();
     assert!(!resp.success);
     assert!(

@@ -10,10 +10,11 @@ import {
 import type { TFunction } from 'i18next';
 
 /**
- * 列表行与详情面板共用的展示 helper（叶子模块，避免两者互相引用）。
+ * Display helpers shared by the list rows and the detail panel (leaf module so
+ * the two never import each other).
  */
 
-/** 凭据类型 → 图标组件 */
+/** Credential type → icon component */
 export const getCredentialIcon = (type: string) => {
   switch (type) {
     case 'Password':
@@ -37,7 +38,7 @@ export const getCredentialIcon = (type: string) => {
   }
 };
 
-/** 安全等级 → 五档配色（未知档走 default 灰） */
+/** Security level → five-tier color scheme (unknown tier falls to the default gray) */
 export const getSecurityColor = (level: string) => {
   switch (level) {
     case 'Critical':
@@ -53,7 +54,7 @@ export const getSecurityColor = (level: string) => {
   }
 };
 
-/** URL → hostname（解析失败原样回显） */
+/** URL → hostname (echoes the raw input when parsing fails) */
 export const getSafeHostname = (url: string) => {
   try {
     return new URL(url).hostname;
@@ -63,17 +64,18 @@ export const getSafeHostname = (url: string) => {
 };
 
 /**
- * URL → favicon 缓存键（useFavicons 批量读与 FaviconImg 查缓存共用，
- * 保证两侧命中同一 key；与后端 extract_favicon_host 的归一化可能存在
- * 边缘差异——只影响缓存键匹配不上，降级为静态图标，无害）。
+ * URL → favicon cache key (shared by the useFavicons batch read and
+ * FaviconImg's cache lookup, so both sides hit the same key; may diverge in
+ * edge cases from the backend's extract_favicon_host normalization — this
+ * only causes a cache key miss and a fallback to the static icon, harmless).
  */
 export const getFaviconCacheKey = (url: string) =>
   getSafeHostname(url).trim().toLowerCase();
 
-/** 凭据类型显示名（未知类型回退原值） */
+/** Credential type display name (unknown types fall back to the raw value) */
 export const credentialTypeLabel = (t: TFunction, type: string) =>
   t(`credentialTypes.${type}`, { defaultValue: type });
 
-/** 安全等级显示名（未知等级回退原值） */
+/** Security level display name (unknown levels fall back to the raw value) */
 export const securityLevelLabel = (t: TFunction, level: string) =>
   t(`securityLevels.${level}`, { defaultValue: level });

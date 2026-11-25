@@ -1,8 +1,9 @@
 use super::*;
 
-/// biometric 命令的 vault 路径解析：参数优先（前端勾选自定义库路径时
-/// 传入——一个 db_path 一把钥匙），其次本会话 db_path，最后默认路径
-/// （解锁屏上 state.db_path 还是 None）。
+/// Vault path resolution for the biometric commands: argument first
+/// (passed when the frontend checked a custom vault path — one db_path, one
+/// key), then the session's db_path, then the default path (state.db_path
+/// is still None on the unlock screen).
 pub(crate) async fn resolve_biometric_db_path(
     requested: Option<String>,
     state: &State<'_, AppState>,
@@ -16,8 +17,8 @@ pub(crate) async fn resolve_biometric_db_path(
     default_db_path()
 }
 
-/// 在 blocking 线程上跑一次 OS 认证弹框（provider 内部自带 120s 超时，
-/// 不泊车 tokio worker）。
+/// Run one OS authentication prompt on a blocking thread (the provider has
+/// its own 120s timeout; the tokio worker is not parked).
 pub(crate) async fn run_biometric_ceremony(
     provider: Arc<dyn persona_core::BiometricProvider>,
     reason: &str,
@@ -37,8 +38,10 @@ pub(crate) async fn run_biometric_ceremony(
         .map_err(|e| format!("Biometric verification failed: {}", e))
 }
 
-/// 本 vault 当前生效（或下一次 enable 将采用）的包裹档位，前端展示用。
-/// wrap blob 存在 = 本 vault 解链已走硬件；否则按平台 capability 报档。
+/// The wrap tier currently in effect for this vault (or the one the next
+/// enable will use), for frontend display. A wrap blob exists = this
+/// vault's unlock chain is hardware-backed; otherwise report by platform
+/// capability.
 pub(crate) fn wrap_tier_for(state: &AppState, wrap_blob_exists: bool) -> String {
     use persona_core::BiometricWrapCapability as Cap;
     if wrap_blob_exists {
@@ -51,19 +54,23 @@ pub(crate) fn wrap_tier_for(state: &AppState, wrap_blob_exists: bool) -> String 
     }
 }
 
-/// 只读：biometric unlock 状态（免解锁——解锁屏 mount 即查，决定指纹
-/// 按钮显隐）。`enabled` 只泄露"本 vault 是否配置过生物解锁"一位元
-/// 数据（与 sync_token_present 同级）；托管的主密码/包裹 blob 真值永远
-/// 不出 keyring、不经 IPC。
+/// Read-only: biometric unlock status (no unlock needed — queried on
+/// unlock-screen mount to decide the fingerprint button's visibility).
+/// `enabled` only leaks one bit of metadata, "whether this vault ever had
+/// biometric unlock configured" (same tier as sync_token_present); the true
+/// values of the custodial master password / wrap blob never leave the
+/// keyring and never cross IPC.
 #[command]
 pub async fn biometric_status(
     db_path: Option<String>,
     state: State<'_, AppState>,
 ) -> std::result::Result<ApiResponse<BiometricStatusResponse>, String> {
     let db_path = resolve_biometric_db_path(db_path, &state).await;
-    // keyring 可达性也是 availability 的一部分：存不进去的 keyring 没有
-    // 可启用的生物解锁（fail-closed，与 attach_sync_emitter 同口径）。
-    // 探测错误一律 enabled=false——不把读取故障误报成已配置。
+    // Keyring reachability is part of availability: a keyring that cannot
+    // be written to has no biometric unlock to enable (fail-closed, same
+    // convention as attach_sync_emitter).
+    // Any probe error is reported as enabled=false — a read failure is never
+    // misreported as configured.
     let entry_probe = state.biometric_store.get(&db_path);
     let wrap_probe = state.biometric_wrap_store.get(&db_path);
     let tier = wrap_tier_for(&state, matches!(wrap_probe, Ok(Some(_))));
@@ -80,13 +87,19 @@ pub async fn biometric_status(
     }))
 }
 
-/// 启用 biometric unlock：验主密码 → OS 认证弹框 → 托管（硬件绑定档：
-/// 主密钥被平台硬件密钥包裹后 blob 进独立 keyring；门禁档：主密码托管进
-/// keyring）。顺序刻意为先密码后弹框——密码是要托管的秘密，必须先证明
-/// 正确（绝不把未验证的密码写进 keyring）；毫秒级验证先跑可 fail-fast，
-/// 把系统级弹窗这个稀缺的注意力资源留到最后。设备指纹通过者 ≠ 必然
-/// 知道 vault 主密码，已解锁会话中仍要求主密码 = 复用"敏感操作再认证"
-/// 先例（1Password 启用 Touch ID 同款体验）。
+/// Enable biometric unlock: verify master password -> OS authentication
+/// prompt -> custody (hardware-bound tier: the master key is wrapped by the
+/// platform hardware key and the blob goes into a separate keyring;
+/// gate-only tier: the master password is custodied into the keyring). The
+/// order is deliberately password first, prompt second — the password is
+/// the secret being custodied and must be proven correct first (never write
+/// an unverified password into the keyring); the millisecond-level
+/// verification runs first to fail fast, saving the system-level prompt —
+/// that scarce attention resource — for last. Passing a device fingerprint
+/// does not mean knowing the vault's master password, so a master password
+/// is still required in an unlocked session = reusing the "sensitive
+/// operation re-authentication" precedent (the same UX as 1Password
+/// enabling Touch ID).
 #[command]
 pub async fn biometric_enable(
     request: BiometricEnableRequest,
@@ -94,7 +107,8 @@ pub async fn biometric_enable(
 ) -> std::result::Result<ApiResponse<BiometricStatusResponse>, String> {
     use base64::Engine;
 
-    // 解锁门禁（同 set_locale）：启用是解锁会话里的敏感配置操作
+    // Unlock gate (same as set_locale): enabling is a sensitive
+    // configuration operation in an unlocked session
     {
         let guard = state.service.lock().await;
         match guard.as_ref() {
@@ -105,8 +119,10 @@ pub async fn biometric_enable(
     }
     let db_path = db_path_or_return!(state);
 
-    // 1. 验主密码（走活服务，继承失败计数 / AccountLocked 语义；语义同
-    //    reauth_verify——错误码原样映射；authenticate_user 需 &mut）
+    // 1. Verify the master password (via the live service, inheriting the
+    //    failure count / AccountLocked semantics; semantics are the same as
+    //    reauth_verify — error codes map through as-is; authenticate_user
+    //    needs &mut)
     {
         let mut guard = state.service.lock().await;
         let service = ok_or_error_response!(guard.as_mut().ok_or("Service not initialized"));
@@ -128,7 +144,7 @@ pub async fn biometric_enable(
         }
     }
 
-    // 2. OS 认证弹框
+    // 2. OS authentication prompt
     if !state.biometric_provider.is_available(None) {
         return Ok(ApiResponse::error(
             "Biometric authentication is not available on this device".to_string(),
@@ -142,10 +158,13 @@ pub async fn biometric_enable(
         .await
     );
 
-    // 3. 托管：硬件绑定档（capability HardwareBound）走密钥包裹——主密钥
-    //    被平台硬件密钥 ECIES 包裹后 blob 进独立 keyring service，密码
-    //    条目不落盘；门禁档维持历史行为（密码托管）。ceremony 已花掉：
-    //    写失败给明确错误，不留半态；用户改用密码登录不受影响。
+    // 3. Custody: the hardware-bound tier (capability HardwareBound) uses
+    //    key wrapping — the master key is ECIES-wrapped by the platform
+    //    hardware key and the blob goes into a separate keyring service,
+    //    with no password entry on disk; the gate-only tier keeps the
+    //    historical behavior (password custody). The ceremony has already
+    //    been spent: a write failure returns an explicit error and leaves no
+    //    half state; the user falling back to password login is unaffected.
     let use_hardware = state.biometric_wrapper.capability()
         == persona_core::BiometricWrapCapability::HardwareBound;
     if use_hardware {
@@ -164,7 +183,8 @@ pub async fn biometric_enable(
         };
         match wrap_result {
             Ok(master_key) => {
-                // 包裹用公钥（不弹框；弹框在解锁侧的解密时刻）
+                // The public key used for wrapping (no prompt; the prompt
+                // happens at the decrypt moment on the unlock side)
                 let wrapper = state.biometric_wrapper.clone();
                 let envelope = tauri::async_runtime::spawn_blocking(move || {
                     persona_core::wrap_master_key(
@@ -184,8 +204,10 @@ pub async fn biometric_enable(
                                 e
                             )));
                         }
-                        // 门禁层密码条目双保险清理（两类互斥；删失败只影响
-                        // fallback 顺序，unlock 以 wrap 条目优先）
+                        // Belt-and-suspenders cleanup of the gate-layer
+                        // password entry (the two kinds are mutually
+                        // exclusive; a failed delete only affects the
+                        // fallback order — unlock prefers the wrap entry)
                         let _ = state.biometric_store.delete(&db_path);
                     }
                     Err(e) => {
@@ -222,10 +244,12 @@ pub async fn biometric_enable(
     }))
 }
 
-/// 禁用 biometric unlock：双删 keyring 条目（包裹 blob + 门禁层密码；
-/// 各自幂等，连删两次都成功）。不需要 ceremony 也不设解锁门禁——这是
-/// 收紧暴露面的操作（无敏感读取，删掉后解锁屏指纹按钮消失，主密码
-/// 登录不受影响）。
+/// Disable biometric unlock: double-delete the keyring entries (wrap blob +
+/// gate-layer password; each is idempotent, so deleting both always
+/// succeeds). No ceremony needed and no unlock gate is set — this is an
+/// exposure-reducing operation (no sensitive reads; once deleted the
+/// fingerprint button disappears from the unlock screen and master password
+/// login is unaffected).
 #[command]
 pub async fn biometric_disable(
     state: State<'_, AppState>,
@@ -251,13 +275,16 @@ pub async fn biometric_disable(
     }))
 }
 
-/// Secure Enclave spike 探针（macOS 真机专用，设计文档 §5.2）。
+/// Secure Enclave spike probe (macOS real devices only, design doc §5.2).
 ///
-/// 跑 `macos_se::run_spike` 的全部探针并逐项回报 OSStatus/结论：调用方
-/// 在真机上以 `PERSONA_BIOMETRIC_SE_SPIKE=1` 启动应用后调本命令，
-/// 把输出贴回设计文档 §5.2。非 macOS 直接报 Unsupported（探针本身是
-/// Security.framework 调用，无跨平台含义）；macOS 上未开 spike 门控
-/// 也允许调用（探针只读/写自家 test key，不碰生产 unlock 链）。
+/// Runs all the probes in `macos_se::run_spike` and reports each
+/// OSStatus/verdict: the caller starts the app on a real device with
+/// `PERSONA_BIOMETRIC_SE_SPIKE=1` and invokes this command, then pastes the
+/// output back into design doc §5.2. Non-macOS reports Unsupported
+/// immediately (the probe is a Security.framework call with no
+/// cross-platform meaning); on macOS the call is allowed even when the
+/// spike gate is off (the probe only reads/writes its own test keys and
+/// never touches the production unlock chain).
 #[command]
 pub async fn biometric_wrap_spike(
 ) -> std::result::Result<ApiResponse<Vec<BiometricSpikeStep>>, String> {
@@ -278,13 +305,15 @@ pub async fn biometric_wrap_spike(
     }
 }
 
-/// Passport KSP 探针（Windows 真机专用，设计文档 §6.1）。
+/// Passport KSP spike probe (Windows real devices only, design doc §6.1).
 ///
-/// 与 macOS 的 `biometric_wrap_spike` 同款：跑 `windows_tpm::run_spike`
-/// 的全部探针并逐项回报 HRESULT/结论——在真机上以
-/// `PERSONA_BIOMETRIC_TPM_SPIKE=1` 启动应用后调本命令，把输出贴回设计
-/// 文档 §6.1。探针只碰自家包裹密钥，不接生产 unlock 链。非 Windows 直接
-/// 报 Unsupported（探针本身是 NCrypt 调用，无跨平台含义）。
+/// Same pattern as macOS's `biometric_wrap_spike`: runs all the probes in
+/// `windows_tpm::run_spike` and reports each HRESULT/verdict — start the
+/// app on a real device with `PERSONA_BIOMETRIC_TPM_SPIKE=1` and invoke
+/// this command, then paste the output back into design doc §6.1. The
+/// probe only touches its own wrap keys and is not connected to the
+/// production unlock chain. Non-Windows reports Unsupported immediately
+/// (the probe is an NCrypt call with no cross-platform meaning).
 #[command]
 pub async fn biometric_tpm_spike(
 ) -> std::result::Result<ApiResponse<Vec<BiometricSpikeStep>>, String> {
@@ -305,8 +334,9 @@ pub async fn biometric_tpm_spike(
     }
 }
 
-/// 平台 spike 步骤 → 命令返回体（macOS SE 与 Windows TPM 两个探针共用；
-/// 仅这两个平台调用，其余平台 cfg 掉免得 dead_code 警告）
+/// Platform spike steps -> command response body (shared by the macOS SE
+/// and Windows TPM probes; only called on those two platforms, cfg'd out
+/// elsewhere to avoid dead_code warnings)
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 pub(crate) fn spike_response(
     steps: impl IntoIterator<Item = (&'static str, bool, String)>,
@@ -323,9 +353,11 @@ pub(crate) fn spike_response(
     )
 }
 
-/// 硬件绑定路径：解包裹 blob（SE/TPM 在解密那一刻强制生物识别）→ 以
-/// 主密钥直进 init。blob 形状坏/解不开/注册集漂移 → 自动删除并返回
-/// BIOMETRIC_RESET（回退链终态 = 主密码，绝不死锁）。
+/// Hardware-bound path: unwrap the blob (SE/TPM force biometrics at the
+/// decrypt moment) -> go straight into init with the master key. A
+/// malformed / unopenable blob or an enrollment-set drift -> auto-delete
+/// and return BIOMETRIC_RESET (the fallback chain's terminal state is the
+/// master password, never a deadlock).
 pub(crate) async fn biometric_unlock_with_wrap<R: tauri::Runtime>(
     wrap_blob: String,
     db_path: String,
@@ -338,7 +370,8 @@ pub(crate) async fn biometric_unlock_with_wrap<R: tauri::Runtime>(
     let envelope = match base64::engine::general_purpose::STANDARD.decode(&wrap_blob) {
         Ok(bytes) => bytes,
         Err(_) => {
-            // blob 不是 base64：必坏，当场删除（与陈旧密码条目同自愈语义）
+            // The blob is not base64: definitely broken, delete on the spot
+            // (same self-heal semantics as a stale password entry)
             let _ = state.biometric_wrap_store.delete(&db_path);
             return ApiResponse::error_with_code(
                 crate::error::CODE_BIOMETRIC_RESET.to_string(),
@@ -364,8 +397,10 @@ pub(crate) async fn biometric_unlock_with_wrap<R: tauri::Runtime>(
             | WrapErr::NotAvailable
             | WrapErr::Unsupported),
         )) => {
-            // 硬件说这份包裹再也打不开（换指纹/密钥重建/平台降级）：
-            // 自动失效 + 明确引导主密码（设计文档 §3.4 回退链终态）
+            // The hardware says this wrap can never be opened again
+            // (re-enrolled fingerprint / key rebuilt / platform downgrade):
+            // auto-invalidate + clearly guide to the master password
+            // (design doc §3.4, the fallback chain's terminal state)
             let _ = state.biometric_wrap_store.delete(&db_path);
             return ApiResponse::error_with_code(
                 crate::error::CODE_BIOMETRIC_RESET.to_string(),
@@ -383,7 +418,8 @@ pub(crate) async fn biometric_unlock_with_wrap<R: tauri::Runtime>(
         Err(task_err) => return ApiResponse::error(task_err),
     };
 
-    // 密钥全程不出进程：init 内部分流直接消费主密钥
+    // The key never leaves the process: init's internal dispatch consumes
+    // the master key directly
     match init_service_inner(
         InitRequest {
             master_password: String::new(),
@@ -400,11 +436,13 @@ pub(crate) async fn biometric_unlock_with_wrap<R: tauri::Runtime>(
     }
 }
 
-/// biometric 解锁：包裹 blob 存在 → 硬件绑定链（解密时刻弹框）；否则
-/// 门禁链（先查条目——没有就干净报错不弹系统框 → OS 认证弹框 → keyring
-/// 取回主密码 → 走既有 [`init_service`] 全链路；成功/InvalidCredentials /
-/// AccountLocked / PASSWORD_CHANGE_REQUIRED 原样透传；主密码全程不出
-/// 进程、不进 ApiResponse）。
+/// Biometric unlock: wrap blob exists -> hardware-bound chain (prompt at
+/// the decrypt moment); otherwise the gate chain (check the entry first —
+/// a clean error without a system prompt when absent -> OS authentication
+/// prompt -> fetch the master password from the keyring -> run the
+/// existing [`init_service`] full chain; Success / InvalidCredentials /
+/// AccountLocked / PASSWORD_CHANGE_REQUIRED pass through as-is; the master
+/// password never leaves the process and never enters an ApiResponse).
 #[command]
 pub async fn biometric_unlock<R: tauri::Runtime>(
     request: BiometricUnlockRequest,
@@ -413,7 +451,8 @@ pub async fn biometric_unlock<R: tauri::Runtime>(
 ) -> std::result::Result<ApiResponse<bool>, String> {
     let db_path = resolve_biometric_db_path(request.db_path, &state).await;
 
-    // 硬件绑定链优先（两类条目互斥，enable 时已双保险）
+    // Hardware-bound chain takes priority (the two entry kinds are mutually
+    // exclusive; enable already did the belt-and-suspenders cleanup)
     if let Ok(Some(wrap_blob)) = state.biometric_wrap_store.get(&db_path) {
         return Ok(biometric_unlock_with_wrap(wrap_blob, db_path, state, app).await);
     }
@@ -421,7 +460,8 @@ pub async fn biometric_unlock<R: tauri::Runtime>(
     let master_password = match state.biometric_store.get(&db_path) {
         Ok(Some(password)) => password,
         Ok(None) => {
-            // 未配置/已被重置：BIOMETRIC_RESET 让前端隐藏按钮并提示
+            // Not configured / already reset: BIOMETRIC_RESET makes the
+            // frontend hide the button and show a message
             return Ok(ApiResponse::error_with_code(
                 crate::error::CODE_BIOMETRIC_RESET.to_string(),
                 "Biometric unlock is not configured for this vault".to_string(),
@@ -439,8 +479,9 @@ pub async fn biometric_unlock<R: tauri::Runtime>(
         run_biometric_ceremony(state.biometric_provider.clone(), "Unlock Persona").await
     );
 
-    // init_service 本尊复用：锁内全链路（auto-lock 桥、passkey 服务端、
-    // sync emitter、biometric provider 注入）与密码解锁完全一致
+    // Reuse init_service itself: the full in-lock chain (auto-lock bridge,
+    // passkey server, sync emitter, biometric provider injection) is
+    // identical to the password unlock
     let biometric_store = state.biometric_store.clone();
     let resp = ok_or_error_response!(
         init_service(
@@ -454,9 +495,11 @@ pub async fn biometric_unlock<R: tauri::Runtime>(
         .await
     );
 
-    // 陈旧条目自愈（桌面外改密等场景）：取回的密码对这把锁已证明
-    // 错误，条目必坏，当场删除——防止反复点指纹白白累计失败计数
-    // （core 5 次失败锁户）把账号锁死
+    // Stale-entry self-heal (e.g. a password changed outside the desktop):
+    // the fetched password has just been proven wrong for this vault, so
+    // the entry must be broken — delete it on the spot to stop repeated
+    // fingerprint taps from pointlessly accumulating failure counts
+    // (core locks the account after 5 failures) and locking it for good
     if !resp.success && resp.error.as_deref() == Some("Invalid master password") {
         if let Err(e) = biometric_store.delete(&db_path) {
             tracing::warn!("stale biometric entry cleanup failed: {}", e);

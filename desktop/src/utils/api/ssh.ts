@@ -28,25 +28,25 @@ export const sshApi = {
   },
 
 
-  /** ~/.ssh/config IdentityAgent 锚点块三态检测（纯读，不解锁） */
+  /** Three-state detection of the IdentityAgent anchor block in ~/.ssh/config (pure read, no unlock) */
   async sshAgentIntegrationStatus(): Promise<ApiResponse<SshIntegrationStatus>> {
     return invoke('ssh_agent_integration_status');
   },
 
 
-  /** 一键启用：幂等 upsert 锚点块（只动块内，其余配置不碰） */
+  /** One-click enable: idempotently upserts the anchor block (touches only what is inside the block, leaves the rest of the config alone) */
   async sshAgentIntegrationEnable(): Promise<ApiResponse<SshIntegrationStatus>> {
     return invoke('ssh_agent_integration_enable');
   },
 
 
-  /** 一键停用：整块移除锚点块 */
+  /** One-click disable: removes the anchor block entirely */
   async sshAgentIntegrationDisable(): Promise<ApiResponse<SshIntegrationStatus>> {
     return invoke('ssh_agent_integration_disable');
   },
 
 
-  /** ~/.ssh/config 的 agent 面只读分析（Include 展开 + SSH_AUTH_SOCK + socket 探测） */
+  /** Read-only analysis of the agent surface of ~/.ssh/config (Include expansion + SSH_AUTH_SOCK + socket probing) */
   async sshAgentConfigAnalysis(): Promise<ApiResponse<SshConfigAgentAnalysis>> {
     return invoke('ssh_agent_config_analysis');
   },
@@ -57,13 +57,13 @@ export const sshApi = {
   },
 
 
-  /** 预览 OpenSSH 私钥文件（指纹/类型/是否受保护），不入库 */
+  /** Previews an OpenSSH private key file (fingerprint / type / whether it is passphrase-protected) without storing it */
   async inspectSshKeyFile(path: string): Promise<ApiResponse<SshKeyInspection>> {
     return invoke('inspect_ssh_key_file', { path });
   },
 
 
-  /** 导入 OpenSSH 私钥文件入库为 SshKey 条目（snake_case 键契约） */
+  /** Imports an OpenSSH private key file into the database as an SshKey entry (snake_case key contract) */
   async importSshKey(request: {
     identity_id: string;
     path: string;
@@ -74,7 +74,7 @@ export const sshApi = {
   },
 
 
-  /** 页面内生成 SSH 密钥对并入库（RSA 4096 可能数十秒，调用方须有加载态） */
+  /** Generates an SSH keypair in the page and stores it (RSA 4096 can take tens of seconds, so the caller must show a loading state) */
   async generateSshKey(request: {
     identity_id: string;
     key_type: string;
@@ -86,7 +86,7 @@ export const sshApi = {
 
 
   // -------------------------------------------------------------------------
-  // SSH 签名审批
+  // SSH signing approvals
   // -------------------------------------------------------------------------
 
   async sshApprovalRespond(requestId: string, allow: boolean): Promise<ApiResponse<boolean>> {

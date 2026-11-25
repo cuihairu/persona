@@ -12,18 +12,18 @@ import type { WalletSummary } from '@/types';
 
 interface WalletCardProps {
   wallet: WalletSummary;
-  /** 当前选中卡的描边态（父层由 selectedWallet?.id 派生） */
+  /** Outlined state for the currently selected card (parent derives it from selectedWallet?.id) */
   selected: boolean;
   onSelect: (wallet: WalletSummary) => void;
-  /** 发送 = 选中（未选中时触发地址加载做投毒检测）+ 打开签名弹窗 */
+  /** Send = select (triggers address loading for poisoning detection when not yet selected) + open the signing modal */
   onSend: (wallet: WalletSummary) => void;
   onExport: (wallet: WalletSummary) => void;
-  /** 刷新即重新拉取钱包列表（余额随服务端刷新） */
+  /** Refresh refetches the wallet list (balances refresh with the server) */
   onRefresh: () => void;
   onDelete: (wallet: WalletSummary) => void;
 }
 
-/** 钱包网格单卡：网络徽标 + 余额 + 操作行；卡体可点选中，操作按钮 stopPropagation */
+/** Single wallet card in the grid: network badge + balance + action row; the card body is clickable to select, action buttons stopPropagation */
 const WalletCard: React.FC<WalletCardProps> = ({
   wallet,
   selected,

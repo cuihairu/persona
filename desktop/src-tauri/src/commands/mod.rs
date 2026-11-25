@@ -16,14 +16,17 @@ use tauri::{command, Emitter, State};
 use tokio::time::{sleep, Duration};
 use uuid::Uuid;
 
-// 命令边界错误纪律（与 get_workspace_settings 早期手写 match 同语义）：
-// 基础设施失败不逃出 #[command] 边界，一律 `return Ok(ApiResponse::error(..))`
-// ——前端 `catch(e) => String(e)` 只该收到 ApiResponse 的 error/error_code，
-// 不该收到 invoke 层的裸 String。宏内 `return` 就地从命令函数返回，不跨边界。
-// 内部 helper（如 ensure_workspace_for_path / wallet_db）裸签名
-// `Result<T, String>` 不跨边界，合法保留。
+// Error discipline at the command boundary (same semantics as the earlier
+// hand-written match in get_workspace_settings): infrastructure failures never
+// escape the #[command] boundary — always `return Ok(ApiResponse::error(..))`
+// — since the frontend's `catch(e) => String(e)` should only ever receive the
+// ApiResponse error/error_code, never a bare String from the invoke layer.
+// The `return` inside the macros returns from the command function in place,
+// without crossing the boundary. Internal helpers (e.g.
+// ensure_workspace_for_path / wallet_db) legitimately keep a bare
+// `Result<T, String>` signature since they never cross the boundary.
 
-/// `state.db_path` 缺失 → Ok(ApiResponse::error)，否则解出 String。
+/// Missing `state.db_path` -> Ok(ApiResponse::error); otherwise unwrap the String.
 macro_rules! db_path_or_return {
     ($state:expr) => {{
         let guard = $state.db_path.lock().await;
@@ -38,7 +41,8 @@ macro_rules! db_path_or_return {
     }};
 }
 
-/// 打开 vault（from_file + migrate）；连接/迁移失败 → Ok(ApiResponse::error)。
+/// Open the vault (from_file + migrate); a connection/migration failure ->
+/// Ok(ApiResponse::error).
 macro_rules! open_db_or_return {
     ($db_path:expr) => {{
         let db = match Database::from_file(&$db_path).await {
@@ -60,7 +64,7 @@ macro_rules! open_db_or_return {
     }};
 }
 
-/// ensure_workspace_for_path 失败 → Ok(ApiResponse::error)。
+/// An ensure_workspace_for_path failure -> Ok(ApiResponse::error).
 macro_rules! workspace_or_return {
     ($db:expr, $workspace_path:expr) => {
         match ensure_workspace_for_path(&$db, &$workspace_path).await {
@@ -75,9 +79,10 @@ macro_rules! workspace_or_return {
     };
 }
 
-/// Result<T, E: Display> → T；Err → Ok(ApiResponse::error(e.to_string()))。
-/// 适合 Err 已是 String（map_err(|_| "...".to_string())、ok_or_else）或
-/// 语义就是原始错误文本的调用点。
+/// Result<T, E: Display> -> T; Err -> Ok(ApiResponse::error(e.to_string())).
+/// Suited to call sites where the Err is already a String
+/// (map_err(|_| "...".to_string()), ok_or_else) or where the semantics are
+/// precisely the raw error text.
 macro_rules! ok_or_error_response {
     ($expr:expr) => {
         match $expr {
@@ -87,8 +92,8 @@ macro_rules! ok_or_error_response {
     };
 }
 
-/// 同 [`ok_or_error_response`]，但用格式串保留语义前缀：
-/// `ok_or_error_response_ctx!(repo.find().await, "Failed to load X: {}")`。
+/// Same as [`ok_or_error_response`], but keeps a semantic prefix via a format
+/// string: `ok_or_error_response_ctx!(repo.find().await, "Failed to load X: {}")`.
 macro_rules! ok_or_error_response_ctx {
     ($expr:expr, $fmt:expr) => {
         match $expr {
@@ -98,8 +103,9 @@ macro_rules! ok_or_error_response_ctx {
     };
 }
 
-/// wallet_db 的命令边界形态："Service is locked" 映射 SERVICE_LOCKED
-/// 码（前端回解锁屏），"Service not initialized" 无码透传。
+/// The command-boundary form of wallet_db: "Service is locked" maps to the
+/// SERVICE_LOCKED code (the frontend returns to the unlock screen);
+/// "Service not initialized" passes through without a code.
 macro_rules! wallet_db_or_return {
     ($state:expr) => {
         match wallet_db(&$state).await {
@@ -116,8 +122,10 @@ macro_rules! wallet_db_or_return {
     };
 }
 
-/// 锁定检查后借出 master 密钥；失败转 `Ok(ApiResponse::error(...))` 返回。
-/// 须在命令体内调用（借用挂 service guard，不跨函数边界）。
+/// Borrow the master key after the lock check; a failure returns
+/// `Ok(ApiResponse::error(...))`.
+/// Must be called inside the command body (the borrow is tied to the service
+/// guard and cannot cross a function boundary).
 macro_rules! sync_master_or_return {
     ($service_guard:expr) => {{
         let service = match $service_guard.as_ref() {

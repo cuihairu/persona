@@ -1,11 +1,12 @@
-//! Persona 桌面端库入口。
+//! Persona desktop library entry point.
 //!
-//! 应用装配（Builder 链、托盘）放在这里，`main.rs` 只留薄入口。passkey
-//! 审批服务端由 init_service 按 workspace 开关门禁启动（见
-//! `commands::maybe_start_passkey_server`）。lib 化让集成测试可以经 `tests/` 独立进程直驱带 mock runtime 的
-//! `AppHandle`（mock runtime 会毒化所在进程的 tokio socket IO 探测，见
-//! `passkey_bridge::tests` 中 FakeSink 的注释）——bin 单进程时代这些路径
-//! 只能用 FakeSink 绕过。
+//! Application assembly (the Builder chain, tray) lives here, with `main.rs` keeping only a thin
+//! entry. The passkey approval server is started by init_service, gated by the workspace switch
+//! (see `commands::maybe_start_passkey_server`). Turning this into a lib lets integration tests
+//! drive an `AppHandle` with a mock runtime through a separate `tests/` process (a mock runtime
+//! poisons the tokio socket IO probe in its own process — see the FakeSink comment in
+//! `passkey_bridge::tests`); in the single-process bin era those paths could only be worked
+//! around with FakeSink.
 
 pub mod approval;
 pub mod biometric;
@@ -13,8 +14,8 @@ pub mod biometric;
 mod command_layer_tests;
 pub mod commands;
 pub mod desktop_fill;
-// Connect HTTP 端点自 v0.1 起是独立 crate（桌面/CLI 共用同一 router），
-// 这里 re-export 保持 `crate::connect_server::*` 引用路径不变。
+// The Connect HTTP endpoint has been a separate crate since v0.1 (desktop/CLI share the same
+// router); the re-export here keeps the `crate::connect_server::*` reference paths unchanged.
 pub use persona_connect_server as connect_server;
 mod error;
 #[cfg(test)]
@@ -36,7 +37,7 @@ use tauri::Manager;
 use tokio::sync::Mutex;
 use types::AppState;
 
-/// 显示主窗口（托盘左键 / Open 菜单共用）
+/// Show the main window (shared by tray left-click / the Open menu item)
 pub fn show_main_window<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.unminimize();
@@ -45,7 +46,8 @@ pub fn show_main_window<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
     }
 }
 
-/// 当前会话有无显示服务器（托盘/menu 的 muda 后端在无 display 时 panic）。
+/// Whether the current session has a display server (the muda backend used by the tray/menu
+/// panics without a display).
 #[cfg(target_os = "linux")]
 fn display_session_available() -> bool {
     std::env::var_os("DISPLAY").is_some() || std::env::var_os("WAYLAND_DISPLAY").is_some()
@@ -56,10 +58,11 @@ fn display_session_available() -> bool {
     true
 }
 
-/// 托盘右键菜单文案。真值在前端 i18n locale 表（`tray.*` 命名空间），
-/// 前端经 `set_tray_locale` 把当前语言的文案推过来渲染；这里的默认值
-/// 只覆盖「前端尚未上报」的启动窗口（默认语言 zh-CN，与前端
-/// DEFAULT_LOCALE 一致），首次推送后即被真值覆盖。
+/// Tray context-menu labels. The source of truth lives in the frontend i18n locale table (the
+/// `tray.*` namespace); the frontend pushes the labels for the current language via
+/// `set_tray_locale` for rendering. The defaults here only cover the startup window in which the
+/// frontend has not yet reported (default language zh-CN, matching the frontend's
+/// DEFAULT_LOCALE); the first push replaces them with the real values.
 #[derive(Clone, Debug, serde::Deserialize)]
 pub struct TrayLocaleLabels {
     pub open: String,
@@ -69,7 +72,7 @@ pub struct TrayLocaleLabels {
     pub quit: String,
 }
 
-/// 启动兜底文案（前端未上报前）。
+/// Startup fallback labels (before the frontend has reported).
 fn default_tray_labels() -> TrayLocaleLabels {
     TrayLocaleLabels {
         open: "打开 Persona".to_string(),
@@ -80,8 +83,9 @@ fn default_tray_labels() -> TrayLocaleLabels {
     }
 }
 
-/// 按文案构建托盘菜单：setup 兜底与运行期语言切换共用同一条构建路径，
-/// 菜单项 id 与 on_menu_event 的分发一一对应，别动 id。
+/// Build the tray menu from labels: the setup fallback and runtime language switching share one
+/// build path, and menu item ids map one-to-one onto the on_menu_event dispatch — do not touch
+/// the ids.
 pub(crate) fn build_tray_menu<R: tauri::Runtime, M: tauri::Manager<R>>(
     manager: &M,
     labels: &TrayLocaleLabels,
@@ -115,13 +119,15 @@ pub(crate) fn build_tray_menu<R: tauri::Runtime, M: tauri::Manager<R>>(
     )
 }
 
-/// 构建系统托盘与菜单（需显示会话；关窗驻留时的常驻入口）。
+/// Build the system tray and its menu (requires a display session; the resident entry point
+/// once the main window is closed).
 fn setup_tray<R: tauri::Runtime>(app: &tauri::App<R>) -> Result<(), Box<dyn std::error::Error>> {
     let tray_menu = build_tray_menu(app, &default_tray_labels())?;
 
     TrayIconBuilder::with_id("persona-tray")
         .icon(
-            // 打包缺 icon 时回退编译期内嵌图标（dev/测试无 bundle icon）
+            // Fall back to the compile-time embedded icon when the bundle lacks one (dev/tests
+            // have no bundle icon)
             app.default_window_icon()
                 .cloned()
                 .unwrap_or_else(|| tauri::include_image!("icons/32x32.png")),
@@ -130,7 +136,7 @@ fn setup_tray<R: tauri::Runtime>(app: &tauri::App<R>) -> Result<(), Box<dyn std:
         .menu(&tray_menu)
         .show_menu_on_left_click(false)
         .on_tray_icon_event(|tray, event| {
-            // 左键点击 = 唤出主窗口（菜单留在右键）
+            // Left click = bring up the main window (the menu stays on right click)
             if let TrayIconEvent::Click {
                 button: MouseButton::Left,
                 button_state: MouseButtonState::Up,
@@ -142,16 +148,18 @@ fn setup_tray<R: tauri::Runtime>(app: &tauri::App<R>) -> Result<(), Box<dyn std:
         })
         .on_menu_event(|app, event| match event.id.as_ref() {
             "open" => show_main_window(app),
-            // Quick Access 浮窗：热键被占用/未注册时，托盘仍是入口
+            // Quick Access popup: when the hotkey is taken/unregistered, the tray stays the entry
             "quick-access" => quick_access::open(app),
-            // 生成器浮窗：同理托盘兜底入口
+            // Generator popup: same tray fallback entry
             "generator-panel" => quick_access::open_generator(app),
             "lock" => {
-                // 收起两个浮窗：锁户后浮窗里留下的检索结果/刚生成的密码
-                // 不该继续在屏幕上（数据已在内存，但暴露面不该多留）
+                // Dismiss both popups: search results left in a popup, or a freshly generated
+                // password, should not stay on screen after locking (the data is in memory
+                // anyway, but the exposure surface shouldn't grow)
                 quick_access::close_all(app);
-                // 走事件链（Locked → persona://auto-lock → 前端回解锁屏），
-                // 再兜底清内存主密钥（与回调同一动作，幂等）
+                // Go through the event chain (Locked -> persona://auto-lock -> the frontend
+                // shows its unlock screen), then belt and braces clear the in-memory master key
+                // (same action as the callback, idempotent)
                 let service = app.state::<AppState>().service.clone();
                 tauri::async_runtime::spawn(async move {
                     let mut guard = service.lock().await;
@@ -168,11 +176,12 @@ fn setup_tray<R: tauri::Runtime>(app: &tauri::App<R>) -> Result<(), Box<dyn std:
     Ok(())
 }
 
-/// 安装脱敏日志 subscriber：production 写 `app_log_dir` 下日志文件
-/// （>5 MiB 单代轮转），dev 构建与降级路径保持 stdout。
+/// Install the redacting log subscriber: production writes a log file under `app_log_dir`
+/// (>5 MiB, single-generation rotation), while dev builds and the fallback paths keep stdout.
 ///
-/// 必须在任何 tracing 事件之前调用（setup 最前）。全局 subscriber 只能
-/// 装一次，重复安装（测试进程多次 build）静默保持已装的。
+/// Must be called before any tracing event (first thing in setup). A global subscriber can only
+/// be installed once; repeated installs (multiple builds in a test process) silently keep the
+/// existing one.
 fn init_desktop_logging<R: tauri::Runtime>(app: &tauri::App<R>) {
     use std::io::Write;
 
@@ -180,7 +189,7 @@ fn init_desktop_logging<R: tauri::Runtime>(app: &tauri::App<R>) {
         let _ = persona_core::logging::init_redacted_tracing(tracing::Level::INFO);
     };
 
-    // dev/test 构建：stdout 可见且不写开发机磁盘
+    // dev/test builds: visible on stdout and writes nothing to the dev machine's disk
     if cfg!(debug_assertions) {
         init_stdout();
         return;
@@ -196,7 +205,8 @@ fn init_desktop_logging<R: tauri::Runtime>(app: &tauri::App<R>) {
     }
 
     let log_path = log_dir.join("persona-desktop.log");
-    // 单代轮转：超限改名为 .1（删旧 .1），在无界增长与写放大之间取中
+    // Single-generation rotation: past the limit, rename to .1 (dropping any old .1) — a middle
+    // ground between unbounded growth and write amplification
     const ROTATE_BYTES: u64 = 5 * 1024 * 1024;
     if std::fs::metadata(&log_path)
         .map(|meta| meta.len() > ROTATE_BYTES)
@@ -240,20 +250,21 @@ fn init_desktop_logging<R: tauri::Runtime>(app: &tauri::App<R>) {
         .init();
 }
 
-/// 组装应用（托盘、passkey 审批服务端、全部命令注册）。
+/// Assemble the application (tray, passkey approval server, all command registrations).
 ///
-/// context 参数化：生产 [`run`] 传 `generate_context!`，集成测试传
-/// `tauri::test::mock_context(noop_assets())` 整链跑 setup。
+/// context is parameterized: production [`run`] passes `generate_context!`, while integration
+/// tests pass `tauri::test::mock_context(noop_assets())` and run setup end to end.
 pub fn build<R: tauri::Runtime>(context: tauri::Context<R>) -> tauri::App<R> {
     tauri::Builder::<R>::new()
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_dialog::init())
-        // OS 级全局热键插件**不在**这里挂：它的 setup 建平台热键管理器，
-        // headless Linux 会失败并让整个 build 失败。改为 setup 里运行时装
-        // 载（quick_access::install_plugin），失败只记录状态。抢注绑定也
-        // 不在这里做——真值在 workspace settings，等解锁后由
-        // `commands::apply_quick_access` 按 DB 下发
+        // The OS-level global hotkey plugin is deliberately **not** attached here: its setup
+        // creates the platform hotkey manager, which fails on headless Linux and would take the
+        // whole build down with it. It is loaded at runtime inside setup instead
+        // (quick_access::install_plugin), where a failure only records state. Claiming the
+        // bindings isn't done here either — the source of truth is the workspace settings, and
+        // `commands::apply_quick_access` pushes them from the DB once unlocked
         .manage(AppState {
             service: Arc::new(Mutex::new(None)),
             db_path: Mutex::new(None),
@@ -290,43 +301,50 @@ pub fn build<R: tauri::Runtime>(context: tauri::Context<R>) -> tauri::App<R> {
             )),
         })
         .setup(|app| {
-            // 日志先行：后续所有 tracing 事件（含托盘降级提示）都有落点
+            // Logging first: every later tracing event (including the tray fallback notice) has
+            // a sink
             init_desktop_logging(app);
-            // 全局热键插件运行时装载（失败不阻断启动，原因存进运行态供
-            // 设置页显示——见 quick_access 模块注释）
+            // Global hotkey plugin loaded at runtime (a failure doesn't block startup; the reason
+            // is kept in the runtime state for the settings page to show — see the quick_access
+            // module docs)
             if let Err(e) = quick_access::install_plugin(app.handle()) {
                 tracing::warn!("global shortcut plugin unavailable: {}", e);
                 let state = app.state::<AppState>();
                 let mut runtime = state.quick_access.lock().unwrap_or_else(|p| p.into_inner());
                 runtime.install_error = Some(e);
             }
-            // 系统托盘：关窗后审批弹窗仍可送达，托盘是常驻入口。
-            // 无显示会话（CI/容器/ssh-only）下 muda 菜单会直接 panic，
-            // 跳过托盘降级运行 —— 审批链路不依赖托盘存活。
+            // System tray: approval popups must still be deliverable after the main window is
+            // closed, and the tray is the resident entry point. Without a display session
+            // (CI/container/ssh-only) the muda menu panics outright, so skip the tray and run
+            // degraded — the approval chain doesn't depend on the tray being alive.
             if display_session_available() {
                 setup_tray(app)?;
             } else {
                 tracing::info!("no display session; running headless without tray");
             }
-            // 云盘同步 watcher：传输为 cloud 且目录已配时，云盘目录的远端
-            // 变更自动触发一轮同步周期（notify 主 + mtime 轮询兜底）。切回
-            // server 传输自动停；锁定/未入组时 sync_cycle_once 门禁兜底。
+            // Cloud drive sync watcher: when transport is cloud and the directory is configured,
+            // remote changes in the cloud drive directory trigger a sync cycle on their own
+            // (notify primary, with an mtime polling fallback). Switching back to server
+            // transport stops it automatically; when locked or not in a group, the
+            // sync_cycle_once gate provides the fallback.
             sync_watcher::spawn_sync_watcher(app.handle().clone());
             Ok(())
         })
         .on_window_event(|window, event| {
-            // 关闭主窗口 = 隐藏到托盘（passkey/SSH 审批照常工作）；托盘 Quit 才退出
+            // Closing the main window = hide to tray (passkey/SSH approvals keep working); only
+            // the tray Quit exits
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 if window.label() == "main" {
                     api.prevent_close();
                     let _ = window.hide();
                 }
             }
-            // Quick Access 与生成器浮窗：失焦即自收尾（1Password 同款行为——
-            // 浮窗是"瞬时取用"面，焦点回到别的应用还杵在屏幕中央就是遮挡）。
-            // CloseRequested 同样转 hide 而不是真关：浮窗是常驻的（初始
-            // visible:false，热键/托盘随时唤起），被 Alt+F4 / cmd-W 真关掉
-            // 就再也唤不回来了
+            // Quick Access and the generator popups: they self-dismiss on focus loss (the same
+            // behaviour as 1Password — a popup is a "grab it quickly" surface, and one sitting in
+            // the middle of the screen after focus moves to another app is just in the way).
+            // CloseRequested is likewise turned into hide rather than a real close: the popups
+            // are resident (visible:false initially, summoned by hotkey/tray at any time), and
+            // being truly closed by Alt+F4 / cmd-W would make them impossible to summon again
             if window.label() == quick_access::WINDOW_LABEL
                 || window.label() == quick_access::GENERATOR_WINDOW_LABEL
             {
@@ -505,13 +523,15 @@ pub fn build<R: tauri::Runtime>(context: tauri::Context<R>) -> tauri::App<R> {
         .expect("error while building tauri application")
 }
 
-/// 组装并运行应用（进程入口调用；事件循环不退出直至 Quit）。
+/// Assemble and run the application (called from the process entry point; the event loop does
+/// not return until Quit).
 pub fn run() {
     let app = build::<tauri::Wry>(tauri::generate_context!());
     app.run(|app_handle, event| {
-        // RunEvent::Exit 是进程退出前的最后回调（托盘 Quit → app.exit(0)
-        // 唯一退出路径在 ExitRequested 之后到达这里）；主线程仍存活，
-        // block_on 尽力 flush 同步上报器队列（与 CLI 尾部 stop 同语义）。
+        // RunEvent::Exit is the last callback before the process exits (tray Quit ->
+        // app.exit(0) is the only exit path, and it lands here after ExitRequested); the main
+        // thread is still alive, so block_on does a best-effort flush of the sync emitter's
+        // queue (same semantics as the stop at the end of the CLI).
         if let tauri::RunEvent::Exit = event {
             tauri::async_runtime::block_on(async {
                 let emitter = app_handle
@@ -530,9 +550,9 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
-    /// mock_app 的 mock runtime 与测试 tokio reactor 的共存性探针：
-    /// 若 sqlx 在 mock_app 之后挂起，这里会先于所有命令级测试失败，
-    /// 给出明确根因（参见 passkey_bridge.rs 中 FakeSink 的注释）。
+    /// Coexistence probe between mock_app's mock runtime and the test tokio reactor: if sqlx
+    /// hangs after mock_app, this fails before every command-level test and pinpoints the root
+    /// cause (see the FakeSink comment in passkey_bridge.rs).
     #[tokio::test]
     async fn sqlite_works_after_mock_app_creation() {
         let _app = tauri::test::mock_app();
@@ -548,7 +568,8 @@ mod tests {
             .expect("sqlx never completed under mock_app — reactor poisoned");
         migrated.unwrap();
 
-        // 一条真实查询 + 一条真实写入，确认 reactor 干扰不限于 migrate。
+        // One real query plus one real write, to confirm the reactor interference isn't limited
+        // to migrate.
         use persona_core::storage::Repository;
         let repo = persona_core::storage::IdentityRepository::new(db);
         let identity = persona_core::models::Identity::new(

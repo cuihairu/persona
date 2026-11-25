@@ -1,6 +1,6 @@
 import { trayLocaleLabels } from './trayLocale';
 
-/** locale 表真值→托盘文案载荷的纯映射：键齐全、顺序稳定（Rust 侧按字段渲染） */
+/** Pure mapping from the locale table truth to the tray label payload: complete keys, stable order (the Rust side renders by field) */
 describe('trayLocaleLabels', () => {
   it('maps every label through its tray.* i18n key', () => {
     const labels: Record<string, string> = {
@@ -47,8 +47,9 @@ describe('trayLocaleLabels', () => {
 
     expect(trayLocaleLabels(t).lock).toBe('Lock');
     current = 'zh-CN';
-    // zh-CN 表未在此桩内铺开时 t 退回 key：真实表由 i18n 资源提供，
-    // 这里只验证"换 t 即换语言"不缓存旧文案
+    // When the zh-CN table is not laid out inside this stub, t falls back to
+    // the key: the real table is provided by the i18n resources. Here we only
+    // verify that "swapping t swaps the language" with no stale labels cached.
     expect(trayLocaleLabels(t).lock).toBe('tray.lock');
   });
 });

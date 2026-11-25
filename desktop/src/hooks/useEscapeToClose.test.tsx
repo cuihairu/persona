@@ -42,7 +42,7 @@ describe('hooks/useEscapeToClose', () => {
     fireEvent.keyDown(window, { key: 'Enter' });
     expect(first).not.toHaveBeenCalled();
 
-    // latest-ref：换 onClose 引用无需重建监听
+    // latest-ref: swapping the onClose reference does not require rebuilding the listener
     rerender({ onClose: second });
     pressEscape();
     expect(first).not.toHaveBeenCalled();

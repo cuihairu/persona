@@ -5,7 +5,7 @@ import { copyToClipboardWithToast } from '@/utils/clipboard';
 import toast from 'react-hot-toast';
 import { useAppStore } from '@/stores/appStore';
 
-// -- hooks：可变返回值，由 beforeEach 重置 -----------------------------------
+// -- hooks: mutable return values, reset by beforeEach -----------------------------------
 let serviceState: any;
 let pendingSeconds: number | null = null;
 let sshPending: any = null;
@@ -32,7 +32,7 @@ jest.mock('@/hooks/usePasskeyApprovals', () => ({
   }),
 }));
 
-// -- 子组件：哑渲染，暴露 props 驱动钩子 -------------------------------------
+// -- Child components: dummy rendering, hooks exposed via props -------------------------------------
 jest.mock('@/components/UnlockScreen', () => ({
   __esModule: true,
   default: () => <div data-testid="unlock-screen" />,
@@ -50,7 +50,7 @@ jest.mock('@/components/CredentialList', () => ({
     <div data-testid="credential-list" onClick={props.onCreateCredential} />
   ),
 }));
-// 详情面板组合测试：哑渲染 reveal 链路（与 CredentialList.test 同款桩）
+// Detail-panel composition tests: dummy-render the reveal chain (same stub style as CredentialList.test)
 jest.mock('@/components/RevealSecretButton', () => ({
   __esModule: true,
   default: ({ field, label }: any) => (
@@ -62,8 +62,9 @@ jest.mock('@/components/CreateCredentialModal', () => ({
   default: (props: any) =>
     props.isOpen ? <div data-testid="create-credential-modal" /> : null,
 }));
-// 注意：mock 组件里不能用 Fragment 简写 <>…</>（jsx-runtime 互操作下
-// Fragment 会解析成 undefined → "Element type is invalid"），用 div 包裹。
+// Note: mock components cannot use the Fragment shorthand <>…</> (under
+// jsx-runtime interop Fragment resolves to undefined → "Element type is
+// invalid"), so wrap in a div instead.
 jest.mock('@/components/ErrorHandling', () => ({
   ErrorBoundary: ({ children }: any) => <div>{children}</div>,
   ErrorDisplay: (props: any) => (
@@ -111,12 +112,12 @@ jest.mock('@/components/SettingsModal', () => ({
 
 jest.mock('react-hot-toast', () => ({
   __esModule: true,
-  // 可调用（更新提示 toast(...)）且保留 success/error（既有断言）
+  // Callable (update-hint toast(...)) while keeping success/error (existing assertions)
   default: Object.assign(jest.fn(), { success: jest.fn(), error: jest.fn() }),
   Toaster: () => null,
 }));
 
-// 更新检查默认关（各用例不触发网络）；单开用例如下按需翻转
+// Update check off by default (no test triggers network); individual tests flip it on as needed below
 jest.mock('@/utils/updateCheck', () => ({
   isUpdateCheckEnabled: jest.fn(() => false),
   checkForUpdate: jest.fn().mockResolvedValue({ status: 'none' }),
@@ -132,12 +133,12 @@ jest.mock('@/utils/api', () => ({
     startAutoLockMonitoring: jest.fn().mockResolvedValue(undefined),
     stopAutoLockMonitoring: jest.fn().mockResolvedValue(undefined),
     getStatistics: jest.fn(),
-    // 默认返回全开：多数既有用例假设六个视图都可达；"默认全关"语义单独覆盖
+    // All flags on by default: most existing tests assume all six views are reachable; the "all off by default" semantics is covered separately
     getWorkspaceSettings: jest.fn().mockResolvedValue({
       success: true,
       data: { features: { ssh_agent: true, wallet: true, passkeys: true, fetch_favicons: true } },
     }),
-    // 托盘右键菜单文案推送（启动恢复语言 / 切换语言时）
+    // Tray right-click menu label push (restoring the language at startup / when switching languages)
     setTrayLocale: jest.fn().mockResolvedValue({ success: true, data: true }),
   },
 }));
@@ -153,7 +154,7 @@ describe('App', () => {
     pendingSeconds = null;
     sshPending = null;
     passkeyPending = null;
-    // 真实 zustand store 跨用例共享：复位为出厂全关，由各用例经拉取/ setState 驱动
+    // The real zustand store is shared across tests: reset to the factory all-off state; individual tests drive it via fetches / setState
     useAppStore.setState({
       featureFlags: { ssh_agent: false, wallet: false, passkeys: false, fetch_favicons: false },
       sidebarFilter: { kind: 'all' },
@@ -169,11 +170,11 @@ describe('App', () => {
       lockService,
       loadCredentialsForIdentity,
       clearError,
-      // 工具栏 QuickSearch（closed 态不发请求，仅防御引用）
+      // Toolbar QuickSearch (closed state issues no request, kept as a defensive reference)
       searchCredentials: jest.fn().mockResolvedValue([]),
       switchIdentity: jest.fn(),
-      // 详情面板防御桩：任何用例往 store 写 selectedCredentialId 都会挂载面板，
-      // 挂载期要拉附件/详情数据——悬挂 promise 不产生 setState，避免 act 警告
+      // Detail-panel defensive stubs: any test writing selectedCredentialId into the store mounts the panel,
+      // whose mount fetches attachment/detail data — a dangling promise produces no setState, avoiding act warnings
       getCredentialData: jest.fn(() => new Promise(() => {})),
       listAttachments: jest.fn(() => new Promise(() => {})),
       getCredentialCustomFields: jest.fn(() => new Promise(() => {})),
@@ -211,7 +212,7 @@ describe('App', () => {
     rerender(<App />);
     expect(personaAPI.startAutoLockMonitoring).toHaveBeenCalled();
 
-    // flush 解锁后触发的 flags 拉取，避免测试结束后 setState 警告
+    // flush the flags fetch triggered by the unlock, to avoid a setState warning after the test ends
     await act(async () => {});
   });
 
@@ -225,7 +226,7 @@ describe('App', () => {
     expect(screen.getByTestId('quick-search-trigger')).toBeInTheDocument();
     expect(screen.queryByTestId('auto-lock-banner')).not.toBeInTheDocument();
 
-    // 身份变化时拉取凭据
+    // Credentials are fetched when the identity changes
     expect(loadCredentialsForIdentity).toHaveBeenCalledWith('id-1');
   });
 
@@ -240,7 +241,7 @@ describe('App', () => {
     serviceState.isUnlocked = true;
     render(<App />);
 
-    // workspace settings 拉取生效后高级入口出现（默认 mock 全开）
+    // After the workspace settings fetch takes effect, the advanced entries appear (the mock is all-on by default)
     await screen.findByRole('button', { name: 'SSH Agent' });
 
     const nav = (label: string) => fireEvent.click(screen.getByRole('button', { name: label }));
@@ -260,7 +261,7 @@ describe('App', () => {
   });
 
   it('hides advanced nav entries while their workspace flags are off', async () => {
-    // Once：消费后回退到顶层的全开实现，不泄漏到后续用例
+    // Once: falls back to the top-level all-on implementation after consumption, so it does not leak into later tests
     (personaAPI.getWorkspaceSettings as jest.Mock).mockResolvedValueOnce({
       success: true,
       data: { features: { ssh_agent: false, wallet: false, passkeys: false, fetch_favicons: false } },
@@ -272,7 +273,7 @@ describe('App', () => {
       expect(personaAPI.getWorkspaceSettings).toHaveBeenCalled();
     });
 
-    // 主航道恒可见，高级功能默认隐藏
+    // The core path is always visible; advanced features are hidden by default
     expect(screen.getByRole('button', { name: '全部条目' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '统计' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '安全瞭望' })).toBeInTheDocument();
@@ -290,7 +291,7 @@ describe('App', () => {
       expect(personaAPI.getWorkspaceSettings).toHaveBeenCalled();
     });
 
-    // 读取失败静默保持默认（全关），主航道不受影响、不崩
+    // A failed read silently keeps the defaults (all off); the core path is unaffected and nothing crashes
     expect(screen.getByRole('button', { name: '全部条目' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '钱包' })).not.toBeInTheDocument();
     expect(screen.queryByTestId('wallet-panel')).not.toBeInTheDocument();
@@ -300,12 +301,12 @@ describe('App', () => {
     serviceState.isUnlocked = true;
     render(<App />);
 
-    // 默认 mock 全开：切到 Wallets
+    // The mock is all-on by default: switch to Wallets
     await screen.findByRole('button', { name: '钱包' });
     fireEvent.click(screen.getByRole('button', { name: '钱包' }));
     expect(screen.getByTestId('wallet-panel')).toBeInTheDocument();
 
-    // 运行中关闭 wallet 开关：按钮消失、视图自动回退
+    // Turning the wallet switch off at runtime: the button disappears and the view falls back automatically
     act(() => {
       useAppStore.setState({
         featureFlags: { ssh_agent: true, wallet: false, passkeys: true, fetch_favicons: true },
@@ -326,7 +327,7 @@ describe('App', () => {
     serviceState.currentIdentity = { id: 'id-2', name: 'B' };
     rerender(<App />);
 
-    // 换身份丢弃旧分类树选中（新身份未必还有该类型/标签）
+    // Switching identity discards the previous category-tree selection (the new identity may not have that type/tag)
     expect(useAppStore.getState().sidebarFilter).toEqual({ kind: 'all' });
   });
 
@@ -334,7 +335,7 @@ describe('App', () => {
     serviceState.isUnlocked = true;
     render(<App />);
 
-    // 侧栏底部操作区：按可访问名取（不再依赖按钮顺序）
+    // Sidebar footer action area: look up by accessible name (no longer relying on button order)
     fireEvent.click(screen.getByRole('button', { name: '设置' }));
     expect(screen.getByTestId('settings-modal')).toBeInTheDocument();
 
@@ -346,7 +347,7 @@ describe('App', () => {
     serviceState.isUnlocked = true;
     const { rerender } = render(<App />);
 
-    // 先开设置：⌘L 后 modal 复位，解锁后不会自动重开
+    // Open settings first: ⌘L resets the modal, and it does not reopen by itself after unlocking
     fireEvent.click(screen.getByRole('button', { name: '设置' }));
     expect(screen.getByTestId('settings-modal')).toBeInTheDocument();
 
@@ -354,7 +355,7 @@ describe('App', () => {
     expect(lockService).toHaveBeenCalledTimes(1);
     expect(screen.queryByTestId('settings-modal')).not.toBeInTheDocument();
 
-    // 锁定屏上再按 ⌘L 无监听，不重复触发
+    // Pressing ⌘L again on the lock screen has no listener, so it is not triggered twice
     serviceState.isUnlocked = false;
     rerender(<App />);
     fireEvent.keyDown(window, { key: 'l', metaKey: true });
@@ -467,7 +468,7 @@ describe('App', () => {
     expect(screen.getByText('Login')).toBeInTheDocument();
     expect(screen.getByText('高')).toBeInTheDocument();
 
-    // 失败分支：静默 console.error，保持加载态
+    // Failure branch: the console.error is silenced and the loading state is kept
     const consoleError = jest.spyOn(console, 'error').mockImplementation(() => {});
     (personaAPI.getStatistics as jest.Mock).mockRejectedValueOnce(new Error('x'));
     fireEvent.click(screen.getByRole('button', { name: '全部条目' }));
@@ -476,12 +477,12 @@ describe('App', () => {
     consoleError.mockRestore();
   });
 
-  // -- 详情面板组合（面板挂在主区详情列；选中/数据/关闭/删除全链路） --------
+  // -- Detail pane composition (the pane hangs in the main area's detail column; the full selection/data/close/delete chain) --------
 
   const setupDetail = (serviceOver: Record<string, any> = {}) => {
     serviceState.isUnlocked = true;
     serviceState.currentIdentity = { id: 'id-1', name: 'Personal' };
-    // 面板挂载期拉附件（悬挂 promise 不产生 setState），其余 service 面均为防御桩
+    // The pane pulls attachments while mounting (a dangling promise produces no setState); every other service surface is a defensive stub
     serviceState.getCredentialData = jest.fn().mockResolvedValue(null);
     serviceState.listAttachments = jest.fn(() => new Promise(() => {}));
     serviceState.getCredentialCustomFields = jest.fn(() => new Promise(() => {}));
@@ -531,7 +532,7 @@ describe('App', () => {
 
     await screen.findByTestId('detail-pane');
     expect(getCredentialData).toHaveBeenCalledWith('c1');
-    // 面板先以 loading 态渲染，字段值等 App 异步加载完成才出现
+    // The pane renders in a loading state first; field values appear only once App's async load finishes
     await screen.findByText('a@b.com');
   });
 
@@ -594,7 +595,7 @@ describe('App', () => {
 
   it('unlock gate opens and resolves through the modal cancel', async () => {
     serviceState.isUnlocked = true;
-    // 事件处理器读的是 store 的解锁态（非 serviceState）
+    // The event handler reads the store's unlocked state (not serviceState)
     useAppStore.setState({ isUnlocked: true });
     render(<App />);
     const resolve = jest.fn();

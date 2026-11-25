@@ -41,13 +41,17 @@ pub(crate) async fn ensure_workspace_for_path(
     repo.create(&ws).await.map_err(|e| e.to_string())
 }
 
-/// 把 PersonaService 的 auto-lock 事件桥接到前端 + 强制落锁闭环。
+/// Bridge PersonaService's auto-lock events to the frontend + close the
+/// forced-lock loop.
 ///
-/// - 任何事件都 `emit("persona://auto-lock", …)` 给前端（倒计时横幅/回解锁屏）
-/// - `Locked` 事件时在独立任务里直接 `service.lock()` 清掉内存主密钥——
-///   不依赖前端存活（AutoLockManager 只锁 session，不清主密钥）
+/// - Any event is `emit("persona://auto-lock", ...)`-ed to the frontend
+///   (countdown banner / back to unlock screen)
+/// - On a `Locked` event, a standalone task calls `service.lock()` directly
+///   to clear the in-memory master key — it does not depend on the frontend
+///   being alive (AutoLockManager only locks the session, not the master key)
 ///
-/// 回调只注册一次（`AtomicBool` 防重复，多次 init_service 安全）。
+/// The callback is registered exactly once (an `AtomicBool` guards against
+/// duplicates; calling it on multiple init_service invocations is safe).
 pub(crate) async fn register_auto_lock_bridge<R: tauri::Runtime>(
     state: &State<'_, AppState>,
     app: &tauri::AppHandle<R>,
@@ -84,8 +88,9 @@ pub(crate) async fn register_auto_lock_bridge<R: tauri::Runtime>(
     }
 }
 
-/// 默认 vault 路径（init_service 与 biometric status/unlock 的路径解析
-/// 共用——解锁屏上 `state.db_path` 还是 None，必须能独立解析）
+/// Default vault path (shared by the path resolution of init_service and
+/// biometric status/unlock — on the unlock screen `state.db_path` is still
+/// None, so it must be resolvable independently)
 pub(crate) fn default_db_path() -> String {
     let app_data_dir = dirs::data_dir()
         .unwrap_or_else(|| std::env::current_dir().unwrap())
@@ -107,10 +112,12 @@ pub async fn init_service<R: tauri::Runtime>(
     init_service_inner(request, None, state, app).await
 }
 
-/// init 的内部分流：`master_key` 为 Some 时跳过密码验证、直接以已解出
-/// 的主密钥建立会话（硬件绑定 biometric 解锁路径——密钥来自包裹层，
-/// 包裹层在解密那一刻已经过硬件认证）。IPC 面永不传密钥：该参数只在
-/// 进程内由 `biometric_unlock` 构造。
+/// init's internal dispatch: when `master_key` is Some, password
+/// verification is skipped and a session is established directly with the
+/// already-decrypted master key (the hardware-bound biometric unlock path —
+/// the key comes from the wrap layer, which is hardware-authenticated at
+/// the moment of decryption). Keys are never passed across the IPC surface:
+/// this argument is only constructed in-process by `biometric_unlock`.
 pub(crate) async fn init_service_inner<R: tauri::Runtime>(
     request: InitRequest,
     master_key: Option<[u8; 32]>,
@@ -145,15 +152,17 @@ pub(crate) async fn init_service_inner<R: tauri::Runtime>(
 
             match PersonaService::new(db).await {
                 Ok(mut service) => {
-                    // 注入 OS 级 biometric provider：PersonaService::new 内置
-                    // 的 Mock（恒通过）会让 service.authenticate_biometric
-                    // 的任何未来调用方静默放行——一律换成 AppState 持有的
-                    // 真实 provider（SSH agent 的 require_biometric 策略
-                    // 同一份）
+                    // Inject an OS-level biometric provider: the Mock built
+                    // into PersonaService::new (always passes) would let any
+                    // future caller of service.authenticate_biometric through
+                    // silently — always replace it with the real provider
+                    // held in AppState (the same instance the SSH agent's
+                    // require_biometric policy uses)
                     service.set_biometric_provider(state.biometric_provider.clone());
-                    // 附件 blob 存储跟随库文件（<db dir>/attachments）。
-                    // 初始化失败只降级附件功能（相关命令报 not initialized），
-                    // 绝不阻断解锁主流程。
+                    // Attachment blob storage follows the vault file
+                    // (<db dir>/attachments). A failed init only degrades
+                    // attachment features (related commands report not
+                    // initialized); it never blocks the main unlock flow.
                     let attachments_dir = std::path::Path::new(&workspace_path).join("attachments");
                     if let Err(e) = service
                         .init_attachment_storage(&attachments_dir, db_for_attachments.clone())
@@ -162,10 +171,13 @@ pub(crate) async fn init_service_inner<R: tauri::Runtime>(
                         tracing::warn!("attachment storage init failed: {}", e);
                     }
                     // Check if this is first-time setup or existing user.
-                    // 红线：查询出错必须 fail-closed——把错误当成"空库"会在
-                    // 已有用户的保险库上插第二行 user_auth（新 salt），旧密
-                    // 码从此解不开已存凭据。多实例并发/库锁超时正是会走到
-                    // 这里的场景。
+                    // Red line: a query error must fail closed — treating an
+                    // error as an "empty vault" would insert a second
+                    // user_auth row (new salt) into an existing user's
+                    // vault, after which the old password can no longer
+                    // decrypt the stored credentials. Concurrent
+                    // multi-instance access / vault lock timeouts are
+                    // exactly the scenarios that land here.
                     let has_users = match service.has_users().await {
                         Ok(has_users) => has_users,
                         Err(e) => {
@@ -178,7 +190,8 @@ pub(crate) async fn init_service_inner<R: tauri::Runtime>(
                     let is_first_time = !has_users;
 
                     if is_first_time {
-                        // 硬件密钥路径对首次建户无意义（还没有用户/密钥可验）
+                        // The hardware key path is meaningless for first-time
+                        // setup (there is no user/key to verify yet)
                         if master_key.is_some() {
                             return Ok(ApiResponse::error(
                                 "Vault is not initialized; biometric key unlock requires an existing vault"
@@ -188,9 +201,12 @@ pub(crate) async fn init_service_inner<R: tauri::Runtime>(
                         // First-time setup: initialize user with master password
                         match service.initialize_user(&request.master_password).await {
                             Ok(_user_id) => {
-                                // 在语句内完成存入并立即释放 guard：
-                                // register_auto_lock_bridge 会再次锁 state.service，
-                                // 若 guard 跨越该调用，tokio Mutex 非重入 → 死锁
+                                // Complete the store inside the statement and
+                                // release the guard immediately:
+                                // register_auto_lock_bridge locks
+                                // state.service again, and if the guard
+                                // spanned that call the non-reentrant tokio
+                                // Mutex would deadlock
                                 *state.service.lock().await = Some(service);
                                 register_auto_lock_bridge(&state, &app).await;
                                 maybe_start_passkey_server(&db_path, &state, &app).await;
@@ -204,14 +220,17 @@ pub(crate) async fn init_service_inner<R: tauri::Runtime>(
                             ))),
                         }
                     } else if let Some(key) = master_key {
-                        // Existing user + 已认证主密钥：锁户/强制改密旗标在
-                        // core 内与密码路径同序生效；session/审计同建
+                        // Existing user + authenticated master key: the
+                        // lockout / forced-password-change flags take effect
+                        // inside core in the same order as the password path;
+                        // session/audit are built the same way
                         match service
                             .authenticate_with_master_key(&key, "biometric-wrap")
                             .await
                         {
                             Ok(persona_core::AuthResult::Success) => {
-                                // 同上：先释放 guard 再注册 auto-lock 桥
+                                // Same as above: release the guard before
+                                // registering the auto-lock bridge
                                 *state.service.lock().await = Some(service);
                                 register_auto_lock_bridge(&state, &app).await;
                                 maybe_start_passkey_server(&db_path, &state, &app).await;
@@ -226,7 +245,9 @@ pub(crate) async fn init_service_inner<R: tauri::Runtime>(
                                 "Account is locked due to too many failed attempts".to_string(),
                             )),
                             Ok(persona_core::AuthResult::PasswordChangeRequired) => {
-                                // 生物解锁同样被强制改密旗标拦下（core 对齐语义）
+                                // Biometric unlock is likewise blocked by the
+                                // forced password change flag (semantics
+                                // aligned with core)
                                 Ok(ApiResponse::error_with_code(
                                     crate::error::CODE_PASSWORD_CHANGE_REQUIRED.to_string(),
                                     "Master password change required".to_string(),
@@ -242,7 +263,8 @@ pub(crate) async fn init_service_inner<R: tauri::Runtime>(
                         match service.authenticate_user(&request.master_password).await {
                             Ok(auth_result) => match auth_result {
                                 persona_core::AuthResult::Success => {
-                                    // 同上：先释放 guard 再注册 auto-lock 桥
+                                    // Same as above: release the guard before
+                                    // registering the auto-lock bridge
                                     *state.service.lock().await = Some(service);
                                     register_auto_lock_bridge(&state, &app).await;
                                     maybe_start_passkey_server(&db_path, &state, &app).await;
@@ -257,7 +279,9 @@ pub(crate) async fn init_service_inner<R: tauri::Runtime>(
                                     "Account is locked due to too many failed attempts".to_string(),
                                 )),
                                 persona_core::AuthResult::PasswordChangeRequired => {
-                                    // 机器可读错误码：前端凭此引导强制改密流程
+                                    // Machine-readable error code: the
+                                    // frontend uses it to guide the forced
+                                    // password change flow
                                     Ok(ApiResponse::error_with_code(
                                         crate::error::CODE_PASSWORD_CHANGE_REQUIRED.to_string(),
                                         "Master password change required".to_string(),
@@ -292,7 +316,8 @@ pub async fn lock_service(
     let mut service_guard = state.service.lock().await;
     if let Some(service) = service_guard.as_mut() {
         service.lock();
-        // 捕获缝持 group key，不应跨锁存活；下次 sync_now 重新装配
+        // The capture seam holds the group key and must not survive a lock;
+        // it is reassembled on the next sync_now
         service.attach_sync_capture(None).await;
         Ok(ApiResponse::success(true))
     } else {
@@ -401,13 +426,15 @@ pub async fn clear_active_identity(
     Ok(ApiResponse::success(true))
 }
 
-/// Get the full workspace settings（免解锁：解锁屏也要按开关裁剪 UI 外壳）。
+/// Get the full workspace settings (no unlock required: the unlock screen
+/// also needs the flags to trim down the UI shell).
 #[command]
 pub async fn get_workspace_settings(
     state: State<'_, AppState>,
 ) -> std::result::Result<ApiResponse<WorkspaceSettings>, String> {
-    // 与命令层错误模式一致：缺 db_path 走 Ok(ApiResponse::error)，不让
-    // Err(String) 逃出命令边界（前端统一按 success 字段分流）
+    // Consistent with the command-layer error pattern: a missing db_path goes
+    // through Ok(ApiResponse::error), so no Err(String) escapes the command
+    // boundary (the frontend branches uniformly on the success field)
     let db_path = {
         let guard = state.db_path.lock().await;
         match guard.clone() {
@@ -427,8 +454,10 @@ pub async fn get_workspace_settings(
     Ok(ApiResponse::success(ws.settings))
 }
 
-/// Change the workspace master password（解锁屏强引导与 Settings 手动改密
-/// 共用；不触碰 `state.service`——前端随后用新密码重新 init 建会话）
+/// Change the workspace master password (shared by the unlock screen's
+/// strong prompt and Settings' manual change; does not touch
+/// `state.service` — the frontend re-inits with the new password to build
+/// the session)
 #[command]
 pub async fn change_master_password(
     request: crate::types::ChangeMasterPasswordRequest,
@@ -454,11 +483,13 @@ pub async fn change_master_password(
         .await
     {
         Ok(()) => {
-            // biometric 托管条目联动：条目存在 → 更新为新密码；写失败 →
-            // 删除（fail-closed：宁可让用户重新启用，也不留坏条目——
-            // 坏条目会在每次 biometric_unlock 时触发 InvalidCredentials
-            // 自删 + 白白累计失败计数）。CLI 改密不经此处，那条路由
-            // biometric_unlock 的陈旧自愈兜底。
+            // Linked biometric custody entry: entry exists -> update it to
+            // the new password; write failure -> delete (fail-closed: rather
+            // have the user re-enable it than leave a broken entry — a
+            // broken entry triggers an InvalidCredentials self-delete on
+            // every biometric_unlock plus a wasted accumulation of failure
+            // counts). The CLI password change does not come through here;
+            // that route relies on biometric_unlock's stale-entry self-heal.
             match state.biometric_store.get(&db_path) {
                 Ok(Some(_)) => {
                     if let Err(e) = state.biometric_store.set(&db_path, &request.new_password) {
@@ -469,11 +500,16 @@ pub async fn change_master_password(
                 Ok(None) => {}
                 Err(e) => tracing::warn!("biometric keyring probe failed: {}", e),
             }
-            // 硬件包裹 blob 联动：blob 包的是**旧**主密钥，改密后解出来
-            // 的是 stale key（item key 已轮换）——不能"更新"（包裹层只认
-            // 硬件 ceremony，不认新密码），只能删除并让用户重新启用。
-            // 删失败仅打日志：unlock 侧解出 stale key 走正常 init 链，
-            // 密码路径的失败计数/锁户语义不变，不会静默放行。
+            // Linked hardware wrap blob: the blob wraps the **old** master
+            // key, so after a password change it decrypts to a stale key
+            // (the item key has already rotated) — it cannot be
+            // "updated" (the wrap layer only recognizes the hardware
+            // ceremony, not the new password), so it must be deleted and the
+            // user asked to re-enable it. A failed delete is only logged:
+            // on the unlock side, decrypting to a stale key still goes
+            // through the normal init chain, and the password path's
+            // failure-count/lockout semantics are unchanged — nothing is
+            // silently allowed through.
             match state.biometric_wrap_store.get(&db_path) {
                 Ok(Some(_)) => {
                     if let Err(e) = state.biometric_wrap_store.delete(&db_path) {
@@ -495,14 +531,19 @@ pub async fn change_master_password(
     }
 }
 
-/// 窄写高级功能开关：只动 `settings.features` 四个位，返回更新后的全量
-/// settings 作为服务端真相（避免前端 clobber 其它设置字段）。
+/// Narrow write of the advanced feature flags: only the four
+/// `settings.features` bits are touched, and the updated full settings are
+/// returned as the server-side truth (so the frontend does not clobber other
+/// settings fields).
 ///
-/// 后端开关联动（开关即生效，无需 lock→unlock）：
-/// - passkeys 关：关停已 spawn 的审批服务端；开：本会话即时拉起
-///   （此前要等下次 init_service）
-/// - ssh_agent 关：停止已运行的 SSH agent（开：不自动启动——入口显隐
-///   归 UI，agent 由用户在面板里 start，对齐 1Password 语义）
+/// Backend flag linkage (the flags take effect immediately, no
+/// lock->unlock needed):
+/// - passkeys off: shut down the already spawned approval server; on: bring
+///   it up in this session (previously this waited for the next
+///   init_service)
+/// - ssh_agent off: stop the running SSH agent (on: no automatic start —
+///   showing/hiding the entry is the UI's job, and the user starts the agent
+///   in the panel, matching 1Password's semantics)
 #[command(rename_all = "snake_case")]
 pub async fn set_feature_flags<R: tauri::Runtime>(
     ssh_agent: bool,
@@ -552,8 +593,10 @@ pub async fn set_feature_flags<R: tauri::Runtime>(
     Ok(ApiResponse::success(updated.settings))
 }
 
-/// 窄写界面语言（"zh-CN" / "en"）。与 `set_feature_flags` 同范式：解锁
-/// 门禁 + 窄写单字段 + 返回全量 settings。非法值拒绝（前端只发受支持项）。
+/// Narrow write of the UI language ("zh-CN" / "en"). Same pattern as
+/// `set_feature_flags`: unlock gate + narrow write of a single field +
+/// return the full settings. Invalid values are rejected (the frontend only
+/// sends supported items).
 #[command]
 pub async fn set_locale(
     locale: String,
@@ -590,10 +633,12 @@ pub async fn set_locale(
     Ok(ApiResponse::success(updated.settings))
 }
 
-/// 托盘右键菜单换文案：前端把 i18n locale 表（tray.* 命名空间）的真值
-/// 推过来渲染——原生托盘菜单不归 useTranslation 管，这是它接入既有 i18n
-/// 体系的唯一通道。无状态、无锁屏门禁（锁屏时右键菜单也要跟着界面语言）；
-/// 无托盘（无显示会话的降级运行）时是无害 no-op。
+/// Swap the tray right-click menu labels: the frontend pushes over the truth
+/// from the i18n locale table (tray.* namespace) for rendering — the native
+/// tray menu is not covered by useTranslation, so this is its only channel
+/// into the existing i18n system. Stateless and no lock-screen gate (the
+/// right-click menu must follow the UI language even while locked); with no
+/// tray (degraded run without a display session) it is a harmless no-op.
 #[command(rename_all = "snake_case")]
 pub fn set_tray_locale<R: tauri::Runtime>(
     labels: crate::TrayLocaleLabels,
@@ -609,8 +654,10 @@ pub fn set_tray_locale<R: tauri::Runtime>(
     ApiResponse::success(true)
 }
 
-/// 窄写主密码过期策略（天）；None = 不过期。`Some(0)` 无意义，拒绝。
-/// 与 `set_feature_flags` 同范式：解锁门禁 + 窄写单字段 + 返回全量 settings。
+/// Narrow write of the master password expiry policy (days); None = never
+/// expires. `Some(0)` is meaningless and rejected.
+/// Same pattern as `set_feature_flags`: unlock gate + narrow write of a
+/// single field + return the full settings.
 #[command]
 pub async fn set_password_expiry(
     days: Option<u32>,
@@ -646,7 +693,8 @@ pub async fn set_password_expiry(
     Ok(ApiResponse::success(updated.settings))
 }
 
-/// 把主窗口拉到前台（浮窗锁定态的"去解锁"出口）
+/// Bring the main window to the foreground (the "go unlock" exit out of the
+/// floating-window locked state)
 #[command]
 pub async fn focus_main_window<R: tauri::Runtime>(
     app: tauri::AppHandle<R>,
@@ -658,9 +706,11 @@ pub async fn focus_main_window<R: tauri::Runtime>(
     }
 }
 
-/// 前端错误上报：production 构建里 ErrorBoundary / handleError 落本地
-/// 日志文件（setup 安装的脱敏 subscriber）。各字段截断防日志爆炸；上报
-/// 路径永不失败——错误已经发生，上报再报错只会制造二次噪声。
+/// Frontend error reporting: in production builds, ErrorBoundary /
+/// handleError write to a local log file (the redacting subscriber
+/// installed at setup). Each field is truncated to prevent log explosion;
+/// the reporting path never fails — the error has already happened, and
+/// reporting it erroring again would only create secondary noise.
 #[command]
 pub fn report_frontend_error(
     message: String,
@@ -673,7 +723,7 @@ pub fn report_frontend_error(
         if value.len() <= max_bytes {
             value.to_string()
         } else {
-            // 按 char 边界回退，不切断 UTF-8
+            // Back up on a char boundary so UTF-8 is not split
             let mut end = max_bytes;
             while end > 0 && !value.is_char_boundary(end) {
                 end -= 1;

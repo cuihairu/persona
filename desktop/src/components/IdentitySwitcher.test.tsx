@@ -73,11 +73,11 @@ describe('components/IdentitySwitcher', () => {
     openOptions(identities, identities[0]);
 
     for (const type of ['Personal', 'Work', 'Social', 'Financial', 'Gaming', 'Custom']) {
-      // 当前身份在闭合按钮上也渲染一次，故至少出现一次
+      // The current identity is also rendered once in the closed button, so it appears at least once
       expect(screen.getAllByText(`N-${type}`).length).toBeGreaterThanOrEqual(1);
     }
-    // 未知类型（Custom）走 default 分支：灰色圆形图标容器
-    // （icon 容器是文本的叔节点，改查文档级 default 配色类）
+    // Unknown types (Custom) fall through to the default branch: gray round icon container
+    // (the icon container is the text's uncle node, so assert on the document-level default color class instead)
     expect(document.querySelector('.bg-gray-100.text-gray-800')).not.toBeNull();
   });
 
@@ -91,8 +91,9 @@ describe('components/IdentitySwitcher', () => {
         switchIdentity: jest.fn(),
       };
       (usePersonaService as jest.Mock).mockReturnValue(service);
-      // 首渲染：currentIdentity=null（headlessui useControllable 按 value!==undefined
-      // 判定受控；value 必须永不为 undefined，否则身份加载完成即触发转换告警）
+      // First render: currentIdentity=null (headlessui useControllable treats
+      // value!==undefined as the controlled test; value must never be
+      // undefined, or the transition warning fires as soon as identity loading completes)
       const { rerender } = render(<IdentitySwitcher onCreateIdentity={() => {}} />);
 
       service.currentIdentity = identity;
@@ -165,7 +166,7 @@ describe('components/CreateIdentityModal', () => {
     await Promise.resolve();
     expect(onClose).toHaveBeenCalledTimes(1);
 
-    // 同一实例关闭再打开：字段已重置
+    // Closing and reopening the same instance: fields are reset
     rerender(<CreateIdentityModal isOpen={false} onClose={onClose} />);
     rerender(<CreateIdentityModal isOpen onClose={onClose} />);
     expect((screen.getByLabelText('身份名称') as HTMLInputElement).value).toBe('');
@@ -177,10 +178,10 @@ describe('components/CreateIdentityModal', () => {
     const onClose = jest.fn();
     renderModal({ onClose });
 
-    // 空名：按钮禁用
+    // Empty name: button is disabled
     expect(screen.getByRole('button', { name: '创建身份' })).toBeDisabled();
 
-    // 表单 submit（绕过 disabled 断言）也应被 guard 拦下
+    // Form submit (bypassing the disabled assertion) must also be stopped by the guard
     fireEvent.submit(screen.getByRole('button', { name: '创建身份' }).closest('form')!);
     expect(createIdentity).not.toHaveBeenCalled();
 

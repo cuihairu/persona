@@ -1,22 +1,25 @@
 import { getVersion } from '@tauri-apps/api/app';
 
 /**
- * 桌面端版本更新检测（纯前端：访问 GitHub 公开 API，不下载不安装）。
+ * Desktop update check (pure frontend: hits the public GitHub API, never
+ * downloads or installs anything).
  *
- * 渠道在构建期经 vite define 注入 globalThis.__PERSONA_BUILD__
- * （见 vite.config.ts / desktop-build.yml）：
- * - nightly 每日构建：比对 desktop-build.yml 最近一次成功 run 的 commit 与时间
- * - release 正式版：比对 GitHub Releases latest 的版本号
- * - dev 本地开发：没有可信构建元信息，不参与比对
+ * The channel is injected at build time via vite define into
+ * globalThis.__PERSONA_BUILD__ (see vite.config.ts / desktop-build.yml):
+ * - nightly daily build: compares the commit and time of the most recent
+ *   successful desktop-build.yml run
+ * - release: compares against the version of GitHub Releases latest
+ * - dev local development: no trustworthy build metadata, never participates
+ *   in the comparison
  */
 
 export type UpdateChannel = 'nightly' | 'release' | 'dev';
 
 export interface BuildMeta {
   channel: UpdateChannel;
-  /** 构建所在 commit（nightly 比对用；dev/未知为空串） */
+  /** Commit the build was made from (used for the nightly comparison; empty string for dev/unknown) */
   sha: string;
-  /** 构建时间 ISO 串（nightly 比对用；dev/未知为空串） */
+  /** Build time as an ISO string (used for the nightly comparison; empty string for dev/unknown) */
   builtAt: string;
 }
 
@@ -25,13 +28,13 @@ export type UpdateCheckStatus = 'up-to-date' | 'update-available' | 'unavailable
 export interface UpdateCheckResult {
   status: UpdateCheckStatus;
   channel: UpdateChannel;
-  /** 当前应用版本（getVersion()；读不到为空串） */
+  /** Current app version (getVersion(); empty string when unavailable) */
   currentVersion: string;
-  /** 新版本标识：release 为 tag（如 v0.2.0），nightly 为短 commit */
+  /** New version identifier: the tag for release (e.g. v0.2.0), a short commit for nightly */
   latestVersion: string | null;
-  /** release 页 / workflow run 页链接 */
+  /** Link to the release page / workflow run page */
   detailUrl: string | null;
-  /** unavailable 时的原因 */
+  /** Why the check was unavailable */
   reason?: 'no-release' | 'dev-channel' | 'network' | 'no-current-version';
 }
 
@@ -44,11 +47,13 @@ export const UPDATE_CHECK_LAST_KEY = 'persona.updateCheck.lastChecked';
 
 const DEFAULT_BUILD_META: BuildMeta = { channel: 'dev', sha: '', builtAt: '' };
 
-/** 构建期注入的元信息；jest / 无 define 环境回退 dev */
+/** Build-time injected metadata; falls back to dev under jest / in environments without the define */
 export const getBuildMeta = (): BuildMeta =>
   typeof __PERSONA_BUILD__ === 'undefined' ? DEFAULT_BUILD_META : __PERSONA_BUILD__;
 
-/** 宽松版本号比较：按数字段逐段比，段数不足补 0；解析不了返回 null（调用方当作"不更新"） */
+/** Lenient version comparison: compares numeric segments one by one, padding
+ * missing segments with 0; returns null when unparsable (the caller treats that
+ * as "no update"). */
 export const compareVersions = (a: string, b: string): number | null => {
   const toParts = (value: string): number[] | null => {
     const parts = value.replace(/^v/i, '').split('.');
@@ -80,7 +85,7 @@ export const setUpdateCheckEnabled = (enabled: boolean): void => {
   try {
     window.localStorage.setItem(UPDATE_CHECK_ENABLED_KEY, enabled ? '1' : '0');
   } catch {
-    // localStorage 不可用（隐私模式等）：设置不持久化，本次会话仍生效
+    // localStorage unavailable (private mode etc.): the setting is not persisted but stays in effect for this session
   }
 };
 
@@ -96,7 +101,7 @@ export const setLastCheckedAt = (iso: string): void => {
   try {
     window.localStorage.setItem(UPDATE_CHECK_LAST_KEY, iso);
   } catch {
-    // 同上：不持久化不致命
+    // Same as above: not persisting is not fatal
   }
 };
 
@@ -104,14 +109,14 @@ const currentAppVersion = async (): Promise<string> => {
   try {
     return (await getVersion()) || '';
   } catch {
-    // 非 Tauri 环境（jest / 纯 vite dev）
+    // Non-Tauri environment (jest / plain vite dev)
     return '';
   }
 };
 
 type FetchLike = (url: string, init?: RequestInit) => Promise<Response>;
 
-/** 返回解析后的 JSON；404 → null（调用方表示"渠道上还没有东西"）；其余非 2xx 抛错 */
+/** Returns the parsed JSON; 404 → null (the caller reports "nothing on the channel yet"); other non-2xx responses throw */
 const fetchJson = async (fetchFn: FetchLike, url: string): Promise<unknown | null> => {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
@@ -142,8 +147,9 @@ interface WorkflowRunsPayload {
 }
 
 /**
- * 按构建渠道检查更新。网络与接口错误一律折算成 `unavailable`，
- * 不向调用方抛异常——检查失败不该打断使用流程。
+ * Checks for updates per build channel. Network and API errors are always
+ * converted to `unavailable` and never thrown to the caller — a failed check
+ * must not interrupt the usage flow.
  */
 export const checkForUpdate = async (
   deps: { fetchFn?: FetchLike } = {},
@@ -179,7 +185,7 @@ export const checkForUpdate = async (
       };
     }
 
-    // nightly：最近一次成功的 desktop-build run 就是"每日更新源"
+    // nightly: the most recent successful desktop-build run is the "daily update source"
     const data = (await fetchJson(
       fetchFn,
       `${GITHUB_API}/actions/workflows/desktop-build.yml/runs?status=success&per_page=5`,
@@ -190,7 +196,7 @@ export const checkForUpdate = async (
     }
     const runTime = Date.parse(run.created_at);
     const buildTime = Date.parse(meta.builtAt);
-    // commit 不同才算有新版；时间都缺时保守当作有新版（宁可提示不漏报）
+    // A different commit is the only evidence of a new build; when both times are missing, conservatively treat it as newer (better to over-prompt than to miss)
     const newer =
       run.head_sha !== meta.sha &&
       (Number.isNaN(buildTime) || Number.isNaN(runTime) || runTime > buildTime);

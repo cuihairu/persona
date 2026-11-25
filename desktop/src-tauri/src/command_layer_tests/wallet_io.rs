@@ -5,12 +5,12 @@
 
 use super::*;
 
-/// wallet_import 三种导入方式 + 地址派生 + 删除与锁定门禁。
+/// wallet_import's three import types + address derivation + delete and locked gates.
 #[tokio::test]
 async fn wallet_import_address_management_and_locked_gates() {
     let (app, identity_id) = app_with_identity().await;
 
-    // HD 导入（mnemonic，2 个地址）。
+    // HD import (mnemonic, 2 addresses).
     let resp = wallet_import(
         identity_id.clone(),
         WalletImportRequest {
@@ -31,7 +31,7 @@ async fn wallet_import_address_management_and_locked_gates() {
     assert_eq!(hd.network, "Ethereum");
     assert_eq!(hd.address_count, 2);
 
-    // 单地址导入（private_key）。
+    // Single-address import (private_key).
     let resp = wallet_import(
         identity_id.clone(),
         WalletImportRequest {
@@ -51,7 +51,7 @@ async fn wallet_import_address_management_and_locked_gates() {
     assert!(!single.wallet_type.contains("HierarchicalDeterministic"));
     assert_eq!(single.address_count, 1);
 
-    // 短密码 / 未知 import_type / 坏助记词都被拒绝。
+    // Short password / unknown import_type / bad mnemonic are all rejected.
     let resp = wallet_import(
         identity_id.clone(),
         WalletImportRequest {
@@ -110,22 +110,22 @@ async fn wallet_import_address_management_and_locked_gates() {
     .unwrap();
     assert!(!resp.success, "invalid mnemonic must be rejected");
 
-    // 按 identity 过滤 + 非法 UUID。
+    // Filter by identity + invalid UUID.
     let resp = wallet_list(Some(identity_id.clone()), app.state::<AppState>())
         .await
         .unwrap();
     assert!(resp.success, "{:?}", resp.error);
     assert_eq!(resp.data.unwrap().wallets.len(), 2);
 
-    // wallet_list 落 bad UUID 为 ApiResponse 错误，不再逃逸命令边界。
+    // wallet_list turns a bad UUID into an ApiResponse error, no longer escaping the command boundary.
     let resp = wallet_list(Some("not-a-uuid".to_string()), app.state::<AppState>())
         .await
         .unwrap();
     assert!(!resp.success);
     assert_eq!(resp.error.as_deref(), Some("Invalid identity UUID format"));
 
-    // 地址列表：非法 UUID / 未知钱包。
-    // Bad UUID 同样落 ApiResponse。
+    // Address list: invalid UUID / unknown wallet.
+    // A bad UUID likewise lands as an ApiResponse.
     let resp = wallet_list_addresses("nope".to_string(), app.state::<AppState>())
         .await
         .unwrap();
@@ -137,7 +137,7 @@ async fn wallet_import_address_management_and_locked_gates() {
         .unwrap();
     assert_eq!(resp.error.as_deref(), Some("Wallet not found"));
 
-    // add_address：未知钱包 / 短密码 / 错误密码 / 单地址钱包 / HD 正常派生。
+    // add_address: unknown wallet / short password / wrong password / single-address wallet / HD derives normally.
     let resp = wallet_add_address(
         uuid::Uuid::new_v4().to_string(),
         "wallet-pass-123".to_string(),
@@ -155,7 +155,7 @@ async fn wallet_import_address_management_and_locked_gates() {
         Some("Wallet password must be at least 8 characters")
     );
 
-    // Decrypt failure 落 ApiResponse 错误消息，不逃逸命令边界。
+    // A decrypt failure lands as an ApiResponse error message, not escaping the command boundary.
     let resp = wallet_add_address(
         hd.id.clone(),
         "wrong-passphrase".to_string(),
@@ -201,7 +201,7 @@ async fn wallet_import_address_management_and_locked_gates() {
         Some(true)
     );
 
-    // 地址列表能看到新地址（serialize_wallet_address 路径）。
+    // The address list can see the new address (the serialize_wallet_address path).
     let resp = wallet_list_addresses(hd.id.clone(), app.state::<AppState>())
         .await
         .unwrap();
@@ -210,7 +210,7 @@ async fn wallet_import_address_management_and_locked_gates() {
     assert_eq!(addresses.len(), 3);
     assert!(addresses.iter().any(|a| a.index == 2));
 
-    // 删除：未知钱包报错，真实删除返回 true。
+    // Delete: an unknown wallet errors, a real delete returns true.
     let resp = wallet_delete(uuid::Uuid::new_v4().to_string(), app.state::<AppState>())
         .await
         .unwrap();
@@ -222,7 +222,7 @@ async fn wallet_import_address_management_and_locked_gates() {
         assert!(resp.data.unwrap());
     }
 
-    // 锁定后整个家族都被 "Service is locked" 门禁拦下。
+    // Once locked, the whole family is gated down by "Service is locked".
     let resp = lock_service(app.state::<AppState>()).await.unwrap();
     assert!(resp.success, "{:?}", resp.error);
 
@@ -277,7 +277,7 @@ async fn wallet_import_address_management_and_locked_gates() {
     .unwrap();
     assert_eq!(resp.error.as_deref(), Some("Service is locked"));
 }
-/// 导出格式矩阵：json（含私钥）/ mnemonic / private_key / xpub / wif。
+/// Export format matrix: json (with private key) / mnemonic / private_key / xpub / wif.
 #[tokio::test]
 async fn wallet_export_format_matrix() {
     let (app, identity_id) = app_with_identity().await;
@@ -300,7 +300,7 @@ async fn wallet_export_format_matrix() {
     let eth = resp.data.expect("eth wallet");
     let eth_id = eth.id.clone();
 
-    // Bitcoin 钱包供 WIF 导出。
+    // A Bitcoin wallet for WIF export.
     let resp = wallet_import(
         identity_id.clone(),
         WalletImportRequest {
@@ -318,7 +318,7 @@ async fn wallet_export_format_matrix() {
     assert!(resp.success, "{:?}", resp.error);
     let btc = resp.data.expect("btc wallet");
 
-    // mnemonic 导出：无密码被拒，有密码还原助记词。
+    // mnemonic export: rejected without a password, returns the mnemonic with one.
     let resp = wallet_export(
         WalletExportRequest {
             wallet_id: eth_id.clone(),
@@ -349,7 +349,7 @@ async fn wallet_export_format_matrix() {
     assert!(resp.success, "{:?}", resp.error);
     assert_eq!(resp.data.unwrap().split_whitespace().count(), 12);
 
-    // private_key 导出：无密码被拒，有密码得到 0x hex。
+    // private_key export: rejected without a password, yields 0x hex with one.
     let resp = wallet_export(
         WalletExportRequest {
             wallet_id: eth_id.clone(),
@@ -385,7 +385,7 @@ async fn wallet_export_format_matrix() {
         priv_hex.len()
     );
 
-    // xpub 导出（HD 导入会写 extended_public_key）。
+    // xpub export (an HD import writes extended_public_key).
     let resp = wallet_export(
         WalletExportRequest {
             wallet_id: eth_id.clone(),
@@ -400,7 +400,7 @@ async fn wallet_export_format_matrix() {
     assert!(resp.success, "{:?}", resp.error);
     assert!(resp.data.unwrap().starts_with("xpub"));
 
-    // WIF 导出：HD Bitcoin 钱包被拒（要求单地址），单地址 Bitcoin 才成功。
+    // WIF export: an HD Bitcoin wallet is rejected (a single address is required); only a single-address Bitcoin wallet succeeds.
     let resp = wallet_export(
         WalletExportRequest {
             wallet_id: btc.id.clone(),
@@ -452,7 +452,7 @@ async fn wallet_export_format_matrix() {
     assert!(resp.success, "{:?}", resp.error);
     assert!(resp.data.unwrap().len() >= 51);
 
-    // JSON 含私钥导出 + 未知格式。
+    // JSON export with the private key + an unknown format.
     let resp = wallet_export(
         WalletExportRequest {
             wallet_id: eth_id.clone(),
@@ -482,9 +482,10 @@ async fn wallet_export_format_matrix() {
     .unwrap();
     assert!(!resp.success, "unknown export format must be rejected");
 
-    // Keystore v3 臂：导出臂的边界（geth 默认 scrypt n=2^18 在本测试里太慢，
-    // 往返覆盖见 core 的 keystore 规范向量与低 work factor 往返），导入臂用
-    // 低 work factor 造的 keystore 端到端走一遍。
+    // Keystore v3 arm: the boundary of the export arm (geth's default scrypt
+    // n=2^18 is too slow for this test; round-trip coverage lives in core's
+    // keystore normative vectors and the low-work-factor round trip). The
+    // import arm runs a keystore built with a low work factor end to end.
     let resp = wallet_export(
         WalletExportRequest {
             wallet_id: eth_id.clone(),
@@ -505,7 +506,7 @@ async fn wallet_export_format_matrix() {
         resp.error
     );
 
-    // 原钱包的私钥，供 keystore 往返校验。
+    // The original wallet's private key, used to verify the keystore round trip.
     let resp = wallet_export(
         WalletExportRequest {
             wallet_id: eth_id,
@@ -569,7 +570,7 @@ async fn wallet_export_format_matrix() {
     assert!(resp.success, "{:?}", resp.error);
     assert_eq!(original_pk, resp.data.unwrap(), "same private key material");
 
-    // 导入臂的坏数据：非法 JSON 在 scrypt 之前就被拒。
+    // Bad data for the import arm: invalid JSON is rejected before scrypt.
     let resp = wallet_import(
         identity_id,
         WalletImportRequest {

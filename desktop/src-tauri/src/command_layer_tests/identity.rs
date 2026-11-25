@@ -268,8 +268,9 @@ async fn generate_password_and_statistics_serve_values() {
 }
 #[tokio::test]
 async fn generate_password_advanced_works_without_unlocked_service() {
-    // 纯计算命令：不建 app、不解锁，直接调用即应出数（Quick Access/锁屏
-    // 场景的前置条件）。
+    // A pure-computation command: no app built, no unlocking, calling it
+    // directly must already produce data (a precondition of the Quick Access /
+    // lock-screen scenarios).
     let resp = generate_password_advanced(16, true, true, true, true, false, 3, None)
         .await
         .unwrap();
@@ -277,12 +278,12 @@ async fn generate_password_advanced_works_without_unlocked_service() {
     let data = resp.data.expect("passwords returned");
     assert_eq!(data.passwords.len(), 3);
     assert!(data.passwords.iter().all(|p| p.len() == 16));
-    // 26 + 26 + 10 + 24 = 86；熵 = log2(86) × 16
+    // 26 + 26 + 10 + 24 = 86; entropy = log2(86) x 16
     assert_eq!(data.pool_size, 86);
     let expected = 86f64.log2() * 16.0;
     assert!((data.entropy_bits - expected).abs() < 1e-9);
 
-    // 选项收敛：只留数字集，池 = 10，字符全来自数字集
+    // Converged options: only the digit set is kept, the pool = 10 and every character comes from the digit set
     let resp = generate_password_advanced(12, false, false, true, false, false, 1, None)
         .await
         .unwrap();
@@ -295,7 +296,7 @@ async fn generate_password_advanced_works_without_unlocked_service() {
 }
 #[tokio::test]
 async fn generate_password_advanced_pronounceable_entropy_and_clamps() {
-    // 可发音（仅小写）：辅音 21 / 元音 5 交替；长度 20 → 10×log2(21)+10×log2(5)
+    // Pronounceable (lowercase only): 21 consonants / 5 vowels alternating; length 20 -> 10*log2(21)+10*log2(5)
     let resp = generate_password_advanced(20, true, false, false, false, true, 1, None)
         .await
         .unwrap();
@@ -305,7 +306,7 @@ async fn generate_password_advanced_pronounceable_entropy_and_clamps() {
     assert!((data.entropy_bits - expected).abs() < 1e-9);
     assert_eq!(data.pool_size, 21);
 
-    // count / length 夹取：0 → 1 条、下限 4；上限防滥用
+    // count / length clamping: 0 -> 1 entry, a lower bound of 4; the upper bound guards against abuse
     let resp = generate_password_advanced(0, true, true, true, true, false, 0, None)
         .await
         .unwrap();
@@ -322,7 +323,7 @@ async fn generate_password_advanced_pronounceable_entropy_and_clamps() {
 }
 #[tokio::test]
 async fn generate_password_advanced_surfaces_validation_errors() {
-    // 无字符集 / 可发音无字母：core 校验错误透传，不 panic 不静默
+    // No character set / pronounceable without letters: core's validation error passes through — no panic, no silence
     let resp = generate_password_advanced(16, false, false, false, false, false, 1, None)
         .await
         .unwrap();
@@ -415,14 +416,14 @@ async fn export_identity_command_returns_exportable_json() {
     assert!(!export.exported_at.is_empty());
     assert!(export.data.is_object(), "export payload is JSON");
 }
-/// export_identity 的成功/错误路径 + audit_cleanup 与 reauth 的门禁。
+/// The success/error paths of export_identity + the gates of audit_cleanup and reauth.
 #[tokio::test]
 async fn export_identity_and_audit_cleanup_gates() {
     let app = mock_app();
     let bad_uuid = uuid::Uuid::new_v4().to_string();
 
-    // 无服务分支：export/audit_cleanup/reauth 全部降级报错；
-    // passkey 导出则先在本地拒绝坏 UUID。
+    // The no-service branch: export/audit_cleanup/reauth all degrade to an error;
+    // passkey export rejects a bad UUID locally first.
     let resp = export_identity(bad_uuid.clone(), app.state::<AppState>())
         .await
         .unwrap();
@@ -453,7 +454,7 @@ async fn export_identity_and_audit_cleanup_gates() {
     .unwrap();
     assert!(resp.success, "{:?}", resp.error);
 
-    // 导出成功：身份 + 凭据 JSON 负载（元数据，不含密文）。
+    // Export success: identity + credential JSON payload (metadata, no ciphertext).
     let resp = export_identity(identity_id.clone(), app.state::<AppState>())
         .await
         .unwrap();
@@ -463,7 +464,7 @@ async fn export_identity_and_audit_cleanup_gates() {
     assert_eq!(export.data["credentials"].as_array().map(Vec::len), Some(1));
     assert!(!export.exported_at.is_empty());
 
-    // 不存在的身份：无专用错误码 → 常规错误串。
+    // A nonexistent identity: no dedicated error code -> the ordinary error string.
     let resp = export_identity(uuid::Uuid::new_v4().to_string(), app.state::<AppState>())
         .await
         .unwrap();
@@ -474,7 +475,7 @@ async fn export_identity_and_audit_cleanup_gates() {
         .unwrap_or_default()
         .contains("Failed to export identity"));
 
-    // 锁定后：export/audit_cleanup 都带 SERVICE_LOCKED 错误码。
+    // After locking: export/audit_cleanup both carry the SERVICE_LOCKED error code.
     let resp = lock_service(app.state::<AppState>()).await.unwrap();
     assert!(resp.success, "{:?}", resp.error);
 
@@ -488,20 +489,21 @@ async fn export_identity_and_audit_cleanup_gates() {
     assert!(!resp.success);
     assert_eq!(resp.error_code.as_deref(), Some("SERVICE_LOCKED"));
 }
-/// workspace 路径推导：裸文件名的 parent 是空串而非 None
-/// （Path::parent 语义），落库时由上层 filter 回落到默认名。
+/// Workspace path derivation: the parent of a bare file name is an empty
+/// string, not None (Path::parent semantics), and the upper-layer filter falls
+/// back to the default name when storing.
 #[test]
 fn workspace_path_for_db_path_handles_bare_names() {
     assert_eq!(workspace_path_for_db_path("/tmp/x/vault.db"), "/tmp/x");
-    // Path::new("bare.db").parent() == Some("")，不触发 unwrap_or_else。
+    // Path::new("bare.db").parent() == Some("") — unwrap_or_else is not triggered.
     assert_eq!(workspace_path_for_db_path("bare.db"), "");
 }
-/// update_identity 的 identity_type 全臂 + 可选字段"空白即清除"归一化。
+/// Every arm of update_identity's identity_type + the "blank means clear" normalization of the optional fields.
 #[tokio::test]
 async fn identity_update_type_matrix_and_optional_field_normalization() {
     let (app, identity_id) = app_with_identity().await;
 
-    // 逐个驱动 identity_type 的映射臂（Personal 已由既有测试覆盖）。
+    // Drive each mapping arm of identity_type in turn (Personal is already covered by an existing test).
     for (type_str, expected) in [
         ("Work", "Work"),
         ("Social", "Social"),
@@ -528,7 +530,7 @@ async fn identity_update_type_matrix_and_optional_field_normalization() {
         assert_eq!(updated.identity_type, expected, "arm for {type_str}");
     }
 
-    // description/email/phone 传纯空白 → 归一化为 None（三个 and_then 臂）。
+    // description/email/phone passed as pure whitespace -> normalized to None (the three and_then arms).
     let resp = update_identity(
         UpdateIdentityRequest {
             id: identity_id.clone(),
@@ -549,7 +551,7 @@ async fn identity_update_type_matrix_and_optional_field_normalization() {
     assert_eq!(updated.email, None);
     assert_eq!(updated.phone, None);
 
-    // 不存在的 id → "Identity not found"。
+    // A nonexistent id -> "Identity not found".
     let resp = update_identity(
         UpdateIdentityRequest {
             id: uuid::Uuid::new_v4().to_string(),
@@ -566,15 +568,15 @@ async fn identity_update_type_matrix_and_optional_field_normalization() {
     .unwrap();
     assert_eq!(resp.error.as_deref(), Some("Identity not found"));
 }
-/// get/set/clear_active_identity 在 db_path 打不开时大声报错
-///（from_file/migrate 错误臂）。
+/// get/set/clear_active_identity report loudly when db_path cannot be opened
+/// (the from_file/migrate error arms).
 #[tokio::test]
 async fn active_identity_commands_report_db_failures() {
     let app = mock_app();
     init_service_ok(&app, "correct-horse").await;
     let state = || app.state::<AppState>();
 
-    // 垃圾文件：connect 打开成功、migrate 才报 not a database。
+    // A junk file: connect opens successfully and only migrate reports not a database.
     let dir = tempfile::tempdir().unwrap();
     let junk = dir.path().join("junk.db");
     std::fs::write(&junk, b"still not a database").unwrap();
@@ -584,7 +586,7 @@ async fn active_identity_commands_report_db_failures() {
         *state.db_path.lock().await = Some(junk.to_string_lossy().to_string());
     }
 
-    // 基础设施失败一律 Ok(ApiResponse::error)：success=false + error 落消息。
+    // Infrastructure failures are always Ok(ApiResponse::error): success=false + the error in the message.
     let resp = get_active_identity(state()).await.unwrap();
     assert!(!resp.success);
     assert!(
@@ -617,7 +619,7 @@ async fn active_identity_commands_report_db_failures() {
         resp.error
     );
 
-    // 不存在目录：from_file 的 connect 直接失败。
+    // A nonexistent directory: from_file's connect fails outright.
     {
         let state = app.state::<AppState>();
         *state.db_path.lock().await = Some("/nonexistent-dir-for-persona-tests/x.db".to_string());
@@ -632,7 +634,7 @@ async fn active_identity_commands_report_db_failures() {
         resp.error
     );
 }
-/// 删除当前活跃的 identity 时，workspace 的 active_identity_id 指针被清空。
+/// When the currently active identity is deleted, the workspace's active_identity_id pointer is cleared.
 #[tokio::test]
 async fn delete_active_identity_clears_workspace_pointer() {
     let (app, identity_id) = app_with_identity().await;
@@ -668,7 +670,7 @@ async fn identity_commands_surface_db_errors_from_garbage_vault() {
         );
     };
 
-    // list 走精确消息（探针验证过的形态），其余断言前缀 + 底层错误。
+    // list uses the exact message (the shape verified by the probe); the rest assert the prefix + the underlying error.
     let resp = get_identities(state.clone()).await.unwrap();
     assert_eq!(
         resp.error.as_deref(),
@@ -763,7 +765,7 @@ async fn identity_commands_surface_db_errors_from_garbage_vault() {
         resp.error
     );
 
-    // touch 只动内存时间戳，坏库也必须成功。
+    // touch only touches in-memory timestamps, so a bad db must still succeed.
     let resp = touch_activity(state).await.unwrap();
     assert!(resp.success, "{:?}", resp.error);
     assert_eq!(resp.data, Some(true));
@@ -772,7 +774,7 @@ async fn identity_commands_surface_db_errors_from_garbage_vault() {
 async fn missing_and_malformed_ids_take_their_own_error_arms() {
     let app = mock_app();
 
-    // 未初始化：各命令的 None service 臂。
+    // Not initialized: the None-service arm of each command.
     let resp = get_identity(
         "00000000-0000-0000-0000-000000000000".to_string(),
         app.state::<AppState>(),
@@ -811,11 +813,11 @@ async fn missing_and_malformed_ids_take_their_own_error_arms() {
     .unwrap();
     assert_eq!(resp.error.as_deref(), Some("Service not initialized"));
 
-    // 初始化后：合法 UUID 但不存在的资源。
+    // After initialization: a legal UUID but a nonexistent resource.
     let (app, _identity_id) = app_with_identity().await;
     let bogus = "00000000-0000-0000-0000-000000000000".to_string();
 
-    // get 对缺失 id 返回 Ok(None)（success=true，无 error）。
+    // get returns Ok(None) for a missing id (success=true, no error).
     let resp = get_identity(bogus.clone(), app.state::<AppState>())
         .await
         .unwrap();
@@ -825,7 +827,7 @@ async fn missing_and_malformed_ids_take_their_own_error_arms() {
         "missing identity returns Ok(None)"
     );
 
-    // update 先查再改：缺失 id 在查询步就被拒。
+    // update checks before it changes: a missing id is rejected at the query step.
     let resp = update_identity(
         UpdateIdentityRequest {
             id: bogus.clone(),
@@ -860,7 +862,7 @@ async fn missing_and_malformed_ids_take_their_own_error_arms() {
         .unwrap();
     assert_eq!(resp.data, Some(false), "delete of missing id is a no-op");
 
-    // 非法 UUID 先于 repo 到达自己的错误臂。
+    // An illegal UUID reaches its own error arm before the repo.
     let resp = delete_credential("not-a-uuid".to_string(), app.state::<AppState>())
         .await
         .unwrap();
@@ -877,11 +879,13 @@ async fn get_active_identity_without_db_path_degrades_loudly() {
         Some("Database path unavailable. Initialize the service first.")
     );
 }
-/// active identity 三命令的前置臂：未初始化、锁定、非法 UUID、db_path 缺失，
-/// 外加 clear_active_identity 的成功路径（此前只有失败路径有覆盖）。
+/// The precondition arms of the three active-identity commands: not
+/// initialized, locked, an illegal UUID, and a missing db_path — plus the
+/// success path of clear_active_identity (previously only the failure paths
+/// were covered).
 #[tokio::test]
 async fn active_identity_precondition_matrix() {
-    // 未初始化：None service 臂在 UUID 解析之前拦下 set。
+    // Not initialized: the None-service arm stops set before UUID parsing.
     let app = mock_app();
     let resp = set_active_identity("not-even-a-uuid".to_string(), app.state::<AppState>())
         .await
@@ -892,7 +896,7 @@ async fn active_identity_precondition_matrix() {
         .unwrap();
     assert_eq!(resp.error.as_deref(), Some("Service not initialized"));
 
-    // 锁定态：unlock 检查在 UUID 解析之前。
+    // Locked: the unlock check comes before UUID parsing.
     let (app, identity_id) = app_with_identity().await;
     lock_service(app.state::<AppState>()).await.unwrap();
     let resp = set_active_identity(identity_id, app.state::<AppState>())
@@ -904,7 +908,7 @@ async fn active_identity_precondition_matrix() {
         .unwrap();
     assert_eq!(resp.error.as_deref(), Some("Service is locked"));
 
-    // 已解锁：UUID 解析在 db_path 检查之前，非法 UUID 走自己的错误臂。
+    // Unlocked: UUID parsing comes before the db_path check, and an illegal UUID takes its own error arm.
     let (app, identity_id) = app_with_identity().await;
     let resp = set_active_identity("bad-uuid".to_string(), app.state::<AppState>())
         .await
@@ -912,7 +916,7 @@ async fn active_identity_precondition_matrix() {
     assert!(!resp.success);
     assert_eq!(resp.error.as_deref(), Some("Invalid identity UUID format"));
 
-    // db_path 缺失：set/clear 都落同一句 ApiResponse 错误。
+    // A missing db_path: set/clear both land on the same ApiResponse error.
     let original_db_path = {
         let state = app.state::<AppState>();
         let path = state.db_path.lock().await.clone();
@@ -936,7 +940,7 @@ async fn active_identity_precondition_matrix() {
         Some("Database path unavailable. Initialize the service first.")
     );
 
-    // 恢复路径后 clear 走完整成功链（ensure_workspace → 清指针 → 落库）。
+    // After the recovery path, clear walks the full success chain (ensure_workspace -> clear the pointer -> persist).
     {
         let state = app.state::<AppState>();
         *state.db_path.lock().await = Some(original_db_path);
@@ -952,13 +956,13 @@ async fn active_identity_precondition_matrix() {
     let resp = get_active_identity(app.state::<AppState>()).await.unwrap();
     assert_eq!(resp.data, Some(None), "clear must remove the pointer");
 }
-/// create_identity 的 identity_type 大写/自定义全臂（354-359 的 match）。
+/// Every uppercase/custom arm of create_identity's identity_type (the match at 354-359).
 #[tokio::test]
 async fn create_identity_type_match_arms_all_reachable() {
     let app = mock_app();
     init_service_ok(&app, "correct-horse").await;
 
-    // 大写形式走专用枚举臂，任意其他字符串走 Custom 原样回显。
+    // The uppercase forms take the dedicated enum arms; any other string is echoed back verbatim as Custom.
     for label in [
         "Personal",
         "Work",
@@ -984,9 +988,11 @@ async fn create_identity_type_match_arms_all_reachable() {
         assert_eq!(identity.name, format!("Typed {label}"));
     }
 }
-/// ensure_workspace_for_path 的 create 分支：workspace_path 无 file_name
-/// （如 "/"）时工作区名叫 "Persona"。需要空库——已有单个 workspace 时
-/// 先走 len==1 迁移分支（改写 path 返回），到不了 name 计算。
+/// The create branch of ensure_workspace_for_path: when workspace_path has no
+/// file_name (such as "/") the workspace is named "Persona". It needs an empty
+/// db — with a single existing workspace the len==1 migration branch runs
+/// first (rewriting path and returning), so the name computation is never
+/// reached.
 #[tokio::test]
 async fn workspace_name_falls_back_to_persona_for_root_paths() {
     assert_eq!(workspace_path_for_db_path("/"), ".");
@@ -1001,7 +1007,7 @@ async fn workspace_name_falls_back_to_persona_for_root_paths() {
     assert_eq!(ws.name, "Persona");
     assert_eq!(ws.path.to_string_lossy(), "/");
 
-    // 同路径二次调用走 find 分支，名字不被重建覆盖。
+    // A second call with the same path takes the find branch, and the name is not overwritten by a rebuild.
     let ws = ensure_workspace_for_path(&db, "/").await.unwrap();
     assert_eq!(ws.name, "Persona");
 }

@@ -1,6 +1,6 @@
 /**
- * 简体中文资源（基准语言——新增文案先在这里定稿，en.ts 跟随）。
- * 顶层 key 按组件/领域分 namespace：common 为跨组件复用词。
+ * Simplified Chinese resources (base locale - finalise new copy here first, en.ts follows).
+ * Top-level keys are namespaced by component/domain: common holds words reused across components.
  */
 export default {
   generator: {
@@ -62,8 +62,8 @@ export default {
       stale_unchanged: '长期未更新',
       two_factor_available: '可开两步验证',
     },
-    // 与 Rust HealthIssueKind::detail 的固定模板对应（后端 detail 是英文，
-    // CLI 消费；前端按结构化字段本地化渲染）
+    // Maps onto Rust's HealthIssueKind::detail fixed templates (the backend detail is English,
+    // consumed by the CLI; the frontend renders the structured fields with local copy)
     detail: {
       weak: '密码强度评分 {{score}}（低于阈值），建议轮换。',
       reused: '该机密被 {{group_size}} 条凭据复用，一处泄露全部暴露。',

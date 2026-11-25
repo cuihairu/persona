@@ -9,7 +9,7 @@ use super::*;
 async fn backup_export_command_round_trip_and_records_evidence() {
     let app = mock_app();
     init_service_ok(&app, "correct-horse").await;
-    // 先放一条凭据，断言备份文件确实携带库内容（恢复链路读回验证）
+    // Create one credential first, asserting the backup file really carries vault content (verified by reading back in the restore path)
     let resp = create_identity(
         CreateIdentityRequest {
             name: "Work".to_string(),
@@ -46,7 +46,7 @@ async fn backup_export_command_round_trip_and_records_evidence() {
     assert!(resp.success, "{:?}", resp.error);
     let outcome = resp.data.expect("outcome");
 
-    // 文件在盘上、是 PERSENC1 密文（不是明文 SQLite）、尺寸与 sha256 对账
+    // File on disk is PERSENC1 ciphertext (not plaintext SQLite), size reconciled with sha256
     let blob = std::fs::read(&dest).expect("backup file written");
     assert_eq!(blob.len() as u64, outcome.size_bytes);
     assert!(
@@ -56,14 +56,14 @@ async fn backup_export_command_round_trip_and_records_evidence() {
     assert_eq!(outcome.sha256.len(), 64);
     assert!(outcome.sha256.chars().all(|c| c.is_ascii_hexdigit()));
 
-    // 恢复链路互解：备份字节 → SQLite 明文（头校验过）→ 可当库打开
+    // Restore path decodes: backup bytes -> SQLite plaintext (header checks pass) -> openable as a DB
     let restored = dir.path().join("restored.db");
     persona_core::backup::restore_backup_bytes(&blob, "backup-pass-Δ", &restored)
         .expect("restore round trip");
     let plain = std::fs::read(&restored).unwrap();
     assert!(plain.starts_with(b"SQLite format 3\0"));
 
-    // 导出凭证落入 workspace settings（非敏感元数据；口令不在任何结构里）
+    // Export evidence lands in workspace settings (non-sensitive metadata; no passphrase in any structure)
     let resp = get_workspace_settings(app.state::<AppState>())
         .await
         .unwrap();
@@ -74,7 +74,7 @@ async fn backup_export_command_round_trip_and_records_evidence() {
     assert_eq!(evidence.size_bytes, blob.len() as u64);
     assert_eq!(evidence.exported_at, outcome.exported_at);
 
-    // 覆盖导出：同路径二次导出原子替换成功，凭证时刻更新
+    // Overwriting export: a second export to the same path atomically replaces it successfully, evidence refreshed each time
     let resp = backup_export_to_file(
         BackupExportRequest {
             path: dest.to_string_lossy().to_string(),
@@ -87,7 +87,7 @@ async fn backup_export_command_round_trip_and_records_evidence() {
     assert!(resp.success, "overwrite export failed: {:?}", resp.error);
     let blob2 = std::fs::read(&dest).unwrap();
     assert!(blob2.starts_with(b"PERSENC1"));
-    // 新口令可解（GCM 校验会失败于旧口令的 key）——换口令真生效
+    // New passphrase decrypts (GCM check fails against the old passphrase's key) -- changing the passphrase really takes effect
     let restored2 = dir.path().join("restored2.db");
     persona_core::backup::restore_backup_bytes(&blob2, "new-pass", &restored2)
         .expect("second export uses new passphrase");
@@ -98,7 +98,7 @@ async fn backup_export_command_rejects_empty_passphrase_path_and_locked_state() 
     let dir = tempfile::tempdir().unwrap();
     let dest = dir.path().join("v.enc");
 
-    // 未初始化服务 → 拒
+    // Service not initialized -> reject
     let resp = backup_export_to_file(
         BackupExportRequest {
             path: dest.to_string_lossy().to_string(),
@@ -113,7 +113,7 @@ async fn backup_export_command_rejects_empty_passphrase_path_and_locked_state() 
 
     init_service_ok(&app, "correct-horse").await;
 
-    // 空口令 → 拒（不产生文件）
+    // Empty passphrase -> reject (no file produced)
     let resp = backup_export_to_file(
         BackupExportRequest {
             path: dest.to_string_lossy().to_string(),
@@ -126,7 +126,7 @@ async fn backup_export_command_rejects_empty_passphrase_path_and_locked_state() 
     assert!(!resp.success);
     assert!(!dest.exists(), "failed export must not leave a file");
 
-    // 空路径 → 拒
+    // Blank path -> reject
     let resp = backup_export_to_file(
         BackupExportRequest {
             path: "   ".to_string(),
@@ -138,7 +138,7 @@ async fn backup_export_command_rejects_empty_passphrase_path_and_locked_state() 
     .unwrap();
     assert!(!resp.success);
 
-    // 锁定态 → 拒
+    // Locked state -> reject
     let resp = lock_service(app.state::<AppState>()).await.unwrap();
     assert!(resp.success, "{:?}", resp.error);
     let resp = backup_export_to_file(
@@ -159,7 +159,7 @@ async fn backup_restore_command_swaps_vault_and_keeps_bak() {
     let app = mock_app();
     let db_path = init_service_ok(&app, "correct-horse").await;
 
-    // 快照基线：身份 A + 其凭据，导出成备份
+    // Snapshot baseline: identity A + its credentials, exported as a backup
     let resp = create_identity(
         CreateIdentityRequest {
             name: "Work".to_string(),
@@ -195,7 +195,7 @@ async fn backup_restore_command_swaps_vault_and_keeps_bak() {
     .unwrap();
     assert!(resp.success, "{:?}", resp.error);
 
-    // 导出后继续变化：当前库变成 2 身份——恢复应回到快照的 1 身份
+    // Vault keeps changing after the export: the current DB now has 2 identities -- restore should return to the snapshot's 1
     let resp = create_identity(
         CreateIdentityRequest {
             name: "Personal".to_string(),
@@ -210,7 +210,7 @@ async fn backup_restore_command_swaps_vault_and_keeps_bak() {
     .unwrap();
     assert!(resp.success, "{:?}", resp.error);
 
-    // 恢复：换文件成功 + 原库留 .bak + staged 已消费
+    // Restore: DB file swap succeeds + the original DB kept as .bak + the staged file consumed
     let resp = backup_restore_from_file(
         BackupRestoreRequest {
             path: dest.to_string_lossy().to_string(),
@@ -228,13 +228,13 @@ async fn backup_restore_command_swaps_vault_and_keeps_bak() {
     staged.set_extension("restore.tmp");
     assert!(!staged.exists(), "staged file must be consumed by rename");
 
-    // 换库后 service 已取下（主密码可能来自备份，必须重新走解锁）
+    // After the DB swap the service is taken down (the master password may come from the backup; unlocking must be redone)
     let resp = is_service_unlocked(app.state::<AppState>()).await.unwrap();
     assert!(resp.success, "{:?}", resp.error);
     assert_eq!(resp.data, Some(false), "restore must take the session down");
 
-    // 重新解锁（同一会话建的备份 = 同主密码；不能用 init_service_ok——
-    // 它每次开新 tempdir，会指到空库），库回到快照形态
+    // Re-unlock (the backup was created in this session = same master password; init_service_ok cannot be used --
+    // it opens a fresh tempdir each time, pointing at an empty DB), and the vault is back to the snapshot shape
     let resp = init_service(
         InitRequest {
             master_password: "correct-horse".to_string(),
@@ -287,7 +287,7 @@ async fn backup_restore_command_wrong_passphrase_leaves_vault_and_session_intact
     .unwrap();
     assert!(resp.success, "{:?}", resp.error);
 
-    // 口令错：staged 复验阶段就失败——库未动、会话不降锁
+    // Wrong passphrase: fails at the staged revalidation stage -- the DB is untouched and the session does not drop its lock
     let resp = backup_restore_from_file(
         BackupRestoreRequest {
             path: dest.to_string_lossy().to_string(),
@@ -306,7 +306,7 @@ async fn backup_restore_command_wrong_passphrase_leaves_vault_and_session_intact
         resp.error
     );
 
-    // 会话仍解锁、库分毫未动、无 .bak / staged 残留
+    // Session still unlocked, DB untouched down to the byte, no .bak / staged leftovers
     let resp = is_service_unlocked(app.state::<AppState>()).await.unwrap();
     assert_eq!(
         resp.data,
@@ -328,7 +328,7 @@ async fn backup_restore_command_rejects_bad_inputs_and_rescues_from_locked_state
     let dir = tempfile::tempdir().unwrap();
     let dest = dir.path().join("v.enc");
 
-    // 服务从未初始化（无 db_path）→ 拒（文件在、输入合法才轮到库路径检查）
+    // Service never initialized (no db_path) -> reject (only with a file present and valid inputs does it reach the DB path check)
     std::fs::write(&dest, b"placeholder").unwrap();
     let resp = backup_restore_from_file(
         BackupRestoreRequest {
@@ -347,7 +347,7 @@ async fn backup_restore_command_rejects_bad_inputs_and_rescues_from_locked_state
 
     let db_path = init_service_ok(&app, "correct-horse").await;
 
-    // 空口令 / 空路径 / 文件不存在 → 拒（都在动库之前）
+    // Empty passphrase / blank path / missing file -> reject (all before the DB is touched)
     for bad in [
         BackupRestoreRequest {
             path: dest.to_string_lossy().to_string(),
@@ -368,7 +368,7 @@ async fn backup_restore_command_rejects_bad_inputs_and_rescues_from_locked_state
         assert!(!resp.success);
     }
 
-    // 不是 PERSENC1 的文件：staged 复验失败 → 库未动
+    // A file that is not PERSENC1: staged revalidation fails -> the DB is untouched
     let garbage = dir.path().join("garbage.enc");
     std::fs::write(&garbage, b"not a backup").unwrap();
     let resp = backup_restore_from_file(
@@ -389,8 +389,8 @@ async fn backup_restore_command_rejects_bad_inputs_and_rescues_from_locked_state
         resp.error
     );
 
-    // 锁定态也能救（设备没丢，只是会话锁着/库坏了——自救口不要求解锁）：
-    // 解锁态导出 → 锁定 → 恢复成功（service 随之取下）
+    // Rescue works from the locked state too (the device was not lost -- only the session is locked / the DB is broken -- the self-rescue hatch does not require unlocking):
+    // export while unlocked -> lock -> restore succeeds (the service is taken down with it)
     let resp = backup_export_to_file(
         BackupExportRequest {
             path: dest.to_string_lossy().to_string(),
@@ -456,8 +456,8 @@ async fn backup_server_push_round_trip_and_records_evidence() {
     assert_eq!(outcome.sha256.len(), 64);
     assert_eq!(outcome.created_at, "2026-10-08T00:00:00Z");
 
-    // 列表对账：服务器侧元数据与推送响应一致（快照加密在推送前完成，
-    // 服务器只见密文——通过下载端点密文长度对账 size_bytes）
+    // List reconciliation: the server-side metadata matches the push response (the snapshot is encrypted before pushing,
+    // and the server only ever sees ciphertext -- size_bytes is reconciled via the ciphertext length on the download endpoint)
     let resp = backup_list_server_versions(
         BackupServerListRequest { limit: Some(10) },
         app.state::<AppState>(),
@@ -472,7 +472,7 @@ async fn backup_server_push_round_trip_and_records_evidence() {
     assert_eq!(list[0].sha256, outcome.sha256);
     assert_eq!(list[0].size_bytes, outcome.size_bytes);
 
-    // 空口令在碰服务器之前就被拒（下载都不发起）
+    // An empty passphrase is rejected before the server is even contacted (no download is initiated)
     let resp = backup_restore_from_server(
         BackupServerRestoreRequest {
             backup_id: "bk-1".to_string(),
@@ -484,7 +484,7 @@ async fn backup_server_push_round_trip_and_records_evidence() {
     .unwrap();
     assert!(!resp.success, "empty passphrase rejected before download");
 
-    // 凭证回写 destination=server（与文件导出同一 BackupEvidence 槽）
+    // Evidence written back with destination=server (the same BackupEvidence slot as file export)
     let resp = get_workspace_settings(app.state::<AppState>())
         .await
         .unwrap();
@@ -499,7 +499,7 @@ async fn backup_server_commands_gate_on_init_config_token_and_lock() {
     let app = mock_app();
     let base_url = spawn_mock_backup_server();
 
-    // 未初始化（无 db_path）→ 拒
+    // Not initialized (no db_path) -> reject
     let resp = backup_list_server_versions(
         BackupServerListRequest { limit: None },
         app.state::<AppState>(),
@@ -514,7 +514,7 @@ async fn backup_server_commands_gate_on_init_config_token_and_lock() {
 
     init_service_ok(&app, "correct-horse").await;
 
-    // 未配置 sync 服务器 → 拒（push 与 list 同门禁口径）
+    // Sync server not configured -> reject (push and list share the same gate semantics)
     let resp = backup_push_to_server(
         BackupPushRequest {
             passphrase: "x".to_string(),
@@ -540,7 +540,7 @@ async fn backup_server_commands_gate_on_init_config_token_and_lock() {
         Some("Sync server URL is not configured")
     );
 
-    // 空口令 → 拒（在碰服务器之前）
+    // Empty passphrase -> reject (before the server is contacted)
     configure_backup_server(&app, &base_url, "tok-persona-1").await;
     let resp = backup_push_to_server(
         BackupPushRequest {
@@ -552,7 +552,7 @@ async fn backup_server_commands_gate_on_init_config_token_and_lock() {
     .unwrap();
     assert!(!resp.success);
 
-    // 错 token → 服务器 401，信封消息透传
+    // Wrong token -> server 401, envelope message passed through
     configure_backup_server(&app, &base_url, "wrong-token").await;
     let resp = backup_list_server_versions(
         BackupServerListRequest { limit: None },
@@ -567,7 +567,7 @@ async fn backup_server_commands_gate_on_init_config_token_and_lock() {
         resp.error
     );
 
-    // push 要求解锁；锁定态 → 拒
+    // push requires being unlocked; locked state -> reject
     let resp = lock_service(app.state::<AppState>()).await.unwrap();
     assert!(resp.success, "{:?}", resp.error);
     let resp = backup_push_to_server(
@@ -586,7 +586,7 @@ async fn backup_restore_from_server_swaps_vault_and_rescues_from_locked_state() 
     let app = mock_app();
     let db_path = init_service_ok(&app, "correct-horse").await;
 
-    // 快照基线：1 身份 "Work"，推送到服务器
+    // Snapshot baseline: 1 identity "Work", pushed to the server
     let resp = create_identity(
         CreateIdentityRequest {
             name: "Work".to_string(),
@@ -612,7 +612,7 @@ async fn backup_restore_from_server_swaps_vault_and_rescues_from_locked_state() 
     .unwrap();
     assert!(resp.success, "{:?}", resp.error);
 
-    // 快照后继续变化：当前库 2 身份——恢复应回到快照的 1 身份
+    // Changes keep happening after the snapshot: the current DB has 2 identities -- restore should return to the snapshot's 1
     let resp = create_identity(
         CreateIdentityRequest {
             name: "Personal".to_string(),
@@ -627,7 +627,7 @@ async fn backup_restore_from_server_swaps_vault_and_rescues_from_locked_state() 
     .unwrap();
     assert!(resp.success, "{:?}", resp.error);
 
-    // 锁屏 → 从服务器恢复（自救口不要求解锁）
+    // Lock screen -> restore from the server (the self-rescue hatch does not require unlocking)
     let resp = lock_service(app.state::<AppState>()).await.unwrap();
     assert!(resp.success, "{:?}", resp.error);
     let resp = backup_restore_from_server(
@@ -647,7 +647,7 @@ async fn backup_restore_from_server_swaps_vault_and_rescues_from_locked_state() 
     staged.set_extension("restore.tmp");
     assert!(!staged.exists(), "staged file must be consumed by rename");
 
-    // 换库后 service 已取下；重新解锁后库回到快照形态
+    // After the DB swap the service is taken down; after re-unlocking the vault is back to the snapshot shape
     let resp = is_service_unlocked(app.state::<AppState>()).await.unwrap();
     assert_eq!(resp.data, Some(false), "restore must take the session down");
     let resp = init_service(
@@ -700,7 +700,7 @@ async fn backup_restore_from_server_wrong_passphrase_leaves_vault_intact() {
     .unwrap();
     assert!(resp.success, "{:?}", resp.error);
 
-    // 口令错：staged 复验阶段就失败——库未动、会话不降锁
+    // Wrong passphrase: fails at the staged revalidation stage -- the DB is untouched and the session does not drop its lock
     let resp = backup_restore_from_server(
         BackupServerRestoreRequest {
             backup_id: "bk-1".to_string(),
@@ -719,7 +719,7 @@ async fn backup_restore_from_server_wrong_passphrase_leaves_vault_intact() {
         resp.error
     );
 
-    // 会话仍解锁、库分毫未动、无 .bak / staged 残留
+    // Session still unlocked, DB untouched down to the byte, no .bak / staged leftovers
     let resp = is_service_unlocked(app.state::<AppState>()).await.unwrap();
     assert_eq!(
         resp.data,
@@ -751,7 +751,7 @@ async fn backup_server_delete_is_idempotent_and_deleted_versions_stop_serving() 
     .unwrap();
     assert!(resp.success, "{:?}", resp.error);
 
-    // 空 ID → 拒（在碰服务器之前）
+    // Blank ID -> reject (before the server is contacted)
     let resp = backup_delete_server_version(
         BackupServerDeleteRequest {
             backup_id: "  ".to_string(),
@@ -762,7 +762,7 @@ async fn backup_server_delete_is_idempotent_and_deleted_versions_stop_serving() 
     .unwrap();
     assert!(!resp.success);
 
-    // 删除成功；再删同 ID 仍成功（服务器 404 → 客户端幂等）
+    // Delete succeeds; deleting the same ID again still succeeds (server 404 -> the client is idempotent)
     for _ in 0..2 {
         let resp = backup_delete_server_version(
             BackupServerDeleteRequest {
@@ -776,7 +776,7 @@ async fn backup_server_delete_is_idempotent_and_deleted_versions_stop_serving() 
         assert!(resp.data.expect("outcome").deleted);
     }
 
-    // 已删版本：列表清空、恢复/下载 404 透传
+    // Deleted version: the list is empty and restore/download 404s are passed through
     let resp = backup_list_server_versions(
         BackupServerListRequest { limit: None },
         app.state::<AppState>(),

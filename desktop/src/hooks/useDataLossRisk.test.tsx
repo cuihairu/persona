@@ -58,7 +58,7 @@ describe('useDataLossRisk', () => {
     await waitFor(() => {
       expect(result.current.loading).toBe(false);
     });
-    // 设备清单读取失败 → 计 0 台 → 单设备高危（保守口径，不谎报已解除）
+    // Reading the device list fails -> counted as 0 devices -> single-device high risk (a conservative call, rather than falsely reporting it resolved)
     expect(result.current.deviceCount).toBe(0);
     expect(result.current.level).toBe('high');
   });
@@ -66,7 +66,7 @@ describe('useDataLossRisk', () => {
   it('falls back to crossDeviceSyncEnabled=true when sync_methods is missing (safe side)', async () => {
     mockStatus.mockResolvedValue({ success: true, data: true });
     mockDevices.mockResolvedValue({ success: true, data: [{ id: 'd1' }] });
-    // 旧 JSON / 测试桩缺 sync_methods 键：按安全侧 true（宁可少提示「可重新开启」）
+    // Legacy JSON / test stubs lacking the sync_methods key: take the safe side with true (better to under-prompt "can be re-enabled")
     mockSettings.mockResolvedValue({ success: true, data: { backup: null, account: null } });
 
     const { result } = renderHook(() => useDataLossRisk());
@@ -88,7 +88,7 @@ describe('useDataLossRisk', () => {
     await waitFor(() => {
       expect(result.current.loading).toBe(false);
     });
-    // 偏好关了但数据仍在组内：档位判定不随偏好降级（仍是 high，不虚报解除）
+    // The preference is off but the data is still in the group: the tier does not downgrade with the preference (still high, no false all-clear)
     expect(result.current.crossDeviceSyncEnabled).toBe(false);
     expect(result.current.level).toBe('high');
   });

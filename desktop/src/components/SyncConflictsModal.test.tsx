@@ -65,14 +65,14 @@ describe('components/SyncConflictsModal', () => {
     await waitFor(() => {
       expect(screen.getByTestId('sync-conflict-entry-item-1')).toBeInTheDocument();
     });
-    // 主位标记当前版本；副本 data 不同 → 内容不同徽标
+    // The primary slot is marked as the current version; the replica has different data -> the content-diverges badge
     expect(screen.getAllByTestId('sync-conflict-badge')).toHaveLength(2);
     expect(screen.getAllByTestId('sync-conflict-badge')[0]).toHaveTextContent('当前版本');
     expect(screen.getAllByTestId('sync-conflict-badge')[1]).toHaveTextContent('内容不同');
-    // 副本名称与版本元数据可见
+    // The replica's name and version metadata are visible
     expect(screen.getByText('GitHub (renamed)')).toBeInTheDocument();
     expect(screen.getByText('GitHub')).toBeInTheDocument();
-    // 采纳按钮指向副本 op_id
+    // The adopt button points at the replica's op_id
     expect(screen.getByTestId('sync-conflict-adopt-op-c')).toBeEnabled();
   });
 
@@ -101,7 +101,7 @@ describe('components/SyncConflictsModal', () => {
       expect(screen.getByTestId('sync-conflict-version-op-del')).toBeInTheDocument();
     });
     expect(screen.getByText('（已删除）')).toBeInTheDocument();
-    // badge 有两枚（主位「当前版本」+ 副本「删除操作」）
+    // Two badges (primary "current version" + replica "delete operation")
     const badges = screen.getAllByTestId('sync-conflict-badge');
     expect(badges).toHaveLength(2);
     expect(badges[1]).toHaveTextContent('删除操作');
@@ -110,7 +110,7 @@ describe('components/SyncConflictsModal', () => {
 
   it('adopts a copy with item id + op id and refreshes the list', async () => {
     mockResolve.mockResolvedValue({ success: true, data: true });
-    // 采纳后重拉：列表清空 → 自动关窗
+    // After adopting, re-fetch: the list empties -> the modal closes itself
     mockList
       .mockResolvedValueOnce({ success: true, data: [conflictedEntry] })
       .mockResolvedValueOnce({ success: true, data: [] });
@@ -124,7 +124,7 @@ describe('components/SyncConflictsModal', () => {
     await waitFor(() => {
       expect(mockResolve).toHaveBeenCalledWith('item-1', 'op-c');
     });
-    // 裁决清空后自动关窗（无冲突可裁决）
+    // Auto-close once nothing is left to resolve (no conflicts to arbitrate)
     await waitFor(() => {
       expect(onClose).toHaveBeenCalled();
     });
@@ -143,7 +143,7 @@ describe('components/SyncConflictsModal', () => {
     await waitFor(() => {
       expect(mockResolve).toHaveBeenCalledWith('item-1', 'op-c');
     });
-    // 失败不刷新不关窗：列表仍在（加载只发生一次）
+    // Failure neither refetches nor closes: the list stays put (loading happens once)
     await waitFor(() => {
       expect(screen.getByTestId('sync-conflict-entry-item-1')).toBeInTheDocument();
     });
@@ -177,7 +177,7 @@ describe('components/SyncConflictsModal', () => {
     await waitFor(() => {
       expect(screen.getByTestId('sync-conflicts-error')).toHaveTextContent('冲突列表加载失败');
     });
-    // 异常路径不自动关窗
+    // The error path does not auto-close
     expect(onClose).not.toHaveBeenCalled();
   });
 
@@ -193,7 +193,7 @@ describe('components/SyncConflictsModal', () => {
     await waitFor(() => {
       expect(mockResolve).toHaveBeenCalledWith('item-1', 'op-c');
     });
-    // 抛异常同样不刷新不关窗
+    // Throwing likewise neither refetches nor closes
     await waitFor(() => {
       expect(screen.getByTestId('sync-conflict-entry-item-1')).toBeInTheDocument();
     });

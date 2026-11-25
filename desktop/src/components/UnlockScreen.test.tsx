@@ -20,7 +20,7 @@ const mockBiometricStatus = personaAPI.biometricStatus as jest.Mock;
 describe('components/UnlockScreen', () => {
   beforeEach(() => {
     jest.clearAllMocks();
-    // 默认未配置 biometric（fail-closed 静默降级：无指纹按钮）
+    // biometric unconfigured by default (fail-closed silent degradation: no fingerprint button)
     mockBiometricStatus.mockResolvedValue({
       success: true,
       data: { available: false, enabled: false, platform: 'linux-polkit' },
@@ -99,7 +99,7 @@ describe('components/UnlockScreen', () => {
   });
 
   // -------------------------------------------------------------------------
-  // 强制改密流（passwordChangeRequired 标志驱动）
+  // Forced rotation flow (driven by the passwordChangeRequired flag)
   // -------------------------------------------------------------------------
 
   describe('forced password rotation', () => {
@@ -130,7 +130,7 @@ describe('components/UnlockScreen', () => {
     });
 
     it('keeps the plain unlock form hidden behind nothing — form still renders', () => {
-      // 弹窗是覆盖层，解锁表单仍在（轮换成功后无需额外状态切换即可继续）
+      // The dialog is an overlay and the unlock form is still there (after a successful rotation no extra state switch is needed to continue)
       mockForced(jest.fn());
 
       render(<UnlockScreen onUnlock={() => {}} />);
@@ -138,8 +138,8 @@ describe('components/UnlockScreen', () => {
     });
 
     it('rotates through the modal and re-initializes with the new password', async () => {
-      // 本用例直接从 forced 态渲染起（不先走解锁失败），轮换后的
-      // 重 init 是该 mock 的首次调用
+      // This case renders straight from the forced state (no unlock failure first),
+      // so the post-rotation re-init is the mock's first call
       const initializeService = jest.fn().mockResolvedValue(true);
       const onUnlock = jest.fn();
       mockForced(initializeService);
@@ -174,7 +174,7 @@ describe('components/UnlockScreen', () => {
 
       const { getByLabelText } = render(<UnlockScreen onUnlock={() => {}} />);
 
-      // 模拟真实时序：先输旧密解锁失败（flag 置位），弹窗预填该密码
+      // Simulate the real sequence: enter the old password, unlock fails (flag set), and the dialog prefills that password
       fireEvent.change(getByLabelText('主密码'), { target: { value: 'tried-pw' } });
       fireEvent.click(screen.getByRole('button', { name: '解锁 Persona' }));
       await Promise.resolve();
@@ -189,7 +189,7 @@ describe('components/UnlockScreen', () => {
   });
 
   // -------------------------------------------------------------------------
-  // biometric 指纹解锁按钮（status 防抖 200ms 后驱动显隐）
+  // biometric fingerprint unlock button (status visibility driven after the 200ms debounce)
   // -------------------------------------------------------------------------
 
   describe('biometric unlock', () => {
@@ -216,7 +216,7 @@ describe('components/UnlockScreen', () => {
 
       render(<UnlockScreen onUnlock={() => {}} />);
 
-      // 防抖 200ms 后仍无按钮
+      // Still no button after the 200ms debounce
       await waitFor(
         () => {
           expect(mockBiometricStatus).toHaveBeenCalled();
@@ -265,7 +265,7 @@ describe('components/UnlockScreen', () => {
         {},
         { timeout: 3000 },
       );
-      // 自定义路径变化触发 status 重查（防抖后），仍启用
+      // A custom path change re-queries status (after the debounce); still enabled
       fireEvent.click(button);
 
       await waitFor(() => {
@@ -290,7 +290,7 @@ describe('components/UnlockScreen', () => {
       );
       fireEvent.click(button);
 
-      // 条目已被后端自删：按钮立即消失，且绝不能算解锁成功
+      // The entry was removed by the backend itself: the button disappears immediately and must never count as an unlock success
       await waitFor(() => {
         expect(screen.queryByTestId('biometric-unlock-button')).not.toBeInTheDocument();
       });

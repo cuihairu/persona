@@ -6,8 +6,9 @@ module.exports = {
     '^@/(.*)$': '<rootDir>/src/$1',
   },
   transform: {
-    // esModuleInterop 仅为 jest 运行时开启：i18next 等 CJS 包的 default import
-    // 在无 interop 的 ts-jest 输出下是 undefined（vite/esbuild 侧自动 interop 不受影响）
+    // esModuleInterop is enabled only for the jest runtime: default imports from
+    // CJS packages such as i18next are undefined under ts-jest output without
+    // interop (vite/esbuild's automatic interop is unaffected)
     '^.+\\.tsx?$': ['ts-jest', { tsconfig: { esModuleInterop: true } }],
   },
   testMatch: [

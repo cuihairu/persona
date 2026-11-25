@@ -41,11 +41,11 @@ import {
 import type { SidebarFilter } from '@/components/sidebarNav';
 import { credentialTypeLabel, securityLevelLabel } from '@/components/credentialDisplay';
 
-/** 两个 Toaster（锁定态/主界面）共用的气泡样式；配色走 .persona-toast 的 CSS 变量随主题翻转 */
+/** Toast styling shared by both Toasters (locked state / main UI); colors come from the .persona-toast CSS variables and flip with the theme */
 const TOAST_OPTIONS = { className: 'persona-toast' };
 
 const App: React.FC = () => {
-  // 主题联动：偏好 → <html>.dark + localStorage + 原生窗口主题（挂在早退 return 之前）
+  // Theme wiring: preference -> <html>.dark + localStorage + native window theme (mounted before the early-return)
   useTheme();
   const { t } = useTranslation();
 
@@ -61,9 +61,11 @@ const App: React.FC = () => {
     clearError,
   } = usePersonaService();
 
-  // 语言偏好恢复：get_workspace_settings 免解锁可读，锁屏阶段即生效；
-  // mount 时已解锁则跳过（解锁路径的 settings 读取见下方 flags effect，会一并应用
-  // locale），避免同帧重复调用 workspace 设置。读取失败静默保持默认 zh-CN。
+  // Language preference restore: get_workspace_settings is readable without
+  // unlocking, so it takes effect during the lock screen; skipped when already
+  // unlocked at mount (the unlock path's settings read below the flags effect
+  // applies the locale too), avoiding duplicate workspace settings calls in the
+  // same frame. On read failure, silently keep the default zh-CN.
   useEffect(() => {
     if (isUnlocked) {
       return;
@@ -74,16 +76,18 @@ const App: React.FC = () => {
         if (resp.success && resp.data) {
           const next = normalizeLocale(resp.data.locale);
           await i18n.changeLanguage(next);
-          // 托盘右键菜单是原生菜单，不吃 useTranslation：把 locale 表的
-          // 真值推给后端渲染。用全局 i18n.t（调用时取当前语言）——组件级
-          // t 是 getFixedT 定语快照，切语言后仍是旧语言
+          // The tray context menu is a native menu and does not honor
+          // useTranslation: push the locale table's values to the backend for
+          // rendering. Use the global i18n.t (it reads the current language at call
+          // time) — a component-level t is a getFixedT snapshot and still speaks the
+          // old language after a switch.
           void personaAPI.setTrayLocale(trayLocaleLabels((key) => i18n.t(key)));
         }
       } catch {
         // keep default
       }
     })();
-    // 仅 mount 时判断初始锁定态（effect 内只引用模块级导入，无响应式依赖）
+    // Decide the initial locked state only at mount (the effect references only module-level imports, no reactive deps)
   }, []);
 
   const featureFlags = useAppStore((s) => s.featureFlags);
@@ -92,10 +96,10 @@ const App: React.FC = () => {
   const sidebarFilter = useAppStore((s) => s.sidebarFilter);
   const setSidebarFilter = useAppStore((s) => s.setSidebarFilter);
   const identities = useAppStore((s) => s.identities);
-  // 编辑中的凭据（DetailPane Edit 按钮写入；modal 消费，null = 创建模式）
+  // Credential being edited (written by the DetailPane Edit button; consumed by the modal, null = create mode)
   const editingCredential = useAppStore((s) => s.editingCredential);
   const setEditingCredential = useAppStore((s) => s.setEditingCredential);
-  // 详情面板：选中 id 在 store（列表/⌘E/全局搜索共用），数据由这里统一加载
+  // Detail pane: the selected id lives in the store (shared by the list / ⌘E / global search), and data is loaded centrally here
   const credentials = useAppStore((s) => s.credentials);
   const selectedCredentialId = useAppStore((s) => s.selectedCredentialId);
   const setSelectedCredentialId = useAppStore((s) => s.setSelectedCredentialId);
@@ -104,8 +108,8 @@ const App: React.FC = () => {
     [credentials, selectedCredentialId],
   );
   const [credentialData, setCredentialData] = useState<any>(null);
-  // hook 非 useCallback，用 ref 持有最新加载函数：effect 只依赖选中 id，
-  // 避免每次渲染都重发请求
+  // The hook is not useCallback'd, so a ref holds the latest load function: the
+  // effect depends only on the selected id, avoiding a refetch on every render
   const loadCredentialDataRef = useRef(getCredentialData);
   loadCredentialDataRef.current = getCredentialData;
   useEffect(() => {
@@ -124,12 +128,13 @@ const App: React.FC = () => {
   const [showCreateCredential, setShowCreateCredential] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
 
-  // 导航只有一个事实源：侧栏筛选态 → 主区视图（工具/通行密钥是面板，其余是列表）
+  // Navigation has a single source of truth: sidebar filter state -> the main-area view (tools/passkeys are panes, everything else is a list)
   const currentView = viewForFilter(sidebarFilter);
 
-  // ⌘L 锁定：App 恒挂载，enabled=isUnlocked 保证锁定屏无监听。
-  // 顺带修既有边界：锁前开着的 modal 在解锁后会自动重开（App 不卸载、
-  // 本地 bool 残留），锁定时一并复位。
+  // ⌘L to lock: App stays mounted, and enabled=isUnlocked guarantees the lock
+  // screen has no listener. Also fixes an existing edge: modals open before
+  // locking would auto-reopen after unlock (App never unmounts and the local bool
+  // survives), so reset them together when locking.
   const handleLock = () => {
     setShowCreateIdentity(false);
     setShowCreateCredential(false);
@@ -139,17 +144,17 @@ const App: React.FC = () => {
   };
   useGlobalShortcut('l', handleLock, isUnlocked);
 
-  // ⌘, 开/关设置 modal
+  // ⌘, toggles the settings modal
   useGlobalShortcut(',', () => setShowSettings((v) => !v), isUnlocked);
 
-  // ⌘G 呼出密码生成器（主航道视图；生成是纯计算，无需选中身份）
+  // ⌘G opens the password generator (a main-path view; generating is pure computation and needs no selected identity)
   useGlobalShortcut('g', () => setSidebarFilter({ kind: 'generator' }), isUnlocked);
 
-  // ⌘E 复制当前选中凭据的用户名（按键时现读 store，不订阅、无陈旧闭包）
+  // ⌘E copies the current selection's username (reads the store at keypress time: no subscription, no stale closure)
   const handleCopyUsername = () => {
     const { credentials, selectedCredentialId, currentIdentity } = useAppStore.getState();
     const selected = credentials.find((c) => c.id === selectedCredentialId);
-    // 无选中 / 选中已悬空（停在别的视图时切身份会残留跨身份 id）都按"未选中"提示
+    // No selection / a dangling selection (switching identity while parked on another view can leave a cross-identity id) both surface as "nothing selected"
     if (!selected || (currentIdentity && selected.identity_id !== currentIdentity.id)) {
       toast.error(t('app.selectEntryFirst'));
       return;
@@ -162,25 +167,27 @@ const App: React.FC = () => {
   };
   useGlobalShortcut('e', handleCopyUsername, isUnlocked);
 
-  // Auto-lock 事件流：lock_pending 倒计时横幅 + locked 回解锁屏（hook 内处理）
+  // Auto-lock event stream: the lock_pending countdown banner + locked returns to the unlock screen (handled inside the hook)
   const { pendingSeconds } = useAutoLockEvents(isUnlocked);
 
-  // Quick Access 浮窗的跨窗跳转（浮窗 → 主窗口切身份 + 选中条目）
+  // Quick Access floating window's cross-window navigation (floating window -> main window switches identity + selects the entry)
   useQuickAccessBridge();
 
-  // SSH 签名审批队列：内嵌 agent 请求确认时弹窗（Allow/Deny）
+  // SSH signature approval queue: a dialog when the embedded agent asks for confirmation (Allow/Deny)
   const { pending: pendingApproval, pendingCount, respond } = useSshApprovals(isUnlocked);
 
-  // Passkey 审批队列：bridge 转来的 create/assert 请求弹窗（Allow/Deny）
+  // Passkey approval queue: a dialog for create/assert requests relayed by the bridge (Allow/Deny)
   const {
     pending: pendingPasskeyApproval,
     pendingCount: pendingPasskeyCount,
     respond: respondPasskey,
   } = usePasskeyApprovals(isUnlocked);
 
-  // SERVICE_LOCKED 引导解锁：invoke gate 撞上惰性 auto-lock 时弹解锁框，
-  // 解锁成功后挂起的原操作自动重试（utils/api requestUnlockGate）。
-  // 前端已在解锁屏（store isUnlocked=false）时不叠弹窗——解锁屏本身就是引导。
+  // SERVICE_LOCKED guided unlock: when an invoke gate hits a lazy auto-lock, the
+  // unlock dialog appears and the suspended original operation retries
+  // automatically after unlocking (utils/api requestUnlockGate).
+  // No stacked dialog while the frontend is already on the unlock screen (store
+  // isUnlocked=false) — the unlock screen itself is the guidance.
   const [unlockGateOpen, setUnlockGateOpen] = useState(false);
   const unlockGateResolveRef = useRef<((unlocked: boolean) => void) | null>(null);
   useEffect(() => {
@@ -202,7 +209,7 @@ const App: React.FC = () => {
     unlockGateResolveRef.current = null;
   };
 
-  // 解锁后启动后端 auto-lock 监控，锁定后停止
+  // Start the backend auto-lock monitor after unlock, stop it after lock
   useEffect(() => {
     if (isUnlocked) {
       personaAPI.startAutoLockMonitoring().catch(() => {});
@@ -211,8 +218,10 @@ const App: React.FC = () => {
     }
   }, [isUnlocked]);
 
-  // 启动时按构建渠道检查一次版本更新（设置里可关；dev 构建不比对）。
-  // i18n.t 在回调时取当前语言，语言切换不重查。
+  // Check for a version update once at startup per build channel (can be turned
+  // off in settings; dev builds do not compare).
+  // i18n.t reads the current language at callback time, so a language switch
+  // needs no re-query.
   useEffect(() => {
     if (!isUpdateCheckEnabled()) return;
     void checkForUpdate()
@@ -229,8 +238,9 @@ const App: React.FC = () => {
       .catch(() => {});
   }, []);
 
-  // 解锁后拉取 workspace 功能开关；锁定时回到默认（全关）。
-  // 读取失败静默保持默认：解锁流程不因设置读取中断。
+  // Fetch workspace feature flags after unlock; fall back to defaults (all off)
+  // while locked. On read failure, silently keep the defaults: the unlock flow is
+  // never interrupted by a settings read.
   useEffect(() => {
     if (!isUnlocked) {
       setFeatureFlags({ ...DEFAULT_FEATURE_FLAGS });
@@ -241,9 +251,11 @@ const App: React.FC = () => {
         const resp = await personaAPI.getWorkspaceSettings();
         if (resp.success && resp.data) {
           setFeatureFlags(resp.data.features);
-          // 同一次读取顺带刷新语言偏好（解锁前后设置可能变化，幂等）；
-          // 托盘右键菜单文案一并重推（原生菜单只认推送的真值，
-          // 用全局 i18n.t 取切换后的语言，组件级 t 是旧语言快照）
+          // The same read also refreshes the language preference (settings can
+          // change across unlocks; idempotent) and re-pushes the tray context
+          // menu copy (the native menu only honors pushed values; the global
+          // i18n.t picks up the switched language, while a component-level t is
+          // an old-language snapshot)
           const next = normalizeLocale(resp.data.locale);
           await i18n.changeLanguage(next);
           void personaAPI.setTrayLocale(trayLocaleLabels((key) => i18n.t(key)));
@@ -254,7 +266,7 @@ const App: React.FC = () => {
     })();
   }, [isUnlocked, setFeatureFlags]);
 
-  // 当前视图依赖的开关被关闭时回退到全部条目（侧栏入口同时消失，避免停在不可达视图）
+  // When a flag the current view depends on turns off, fall back to all entries (the sidebar entry disappears too, so the UI never sits on an unreachable view)
   useEffect(() => {
     const flag = FLAG_BY_VIEW[currentView];
     if (flag && !featureFlags[flag]) {
@@ -262,7 +274,7 @@ const App: React.FC = () => {
     }
   }, [currentView, featureFlags, setSidebarFilter]);
 
-  // 侧栏点保险库 = 切换当前身份（身份即保险库，条目按身份加载）
+  // Clicking the vault in the sidebar = switch the current identity (the identity is the vault; entries load per identity)
   const handleNavigate = (filter: SidebarFilter) => {
     if (filter.kind === 'identity') {
       const targetIdentity = identities.find((i) => i.id === filter.value);
@@ -277,14 +289,17 @@ const App: React.FC = () => {
     if (currentIdentity) {
       loadCredentialsForIdentity(currentIdentity.id);
     }
-    // 换身份丢弃旧分类树选中（新身份未必还有该类型/标签）
+    // Switching identity drops the old category-tree selection (the new identity may not have that type/tag anymore)
     resetSidebarFilter();
   }, [currentIdentity]);
 
-  // 全屏 spinner 仅用于启动检查/解锁屏初始化中。解锁后的写操作也共用全局
-  // isLoading（gate 解锁、创建/编辑条目等），若在此拆主 UI，重挂会连带
-  // CredentialList 的「选中悬空即清」effect 把用户选中态清掉——操作中引导
-  // 解锁（UnlockGateModal）正是在解锁态置位，必须保持页面上下文不拆。
+  // The fullscreen spinner is only for startup checks / unlock-screen
+  // initialization. Post-unlock write operations also share the global isLoading
+  // (gate unlocks, create/edit entry, etc.); if the main UI were torn down here,
+  // remounting would trip CredentialList's "dangling selection gets cleared"
+  // effect and wipe the user's selection — guided unlocks mid-operation
+  // (UnlockGateModal) are exactly the unlocked-state path, so the page context
+  // must stay intact.
   if (isLoading && !isUnlocked) {
     return (
       <div className="min-h-screen bg-gray-50 dark:bg-gray-950 flex items-center justify-center">
@@ -316,9 +331,9 @@ const App: React.FC = () => {
 
   return (
     <ErrorBoundary>
-      {/* app shell：固定视口高度，滚动收进侧栏与主列各自的内部容器 */}
+      {/* app shell: fixed viewport height; scrolling lives in the sidebar's and main column's own inner containers */}
       <div className="h-screen flex flex-col overflow-hidden bg-gray-50 dark:bg-gray-950">
-        {/* Auto-lock 倒计时横幅 */}
+        {/* Auto-lock countdown banner */}
         {pendingSeconds !== null && (
           <div
             data-testid="auto-lock-banner"
@@ -347,7 +362,7 @@ const App: React.FC = () => {
             onLock={handleLock}
           />
 
-          {/* 主列：工具条（当前节点标题 + 全局搜索）+ 独立滚动的主区 */}
+          {/* Main column: toolbar (current node title + global search) + an independently scrolling main area */}
           <div className="flex min-w-0 flex-1 flex-col bg-background dark:bg-gray-950">
             <div className="flex h-12 shrink-0 items-center gap-3 border-b border-secondary-200 px-4 dark:border-gray-800">
               <h1
@@ -365,7 +380,7 @@ const App: React.FC = () => {
                   <div className="flex h-full min-w-0 flex-1 flex-col">
                     <CredentialList onCreateCredential={() => setShowCreateCredential(true)} />
                   </div>
-                  {/* 详情面板列：未选中时占位；窄屏（<lg）隐藏，详情在移动布局中省略 */}
+                  {/* Detail pane column: placeholder when nothing is selected; hidden below lg, details omitted in the mobile layout */}
                   <div className="hidden w-[360px] shrink-0 overflow-y-auto border-l border-secondary-200 dark:border-gray-800 lg:block">
                     {selectedCredential ? (
                       <CredentialDetailPane
@@ -426,21 +441,21 @@ const App: React.FC = () => {
           onClose={() => setShowSettings(false)}
         />
 
-        {/* SSH 签名审批弹窗 */}
+        {/* SSH signature approval dialog */}
         <SshApprovalModal
           request={pendingApproval}
           pendingCount={pendingCount}
           onRespond={respond}
         />
 
-        {/* Passkey 审批弹窗（bridge 请求） */}
+        {/* Passkey approval dialog (bridge request) */}
         <PasskeyApprovalModal
           request={pendingPasskeyApproval}
           pendingCount={pendingPasskeyCount}
           onRespond={respondPasskey}
         />
 
-        {/* SERVICE_LOCKED 引导解锁（惰性 auto-lock 竞态） */}
+        {/* SERVICE_LOCKED guided unlock (lazy auto-lock race) */}
         <UnlockGateModal isOpen={unlockGateOpen} onResolve={resolveUnlockGate} />
 
         {/* Toast Notifications */}
@@ -486,8 +501,9 @@ const StatisticsView: React.FC = () => {
         <h2 className="text-lg font-medium text-gray-900 dark:text-gray-100 mb-4">{t('statistics.title')}</h2>
       </div>
 
-      {/* Overview Cards — 图标是铬件不是数据：单一中性墨色 + 语义字形，
-          不做装饰性多色块（dataviz：颜色只跟随数据实体，状态色保留给状态）。 */}
+      {/* Overview Cards — the icons are chrome, not data: one neutral ink color
+          plus semantic glyphs, no decorative multi-color blocks (dataviz: color
+          follows data entities only, and state colors stay reserved for state). */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
         <div className="card p-6">
           <div className="flex items-center">

@@ -92,7 +92,7 @@ async fn wallet_commands_round_trip_generate_list_export_delete() {
     let resp = wallet_list(None, app.state::<AppState>()).await.unwrap();
     assert!(resp.data.unwrap().wallets.is_empty());
 }
-/// wallet 家族在"服务未初始化"下一律失败关闭。
+/// The wallet family always fails closed when "the service is not initialized".
 #[tokio::test]
 async fn wallet_family_fails_closed_without_service() {
     let app = mock_app();
@@ -148,12 +148,12 @@ async fn wallet_family_fails_closed_without_service() {
     .unwrap();
     assert_eq!(resp.error.as_deref(), Some("Service not initialized"));
 }
-/// wallet_add_address 的 Bitcoin P2WPKH 派生臂与 Solana"未实现"拒绝臂。
+/// wallet_add_address's Bitcoin P2WPKH derivation arm and Solana's "not implemented" rejection arm.
 #[tokio::test]
 async fn wallet_add_address_bitcoin_and_unsupported_network() {
     let (app, identity_id) = app_with_identity().await;
 
-    // BTC HD 钱包（1 地址）→ 追加地址走 Bitcoin P2WPKH 派生臂。
+    // BTC HD wallet (1 address) -> the appended address takes the Bitcoin P2WPKH derivation arm.
     let resp = wallet_import(
         identity_id.clone(),
         WalletImportRequest {
@@ -188,10 +188,12 @@ async fn wallet_add_address_bitcoin_and_unsupported_network() {
     assert_eq!(addr.address_type, "P2WPKH");
     assert_eq!(addr.index, 1, "next index after the seeded first address");
 
-    // 地址生成未实现的网络：core 的 import/generate 都在派生阶段就拒绝
-    //（derive_addresses 对非 BTC/ETH 系报 not implemented），所以拿已导入
-    // 的 BTC HD 钱包把 network 改写为 Litecoin（等价于旧版本遗留钱包），
-    // 让 add_address 走完派生后撞上命令层的 not-implemented 拒绝臂。
+    // Networks without address generation: core's import/generate both reject at
+    // the derivation stage (derive_addresses reports "not implemented" for
+    // non-BTC/ETH families), so take the imported BTC HD wallet and rewrite its
+    // network to Litecoin (equivalent to a legacy wallet from an older version),
+    // letting add_address finish derivation and then hit the command layer's
+    // not-implemented rejection arm.
     let wallet_id = uuid::Uuid::parse_str(&btc.id).unwrap();
     {
         let db_path = app
@@ -229,18 +231,19 @@ async fn wallet_add_address_bitcoin_and_unsupported_network() {
         "got: {msg}"
     );
 }
-/// db_path 坏文件/坏目录时 wallet 命令大声报连接或迁移错误（sqlx 惰性
-/// 连接：from_file 不检查文件内容，migrate 才暴露 "not a database"）。
+/// When db_path is a bad file/directory, the wallet commands loudly report a
+/// connection or migration error (sqlx lazy connections: from_file does not
+/// inspect the file's contents, only migrate exposes "not a database").
 #[tokio::test]
 async fn wallet_commands_report_db_path_failures_loudly() {
     let (app, identity_id) = app_with_identity().await;
 
-    // 指向不存在目录 → 连接失败。
+    // Points at a nonexistent directory -> connection failure.
     {
         let state = app.state::<AppState>();
         *state.db_path.lock().await = Some("/nonexistent-dir-for-persona-tests/bad.db".to_string());
     }
-    // 连接失败：基础设施错误走 Ok(ApiResponse::error)，不逃出命令边界。
+    // Connection failure: infrastructure errors take the Ok(ApiResponse::error) path, not escaping the command boundary.
     let resp = wallet_list(None, app.state::<AppState>()).await.unwrap();
     assert!(!resp.success);
     assert!(
@@ -251,13 +254,14 @@ async fn wallet_commands_report_db_path_failures_loudly() {
         resp.error
     );
 
-    // 垃圾文件：from_file 的 connect 能打开任意可读文件，migrate 执行时
-    // 才撞上 (code: 26) file is not a database → "Database migration failed"。
+    // Junk file: from_file's connect can open any readable file; only when migrate
+    // runs does it hit (code: 26) file is not a database -> "Database migration
+    // failed".
     let dir = tempfile::tempdir().unwrap();
     let junk = dir.path().join("junk.db");
     std::fs::write(&junk, b"definitely not a sqlite database").unwrap();
     let junk_path = junk.to_string_lossy().to_string();
-    // 保留 tempdir 到测试结束（list/addresses/import/generate 均复用）。
+    // Keep the tempdir until the end of the test (list/addresses/import/generate all reuse it).
     std::mem::forget(dir);
     {
         let state = app.state::<AppState>();
@@ -331,7 +335,7 @@ async fn wallet_commands_report_db_path_failures_loudly() {
         resp.error
     );
 }
-/// wallet_generate 拒绝未支持的 wallet_type。
+/// wallet_generate rejects an unsupported wallet_type.
 #[tokio::test]
 async fn wallet_generate_rejects_unsupported_wallet_type() {
     let (app, identity_id) = app_with_identity().await;
@@ -353,10 +357,12 @@ async fn wallet_generate_rejects_unsupported_wallet_type() {
         Some("Unsupported wallet_type 'ledger'. Use 'hd'.")
     );
 }
-/// 五个此前只覆盖成功/半覆盖路径的 wallet 命令（add_address/delete/export/
-/// create_transaction/sign_transaction）的前置臂与死库矩阵：
-/// None service → Ok(error)（wallet_db 路径为 Err）、locked → 同型、
-/// 短密码专属臂、db_path 缺失 → Err、垃圾库 → migrate 失败。
+/// Precondition arms and dead-vault matrix for the five wallet commands that
+/// were previously only covered on their success / partially covered paths
+/// (add_address/delete/export/create_transaction/sign_transaction):
+/// None service -> Ok(error) (the wallet_db path is Err), locked -> the same
+/// shape, the short-password-only arm, missing db_path -> Err, junk vault ->
+/// migrate fails.
 #[tokio::test]
 async fn wallet_five_commands_precondition_and_dead_db_matrix() {
     let export_request = || WalletExportRequest {
@@ -382,8 +388,9 @@ async fn wallet_five_commands_precondition_and_dead_db_matrix() {
         confirm_poisoning_check: false,
     };
 
-    // 场景 A：未初始化。add/delete/export 返回 Ok 包错误体；
-    // create/sign 先解析 UUID 再走 wallet_db 的 Err 臂。
+    // Scenario A: not initialized. add/delete/export return an Ok carrying an error
+    // body; create/sign parse the UUID first and then take the Err arm of
+    // wallet_db.
     let app = mock_app();
     let resp = wallet_add_address(
         uuid::Uuid::new_v4().to_string(),
@@ -418,7 +425,8 @@ async fn wallet_five_commands_precondition_and_dead_db_matrix() {
     assert!(!resp.success);
     assert_eq!(resp.error.as_deref(), Some("Service not initialized"));
 
-    // 场景 B：锁定。同型消息，wallet_db 路径的锁定语义带码落 ApiResponse。
+    // Scenario B: locked. The same message shape; the locking semantics of the
+    // wallet_db path carry a code into the ApiResponse.
     let (app, _identity_id) = app_with_identity().await;
     lock_service(app.state::<AppState>()).await.unwrap();
     let resp = wallet_add_address(
@@ -456,10 +464,12 @@ async fn wallet_five_commands_precondition_and_dead_db_matrix() {
     assert_eq!(resp.error.as_deref(), Some("Service is locked"));
     assert_eq!(resp.error_code.as_deref(), Some("SERVICE_LOCKED"));
 
-    // 场景 C/D：已解锁。短密码专属臂、db_path 缺失、垃圾库 migrate 失败。
+    // Scenarios C/D: unlocked. The short-password-only arm, missing db_path, and
+    // migrate failing on a junk vault.
     let (app, _identity_id) = app_with_identity().await;
 
-    // add_address：合法 UUID 但密码太短（UUID 解析之后、db_path 之前）。
+    // add_address: a legal UUID but a password that is too short (after UUID
+    // parsing, before db_path).
     let resp = wallet_add_address(
         uuid::Uuid::new_v4().to_string(),
         "short".to_string(),
@@ -471,7 +481,7 @@ async fn wallet_five_commands_precondition_and_dead_db_matrix() {
         resp.error.as_deref(),
         Some("Wallet password must be at least 8 characters")
     );
-    // delete 的 UUID 解析在 db_path 之后——用非法 UUID 顺带钉住顺序。
+    // delete's UUID parsing happens after db_path — an invalid UUID pins down that ordering as well.
     let resp = wallet_delete("bad-uuid".to_string(), app.state::<AppState>())
         .await
         .unwrap();
@@ -517,7 +527,7 @@ async fn wallet_five_commands_precondition_and_dead_db_matrix() {
         .unwrap();
     expect_db_path_err(&resp);
 
-    // 垃圾库：migrate 才撞 not a database。
+    // Junk vault: only migrate hits "not a database".
     {
         let state = app.state::<AppState>();
         *state.db_path.lock().await = Some(junk_path);
@@ -564,14 +574,15 @@ async fn wallet_five_commands_precondition_and_dead_db_matrix() {
         .unwrap();
     expect_junk_err(&resp);
 }
-/// wallet_list_addresses 的 AddressType 标签全臂（命令内联 match，与
-/// serialize_wallet_address 单测不共享）；wallet_generate 的非法 UUID 臂；
-/// passkey_create 的非法 base64 两臂。
+/// Every arm of wallet_list_addresses's AddressType labels (an inline match in
+/// the command, not shared with the serialize_wallet_address unit test); the
+/// invalid-UUID arm of wallet_generate; and the two invalid-base64 arms of
+/// passkey_create.
 #[tokio::test]
 async fn wallet_address_labels_and_passkey_create_base64_gates() {
     let (app, identity_id) = app_with_identity().await;
 
-    // wallet_generate：非法 identity_id 在任何 db 操作前拦下。
+    // wallet_generate: an invalid identity_id is stopped before any db operation.
     let resp = wallet_generate(
         "bad-uuid".to_string(),
         WalletGenerateRequest {
@@ -588,7 +599,7 @@ async fn wallet_address_labels_and_passkey_create_base64_gates() {
     assert!(!resp.success);
     assert_eq!(resp.error.as_deref(), Some("Invalid identity UUID format"));
 
-    // 手工插一个七种地址类型齐全的钱包，驱动命令内联 match 全臂。
+    // Manually insert a wallet holding all seven address types, to drive every arm of the command's inline match.
     let db_path = {
         let state = app.state::<AppState>();
         let guard = state.db_path.lock().await;
@@ -630,7 +641,7 @@ async fn wallet_address_labels_and_passkey_create_base64_gates() {
                 created_at: chrono::Utc::now(),
             });
     }
-    // Custom 变体的标签就是自定义名本身。
+    // The Custom variant's label is the custom name itself.
     wallet
         .addresses
         .push(persona_core::models::wallet::WalletAddress {
@@ -666,7 +677,7 @@ async fn wallet_address_labels_and_passkey_create_base64_gates() {
         "custom type renders its own name"
     );
 
-    // passkey_create：client_data_json_b64 非法 base64 → 专属错误体。
+    // passkey_create: client_data_json_b64 with invalid base64 -> its own dedicated error body.
     let resp = passkey_create(
         CreatePasskeyRequest {
             identity_id: identity_id.clone(),
@@ -690,7 +701,7 @@ async fn wallet_address_labels_and_passkey_create_base64_gates() {
         resp.error
     );
 
-    // user_handle_b64 非法 base64 → 第二道门。
+    // user_handle_b64 with invalid base64 -> the second gate.
     let resp = passkey_create(
         CreatePasskeyRequest {
             identity_id,

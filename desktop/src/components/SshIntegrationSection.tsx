@@ -4,19 +4,22 @@ import toast from 'react-hot-toast';
 import { personaAPI } from '@/utils/api';
 import type { SshConfigAgentAnalysis, SshIntegrationStatus } from '@/types';
 
-/** "OpenSSH_10.2p1" → [10, 2]；解析不了 → null */
+/** "OpenSSH_10.2p1" → [10, 2]; unparseable → null */
 const parseSshVersion = (label: string): [number, number] | null => {
   const m = /^OpenSSH_(\d+)\.(\d+)/.exec(label);
   return m ? [Number(m[1]), Number(m[2])] : null;
 };
 
 /**
- * 设置页「SSH 走 persona agent」：检测/一键启用 ~/.ssh/config 的
- * IdentityAgent 锚点块，纯文件操作不解锁。文案解释原理（IdentityAgent
- * 等效 host 级 SSH_AUTH_SOCK）与手动配置片段；三平台兼容随文案说明。
+ * Settings page "route SSH through the persona agent": detects / enables in one
+ * click the IdentityAgent anchor block in ~/.ssh/config; pure file work, no
+ * unlocking. The copy explains the mechanism (IdentityAgent is equivalent to a
+ * host-level SSH_AUTH_SOCK) plus a manual config snippet; three-platform
+ * compatibility is covered by the copy.
  *
- * agent 配置分析面板：读出 ~/.ssh/config（含 Include 展开）的 agent 相关
- * 配置、SSH_AUTH_SOCK 与 socket 连通探测——状态灯=读出来的真状态，不是猜。
+ * Agent config analysis panel: reads the agent-related config of ~/.ssh/config
+ * (including Include expansion), SSH_AUTH_SOCK and a socket connectivity probe
+ * — the status dot is the state actually read, not a guess.
  */
 const SshIntegrationSection: React.FC = () => {
   const { t } = useTranslation();
@@ -30,9 +33,9 @@ const SshIntegrationSection: React.FC = () => {
     try {
       const resp = await personaAPI.sshAgentConfigAnalysis();
       if (resp.success && resp.data) setAnalysis(resp.data);
-      // 分析查询失败：面板保持隐藏，不谎报
+      // Analysis lookup failed: keep the panel hidden, do not misreport
     } catch {
-      /* 同上 */
+      /* Same as above */
     }
   }, []);
 
@@ -40,9 +43,9 @@ const SshIntegrationSection: React.FC = () => {
     try {
       const resp = await personaAPI.sshAgentIntegrationStatus();
       if (resp.success && resp.data) setStatus(resp.data);
-      // 状态查询失败：行保持隐藏，不谎报未启用
+      // Status lookup failed: keep the row hidden, do not misreport it as disabled
     } catch {
-      /* 同上 */
+      /* Same as above */
     }
     await refreshAnalysis();
   }, [refreshAnalysis]);
@@ -51,7 +54,7 @@ const SshIntegrationSection: React.FC = () => {
     void refresh();
   }, [refresh]);
 
-  // 手动重读：外部改了 config / 起了 agent 后，面板与状态行同步现状
+  // Manual re-read: after the config is edited externally / an agent is started, sync the panel and the status row to the current state
   const manualRefresh = async (): Promise<void> => {
     setRefreshing(true);
     try {
@@ -69,9 +72,11 @@ const SshIntegrationSection: React.FC = () => {
           ? await personaAPI.sshAgentIntegrationEnable()
           : await personaAPI.sshAgentIntegrationDisable();
       if (resp.success) {
-        // 统一回读点：以盘上真实状态为准刷新（不信写入响应里的快照）——
-        // 快照与盘上漂移（响应迟到/为空、外部并发改 config）时界面不会
-        // 停在旧状态；回读完成前按钮保持禁用，避免用户在过期状态上连点。
+        // Single re-read point: refresh from the real on-disk state (do not trust the
+        // snapshot inside the write response) — when the snapshot drifts from
+        // disk (late/empty response, concurrent external config edit) the UI does
+        // not get stuck on a stale state; the button stays disabled until the
+        // re-read finishes, so the user cannot hammer on an expired state
         await refresh();
         toast.success(
           t(
@@ -100,7 +105,8 @@ const SshIntegrationSection: React.FC = () => {
   if (!status) return null;
 
   const { enabled, anomaly, manualEntry, socketPath, configPath } = status;
-  // socket 连通状态灯色：绿=有进程在听 / 红=无人听 / 灰=无法判定
+  // Socket connectivity status dot color: green = a process is listening /
+  // red = nobody listens / gray = indeterminate
   const aliveDot = (v: boolean | null) =>
     v === true ? 'bg-green-500' : v === false ? 'bg-red-500' : 'bg-gray-400';
   const aliveLabel =
@@ -110,8 +116,8 @@ const SshIntegrationSection: React.FC = () => {
         ? t('settings.sshIntegration.analysisAliveDead')
         : t('settings.sshIntegration.analysisAliveUnknown');
 
-  // OpenSSH 版本兼容判定：IdentityAgent 需 8.3+（探测不到/解析不了则
-  // 如实显示无法判定，不猜）
+  // OpenSSH version compatibility verdict: IdentityAgent needs 8.3+; if the
+  // version cannot be probed or parsed, show indeterminate honestly, not a guess
   const parsedVersion = status.sshVersion
     ? parseSshVersion(status.sshVersion)
     : null;
@@ -120,8 +126,9 @@ const SshIntegrationSection: React.FC = () => {
       ? parsedVersion[0] > 8 || (parsedVersion[0] === 8 && parsedVersion[1] >= 3)
       : null
     : null;
-  // Host * 作用域行与后端锚点块同构：块追加在 EOF，若无它会落入用户
-  // 最后一个 Host 块的作用域（见 ssh_integration.rs 模块注释）
+  // The "Host *" scope line mirrors the backend anchor block: the block is
+  // appended at EOF, so without it the entry would fall inside the scope of the
+  // user's last Host block (see the ssh_integration.rs module docs)
   const manualSnippet = [
     '# persona managed begin',
     'Host *',
@@ -221,7 +228,8 @@ const SshIntegrationSection: React.FC = () => {
             </button>
           </div>
 
-          {/* config 损坏/无权限：如实显示，不崩、不静默 */}
+          {/* config corrupt / inaccessible: report it honestly,
+            no crash and no silent swallow */}
           {analysis.readError && (
             <div
               data-testid="ssh-analysis-read-error"

@@ -1,6 +1,7 @@
 use super::*;
 
-/// 助记词校验结果：词数与（失败时的）具体错误，供表单实时反馈
+/// Mnemonic validation result: word count and (on failure) the specific
+/// error, for real-time form feedback
 #[derive(serde::Serialize)]
 pub struct MnemonicValidation {
     pub valid: bool,
@@ -8,7 +9,8 @@ pub struct MnemonicValidation {
     pub error: Option<String>,
 }
 
-/// 校验助记词（BIP-39 词表 + 校验和）：纯计算，不触库、不留存。
+/// Validate a mnemonic (BIP-39 wordlist + checksum): pure computation, no
+/// DB access, nothing persisted.
 #[command(rename_all = "snake_case")]
 pub async fn wallet_validate_mnemonic(
     phrase: String,
@@ -36,7 +38,8 @@ pub async fn wallet_validate_mnemonic(
     }
 }
 
-/// 生成 BIP-39 助记词（12/15/18/21/24 词）：纯计算，不触库、不留存。
+/// Generate a BIP-39 mnemonic (12/15/18/21/24 words): pure computation, no
+/// DB access, nothing persisted.
 #[command(rename_all = "snake_case")]
 pub async fn wallet_generate_mnemonic(
     word_count: u32,
@@ -481,7 +484,7 @@ pub async fn wallet_export(
 pub struct WalletCreateTransactionRequest {
     pub wallet_id: String,
     pub to_address: String,
-    /// 最小单位字符串（wei / satoshi / lamport）
+    /// Amount as a string in the smallest unit (wei / satoshi / lamport)
     pub amount: String,
     pub fee: String,
     pub gas_price: Option<String>,
@@ -495,14 +498,17 @@ pub struct WalletCreateTransactionRequest {
 pub struct WalletSignTransactionRequest {
     pub transaction_id: String,
     pub password: String,
-    /// 桌面确认弹窗展示投毒告警后用户再次确认；缺省按未确认处理（拒绝签名）。
+    /// The user re-confirmed after the desktop dialog showed the
+    /// transaction-poisoning warning; treated as unconfirmed by default
+    /// (signature refused).
     #[serde(default)]
     pub confirm_poisoning_check: bool,
 }
 
-/// 从数据库加载钱包交易仓库。
+/// Load the wallet repository from the database.
 ///
-/// 钱包命令绕过 PersonaService 直用 `CryptoWalletRepository`（既有架构决策）。
+/// Wallet commands bypass PersonaService and use `CryptoWalletRepository`
+/// directly (an existing architectural decision).
 pub(crate) async fn wallet_db(
     state: &State<'_, AppState>,
 ) -> std::result::Result<Database, String> {
@@ -517,8 +523,9 @@ pub(crate) async fn wallet_db(
         return Err("Service is locked".to_string());
     }
 
-    // helper 内部：Err(String) 不跨命令边界，走手写样板（宏会往
-    // ApiResponse 边界 return，类型在这里不成立）。
+    // Inside a helper: Err(String) does not cross the command boundary, so
+    // use hand-written boilerplate (the macro returns at the ApiResponse
+    // boundary, a type that does not hold here).
     let db_path = {
         let guard = state.db_path.lock().await;
         guard
@@ -617,7 +624,8 @@ pub async fn wallet_pending_transactions(
 
 /// Sign a pending transaction (derive key → sign → verify → persist).
 ///
-/// 流程与 CLI `wallet --sign` 一致：签名后先本地验签，验签失败拒绝落库。
+/// Same flow as the CLI `wallet --sign`: after signing, verify locally
+/// first, and refuse to persist when verification fails.
 #[command]
 pub async fn wallet_sign_transaction(
     request: WalletSignTransactionRequest,
@@ -662,10 +670,12 @@ pub async fn wallet_sign_transaction(
     Ok(ApiResponse::success(value))
 }
 
-/// 按地址派生签名钥 → 签名 → 本地验签 → 落库。
+/// Derive the signing key for the address -> sign -> verify locally ->
+/// persist.
 ///
-/// 与 CLI `CreateTransaction { sign: true }` 保持一致；验签失败时
-/// **拒绝落库**（不产生 signed_transactions 记录）。
+/// Consistent with the CLI `CreateTransaction { sign: true }`; on a
+/// verification failure we **refuse to persist** (no signed_transactions
+/// record is created).
 pub(crate) async fn sign_wallet_transaction(
     repo: &CryptoWalletRepository,
     wallet: &CryptoWallet,
@@ -682,8 +692,10 @@ pub(crate) async fn sign_wallet_transaction(
     use persona_core::models::wallet::{BroadcastStatus, SignedTransaction};
     use sha2::Digest;
 
-    // 后端防投毒强制检查（WALLET_DESIGN.md §5 第 3 条）：不只依赖桌面确认
-    // 弹窗的启发式——弹窗展示告警后用户再次确认才会带 ack，否则拒绝签名。
+    // Backend-enforced anti-poisoning check (WALLET_DESIGN.md §5, rule 3): do
+    // not rely on the desktop dialog heuristic alone — the ack is only
+    // carried when the user re-confirms after the warning was shown,
+    // otherwise signing is refused.
     let known_addresses: Vec<String> = wallet.addresses.iter().map(|a| a.address.clone()).collect();
     if let Some(mimicked) = detect_address_poisoning(&request.to_address, &known_addresses) {
         tracing::warn!(
@@ -705,7 +717,7 @@ pub(crate) async fn sign_wallet_transaction(
     let signature = sign_transaction(request, &key)
         .map_err(|e| format!("Failed to sign transaction: {}", e))?;
 
-    // 本地验签：失败一律拒绝落库
+    // Local verification: any failure means refusing to persist
     match request.network {
         BlockchainNetwork::Ethereum
         | BlockchainNetwork::Polygon
@@ -738,7 +750,8 @@ pub(crate) async fn sign_wallet_transaction(
         _ => {}
     }
 
-    // Bitcoin 等需要 UTXO 集的网络：raw 组装失败时只落审计签名记录
+    // Networks that need a UTXO set (e.g. Bitcoin): when raw assembly fails,
+    // only an audit signature record is stored
     let (raw_bytes, tx_hash) = match build_raw_transaction(request, &key) {
         Ok(raw) => (raw.raw, raw.hash),
         Err(e) => {

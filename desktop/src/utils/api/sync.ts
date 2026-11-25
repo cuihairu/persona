@@ -23,28 +23,28 @@ import type {
 export const syncApi = {
 
   // ---------------------------------------------------------------------
-  // Connect 本机自动化（secrets automation）
+  // Local Connect automation (secrets automation)
   // ---------------------------------------------------------------------
 
-  /** 启动 Connect listener（bind 127.0.0.1；端口 null = OS 分配） */
+  /** Start the Connect listener (binds 127.0.0.1; port null = OS-assigned) */
   async connectServerStart(port?: number | null): Promise<ApiResponse<ConnectServerStatus>> {
     return invoke('connect_server_start', { port: port ?? null });
   },
 
 
-  /** 停止 Connect listener（幂等） */
+  /** Stop the Connect listener (idempotent) */
   async connectServerStop(): Promise<ApiResponse<ConnectServerStatus>> {
     return invoke('connect_server_stop');
   },
 
 
-  /** Connect listener 运行状态 */
+  /** Connect listener running status */
   async connectServerStatus(): Promise<ApiResponse<ConnectServerStatus>> {
     return invoke('connect_server_status');
   },
 
 
-  /** 创建 Connect token（敏感操作：reauth 门禁；明文仅响应一次） */
+  /** Create a Connect token (sensitive operation: reauth gate; the plaintext is returned only once) */
   async connectTokenCreate(
     label: string,
     scope: ConnectTokenScope,
@@ -53,19 +53,19 @@ export const syncApi = {
   },
 
 
-  /** token 管理列表（含已吊销；哈希不出库） */
+  /** Token management list (includes revoked ones; the hash never leaves the store) */
   async connectTokenList(): Promise<ApiResponse<ConnectTokenView[]>> {
     return invoke('connect_token_list');
   },
 
 
-  /** 吊销 Connect token（幂等，即时生效） */
+  /** Revoke a Connect token (idempotent, takes effect immediately) */
   async connectTokenRevoke(id: string): Promise<ApiResponse<boolean>> {
     return invoke('connect_token_revoke', { id });
   },
 
 
-  /** 窄写同步服务器配置；server_token 空串 = 后端保留旧 token（真值存 OS keyring） */
+  /** Narrow write of the sync server configuration; an empty server_token = the backend keeps the old token (the real value lives in the OS keyring) */
   async setSyncConfig(config: SyncConfig): Promise<ApiResponse<WorkspaceSettings>> {
     return invoke('set_sync_config', {
       enabled: config.enabled,
@@ -76,11 +76,14 @@ export const syncApi = {
 
 
   /**
-   * 窄写同步传输选择（指令流走 persona-server 还是云盘目录）。
+   * Narrow write of the sync transport choice (whether the command stream runs
+   * over persona-server or over a cloud-drive directory).
    *
-   * 语义红线：`cloud` 必须带非空目录（后端校验，空目录会被拒）；`null` 目录
-   * = 保留旧值（切回 server 再切回 cloud 不用重选）。成功返回全量 settings，
-   * 由调用方回填真相（不乐观翻转）。
+   * Semantic red line: `cloud` must carry a non-empty directory (validated on
+   * the backend; an empty directory is rejected); a `null` directory = keep the
+   * old value (switching back to server and then to cloud needs no re-selection).
+   * On success the full settings are returned so the caller refreshes the truth
+   * (no optimistic flip).
    */
   async setSyncTransport(
     syncTransport: 'server' | 'cloud',
@@ -91,10 +94,13 @@ export const syncApi = {
 
 
   /**
-   * 窄写同步方式开关（跨设备同步 / 账号同步，各自独立）。
+   * Narrow write of the sync-method switches (cross-device sync / account sync,
+   * independent of each other).
    *
-   * 语义红线：只写偏好（settings.sync_methods），**不删 keyring、不触发网络**
-   * ——关闭某个方式 ≠ 离开同步组。成功返回全量 settings，由调用方回填真相。
+   * Semantic red line: this only writes the preference (settings.sync_methods) —
+   * it **never deletes the keyring and never triggers network traffic**;
+   * turning a method off ≠ leaving the sync group. On success the full settings
+   * are returned so the caller refreshes the truth.
    */
   async setSyncMethods(
     cross_device_sync: boolean,
@@ -104,124 +110,126 @@ export const syncApi = {
   },
 
 
-  /** OS keyring 里是否存有 sync token（免解锁只读；真值不经 IPC） */
+  /** Whether a sync token is stored in the OS keyring (read-only without unlocking; the real value never crosses IPC) */
   async syncTokenPresent(): Promise<ApiResponse<boolean>> {
     return invoke('sync_token_present');
   },
 
 
-  /** E2EE sync 设备身份状态（纯本地 keyring，免解锁） */
+  /** E2EE sync device identity status (purely local keyring, no unlock needed) */
   async syncDeviceStatus(): Promise<ApiResponse<SyncDeviceStatus>> {
     return invoke('sync_device_status');
   },
 
 
-  /** 加入 E2EE 同步（生成设备密钥对并向服务器登记；失败不留半态） */
+  /** Join E2EE sync (generates the device keypair and registers it with the server; a failure leaves no half state) */
   async syncJoin(deviceName: string): Promise<ApiResponse<SyncJoinOutcome>> {
     return invoke('sync_join', { deviceName });
   },
 
 
-  /** 离开同步（本地清理优先；服务器吊销尽力而为） */
+  /** Leave sync (local cleanup first; server-side revocation is best effort) */
   async syncLeave(): Promise<ApiResponse<boolean>> {
     return invoke('sync_leave');
   },
 
 
-  /** 同步组设备列表（含授权状态与本机标记） */
+  /** Sync-group device list (includes authorization status and the this-device flag) */
   async syncListDevices(): Promise<ApiResponse<SyncDeviceView[]>> {
     return invoke('sync_list_devices');
   },
 
 
-  /** 设置本设备备注（服务端按令牌归属锁定；空串/纯空白 = 清除；返回规整后的备注） */
+  /** Set this device's remark (locked server-side by token ownership; empty/whitespace-only = clear; returns the normalized remark) */
   async syncSetDeviceRemark(remark: string): Promise<ApiResponse<string>> {
     return invoke('sync_set_device_remark', { remark });
   },
 
 
-  /** 为目标设备授权（拆本机信封重封目标公钥；本机未授权 fail-closed） */
+  /** Authorize the target device (unwraps this device's envelope and re-wraps for the target public key; fails closed when this device is not authorized) */
   async syncAuthorize(targetDeviceId: string): Promise<ApiResponse<boolean>> {
     return invoke('sync_authorize', { targetDeviceId });
   },
 
 
-  /** 吊销设备（幂等；吊销自己走 syncLeave） */
+  /** Revoke a device (idempotent; revoking yourself goes through syncLeave) */
   async syncRevoke(targetDeviceId: string): Promise<ApiResponse<boolean>> {
     return invoke('sync_revoke', { targetDeviceId });
   },
 
 
-  /** 立即同步：存量灌入 → pull/materialize/push 周期，返回计数汇总 */
+  /** Sync now: backfill the existing data, then the pull/materialize/push cycle; returns the count summary */
   async syncNow(): Promise<ApiResponse<SyncNowReport>> {
     return invoke('sync_now');
   },
 
 
-  /** 同步状态快照：组最新版本号/本机水位/落后 N/待推 N/最近同步时间（只读） */
+  /** Sync status snapshot: newest group version / local watermark / behind N / pending push N / last sync time (read-only) */
   async syncStatus(): Promise<ApiResponse<SyncStatusReport>> {
     return invoke('sync_status');
   },
 
 
-  /** group key 轮换：换信封 + 全量重包（吊销设备真正闭环的安全操作） */
+  /** Group key rotation: swap the envelope and re-wrap everything (the security operation that actually closes the loop after revoking a device) */
   async syncRotate(): Promise<ApiResponse<SyncRotateReport>> {
     return invoke('sync_rotate');
   },
 
 
-  /** 全部待裁决冲突条目（主位 + 副本解密快照；只读） */
+  /** All conflict entries awaiting resolution (primary + decrypted snapshot copies; read-only) */
   async syncConflictsList(): Promise<ApiResponse<SyncConflictEntry[]>> {
     return invoke('sync_conflicts_list');
   },
 
 
-  /** 冲突裁决：采纳一个副本（其余版本淘汰出裁决视图，数据不丢） */
+  /** Resolve a conflict: adopt one copy (the remaining versions drop out of the resolution view, no data is lost) */
   async syncConflictResolve(itemId: string, adoptOpId: string): Promise<ApiResponse<boolean>> {
     return invoke('sync_conflict_resolve', { itemId, adoptOpId });
   },
 
 
-  /** 同步组：本 vault 是否已加入（keyring 组密钥条目，免解锁只读） */
+  /** Sync group: whether this vault has joined (keyring group key entry, read-only without unlocking) */
   async syncGroupStatus(): Promise<ApiResponse<boolean>> {
     return invoke('sync_group_status');
   },
 
 
-  /** 同步组配对：host 出码（动态密码 + 邀请串；会话挂起等待对方加入） */
+  /** Sync-group pairing: the host presents the code (dynamic code + invite string; the session suspends waiting for the other side to join) */
   async syncGroupPairingCreate(): Promise<ApiResponse<SyncPairingCreateOutcome>> {
     return invoke('sync_group_pairing_create');
   },
 
 
   /**
-   * 同步组配对：host 等待 guest 加入（阻塞至完成或 90s 超时；取消走
-   * syncGroupPairingCancel，中转信箱删除后本调用即报错返回）
+   * Sync-group pairing: the host waits for the guest to join (blocks until
+   * completion or a 90s timeout; cancellation goes through
+   * syncGroupPairingCancel, and once the relay mailbox is deleted this call
+   * returns with an error)
    */
   async syncGroupPairingPoll(sessionId: string): Promise<ApiResponse<SyncPairingPollOutcome>> {
     return invoke('sync_group_pairing_poll', { sessionId });
   },
 
 
-  /** 同步组配对：取消会话（host/guest 通用；幂等，尽力清理中转信箱） */
+  /** Sync-group pairing: cancel the session (shared by host/guest; idempotent, cleans up the relay mailbox best effort) */
   async syncGroupPairingCancel(sessionId: string): Promise<ApiResponse<boolean>> {
     return invoke('sync_group_pairing_cancel', { sessionId });
   },
 
 
-  /** 同步组加入：guest 解析邀请串起配，返回短指纹（与 host 端比对） */
+  /** Sync-group join: the guest parses the invite string and starts pairing, returning the short fingerprint (to compare with the host side) */
   async syncGroupJoinBegin(inviteLink: string): Promise<ApiResponse<SyncJoinBeginOutcome>> {
     return invoke('sync_group_join_begin', { inviteLink });
   },
 
 
-  /** 同步组加入：指纹比对通过后确认入组（组密钥落 keyring） */
+  /** Sync-group join: confirm joining once the fingerprint comparison passes (the group key lands in the keyring) */
   async syncGroupJoinConfirm(sessionId: string): Promise<ApiResponse<boolean>> {
     return invoke('sync_group_join_confirm', { sessionId });
   },
 
 
-  /** 同步组加入：取消（指纹不通过 / 放弃；幂等） */
+  /** Sync-group join: cancel (fingerprint mismatch / give up; idempotent) */
   async syncGroupJoinCancel(sessionId: string): Promise<ApiResponse<boolean>> {
     return invoke('sync_group_join_cancel', { sessionId });
   },

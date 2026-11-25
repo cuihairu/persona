@@ -16,7 +16,7 @@ jest.mock('@tauri-apps/api/core', () => ({
   invoke: (...args: any[]) => mockInvoke(...args),
 }));
 
-/** 捕获已注册的事件 handler（listen 是异步 resolve 的）。 */
+/** Captures the registered event handler (listen resolves asynchronously). */
 const registeredHandler = async (): Promise<Handler> => {
   await Promise.resolve();
   await Promise.resolve();
@@ -54,7 +54,7 @@ describe('hooks/useAutoLockEvents', () => {
     expect(mockListen).not.toHaveBeenCalled();
     expect(result.current.pendingSeconds).toBeNull();
 
-    // 解锁后挂监听；再落锁（disabled）时清空倒计时
+    // The listener is attached after unlocking; clearing the countdown when locking again (disabled)
     rerender({ enabled: true });
     expect(mockListen).toHaveBeenCalledTimes(1);
     rerender({ enabled: false });
@@ -95,23 +95,23 @@ describe('hooks/useAutoLockEvents', () => {
     expect(state.identities).toEqual([]);
     expect(state.currentIdentity).toBeNull();
     expect(state.credentials).toEqual([]);
-    // 与手动 lockService 清理对齐：favicon、选中、待注入跳转一并作废
+    // Mirrors manual lockService cleanup: favicon cache, selection, and the pending injection jump are all invalidated
     expect(state.faviconCache).toEqual({});
     expect(state.faviconMisses).toEqual({});
     expect(state.selectedCredentialId).toBeNull();
     expect(state.pendingCredentialSelection).toBeNull();
-    // 侧栏分类选中同随锁复位
+    // Sidebar category selection is also reset with the lock
     expect(state.sidebarFilter).toEqual({ kind: 'all' });
   });
 
   it('unsubscribes on unmount and cancels a pending subscription', async () => {
-    // 常规卸载 → unlisten
+    // A normal unmount -> unlisten
     const { unmount } = renderHook(() => useAutoLockEvents(true));
     await registeredHandler();
     unmount();
     expect(unlisten).toHaveBeenCalledTimes(1);
 
-    // listen 尚未 resolve 时就卸载 → disposed 竞态：resolve 后立即退订
+    // Unmounting before listen has resolved -> disposed race: unsubscribe immediately once it resolves
     mockListen.mockReset().mockResolvedValue(unlisten);
     const slow = renderHook(() => useAutoLockEvents(true));
     slow.unmount();
@@ -133,14 +133,14 @@ describe('hooks/useAutoLockEvents', () => {
     expect(mockInvoke).toHaveBeenCalledTimes(1);
     expect(mockInvoke).toHaveBeenCalledWith('touch_activity');
 
-    // 30s 内的第二次活动被节流
+    // A second activity within 30s is throttled away
     clock += 10_000;
     act(() => {
       fireEvent(window, new Event('keydown'));
     });
     expect(mockInvoke).toHaveBeenCalledTimes(1);
 
-    // 超过节流窗口后再次回传
+    // Once the throttle window has passed, activity is reported again
     clock += 31_000;
     act(() => {
       fireEvent(window, new Event('keydown'));
@@ -159,7 +159,7 @@ describe('hooks/useAutoLockEvents', () => {
     act(() => {
       fireEvent(window, new Event('pointerdown'));
     });
-    // 拒绝被 .catch 吞掉，不产生 unhandled rejection
+    // The rejection is swallowed by .catch, producing no unhandled rejection
     await Promise.resolve();
     await Promise.resolve();
 

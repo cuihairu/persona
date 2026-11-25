@@ -1,12 +1,12 @@
 import { useEffect, useRef } from 'react';
 
 /**
- * Escape 关闭 modal：window keydown 监听（焦点无需落在 modal 内，
- * 对齐 1Password——modal 开着 Esc 即关）。isOpen=false 时不挂监听。
+ * Escape closes the modal: listens on window keydown (focus does not need to be inside the modal,
+ * matching 1Password—Esc closes whenever the modal is open). When isOpen=false no listener is attached.
  *
- * onClose 走 latest-ref（useGlobalShortcut 先例），监听只随 isOpen 重建；
- * 叠开场景由调用方收口：下层 modal 把 isOpen 传成
- * `isOpen && !上层弹窗开启`，保证 Esc 只关最上层。
+ * onClose goes through a latest-ref (following useGlobalShortcut), so the listener is only rebuilt when
+ * isOpen changes; stacked modals are coordinated by the caller: the lower modal passes
+ * `isOpen && !upperModalOpen` so Esc only closes the topmost one.
  */
 export const useEscapeToClose = (isOpen: boolean, onClose: () => void) => {
   const onCloseRef = useRef(onClose);

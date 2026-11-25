@@ -28,12 +28,14 @@ import type { CredentialCategory, FeatureFlags, Identity, SidebarFilter } from '
 export type { SidebarFilter };
 
 /**
- * 侧栏导航的单一事实源：节点定义、分类↔凭据类型映射、筛选态↔主区视图映射、
- * 显示名解析。Sidebar 渲染、App 派生主区视图与标题、CredentialList 派生
- * 列表筛选都从这里取，避免三处各写一份标签与开关判断。
+ * Single source of truth for sidebar navigation: node definitions, the
+ * category↔credential-type mapping, filter-state↔main-area-view mapping, and
+ * display-name resolution. Sidebar rendering, App's derived main-area view and
+ * title, and CredentialList's derived list filters all read from here, so the
+ * three don't each keep their own copy of labels and flag checks.
  */
 
-/** 主区视图：'credentials' 是列表，其余是工具/管理面板 */
+/** Main-area views: 'credentials' is the list; the rest are tool/admin panels */
 export type ViewId =
   | 'credentials'
   | 'statistics'
@@ -45,7 +47,7 @@ export type ViewId =
 
 type IconComponent = typeof Squares2X2Icon;
 
-/** 身份（保险库）类型 → 图标；IdentitySwitcher 与侧栏保险库行共用一份映射 */
+/** Identity (vault) type → icon; one mapping shared by IdentitySwitcher and the sidebar vault rows */
 export const identityIcon = (identityType: string): IconComponent => {
   switch (identityType) {
     case 'Personal':
@@ -64,21 +66,21 @@ export const identityIcon = (identityType: string): IconComponent => {
 };
 
 export interface NavNode {
-  /** 点击后写入 store 的筛选态 */
+  /** Filter state written to the store when clicked */
   filter: SidebarFilter;
-  /** i18n key（节点是模块级常量，不能调 hook，渲染处 t()） */
+  /** i18n key (nodes are module-level constants, so no hooks—t() at the render site) */
   labelKey: string;
   icon: IconComponent;
-  /** 对应 workspace 功能开关；缺省 = 主航道，恒可见 */
+  /** Corresponding workspace feature flag; omitted = mainline, always visible */
   flag?: keyof FeatureFlags;
-  /** 分类专用：聚合的 credential_type（列表筛选用） */
+  /** Category-only: the aggregated credential_types (used for list filtering) */
   types?: string[];
 }
 
-/** 侧栏默认筛选态（store 出厂值，见 appStore.DEFAULT_SIDEBAR_FILTER） */
+/** Sidebar default filter state (the store's factory value, see appStore.DEFAULT_SIDEBAR_FILTER) */
 export const ALL_ITEMS_FILTER: SidebarFilter = { kind: 'all' };
 
-/** 分类 → 凭据类型（1Password 的类别语义：一个类别聚合多种 item type） */
+/** Category → credential types (1Password's category semantics: one category aggregates several item types) */
 export const CATEGORY_TYPES: Record<CredentialCategory, string[]> = {
   passwords: ['Password'],
   secure_notes: ['SecureNote'],
@@ -90,7 +92,7 @@ export const CATEGORY_TYPES: Record<CredentialCategory, string[]> = {
   game_tokens: ['TwoFactor', 'GameToken', 'GameAccount'],
 };
 
-/** 顶部三行：全部条目 / 收藏 / 最近使用 */
+/** Top three rows: All Items / Favorites / Recently Used */
 export const TOP_NODES: NavNode[] = [
   { filter: ALL_ITEMS_FILTER, labelKey: 'sidebar.allItems', icon: Squares2X2Icon },
   { filter: { kind: 'favorites' }, labelKey: 'sidebar.favorites', icon: HeartIcon },
@@ -98,8 +100,9 @@ export const TOP_NODES: NavNode[] = [
 ];
 
 /**
- * 类别分组。通行密钥是特例：它存在独立 passkeys 表里、不进凭据列表，
- * 所以这一行不产出 { kind: 'category' } 而是打开管理视图。
+ * Category group. Passkeys are the special case: they live in a separate
+ * passkeys table and never enter the credential list, so that row does not
+ * produce { kind: 'category' } but opens the admin view instead.
  */
 export const CATEGORY_NODES: NavNode[] = [
   {
@@ -159,7 +162,7 @@ export const CATEGORY_NODES: NavNode[] = [
   },
 ];
 
-/** 工具分组：面板视图（统计 / SSH Agent / 钱包 / 安全瞭望 / 生成器） */
+/** Tools group: panel views (Statistics / SSH Agent / Wallets / Watchtower / Generator) */
 export const TOOL_NODES: NavNode[] = [
   { filter: { kind: 'statistics' }, labelKey: 'sidebar.tools.statistics', icon: ChartBarIcon },
   {
@@ -177,7 +180,7 @@ export const TOOL_NODES: NavNode[] = [
   { filter: { kind: 'generator' }, labelKey: 'sidebar.tools.generator', icon: SparklesIcon },
 ];
 
-/** 筛选态 → 主区视图（除工具/通行密钥外都是凭据列表） */
+/** Filter state → main-area view (everything except tools/passkeys is the credential list) */
 export const viewForFilter = (filter: SidebarFilter): ViewId => {
   switch (filter.kind) {
     case 'statistics':
@@ -197,28 +200,29 @@ export const viewForFilter = (filter: SidebarFilter): ViewId => {
   }
 };
 
-/** 视图 → 依赖的功能开关（运行中关掉开关时据此回落到凭据列表） */
+/** View → the feature flag it depends on (when the flag is turned off at runtime, fall back to the credential list accordingly) */
 export const FLAG_BY_VIEW: Partial<Record<ViewId, keyof FeatureFlags>> = {
   sshAgent: 'ssh_agent',
   wallets: 'wallet',
   passkeys: 'passkeys',
 };
 
-/** 侧栏行 / 测试锚点的 testid：nav-all、nav-category-api_keys、nav-identity-i1… */
+/** testid for sidebar rows / test anchors: nav-all, nav-category-api_keys, nav-identity-i1... */
 export const navTestId = (filter: SidebarFilter): string => {
   const value = 'value' in filter ? filter.value : undefined;
   return `nav-${filter.kind}${value ? `-${value}` : ''}`;
 };
 
-/** 两个筛选态是否指向同一节点（value 缺省的一律按无值比较） */
+/** Whether two filter states point at the same node (missing value is always compared as no value) */
 export const isSameFilter = (a: SidebarFilter, b: SidebarFilter): boolean => {
   if (a.kind !== b.kind) return false;
   return ('value' in a ? a.value : undefined) === ('value' in b ? b.value : undefined);
 };
 
 /**
- * 筛选态的显示名（主区工具条标题与空态提示共用）：
- * 节点取自身 labelKey，标签取 `#tag`，保险库取身份名（找不到回退全部条目）。
+ * Display name for a filter state (shared by the main-area toolbar title and
+ * empty-state hints): a node uses its own labelKey, a tag uses `#tag`, a vault
+ * uses the identity name (falls back to All Items when not found).
  */
 export const filterLabel = (
   t: TFunction,
@@ -237,8 +241,9 @@ export const filterLabel = (
     case 'identity':
       return identities.find((i) => i.id === filter.value)?.name ?? t('sidebar.allItems');
     case 'category': {
-      // 节点表是 labelKey 的事实源（i18n key 是驼峰，筛选值是 snake_case，
-      // 不能直接拼接）；查不到回退全部条目
+      // The node table is the source of truth for labelKey (the i18n key is
+      // camelCase while the filter value is snake_case, so they cannot be
+      // concatenated directly); fall back to All Items when not found
       const node = CATEGORY_NODES.find(
         (n) => n.filter.kind === 'category' && n.filter.value === filter.value,
       );

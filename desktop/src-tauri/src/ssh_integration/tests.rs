@@ -10,7 +10,7 @@ fn upsert_appends_when_absent_and_is_idempotent() {
     assert!(a.contains(BLOCK_BEGIN));
     assert!(a.contains(&format!("IdentityAgent {AGENT}")));
     assert!(a.contains("Host github.com"));
-    // 再跑一遍：块不重复、内容一致
+    // Run it again: no duplicate block, identical content
     let b = upsert_managed_block(&a, AGENT);
     assert_eq!(a, b);
     assert_eq!(b.matches(BLOCK_BEGIN).count(), 1);
@@ -24,7 +24,7 @@ fn upsert_updates_existing_block_only() {
     let updated = upsert_managed_block(&with_block, AGENT);
     assert!(updated.contains(&format!("IdentityAgent {AGENT}")));
     assert!(!updated.contains("/old/persona"));
-    // 用户块外的 IdentityAgent 原样保留
+    // The IdentityAgent outside the managed block is preserved as-is
     assert!(updated.contains("IdentityAgent /old/path"));
     assert!(updated.contains("Host b"));
 }
@@ -39,21 +39,22 @@ fn remove_strips_block_and_blank_run_but_keeps_user_config() {
     assert!(!cleaned.contains("IdentityAgent"));
     assert!(cleaned.contains("Host a"));
     assert!(cleaned.contains("Host b"));
-    // 幂等
+    // Idempotent
     assert_eq!(remove_managed_block(&cleaned), cleaned);
 }
 
 #[test]
 fn write_then_reread_round_trip_keeps_enabled_truthful() {
-    // 真实文件往返：一键启用（upsert + 原子写）→ 按
-    // ssh_agent_integration_status 的同一种读法回读 → enabled 判据必须为真；
-    // 一键停用（整块移除 + 原子写）→ 回读必须为假。前端启用/停用后
-    // 一律走这个回读点，所以这里钉住「写→读」的一致性。
+    // Real-file round trip: one-click enable (upsert + atomic write) -> re-read using the same
+    // path ssh_agent_integration_status uses -> the enabled criterion must be true; one-click
+    // disable (remove the whole block + atomic write) -> re-reading must be false. The frontend
+    // always goes through this re-read point after enable/disable, so this pins the
+    // "write -> read" consistency.
     let dir = std::env::temp_dir().join(format!("persona-ssh-int-{}", std::process::id()));
     let path = dir.join(".ssh").join("config");
     let config = "Host github.com\n  User git\n";
 
-    // 启用链路
+    // Enable path
     write_config_atomic(&path, &upsert_managed_block(config, AGENT)).expect("write enabled config");
     let (reread, read_error) = match std::fs::read_to_string(&path) {
         Ok(c) => (c, None),
@@ -66,11 +67,11 @@ fn write_then_reread_round_trip_keeps_enabled_truthful() {
         "enabled 判据（锚点块 == agent socket）在回读后必须为真"
     );
 
-    // 停用链路
+    // Disable path
     write_config_atomic(&path, &remove_managed_block(&reread)).expect("write disabled config");
     let reread = std::fs::read_to_string(&path).expect("reread disabled config");
     assert_eq!(managed_block_identity_agent(&reread), None);
-    // 用户配置在两次往返中保持原样
+    // The user config survives both round trips untouched
     assert!(reread.contains("Host github.com"));
     assert!(reread.contains("  User git"));
 
@@ -84,7 +85,7 @@ fn damaged_block_begin_without_end_is_replaced_not_duplicated() {
     assert_eq!(fixed.matches(BLOCK_BEGIN).count(), 1);
     assert!(fixed.contains(&format!("IdentityAgent {AGENT}")));
     assert!(!fixed.contains("/stale"));
-    // remove 同样收敛损坏块
+    // remove likewise converges the damaged block
     assert!(!remove_managed_block(&fixed).contains(BLOCK_BEGIN));
     let damaged2 = format!("Host a\n\n{BLOCK_BEGIN}\nIdentityAgent /stale\n");
     let cleaned = remove_managed_block(&damaged2);
@@ -97,7 +98,7 @@ fn managed_block_identity_agent_reads_value() {
     let cfg = format!("x\n{BLOCK_BEGIN}\nIdentityAgent {AGENT}\n{BLOCK_END}\n");
     assert_eq!(managed_block_identity_agent(&cfg).as_deref(), Some(AGENT));
     assert_eq!(managed_block_identity_agent("no block"), None);
-    // 有 begin 无 end = 损坏
+    // A begin without an end = damaged
     assert_eq!(
         managed_block_identity_agent(&format!("{BLOCK_BEGIN}\nIdentityAgent p\n")),
         None
@@ -112,15 +113,16 @@ fn manual_entry_detection_ignores_managed_block() {
     assert!(has_manual_persona_entry(&cfg));
     let only_managed = format!("{BLOCK_BEGIN}\nIdentityAgent {AGENT}\n{BLOCK_END}\n");
     assert!(!has_manual_persona_entry(&only_managed));
-    // 大小写不敏感的 persona 线索
+    // Case-insensitive persona hint
     let other = "Host a\n  IdentityAgent /other\n";
     assert!(!has_manual_persona_entry(other));
 }
 
 #[test]
 fn upsert_block_carries_host_star_so_eof_append_reaches_all_hosts() {
-    // 用户 config 以具体 Host 块结尾：EOF 追加若无 Host * 会落入该块
-    // 作用域，其他 host 静默拿不到 persona agent（走查实证的缺口）
+    // A user config ending in a specific Host block: an EOF append without Host * would land in
+    // that block's scope, and other hosts would silently get no persona agent (a gap proven by
+    // the real ssh -G run)
     let cfg = "Host github.com\n  User git\n\nHost bastion.example.com\n  ProxyJump github.com\n";
     let out = upsert_managed_block(cfg, AGENT);
     let begin = out.find(BLOCK_BEGIN).unwrap();
@@ -129,12 +131,13 @@ fn upsert_block_carries_host_star_so_eof_append_reaches_all_hosts() {
     let star = block.find("Host *").expect("块内应有 Host * 作用域行");
     let agent = block.find("IdentityAgent").expect("块内应有 IdentityAgent");
     assert!(star < agent, "Host * 必须排在 IdentityAgent 之前才生效");
-    // 幂等：再跑一遍不重复
+    // Idempotent: a second run adds nothing
     assert_eq!(upsert_managed_block(&out, AGENT), out);
 }
 
-/// 硬验收：OpenSSH 真实解析锚点块（注释行不得干扰 IdentityAgent）。
-/// `ssh -G -F <file> <host>` 输出归一化配置；无 ssh（精简 CI 容器）则跳过。
+/// Hard acceptance: real OpenSSH parsing of the anchor block (comment lines must not interfere
+/// with IdentityAgent). `ssh -G -F <file> <host>` prints the normalized configuration; skipped
+/// when ssh is unavailable (slim CI container).
 #[cfg(unix)]
 #[test]
 fn ssh_g_resolves_identity_agent_from_managed_block() {
@@ -163,11 +166,11 @@ fn ssh_g_resolves_identity_agent_from_managed_block() {
         .find(|l| l.starts_with("identityagent "))
         .unwrap_or_else(|| panic!("identityagent missing in ssh -G output:\n{stdout}"));
     assert_eq!(line, format!("identityagent {AGENT}"));
-    // 用户配置照常生效
+    // The user config still takes effect as usual
     assert!(stdout.lines().any(|l| l == "user git"));
 
-    // 块外无关 host 同样解析到（Host * 作用域；块落在 Host example.test
-    // 之后但不得被其作用域吞掉）
+    // An unrelated host outside the block also resolves to it (Host * scope; the block comes
+    // after Host example.test but must not be swallowed by that block's scope)
     let out2 = std::process::Command::new(&ssh)
         .args(["-G", "-F"])
         .arg(&config_path)
@@ -204,7 +207,7 @@ fn parse_ssh_line_handles_both_forms_and_comments() {
         parse_ssh_line("forwardagent=/run/y"),
         Some(("forwardagent".into(), "/run/y".into()))
     );
-    // `Key = value`（= 作分隔符）与成对引号值
+    // `Key = value` (using = as the separator) and paired quoted values
     assert_eq!(
         parse_ssh_line("ForwardAgent = yes"),
         Some(("ForwardAgent".into(), "yes".into()))
@@ -213,7 +216,7 @@ fn parse_ssh_line_handles_both_forms_and_comments() {
         parse_ssh_line("ProxyAgent \"a b/c\""),
         Some(("ProxyAgent".into(), "a b/c".into()))
     );
-    // 不成对引号原样保留
+    // Unpaired quotes are kept verbatim
     assert_eq!(
         parse_ssh_line("IdentityAgent \"a b"),
         Some(("IdentityAgent".into(), "\"a b".into()))
@@ -241,8 +244,9 @@ fn analyze_collects_agent_entries_across_scopes_and_includes() {
     std::fs::create_dir(&inc_dir).unwrap();
     std::fs::write(inc_dir.join("extra.conf"), "AddKeysToAgent yes\n").unwrap();
     let config_path = dir.path().join("config");
-    // OpenSSH 语义：相对 Include 相对 ~/.ssh 解析，这里用绝对路径指向 tempdir；
-    // 全局 IdentityAgent 必须在任何 Host/Match 之前（作用域持续到下一个块头）
+    // OpenSSH semantics: a relative Include resolves against ~/.ssh, so an absolute path pointing
+    // into the tempdir is used here; a global IdentityAgent must precede any Host/Match (its
+    // scope extends until the next block header)
     std::fs::write(
         &config_path,
         format!(
@@ -258,14 +262,14 @@ fn analyze_collects_agent_entries_across_scopes_and_includes() {
     assert!(a.readable);
     assert!(a.read_error.is_none());
     assert!(a.warnings.is_empty(), "warnings: {:?}", a.warnings);
-    // 作用域归属与行号（1 起）
+    // Scope attribution and line numbers (1-based)
     assert_eq!(a.forward_agent_entries.len(), 1);
     assert_eq!(a.forward_agent_entries[0].scope, "Host github.com");
     assert_eq!(a.forward_agent_entries[0].line, 4);
-    // 顶层级首个 IdentityAgent 生效，环境变量被压后
+    // The first top-level IdentityAgent wins, and the env var ranks below it
     assert_eq!(a.identity_agent_effective.as_deref(), Some("/global/sock"));
     assert_eq!(a.effective_socket.as_deref(), Some("/global/sock"));
-    // Include 展开进条目（file 指向被包含文件）
+    // Include expands into entries (file points at the included file)
     let add = a
         .entries
         .iter()
@@ -277,14 +281,14 @@ fn analyze_collects_agent_entries_across_scopes_and_includes() {
         add.file
     );
     assert_eq!(add.value, "yes");
-    // Match 作用域条目如实展示，但不妄断生效值
+    // Match-scope entries are shown as they are, without presuming they take effect
     let m = a
         .entries
         .iter()
         .find(|e| e.keyword == "IdentityAgent" && e.scope.starts_with("Match"))
         .expect("Match 块条目应被收集");
     assert_eq!(m.value, "/match/sock");
-    // 目标 socket 不存在 → 探测 false（不是 None 的「未知」）
+    // Target socket doesn't exist -> probe is false (not None's "unknown")
     assert_eq!(a.socket_alive, Some(false));
     assert_eq!(a.ssh_auth_sock.as_deref(), Some("/env/sock"));
 }
@@ -293,8 +297,9 @@ fn analyze_collects_agent_entries_across_scopes_and_includes() {
 fn analyze_excludes_persona_managed_block_entries() {
     let dir = tempfile::tempdir().unwrap();
     let config_path = dir.path().join("config");
-    // 用测试内自造的不存在路径而非真实稳定 socket：探测断言不能依赖
-    // 机器上是否恰有一个活 agent（并行测试/本机真实实例都会命中）。
+    // A nonexistent path fabricated inside the test rather than a real, well-known socket: the
+    // probe assertions must not depend on whether the machine happens to have one live agent
+    // (parallel tests / a real local instance would both match).
     let agent = dir.path().join("absent-agent.sock");
     let agent = agent.to_string_lossy().to_string();
     std::fs::write(
@@ -305,13 +310,14 @@ fn analyze_excludes_persona_managed_block_entries() {
         )
         .unwrap();
     let a = analyze_config(&config_path, None);
-    // 条目列表不含锚点块（那是 persona 自己写的，不是用户配置）
+    // The entry list excludes the anchor block (persona wrote that itself, it isn't user config)
     assert!(a.entries.iter().all(|e| e.keyword != "IdentityAgent"));
     assert_eq!(a.forward_agent_entries.len(), 1);
-    // 但生效判定包含块值：无用户全局条目时 ssh 实际用的就是块
+    // But the effective-value judgement does include the block's value: with no user global
+    // entry, that is what ssh actually uses
     assert_eq!(a.identity_agent_effective.as_deref(), Some(agent.as_str()));
     assert_eq!(a.effective_socket.as_deref(), Some(agent.as_str()));
-    // 路径不存在 → 探测 false（不是 None 的「未知」）
+    // The path doesn't exist -> probe is false (not None's "unknown")
     assert_eq!(a.socket_alive, Some(false));
 }
 
@@ -319,7 +325,8 @@ fn analyze_excludes_persona_managed_block_entries() {
 fn user_global_identity_agent_beats_managed_block_first_wins() {
     let dir = tempfile::tempdir().unwrap();
     let config_path = dir.path().join("config");
-    // 用户全局条目在前，块在 EOF：ssh first-wins 语义下用户条目生效
+    // The user's global entry comes first and the block is at EOF: under ssh's first-wins
+    // semantics the user entry takes effect
     std::fs::write(
             &config_path,
             format!(
@@ -341,7 +348,7 @@ fn analyze_warns_on_missing_and_circular_includes() {
     let a_path = dir.path().join("a.conf");
     let b_path = dir.path().join("b.conf");
     let root = dir.path().join("root.conf");
-    // root → a →（缺失 glob + 指回 root 的环）；root → b（正常条目）
+    // root -> a -> (missing glob + a cycle back to root); root -> b (a normal entry)
     std::fs::write(
         &a_path,
         format!("Include missing-glob-*.conf\nInclude {}\n", root.display()),
@@ -361,7 +368,7 @@ fn analyze_warns_on_missing_and_circular_includes() {
     let a = analyze_config(&root, None);
     assert!(a.warnings.iter().any(|w| w.contains("无匹配文件")));
     assert!(a.warnings.iter().any(|w| w.contains("循环引用")));
-    // 环不挡正常收集：b.conf 的条目照进列表
+    // The cycle doesn't block ordinary collection: b.conf's entry still lands in the list
     assert_eq!(a.entries.len(), 1);
     assert_eq!(a.entries[0].keyword, "AddKeysToAgent");
 }
@@ -374,7 +381,7 @@ fn analyze_missing_config_is_not_an_error() {
     assert!(!a.config_exists);
     assert!(a.read_error.is_none());
     assert!(a.entries.is_empty());
-    // 生效 socket 退回环境变量
+    // The effective socket falls back to the environment variable
     assert_eq!(a.effective_socket.as_deref(), Some("/env"));
 }
 
@@ -388,13 +395,13 @@ fn parse_ssh_version_extracts_label_and_numbers() {
         parse_ssh_version("OpenSSH_9.6p1, OpenSSL 3.0.13 30 Jan 2024"),
         Some(("OpenSSH_9.6p1".into(), (9, 6)))
     );
-    // 无 p 后缀
+    // No p suffix
     assert_eq!(
         parse_ssh_version("OpenSSH_8.3\n"),
         Some(("OpenSSH_8.3".into(), (8, 3)))
     );
-    // 不是 OpenSSH（如 Windows 的 Win32-OpenSSH 也会带 OpenSSH_，但
-    // 完全无关的输出应回 None）
+    // Not OpenSSH (Windows' Win32-OpenSSH also carries OpenSSH_, but wholly unrelated output
+    // should return None)
     assert_eq!(
         parse_ssh_version("usage: ssh [-46AaCfGgKkMNnqsTtVvXxYy]"),
         None
@@ -405,7 +412,8 @@ fn parse_ssh_version_extracts_label_and_numbers() {
 #[test]
 fn analyze_reports_unreadable_config_instead_of_panicking() {
     let dir = tempfile::tempdir().unwrap();
-    // 路径是目录：确定性的读失败（不依赖 chmod，CI root 也能跑）
+    // The path is a directory: a deterministic read failure (doesn't rely on chmod, so it runs
+    // even as root in CI)
     let as_dir = dir.path().join("config");
     std::fs::create_dir(&as_dir).unwrap();
     let a = analyze_config(&as_dir, None);

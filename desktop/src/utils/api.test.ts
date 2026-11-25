@@ -161,8 +161,9 @@ describe('utils/api PersonaAPI', () => {
 });
 
 // ---------------------------------------------------------------------------
-// 剩余命令映射补全：每个 personaAPI 方法对应一个 tauri invoke 及参数命名
-// （camelCase → snake_case 映射是这里唯一的逻辑）。
+// Command mapping coverage for the remaining commands: each personaAPI method
+// corresponds to one tauri invoke and its argument naming (the camelCase →
+// snake_case mapping is the only logic here).
 // ---------------------------------------------------------------------------
 
 describe('utils/api command mapping coverage', () => {
@@ -185,7 +186,7 @@ describe('utils/api command mapping coverage', () => {
   });
 
   it('identity CRUD methods', async () => {
-    // 可选描述字段缺省即可（serde Option 缺键即 None）
+    // Omitting the optional description field is fine (a missing serde Option key is None)
     await personaAPI.createIdentity({
       name: 'n',
       identity_type: 'personal',
@@ -409,24 +410,24 @@ describe('utils/api command mapping coverage', () => {
   });
 
   it('biometric methods map with dbPath/null arg shapes', async () => {
-    // status：顶层 dbPath 参数（命令签名单参，非 request 包装）
+    // status: top-level dbPath argument (the command signature takes a bare argument, not a request wrapper)
     await personaAPI.biometricStatus();
     expect(mockInvoke).toHaveBeenCalledWith('biometric_status', { dbPath: null });
 
     await personaAPI.biometricStatus('/tmp/x.db');
     expect(mockInvoke).toHaveBeenCalledWith('biometric_status', { dbPath: '/tmp/x.db' });
 
-    // enable：密码只存在于 request 体内
+    // enable: the password exists only inside the request body
     await personaAPI.biometricEnable('pw');
     expect(mockInvoke).toHaveBeenCalledWith('biometric_enable', {
       request: { master_password: 'pw' },
     });
 
-    // disable：幂等删，无参数
+    // disable: idempotent delete, no arguments
     await personaAPI.biometricDisable();
     expect(mockInvoke).toHaveBeenCalledWith('biometric_disable');
 
-    // unlock：db_path 走 request 体内（与 init_service 同形）
+    // unlock: db_path goes inside the request body (same shape as init_service)
     await personaAPI.biometricUnlock();
     expect(mockInvoke).toHaveBeenCalledWith('biometric_unlock', {
       request: { db_path: null },
@@ -471,7 +472,7 @@ describe('utils/api command mapping coverage', () => {
   });
 
   it('E2EE sync device and conflict methods map to tauri invokes', async () => {
-    // 设备管理（3b）：status/join/leave/list 无参或单词参数
+    // Device management (3b): status/join/leave/list take no arguments or a single word argument
     await personaAPI.syncDeviceStatus();
     expect(mockInvoke).toHaveBeenCalledWith('sync_device_status');
 
@@ -490,11 +491,11 @@ describe('utils/api command mapping coverage', () => {
     await personaAPI.syncRevoke('d-2');
     expect(mockInvoke).toHaveBeenCalledWith('sync_revoke', { targetDeviceId: 'd-2' });
 
-    // 同步周期与冲突裁决（3c）：sync_now 无参，裁决带 itemId + adoptOpId
+    // Sync cycle and conflict resolution (3c): sync_now takes no arguments, resolution carries itemId + adoptOpId
     await personaAPI.syncNow();
     expect(mockInvoke).toHaveBeenCalledWith('sync_now');
 
-    // 组密钥轮换（3d）：无参
+    // Group key rotation (3d): no arguments
     await personaAPI.syncRotate();
     expect(mockInvoke).toHaveBeenCalledWith('sync_rotate');
 
@@ -508,9 +509,11 @@ describe('utils/api command mapping coverage', () => {
     });
   });
 
-  // Tauri 2 以字符串 reject invoke promise；api 层必须归一成 Error，
-  // 否则调用方 `err instanceof Error ? err.message : 通用文案` 只显示
-  // "保存失败"，底层原因（如 missing required key）被吞掉。
+  // Tauri 2 rejects the invoke promise with a string; the api layer must
+  // normalize it into an Error, otherwise a caller's
+  // `err instanceof Error ? err.message : generic message` only shows
+  // "save failed" and the underlying cause (e.g. missing required key) is
+  // swallowed.
   it('normalizes string rejections into Error instances carrying the cause', async () => {
     mockInvoke.mockRejectedValueOnce(
       "invalid args 'sshAgent' for command 'set_feature_flags': missing required key sshAgent",
@@ -533,14 +536,14 @@ describe('utils/api command mapping coverage', () => {
     await expect(personaAPI.lockService()).rejects.toThrow('{"code":7}');
   });
 
-  // 已是 Error 的 rejection 原样透传（不二次包装丢失栈）
+  // A rejection that is already an Error passes through untouched (no double wrapping that loses the stack)
   it('passes Error rejections through untouched', async () => {
     const boom = new Error('backend exploded');
     mockInvoke.mockRejectedValueOnce(boom);
     await expect(personaAPI.lockService()).rejects.toBe(boom);
   });
 
-  // 薄包装透传面：settings 窄写 / 旅行模式 / Connect / 同步
+  // Thin pass-through wrapper surface: settings narrow writes / travel mode / Connect / sync
   it('settings, travel, connect and sync methods map to tauri invokes', async () => {
     mockInvoke.mockResolvedValue({ success: true, data: null });
 
@@ -714,7 +717,7 @@ describe('utils/api command mapping coverage', () => {
       },
     });
 
-    // 登录仪式第一步：按凭据 id 换服务器挑战
+    // First step of the login ceremony: exchange the credential id for a server challenge
     await personaAPI.accountPasskeyLoginOptions(acct, { credential_id: 'cid' });
     expect(mockInvoke).toHaveBeenCalledWith('account_passkey_login_options', {
       account_id: acct,
@@ -739,7 +742,7 @@ describe('utils/api command mapping coverage', () => {
       request: { session_id: 's1', client_proof: 'cHJvb2Y' },
     });
 
-    // 向导式：口令进、wire 值不出（salt/verifier/M1 推导都在 core）
+    // Wizard style: the passphrase goes in, no wire values come out (the salt/verifier/M1 derivation all happens in core)
     await personaAPI.accountSrpRegisterWithPassword(acct, {
       device_name: 'laptop',
       password: 'pw',
@@ -810,7 +813,7 @@ describe('utils/api command mapping coverage', () => {
       device_id: 'd1',
     });
 
-    // 会话证据两种形态：SRP 15 分钟令牌 / passkey 断言（恰好一种）
+    // The two shapes of session evidence: the SRP 15-minute token / a passkey assertion (exactly one)
     await personaAPI.accountCreateSession(acct, { srp_token: 'tok15m' });
     expect(mockInvoke).toHaveBeenCalledWith('account_create_session', {
       account_id: acct,
@@ -846,7 +849,7 @@ describe('utils/api command mapping coverage', () => {
     });
   });
 
-  // SERVICE_LOCKED 引导解锁 gate：惰性 auto-lock 竞态下操作不该被堵死
+  // The SERVICE_LOCKED guided-unlock gate: under the lazy auto-lock race, an operation must not be dead-ended
   describe('SERVICE_LOCKED unlock gate', () => {
     const lockedEnvelope = {
       success: false,
@@ -855,7 +858,7 @@ describe('utils/api command mapping coverage', () => {
       error_code: 'SERVICE_LOCKED',
     };
 
-    // 模拟 App 层监听 persona:need-unlock 并以给定结果收口
+    // Simulates the App layer listening for persona:need-unlock and settling it with a given result
     const listenUnlockGate = (outcome: boolean) => {
       const listener = (e: Event) => {
         const detail = (e as CustomEvent).detail as { resolve: (ok: boolean) => void };

@@ -18,11 +18,12 @@ import type {
 export const accountApi = {
 
   // -------------------------------------------------------------------------
-  // 账号体系（M2 脚手架：对齐 server /api/v1/accounts/* 契约的代理 seam，
-  // tauri 代理命令层随 M2 账号 UI 批次落地；账号/同步功能默认关闭）
+  // Account system (M2 scaffolding: a proxy seam aligned with the server
+  // /api/v1/accounts/* contract; the tauri proxy command layer lands with the
+  // M2 account UI batch; account/sync features are off by default)
   // -------------------------------------------------------------------------
 
-  /** 公开注册新账号（无需认证）。成功返回 account_id 与 basic info。 */
+  /** Public registration of a new account (no authentication). On success returns account_id plus basic info. */
   async accountRegister(
     request: { username: string; display_name?: string }
   ): Promise<ApiResponse<AccountRegistrationResponse>> {
@@ -30,8 +31,9 @@ export const accountApi = {
   },
 
 
-  /** passkey 注册选项（公开端点）。服务器签发带挑战的 WebAuthn creation
-   * options（120s 一次性挑战，register 时严格比对）。 */
+  /** Passkey registration options (public endpoint). The server issues WebAuthn
+   * creation options with a challenge (a one-time 120s challenge, matched
+   * strictly at register time). */
   async accountPasskeyCreateOptions(
     account_id: string,
     request: {
@@ -46,8 +48,9 @@ export const accountApi = {
   },
 
 
-  /** passkey 注册完成（公开端点）。提交认证器 attestation，服务器做 RP 侧
-   * 完整验证后存入公钥材料。 */
+  /** Completes passkey registration (public endpoint). Submits the authenticator
+   * attestation; the server performs full RP-side verification and then stores
+   * the public key material. */
   async accountPasskeyRegister(
     account_id: string,
     request: {
@@ -60,8 +63,9 @@ export const accountApi = {
   },
 
 
-  /** passkey 登录选项（公开端点，登录仪式第一步）。按凭据 id 换取服务器
-   * 挑战（120s 一次性），断言时消费。 */
+  /** Passkey login options (public endpoint, first step of the login ceremony).
+   * Exchanges a server challenge (one-time, 120s) for the credential id, to be
+   * consumed at assertion time. */
   async accountPasskeyLoginOptions(
     account_id: string,
     request: { credential_id: string }
@@ -70,7 +74,7 @@ export const accountApi = {
   },
 
 
-  /** SRP 凭据注册（需要 Bearer）。账号内设备的 SRP salt+verifier 登记。 */
+  /** SRP credential registration (requires Bearer). Registers the SRP salt+verifier of a device within the account. */
   async accountSrpRegister(
     account_id: string,
     request: { device_name: string; salt: string; verifier: string }
@@ -79,7 +83,7 @@ export const accountApi = {
   },
 
 
-  /** SRP 挑战请求（公开端点，登录步骤）。发起账号 SRP 登录握手。 */
+  /** SRP challenge request (public endpoint, a login step). Starts the account SRP login handshake. */
   async accountSrpChallenge(
     account_id: string,
     request: { device_name: string; client_public: string }
@@ -88,8 +92,9 @@ export const accountApi = {
   },
 
 
-  /** SRP 验证完成（公开端点，登录步骤）。完成握手，返回 15 分钟 SRP
-   * 登录令牌（可作账号路由 Bearer，或兑换 24h 会话）。 */
+  /** SRP verification completion (public endpoint, a login step). Finishes the
+   * handshake and returns a 15-minute SRP login token (usable as the Bearer for
+   * account routing, or exchanged for a 24h session). */
   async accountSrpVerify(
     account_id: string,
     request: { session_id: string; client_proof: string }
@@ -98,8 +103,10 @@ export const accountApi = {
   },
 
 
-  /** 向导式 SRP 凭据注册：口令在 core 推导 salt+verifier 并注册（引导
-   * Bearer：账号会话缺失时回退静态服务器令牌）。前端不接触 wire 值。 */
+  /** Wizard-style SRP credential registration: the passphrase is used in core to
+   * derive salt+verifier and register them (the bootstrap Bearer falls back to
+   * the static server token when the account session is missing). The frontend
+   * never touches the wire values. */
   async accountSrpRegisterWithPassword(
     account_id: string,
     request: { device_name: string; password: string }
@@ -108,8 +115,9 @@ export const accountApi = {
   },
 
 
-  /** 向导式 SRP 登录：challenge/verify 与 M2 核验在 core 编排，15 分钟
-   * 令牌直写 keyring（响应不含令牌本体）。 */
+  /** Wizard-style SRP login: challenge/verify and the M2 checks are orchestrated
+   * in core, and the 15-minute token is written straight to the keyring (the
+   * response does not carry the token itself). */
   async accountSrpLogin(
     account_id: string,
     request: { device_name: string; password: string }
@@ -118,8 +126,9 @@ export const accountApi = {
   },
 
 
-  /** 账号域绑定写入：绑定（向导成功后）/ 解绑（退出账号，传 null）。
-   * 读取走 getWorkspaceSettings（settings.account 直出）。 */
+  /** Writes the account-domain binding: bind (after the wizard succeeds) / unbind
+   * (signing out of the account, pass null). Reading goes through
+   * getWorkspaceSettings (settings.account is returned directly). */
   async accountSetBinding(
     binding: { account_id: string; username: string; device_name?: string | null } | null
   ): Promise<ApiResponse<WorkspaceSettings>> {
@@ -127,8 +136,10 @@ export const accountApi = {
   },
 
 
-  /** 兑换 24h 会话（编排命令）：keyring 的 15 分钟令牌同时作 Bearer 与
-   * 证据，24h 会话直写 keyring。响应不含令牌本体。 */
+  /** Exchanges for a 24h session (orchestration command): the keyring's
+   * 15-minute token serves as both Bearer and evidence, and the 24h session is
+   * written straight to the keyring. The response does not carry the token
+   * itself. */
   async accountExchangeSession(
     account_id: string
   ): Promise<ApiResponse<{ expires_in_secs: number }>> {
@@ -136,14 +147,15 @@ export const accountApi = {
   },
 
 
-  /** 退出账号（编排命令）：自吊销 keyring 令牌（服务器尽力而为）并清
-   * keyring。revoked_on_server=false = 服务器侧无可吊销项。 */
+  /** Signs out of the account (orchestration command): self-revokes the keyring
+   * token (best effort on the server side) and clears the keyring.
+   * revoked_on_server=false = there was nothing to revoke server-side. */
   async accountSignOut(account_id: string): Promise<ApiResponse<{ revoked_on_server: boolean }>> {
     return invoke('account_sign_out', { account_id });
   },
 
 
-  /** 生成恢复码（需要 Bearer）。每次调用生成新一组（8 个），旧未用的作废。 */
+  /** Generates recovery codes (requires Bearer). Each call produces a fresh set of 8 and invalidates the previously unused ones. */
   async accountGenerateRecoveryCodes(
     account_id: string
   ): Promise<ApiResponse<AccountRecoveryCodes>> {
@@ -151,7 +163,7 @@ export const accountApi = {
   },
 
 
-  /** 验证恢复码（公开端点）。一次性消费，验证成功后标记为已用。 */
+  /** Verifies a recovery code (public endpoint). Single-use: it is marked as used after a successful verification. */
   async accountVerifyRecoveryCode(
     account_id: string,
     request: { code: string }
@@ -160,8 +172,8 @@ export const accountApi = {
   },
 
 
-  /** 为账号授权设备（需要 Bearer）。把已登记的 sync 设备（按 device_id +
-   * 公钥比对）关联到账号。 */
+  /** Authorizes a device for the account (requires Bearer). Associates an already
+   * registered sync device (matched by device_id + public key) with the account. */
   async accountAuthorizeDevice(
     account_id: string,
     request: { device_id: string; public_key: string }
@@ -170,7 +182,7 @@ export const accountApi = {
   },
 
 
-  /** 获取账号下的已授权设备列表（需要 Bearer）。 */
+  /** Lists the devices authorized under the account (requires Bearer). */
   async accountListDevices(
     account_id: string
   ): Promise<ApiResponse<AccountDevicesList>> {
@@ -178,7 +190,7 @@ export const accountApi = {
   },
 
 
-  /** 吊销账号下的设备（需要 Bearer）。 */
+  /** Revokes a device under the account (requires Bearer). */
   async accountRevokeDevice(
     account_id: string,
     device_id: string
@@ -187,8 +199,9 @@ export const accountApi = {
   },
 
 
-  /** 创建账号会话（需要 Bearer）。凭恰好一种登录证据（SRP 15 分钟令牌或
-   * passkey 断言）兑换 24h 账号会话令牌。 */
+  /** Creates an account session (requires Bearer). Exchanges exactly one piece of
+   * login evidence (the SRP 15-minute token or a passkey assertion) for a 24h
+   * account session token. */
   async accountCreateSession(
     account_id: string,
     request: AccountSessionEvidence
@@ -197,7 +210,7 @@ export const accountApi = {
   },
 
 
-  /** 吊销账号会话（需要 Bearer）。登出该会话令牌。 */
+  /** Revokes an account session (requires Bearer). Logs that session token out. */
   async accountRevokeSession(
     account_id: string,
     session_token: string

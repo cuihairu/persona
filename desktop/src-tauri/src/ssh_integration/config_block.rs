@@ -2,13 +2,15 @@ use std::path::{Path, PathBuf};
 
 use super::{BLOCK_BEGIN, BLOCK_END};
 
-/// agent 稳定 socket 路径：desktop 壳启动 agent 前经
-/// `PERSONA_AGENT_SOCKET_PATH` 注入 daemon，此函数返回同一路径供写入与比对。
+/// The agent's stable socket path: the desktop shell injects it into the daemon
+/// via `PERSONA_AGENT_SOCKET_PATH` before starting the agent, and this function
+/// returns the same path for writing and comparison.
 pub fn agent_stable_socket() -> PathBuf {
     #[cfg(unix)]
     {
-        // XDG_RUNTIME_DIR 是用户级 runtime 目录（/run/user/<uid>，重启清空，
-        // 不会积累 stale socket）；缺失（某些 macOS/精简环境）退回 ~/.persona/run
+        // XDG_RUNTIME_DIR is the user-level runtime directory (/run/user/<uid>,
+        // cleared on reboot so stale sockets do not accumulate); when missing
+        // (some macOS / minimal environments) fall back to ~/.persona/run
         if let Ok(dir) = std::env::var("XDG_RUNTIME_DIR") {
             if !dir.is_empty() {
                 let p = PathBuf::from(dir).join("persona").join("ssh-agent.sock");
@@ -26,12 +28,13 @@ pub fn agent_stable_socket() -> PathBuf {
 
     #[cfg(windows)]
     {
-        // 命名管道稳定名；AgentListener::bind 取 file_name 造 \\.\pipe\{name}
+        // Stable named-pipe name; AgentListener::bind takes the file_name to build \\.\pipe\{name}
         PathBuf::from("persona-ssh-agent")
     }
 }
 
-/// 写进 IdentityAgent 的值：unix 是绝对路径；windows 是完整管道路径。
+/// The value written into IdentityAgent: on unix an absolute path; on windows
+/// the full pipe path.
 pub fn identity_agent_value() -> String {
     #[cfg(unix)]
     {
@@ -51,8 +54,9 @@ pub fn ssh_config_path() -> PathBuf {
         .join("config")
 }
 
-/// 抽出锚点块的 IdentityAgent 值；块损坏（有 begin 无 end）返回 None。
-/// 多个值时取第一个（OpenSSH 语义也是先用）。
+/// Extract the IdentityAgent value from the anchor block; a corrupted block
+/// (begin without end) returns None.
+/// When multiple values exist, take the first (OpenSSH also applies the first).
 pub fn managed_block_identity_agent(config: &str) -> Option<String> {
     let begin = config.lines().position(|l| l.trim() == BLOCK_BEGIN)?;
     let end = config.lines().position(|l| l.trim() == BLOCK_END)?;
@@ -73,7 +77,8 @@ pub fn managed_block_identity_agent(config: &str) -> Option<String> {
         })
 }
 
-/// 锚点块之外是否存在指向 persona 的 IdentityAgent（用户手写的）
+/// Whether an IdentityAgent pointing at persona exists outside the anchor block
+/// (hand-written by the user)
 pub fn has_manual_persona_entry(config: &str) -> bool {
     let mut inside = false;
     config.lines().any(|l| {
@@ -90,8 +95,9 @@ pub fn has_manual_persona_entry(config: &str) -> bool {
     })
 }
 
-/// 幂等替换锚点块内容（保留块外一切）。无块则 append（前置空行分隔）；
-/// 损坏块（begin 无 end）按删到 EOF 收敛。
+/// Idempotently replace the anchor block's contents (preserving everything
+/// outside the block). With no block, append (separated by a leading blank
+/// line); a corrupted block (begin without end) converges by deleting to EOF.
 pub fn upsert_managed_block(config: &str, identity_agent_value: &str) -> String {
     let block =
         format!("{BLOCK_BEGIN}\nHost *\nIdentityAgent {identity_agent_value}\n{BLOCK_END}\n");
@@ -101,8 +107,9 @@ pub fn upsert_managed_block(config: &str, identity_agent_value: &str) -> String 
         config.lines().position(|l| l.trim() == BLOCK_END),
     ) {
         (Some(begin), Some(end)) if end >= begin => rebuild(config, begin, end, &block),
-        // 损坏块（begin 无 end，或 end 错位在 begin 前）：自 begin 删到 EOF
-        // 收敛（head 里可能的孤儿 end 行一并滤除），再 append 完整块。
+        // Corrupted block (begin without end, or an end misplaced before begin):
+        // converge by deleting from begin to EOF (any orphan end lines in the
+        // head are filtered out too), then append the complete block.
         (Some(begin), _) => {
             let head: String = config
                 .lines()
@@ -128,7 +135,7 @@ pub fn upsert_managed_block(config: &str, identity_agent_value: &str) -> String 
     }
 }
 
-/// 行级重建：[0, begin) + block + (end, len)
+/// Line-level rebuild: [0, begin) + block + (end, len)
 fn rebuild(config: &str, begin: usize, end: usize, block: &str) -> String {
     let mut out = String::new();
     for (i, line) in config.lines().enumerate() {
@@ -147,12 +154,14 @@ fn rebuild(config: &str, begin: usize, end: usize, block: &str) -> String {
     out
 }
 
-/// 移除锚点块（含块后紧邻空行）；损坏块（begin 无 end/错位）删 begin 到 EOF。
+/// Remove the anchor block (including a blank line immediately after it); a
+/// corrupted block (begin without end / misplaced) is deleted from begin to EOF.
 pub fn remove_managed_block(config: &str) -> String {
     let Some(begin) = config.lines().position(|l| l.trim() == BLOCK_BEGIN) else {
         return config.to_string();
     };
-    // 完好块保留 end 之后内容；end 缺失或错位在 begin 前一律删到 EOF
+    // An intact block keeps content after end; a missing end or one misplaced
+    // before begin always deletes to EOF
     let end = config
         .lines()
         .position(|l| l.trim() == BLOCK_END)
@@ -186,7 +195,9 @@ pub fn remove_managed_block(config: &str) -> String {
     }
 }
 
-/// 原子写 config：tmp + rename，保留原权限；无原文件时 0600（私网凭据配置）。
+/// Write the config atomically: tmp + rename, preserving the original
+/// permissions; 0600 when there is no original file (private-network credential
+/// config).
 pub fn write_config_atomic(path: &Path, content: &str) -> std::io::Result<()> {
     use std::io::Write;
 

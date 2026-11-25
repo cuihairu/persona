@@ -59,7 +59,7 @@ export const credentialApi = {
   },
 
 
-  /** 结构化自定义字段（1Password 对齐）：per-item key 密封，读需解锁 */
+  /** Structured custom fields (1Password-aligned): sealed with the per-item key, reading requires an unlock */
   async getCredentialCustomFields(
     credentialId: string
   ): Promise<ApiResponse<CustomField[]>> {
@@ -67,7 +67,7 @@ export const credentialApi = {
   },
 
 
-  /** 整表替换（空表=移除）；新行 id 传空串由后端生成 */
+  /** Replaces the whole table (empty table = remove); pass an empty string for new rows' id and the backend generates it */
   async setCredentialCustomFields(
     credentialId: string,
     fields: CustomField[]
@@ -128,7 +128,7 @@ export const credentialApi = {
   },
 
 
-  /** 完整选项生成器（Generator 面板用；纯计算，无需解锁） */
+  /** Full-options generator (used by the Generator panel; pure computation, no unlock needed) */
   async generatePasswordAdvanced(options: {
     length: number;
     include_lowercase: boolean;
@@ -148,13 +148,13 @@ export const credentialApi = {
   },
 
 
-  /** 按需抓取凭据站点的 favicon（唯一外联入口；flag 关时后端兜底拒绝） */
+  /** Fetches a credential site's favicon on demand (the only outbound path; the backend refuses as a fallback when the flag is off) */
   async fetchCredentialFavicon(credentialId: string): Promise<ApiResponse<FaviconData>> {
     return invoke('fetch_credential_favicon', { credential_id: credentialId });
   },
 
 
-  /** 批量读已缓存 favicon（纯本地读；flag 关时后端静默回空数组） */
+  /** Bulk read of cached favicons (purely local; the backend silently returns an empty array when the flag is off) */
   async getFavicons(hosts: string[]): Promise<ApiResponse<FaviconData[]>> {
     return invoke('get_favicons', { hosts });
   },

@@ -310,7 +310,7 @@ const WalletPanel: React.FC = () => {
     }
   };
 
-  /** 卡片发送按钮：未选中先选中（触发地址加载做投毒检测），再开签名弹窗 */
+  /** Card send button: selects first if unselected (triggering address loading for poisoning detection), then opens the signing modal */
   const sendFromCard = (wallet: WalletSummary) => {
     if (selectedWallet?.id !== wallet.id) {
       setSelectedWallet(wallet);

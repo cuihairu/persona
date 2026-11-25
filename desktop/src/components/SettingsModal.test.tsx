@@ -26,7 +26,7 @@ jest.mock('@/utils/api', () => ({
     enterTravelMode: jest.fn(),
     exitTravelMode: jest.fn(),
     reauthVerify: jest.fn(),
-    // Connect 本机自动化区块（SecurityPane 后的 section）
+    // The Connect local-automation section (the section after SecurityPane)
     connectServerStatus: jest.fn(),
     connectServerStart: jest.fn(),
     connectServerStop: jest.fn(),
@@ -34,7 +34,7 @@ jest.mock('@/utils/api', () => ({
     connectTokenCreate: jest.fn(),
     connectTokenRevoke: jest.fn(),
     getIdentities: jest.fn(),
-    // E2EE sync 设备管理
+    // E2EE sync device management
     syncDeviceStatus: jest.fn(),
     syncJoin: jest.fn(),
     syncLeave: jest.fn(),
@@ -47,11 +47,11 @@ jest.mock('@/utils/api', () => ({
     syncRotate: jest.fn(),
     syncConflictsList: jest.fn(),
     syncConflictResolve: jest.fn(),
-    // SSH 走 persona agent（~/.ssh/config IdentityAgent 锚点块）
+    // SSH goes through the persona agent (the IdentityAgent anchor block in ~/.ssh/config)
     sshAgentIntegrationStatus: jest.fn(),
     sshAgentIntegrationEnable: jest.fn(),
     sshAgentIntegrationDisable: jest.fn(),
-    // 语言切换（GeneralPane 的 locale-select）与其后的托盘文案推送
+    // Locale switching (GeneralPane's locale-select) and the tray-copy push that follows
     setLocale: jest.fn(),
     setTrayLocale: jest.fn().mockResolvedValue({ success: true, data: true }),
   },
@@ -98,15 +98,15 @@ const inactiveTravel = {
   data: { active: false, entered_at: null, sidecar_exists: false, inconsistent: false },
 };
 
-/** 空设置响应（SyncServerPane 的初始加载） */
+/** Empty settings response (SyncServerPane's initial load) */
 const emptySettings = { success: true, data: null };
 
-/** General 默认可见；身份管理用例需先切到 Identities tab */
+/** General is visible by default; identity-management cases must first switch to the Identities tab */
 const openIdentitiesTab = () => {
   fireEvent.click(screen.getByRole('tab', { name: '身份' }));
 };
 
-/** 旅行口令弹窗输入辅助 */
+/** Helper for typing into the travel-passphrase modal */
 const typeTravel = (value: string) =>
   fireEvent.change(screen.getByTestId('travel-passphrase-input'), { target: { value } });
 const typeTravelConfirm = (value: string) =>
@@ -117,30 +117,30 @@ const typeTravelConfirm = (value: string) =>
 describe('components/SettingsModal', () => {
   beforeEach(() => {
     jest.clearAllMocks();
-    // theme 在 store 里跨用例存活，逐用例复位
+    // theme survives across cases in the store; reset it per case
     useAppStore.setState({ theme: 'system', featureFlags: { ...DEFAULT_FEATURE_FLAGS } });
     mockGetSettings.mockResolvedValue(emptySettings);
-    // 默认 keyring 无 token（placeholder = 'API token'）
+    // The keyring has no token by default (placeholder = 'API token')
     mockTokenPresent.mockResolvedValue({ success: true, data: false });
-    // 默认系统不可用 biometric（开关禁用 + 不可用提示）
+    // Biometrics are unavailable by default on this system (toggle disabled + unavailable hint)
     mockBiometricStatus.mockResolvedValue({
       success: true,
       data: { available: false, enabled: false, platform: 'linux-polkit' },
     });
-    // 默认旅行模式关闭
+    // Travel mode is off by default
     mockGetTravelStatus.mockResolvedValue(inactiveTravel);
-    // 默认 Connect listener 关闭、无 token、无身份
+    // The Connect listener is off by default, with no token and no identity
     mockConnectStatus.mockResolvedValue({ success: true, data: { running: false, port: null } });
     mockConnectList.mockResolvedValue({ success: true, data: [] });
     mockGetIdentities.mockResolvedValue({ success: true, data: [] });
-    // 默认未加入 E2EE sync（join 表单可见，不拉设备列表）
+    // Not joined to E2EE sync by default (the join form is visible and no device list is fetched)
     mockSyncStatus.mockResolvedValue({
       success: true,
       data: { joined: false, corrupted: false, device_id: null, device_name: null },
     });
-    // 默认水位查询无数据（行隐藏；用例按需覆盖成具体快照）
+    // The watermark query returns no data by default (row hidden; cases override it with a concrete snapshot)
     mockSyncStatusReport.mockResolvedValue({ success: true, data: null });
-    // 默认 SSH 集成区未启用（section 按 data 渲染常态徽标）
+    // The SSH integration section is not enabled by default (the section renders its steady-state badge from data)
     (personaAPI.sshAgentIntegrationStatus as jest.Mock).mockResolvedValue({
       success: true,
       data: {
@@ -201,13 +201,13 @@ describe('components/SettingsModal', () => {
       isLoading: false,
     });
 
-    // 挂载期四个 pane 异步首拉：async act 冲掉 resolved promise 的 setState，
-    // 否则落在 act 外刷 "not wrapped in act" 告警
+    // On mount the four panes start their first async fetch: async act flushes the setState of the already-resolved
+    // promises, otherwise the update lands outside act and logs a "not wrapped in act" warning
     await act(async () => {
       render(<SettingsModal isOpen={true} onClose={() => {}} />);
     });
 
-    // 默认 tab：General 四开关（出厂全关），身份区块不可见
+    // Default tab: the four General toggles (all off out of the box), identity section not visible
     expect(screen.getByRole('tab', { name: '通用' })).toHaveAttribute('aria-selected', 'true');
     expect(screen.getByRole('switch', { name: 'SSH Agent' })).toHaveAttribute(
       'aria-checked',
@@ -241,8 +241,8 @@ describe('components/SettingsModal', () => {
     });
     useAppStore.setState({ theme: 'dark' });
 
-    // 挂载期四个 pane 异步首拉：async act 冲掉 resolved promise 的 setState，
-    // 否则落在 act 外刷 "not wrapped in act" 告警
+    // On mount the four panes start their first async fetch: async act flushes the setState of the already-resolved
+    // promises, otherwise the update lands outside act and logs a "not wrapped in act" warning
     await act(async () => {
       render(<SettingsModal isOpen={true} onClose={() => {}} />);
     });
@@ -262,8 +262,8 @@ describe('components/SettingsModal', () => {
       isLoading: false,
     });
 
-    // 挂载期四个 pane 异步首拉：async act 冲掉 resolved promise 的 setState，
-    // 否则落在 act 外刷 "not wrapped in act" 告警
+    // On mount the four panes start their first async fetch: async act flushes the setState of the already-resolved
+    // promises, otherwise the update lands outside act and logs a "not wrapped in act" warning
     await act(async () => {
       render(<SettingsModal isOpen={true} onClose={() => {}} />);
     });
@@ -274,7 +274,7 @@ describe('components/SettingsModal', () => {
     fireEvent.click(screen.getByTestId('theme-option-light'));
     expect(useAppStore.getState().theme).toBe('light');
 
-    // Theme 与功能开关互不相干（组件只写 store，html class 由 App 层 useTheme 应用）
+    // Theme and the feature toggles are independent (the component only writes the store; the html class is applied by useTheme at the App layer)
     expect(mockSetFlags).not.toHaveBeenCalled();
   });
 
@@ -292,8 +292,8 @@ describe('components/SettingsModal', () => {
       render(<SettingsModal isOpen={true} onClose={() => {}} />);
     });
 
-    // 初始 zh-CN：选择 en 后，托盘文案必须是英文真值——
-    // 组件级 t 是 getFixedT 旧语言快照，这里若误用会推回中文标签
+    // Starts at zh-CN: after selecting en, the tray copy must be the real English values --
+    // the component-level t is a getFixedT snapshot of the old language, and misusing it here would push the Chinese labels back
     fireEvent.change(screen.getByTestId('locale-select'), { target: { value: 'en' } });
 
     await waitFor(() => {
@@ -308,7 +308,7 @@ describe('components/SettingsModal', () => {
     });
     expect(mockSetTrayLocale).toHaveBeenCalledTimes(1);
 
-    // 真实 i18n 单例跨用例共享：切回 zh-CN 复位（setupTests 基准语言）
+    // The real i18n singleton is shared across cases: switch back to zh-CN to reset (setupTests' base locale)
     await act(async () => {
       await i18n.changeLanguage('zh-CN');
     });
@@ -341,8 +341,8 @@ describe('components/SettingsModal', () => {
     });
   });
 
-  // 深审 Major 回归（2026-11-13）：语言切换写入串行化——第一笔在途时
-  // 第二笔必须排队，迟到失败只回滚自己，不得把后来的成功打回去。
+  // Deep-review Major regression (2026-11-13): locale-change writes are serialized -- while the first
+  // write is in flight the second must queue, and a late failure rolls back only itself, never the later success.
   it('serializes stacked locale switches so a late failure cannot roll back a newer one', async () => {
     (usePersonaService as jest.Mock).mockReturnValue({
       identities: [],
@@ -366,9 +366,9 @@ describe('components/SettingsModal', () => {
     });
 
     fireEvent.change(screen.getByTestId('locale-select'), { target: { value: 'en' } });
-    // 冲掉链首微任务：第一笔已发出（optimistic + IPC 调用，仍在途）
+    // Flush the head microtask of the chain: the first write has been issued (optimistic + IPC call, still in flight)
     await act(async () => {});
-    // 第一笔在途：第二笔必须排队，不得并发携带陈旧基线
+    // First write in flight: the second must queue and never run concurrently carrying a stale baseline
     fireEvent.change(screen.getByTestId('locale-select'), { target: { value: 'zh-CN' } });
     expect(mockSetLocale).toHaveBeenCalledTimes(1);
 
@@ -380,7 +380,7 @@ describe('components/SettingsModal', () => {
       expect(mockSetLocale).toHaveBeenCalledTimes(2);
     });
     expect(mockSetLocale).toHaveBeenLastCalledWith('zh-CN');
-    // 最终停在第二笔的目标语言；第一笔的迟到失败只 toast
+    // It finally rests at the second write's target locale; the first write's late failure only toasts
     expect(screen.getByTestId('locale-select')).toHaveValue('zh-CN');
     expect(toast.error).toHaveBeenCalledWith('first failed');
 
@@ -397,7 +397,7 @@ describe('components/SettingsModal', () => {
       deleteIdentity: jest.fn(),
       isLoading: false,
     });
-    // 服务端把三个位一起确认（比如另一处改动）：以返回值为准
+    // The server confirms all three bits together (e.g. because of a change elsewhere): the return value wins
     mockSetFlags.mockResolvedValueOnce({
       success: true,
       data: {
@@ -411,8 +411,8 @@ describe('components/SettingsModal', () => {
       },
     });
 
-    // 挂载期四个 pane 异步首拉：async act 冲掉 resolved promise 的 setState，
-    // 否则落在 act 外刷 "not wrapped in act" 告警
+    // On mount the four panes start their first async fetch: async act flushes the setState of the already-resolved
+    // promises, otherwise the update lands outside act and logs a "not wrapped in act" warning
     await act(async () => {
       render(<SettingsModal isOpen={true} onClose={() => {}} />);
     });
@@ -428,7 +428,7 @@ describe('components/SettingsModal', () => {
       });
     });
     await waitFor(() => {
-      // 服务端真相（全开）覆盖 optimistic 值
+      // Server truth (all on) overrides the optimistic value
       expect(useAppStore.getState().featureFlags).toEqual({
         ssh_agent: true,
         wallet: true,
@@ -453,8 +453,8 @@ describe('components/SettingsModal', () => {
     });
     mockSetFlags.mockRejectedValueOnce(new Error('ipc down'));
 
-    // 挂载期四个 pane 异步首拉：async act 冲掉 resolved promise 的 setState，
-    // 否则落在 act 外刷 "not wrapped in act" 告警
+    // On mount the four panes start their first async fetch: async act flushes the setState of the already-resolved
+    // promises, otherwise the update lands outside act and logs a "not wrapped in act" warning
     await act(async () => {
       render(<SettingsModal isOpen={true} onClose={() => {}} />);
     });
@@ -464,7 +464,7 @@ describe('components/SettingsModal', () => {
     await waitFor(() => {
       expect(toast.error).toHaveBeenCalledWith('ipc down');
     });
-    // 回滚到出厂全关
+    // Rolls back to the factory all-off state
     expect(useAppStore.getState().featureFlags).toEqual({
       ssh_agent: false,
       wallet: false,
@@ -477,8 +477,8 @@ describe('components/SettingsModal', () => {
     );
   });
 
-  // 深审 Major 回归（2026-11-13）：功能开关写入串行化——第一笔慢失败
-  // 不得回滚第二笔的成功；第二笔的基线是第一笔回滚后的最新真相。
+  // Deep-review Major regression (2026-11-13): feature-flag writes are serialized -- a slow first-write
+  // failure must not roll back the second write's success; the second write's baseline is the latest truth after the first rollback.
   it('serializes stacked feature toggles so a late failure cannot roll back a newer save', async () => {
     (usePersonaService as jest.Mock).mockReturnValue({
       identities: [],
@@ -507,9 +507,9 @@ describe('components/SettingsModal', () => {
     });
 
     fireEvent.click(screen.getByTestId('feature-toggle-ssh_agent'));
-    // 冲掉链首微任务：第一笔已发出（optimistic + IPC 调用，仍在途）
+    // Flush the head microtask of the chain: the first write has been issued (optimistic + IPC call, still in flight)
     await act(async () => {});
-    // 第一笔在途：第二笔必须排队
+    // First write in flight: the second must queue
     fireEvent.click(screen.getByTestId('feature-toggle-wallet'));
     expect(mockSetFlags).toHaveBeenCalledTimes(1);
 
@@ -517,7 +517,7 @@ describe('components/SettingsModal', () => {
       rejectFirst(new Error('first failed'));
     });
 
-    // 第二笔以回滚后的真相为基线：wallet 单独为 on
+    // The second write baselines on the post-rollback truth: wallet is on by itself
     await waitFor(() => {
       expect(mockSetFlags).toHaveBeenLastCalledWith({
         ssh_agent: false,
@@ -552,8 +552,8 @@ describe('components/SettingsModal', () => {
     });
     mockSetFlags.mockResolvedValueOnce({ success: false, error: 'Service is locked' });
 
-    // 挂载期四个 pane 异步首拉：async act 冲掉 resolved promise 的 setState，
-    // 否则落在 act 外刷 "not wrapped in act" 告警
+    // On mount the four panes start their first async fetch: async act flushes the setState of the already-resolved
+    // promises, otherwise the update lands outside act and logs a "not wrapped in act" warning
     await act(async () => {
       render(<SettingsModal isOpen={true} onClose={() => {}} />);
     });
@@ -575,8 +575,8 @@ describe('components/SettingsModal', () => {
       isLoading: false,
     });
 
-    // 挂载期四个 pane 异步首拉：async act 冲掉 resolved promise 的 setState，
-    // 否则落在 act 外刷 "not wrapped in act" 告警
+    // On mount the four panes start their first async fetch: async act flushes the setState of the already-resolved
+    // promises, otherwise the update lands outside act and logs a "not wrapped in act" warning
     await act(async () => {
       render(<SettingsModal isOpen={true} onClose={() => {}} />);
     });
@@ -607,8 +607,8 @@ describe('components/SettingsModal', () => {
       isLoading: false,
     });
 
-    // 挂载期四个 pane 异步首拉：async act 冲掉 resolved promise 的 setState，
-    // 否则落在 act 外刷 "not wrapped in act" 告警
+    // On mount the four panes start their first async fetch: async act flushes the setState of the already-resolved
+    // promises, otherwise the update lands outside act and logs a "not wrapped in act" warning
     await act(async () => {
       render(<SettingsModal isOpen={true} onClose={() => {}} />);
     });
@@ -648,8 +648,8 @@ describe('components/SettingsModal', () => {
 
     const confirmSpy = jest.spyOn(window, 'confirm').mockReturnValue(true);
 
-    // 挂载期四个 pane 异步首拉：async act 冲掉 resolved promise 的 setState，
-    // 否则落在 act 外刷 "not wrapped in act" 告警
+    // On mount the four panes start their first async fetch: async act flushes the setState of the already-resolved
+    // promises, otherwise the update lands outside act and logs a "not wrapped in act" warning
     await act(async () => {
       render(<SettingsModal isOpen={true} onClose={() => {}} />);
     });
@@ -663,7 +663,7 @@ describe('components/SettingsModal', () => {
   });
 
   // -------------------------------------------------------------------------
-  // 同步服务器区块
+  // Sync-server section
   // -------------------------------------------------------------------------
 
   const mockIdentityHook = () => {
@@ -678,8 +678,8 @@ describe('components/SettingsModal', () => {
 
   it('loads the saved sync config and keeps the stored token masked', async () => {
     mockIdentityHook();
-    // 后端 sync.server_token 恒回空串（真值在 OS keyring）；
-    // placeholder 由 sync_token_present 的存在性查询驱动
+    // The backend's sync.server_token always returns an empty string (the real value lives in the OS keyring);
+    // the placeholder is driven by the sync_token_present existence query
     mockGetSettings.mockResolvedValue({
       success: true,
       data: {
@@ -689,8 +689,8 @@ describe('components/SettingsModal', () => {
     });
     mockTokenPresent.mockResolvedValue({ success: true, data: true });
 
-    // 挂载期四个 pane 异步首拉：async act 冲掉 resolved promise 的 setState，
-    // 否则落在 act 外刷 "not wrapped in act" 告警
+    // On mount the four panes start their first async fetch: async act flushes the setState of the already-resolved
+    // promises, otherwise the update lands outside act and logs a "not wrapped in act" warning
     await act(async () => {
       render(<SettingsModal isOpen={true} onClose={() => {}} />);
     });
@@ -699,7 +699,7 @@ describe('components/SettingsModal', () => {
       expect(screen.getByTestId('sync-url-input')).toHaveValue('https://sync.example.com');
     });
     expect(screen.getByTestId('sync-toggle')).toHaveAttribute('aria-checked', 'true');
-    // token 永不回填输入框（避免令牌常驻前端内存）；placeholder 提示已有保存
+    // The token is never written back into the input (keeps it out of long-lived frontend memory); the placeholder signals one is stored
     const tokenInput = screen.getByTestId('sync-token-input') as HTMLInputElement;
     expect(tokenInput.type).toBe('password');
     expect(tokenInput.value).toBe('');
@@ -710,7 +710,7 @@ describe('components/SettingsModal', () => {
 
   it('saves sync config, adopts server truth and clears the token field', async () => {
     mockIdentityHook();
-    // 保存后 placeholder 重查 keyring 存在性（新 token 已入库）
+    // After saving the placeholder re-queries keyring existence (the new token is stored)
     mockTokenPresent.mockResolvedValue({ success: true, data: true });
     mockSetSync.mockResolvedValueOnce({
       success: true,
@@ -720,13 +720,13 @@ describe('components/SettingsModal', () => {
       },
     });
 
-    // 挂载期四个 pane 异步首拉：async act 冲掉 resolved promise 的 setState，
-    // 否则落在 act 外刷 "not wrapped in act" 告警
+    // On mount the four panes start their first async fetch: async act flushes the setState of the already-resolved
+    // promises, otherwise the update lands outside act and logs a "not wrapped in act" warning
     await act(async () => {
       render(<SettingsModal isOpen={true} onClose={() => {}} />);
     });
 
-    // 打开开关先弹数据范围披露：确认前表单不出现、不落盘
+    // Enabling the toggle first raises the data-scope disclosure: before confirmation the form never appears and nothing is persisted
     fireEvent.click(screen.getByTestId('sync-toggle'));
     expect(mockSetSync).not.toHaveBeenCalled();
     expect(screen.getByTestId('data-scope-modal')).toBeInTheDocument();
@@ -738,7 +738,7 @@ describe('components/SettingsModal', () => {
       target: { value: 'https://s.example.com' },
     });
     fireEvent.change(screen.getByTestId('sync-token-input'), { target: { value: 'fresh-tok' } });
-    // save() 异步链（IPC mock resolve → setState → placeholder 重查）整体在 act 内 flush
+    // The whole save() async chain (IPC mock resolve -> setState -> placeholder re-query) flushes inside act
     await act(async () => {
       fireEvent.click(screen.getByTestId('sync-save'));
     });
@@ -750,8 +750,8 @@ describe('components/SettingsModal', () => {
         server_token: 'fresh-tok',
       });
     });
-    // 服务端真相回填；token 输入框清空（空串 = 后端保留旧值）；
-    // placeholder 重查 keyring 存在性，全部微任务在 act 内 flush
+    // Server truth is written back; the token input clears (empty string = the backend keeps the old value);
+    // the placeholder re-queries keyring existence and every microtask flushes inside act
     await waitFor(() => {
       expect(toast.success).toHaveBeenCalledWith('同步设置已保存');
     });
@@ -766,8 +766,8 @@ describe('components/SettingsModal', () => {
   it('refuses to save an enabled config without a server url', async () => {
     mockIdentityHook();
 
-    // 挂载期四个 pane 异步首拉：async act 冲掉 resolved promise 的 setState，
-    // 否则落在 act 外刷 "not wrapped in act" 告警
+    // On mount the four panes start their first async fetch: async act flushes the setState of the already-resolved
+    // promises, otherwise the update lands outside act and logs a "not wrapped in act" warning
     await act(async () => {
       render(<SettingsModal isOpen={true} onClose={() => {}} />);
     });
@@ -798,8 +798,8 @@ describe('components/SettingsModal', () => {
       },
     });
 
-    // 挂载期四个 pane 异步首拉：async act 冲掉 resolved promise 的 setState，
-    // 否则落在 act 外刷 "not wrapped in act" 告警
+    // On mount the four panes start their first async fetch: async act flushes the setState of the already-resolved
+    // promises, otherwise the update lands outside act and logs a "not wrapped in act" warning
     await act(async () => {
       render(<SettingsModal isOpen={true} onClose={() => {}} />);
     });
@@ -807,7 +807,7 @@ describe('components/SettingsModal', () => {
       expect(screen.getByTestId('sync-toggle')).toHaveAttribute('aria-checked', 'true');
     });
 
-    // toggle-off 立即保存：save() 异步链在 act 内 flush（同上一用例）
+    // Toggle-off saves immediately: the save() async chain flushes inside act (as in the previous case)
     await act(async () => {
       fireEvent.click(screen.getByTestId('sync-toggle'));
     });
@@ -822,8 +822,8 @@ describe('components/SettingsModal', () => {
     });
   });
 
-  // 深审 Major 回归（2026-11-13）：关闭同步失败不得乐观翻转——状态只在
-  // 保存成功后由服务端真相回填，失败停在真实（开）状态。
+  // Deep-review Major regression (2026-11-13): a failed sync disable must not optimistically flip -- the state
+  // is written back from server truth only after a successful save; on failure it stays at the real (on) state.
   it('keeps the sync toggle on when switching off fails server-side', async () => {
     mockIdentityHook();
     mockGetSettings.mockResolvedValue({
@@ -857,8 +857,8 @@ describe('components/SettingsModal', () => {
   });
 
   // -------------------------------------------------------------------------
-  // 隐私红线（2026-10 定位升级令⑤）：同步默认关闭、显式开启、开启时明示
-  // 数据范围；取消披露 = 一律不放行（不落盘、不加入）
+  // Privacy red line (2026-10 scoping upgrade directive 5): sync is off by default, enabled explicitly, and the
+  // data scope is disclosed at enable time; dismissing the disclosure never lets it through (nothing persisted, no join)
   // -------------------------------------------------------------------------
 
   it('defaults sync off and gates enabling behind the data-scope disclosure', async () => {
@@ -868,22 +868,22 @@ describe('components/SettingsModal', () => {
       render(<SettingsModal isOpen={true} onClose={() => {}} />);
     });
 
-    // fresh workspace（无 sync 段）→ 开关默认关闭
+    // A fresh workspace (no sync section) -> the toggle defaults to off
     expect(screen.getByTestId('sync-toggle')).toHaveAttribute('aria-checked', 'false');
 
-    // 点开 = 先披露：不落盘、不展开配置表单
+    // Toggling on = disclosure first: nothing persisted and the config form stays collapsed
     fireEvent.click(screen.getByTestId('sync-toggle'));
     expect(screen.getByTestId('data-scope-modal')).toHaveAttribute('data-scope', 'audit');
     expect(screen.queryByTestId('sync-url-input')).not.toBeInTheDocument();
     expect(mockSetSync).not.toHaveBeenCalled();
 
-    // 取消 = 保持关闭
+    // Cancel = stays off
     fireEvent.click(screen.getByTestId('data-scope-cancel'));
     expect(screen.queryByTestId('data-scope-modal')).not.toBeInTheDocument();
     expect(screen.getByTestId('sync-toggle')).toHaveAttribute('aria-checked', 'false');
     expect(mockSetSync).not.toHaveBeenCalled();
 
-    // 再开 + 确认 = 展开表单（保存才落盘，确认本身不落盘）
+    // Toggle on again + confirm = expand the form (only saving persists; confirming alone persists nothing)
     fireEvent.click(screen.getByTestId('sync-toggle'));
     fireEvent.click(screen.getByTestId('data-scope-confirm'));
     expect(screen.queryByTestId('data-scope-modal')).not.toBeInTheDocument();
@@ -913,16 +913,16 @@ describe('components/SettingsModal', () => {
       fireEvent.click(screen.getByTestId('sync-join-button'));
     });
 
-    // 披露开着、后端没被调
+    // The disclosure is open and the backend was never called
     expect(screen.getByTestId('data-scope-modal')).toHaveAttribute('data-scope', 'e2ee');
     expect(mockSyncJoin).not.toHaveBeenCalled();
 
-    // 取消 = 不加入，披露关闭
+    // Cancel = no join and the disclosure closes
     fireEvent.click(screen.getByTestId('data-scope-cancel'));
     expect(screen.queryByTestId('data-scope-modal')).not.toBeInTheDocument();
     expect(mockSyncJoin).not.toHaveBeenCalled();
 
-    // 重开并确认 = 才真正调后端
+    // Only reopening and confirming actually calls the backend
     await act(async () => {
       fireEvent.click(screen.getByTestId('sync-join-button'));
     });
@@ -933,7 +933,7 @@ describe('components/SettingsModal', () => {
   });
 
   // -------------------------------------------------------------------------
-  // 密码安全区块（过期策略 + 手动改密）
+  // Password-security section (expiry policy + manual password change)
   // -------------------------------------------------------------------------
 
   it('renders the expiry selector with the persisted policy value', async () => {
@@ -947,8 +947,8 @@ describe('components/SettingsModal', () => {
       },
     });
 
-    // 挂载期四个 pane 异步首拉：async act 冲掉 resolved promise 的 setState，
-    // 否则落在 act 外刷 "not wrapped in act" 告警
+    // On mount the four panes start their first async fetch: async act flushes the setState of the already-resolved
+    // promises, otherwise the update lands outside act and logs a "not wrapped in act" warning
     await act(async () => {
       render(<SettingsModal isOpen={true} onClose={() => {}} />);
     });
@@ -970,12 +970,12 @@ describe('components/SettingsModal', () => {
       },
     });
 
-    // 挂载期四个 pane 异步首拉：async act 冲掉 resolved promise 的 setState，
-    // 否则落在 act 外刷 "not wrapped in act" 告警
+    // On mount the four panes start their first async fetch: async act flushes the setState of the already-resolved
+    // promises, otherwise the update lands outside act and logs a "not wrapped in act" warning
     await act(async () => {
       render(<SettingsModal isOpen={true} onClose={() => {}} />);
     });
-    // 服务端真相未回填前默认 Never（旧 JSON 缺键同型）
+    // Defaults to Never until server truth is written back (the same shape when an older JSON omits the key)
     await waitFor(() => {
       expect(screen.getByTestId('password-expiry-select')).toHaveValue('');
     });
@@ -987,7 +987,7 @@ describe('components/SettingsModal', () => {
     await waitFor(() => {
       expect(mockSetExpiry).toHaveBeenCalledWith(180);
     });
-    // 以服务端返回为准回填
+    // Fills back using the server's return value as the authority
     await waitFor(() => {
       expect(screen.getByTestId('password-expiry-select')).toHaveValue('180');
     });
@@ -1013,8 +1013,8 @@ describe('components/SettingsModal', () => {
       },
     });
 
-    // 挂载期四个 pane 异步首拉：async act 冲掉 resolved promise 的 setState，
-    // 否则落在 act 外刷 "not wrapped in act" 告警
+    // On mount the four panes start their first async fetch: async act flushes the setState of the already-resolved
+    // promises, otherwise the update lands outside act and logs a "not wrapped in act" warning
     await act(async () => {
       render(<SettingsModal isOpen={true} onClose={() => {}} />);
     });
@@ -1044,8 +1044,8 @@ describe('components/SettingsModal', () => {
     });
     mockSetExpiry.mockResolvedValueOnce({ success: false, error: 'Service is locked' });
 
-    // 挂载期四个 pane 异步首拉：async act 冲掉 resolved promise 的 setState，
-    // 否则落在 act 外刷 "not wrapped in act" 告警
+    // On mount the four panes start their first async fetch: async act flushes the setState of the already-resolved
+    // promises, otherwise the update lands outside act and logs a "not wrapped in act" warning
     await act(async () => {
       render(<SettingsModal isOpen={true} onClose={() => {}} />);
     });
@@ -1079,13 +1079,13 @@ describe('components/SettingsModal', () => {
     });
     mockChangePw.mockResolvedValue({ success: true, data: true });
 
-    // 挂载期四个 pane 异步首拉：async act 冲掉 resolved promise 的 setState，
-    // 否则落在 act 外刷 "not wrapped in act" 告警
+    // On mount the four panes start their first async fetch: async act flushes the setState of the already-resolved
+    // promises, otherwise the update lands outside act and logs a "not wrapped in act" warning
     await act(async () => {
       render(<SettingsModal isOpen={true} onClose={() => {}} />);
     });
 
-    // 手动改密走非 forced 弹窗：可取消，旧密码不预填
+    // The manual password change uses the non-forced modal: cancellable, and the old password is not prefilled
     fireEvent.click(screen.getByTestId('change-password-button'));
     expect(screen.getByTestId('change-password-modal')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '取消' })).toBeInTheDocument();
@@ -1104,7 +1104,7 @@ describe('components/SettingsModal', () => {
     await waitFor(() => {
       expect(mockChangePw).toHaveBeenCalledWith('old-pw', 'new-pw', undefined);
     });
-    // 改密成功 → 回锁屏（state.service 旧会话密钥已作废）
+    // A successful password change -> back to the lock screen (the old session key in state.service is already invalidated)
     await waitFor(() => {
       expect(lockService).toHaveBeenCalledTimes(1);
     });
@@ -1113,14 +1113,14 @@ describe('components/SettingsModal', () => {
   });
 
   // -------------------------------------------------------------------------
-  // biometric 解锁区块（开 = ReauthModal 验密；关 = 直接禁用）
+  // Biometric unlock section (on = ReauthModal verifies the password; off = disables directly)
   // -------------------------------------------------------------------------
 
   it('disables the biometric switch with an unavailable hint when the OS lacks support', async () => {
     mockIdentityHook();
 
-    // 挂载期四个 pane 异步首拉：async act 冲掉 resolved promise 的 setState，
-    // 否则落在 act 外刷 "not wrapped in act" 告警
+    // On mount the four panes start their first async fetch: async act flushes the setState of the already-resolved
+    // promises, otherwise the update lands outside act and logs a "not wrapped in act" warning
     await act(async () => {
       render(<SettingsModal isOpen={true} onClose={() => {}} />);
     });
@@ -1128,7 +1128,7 @@ describe('components/SettingsModal', () => {
     const toggle = await screen.findByTestId('biometric-toggle');
     expect(toggle).toBeDisabled();
     expect(toggle).toHaveAttribute('aria-checked', 'false');
-    // status 回填后切换到不可用提示（加载中显示的是普通 hint）
+    // After the status is written back it switches to the unavailable hint (while loading it shows the plain hint)
     await waitFor(() => {
       expect(toggle.closest('div')).toHaveTextContent('当前系统不支持或未配置生物识别');
     });
@@ -1145,8 +1145,8 @@ describe('components/SettingsModal', () => {
       data: { available: true, enabled: true, platform: 'linux-polkit' },
     });
 
-    // 挂载期四个 pane 异步首拉：async act 冲掉 resolved promise 的 setState，
-    // 否则落在 act 外刷 "not wrapped in act" 告警
+    // On mount the four panes start their first async fetch: async act flushes the setState of the already-resolved
+    // promises, otherwise the update lands outside act and logs a "not wrapped in act" warning
     await act(async () => {
       render(<SettingsModal isOpen={true} onClose={() => {}} />);
     });
@@ -1155,7 +1155,7 @@ describe('components/SettingsModal', () => {
     await waitFor(() => expect(toggle).toBeEnabled());
     fireEvent.click(toggle);
 
-    // 开启先验主密码（ReauthModal），不直接调 enable
+    // Enabling first verifies the master password (ReauthModal); it does not call enable directly
     const modal = screen.getByTestId('reauth-modal');
     expect(mockBiometricEnable).not.toHaveBeenCalled();
     fireEvent.change(modal.querySelector('input') as HTMLInputElement, {
@@ -1186,8 +1186,8 @@ describe('components/SettingsModal', () => {
       error: 'Invalid master password',
     });
 
-    // 挂载期四个 pane 异步首拉：async act 冲掉 resolved promise 的 setState，
-    // 否则落在 act 外刷 "not wrapped in act" 告警
+    // On mount the four panes start their first async fetch: async act flushes the setState of the already-resolved
+    // promises, otherwise the update lands outside act and logs a "not wrapped in act" warning
     await act(async () => {
       render(<SettingsModal isOpen={true} onClose={() => {}} />);
     });
@@ -1204,7 +1204,7 @@ describe('components/SettingsModal', () => {
       fireEvent.click(screen.getByRole('button', { name: '确认' }));
     });
 
-    // 密码不对：错误留在弹窗内原地重试，开关不翻
+    // Wrong password: the error stays inside the modal for an in-place retry and the toggle does not flip
     await waitFor(() => {
       expect(screen.getByTestId('reauth-error')).toHaveTextContent('Invalid master password');
     });
@@ -1222,8 +1222,8 @@ describe('components/SettingsModal', () => {
       data: { available: true, enabled: true, platform: 'touch-id', wrap_tier: 'hardware-bound' },
     });
 
-    // 挂载期四个 pane 异步首拉：async act 冲掉 resolved promise 的 setState，
-    // 否则落在 act 外刷 "not wrapped in act" 告警
+    // On mount the four panes start their first async fetch: async act flushes the setState of the already-resolved
+    // promises, otherwise the update lands outside act and logs a "not wrapped in act" warning
     await act(async () => {
       render(<SettingsModal isOpen={true} onClose={() => {}} />);
     });
@@ -1240,7 +1240,7 @@ describe('components/SettingsModal', () => {
       fireEvent.click(screen.getByRole('button', { name: '确认' }));
     });
 
-    // 启用后显示硬件绑定档位行（密钥被硬件包裹，非密码托管）
+    // Once enabled it shows the hardware-bound tier row (the key is wrapped by hardware, not password-escrowed)
     await waitFor(() => {
       expect(screen.getByTestId('biometric-tier')).toHaveTextContent('硬件绑定');
     });
@@ -1253,8 +1253,8 @@ describe('components/SettingsModal', () => {
       data: { available: true, enabled: true, platform: 'linux-polkit', wrap_tier: 'os-gate' },
     });
 
-    // 挂载期四个 pane 异步首拉：async act 冲掉 resolved promise 的 setState，
-    // 否则落在 act 外刷 "not wrapped in act" 告警
+    // On mount the four panes start their first async fetch: async act flushes the setState of the already-resolved
+    // promises, otherwise the update lands outside act and logs a "not wrapped in act" warning
     await act(async () => {
       render(<SettingsModal isOpen={true} onClose={() => {}} />);
     });
@@ -1275,15 +1275,15 @@ describe('components/SettingsModal', () => {
       data: { available: true, enabled: false, platform: 'linux-polkit' },
     });
 
-    // 挂载期四个 pane 异步首拉：async act 冲掉 resolved promise 的 setState，
-    // 否则落在 act 外刷 "not wrapped in act" 告警
+    // On mount the four panes start their first async fetch: async act flushes the setState of the already-resolved
+    // promises, otherwise the update lands outside act and logs a "not wrapped in act" warning
     await act(async () => {
       render(<SettingsModal isOpen={true} onClose={() => {}} />);
     });
 
     const toggle = await screen.findByTestId('biometric-toggle');
     await waitFor(() => expect(toggle).toHaveAttribute('aria-checked', 'true'));
-    // 收紧操作不设密码门禁：一键直删 keyring 条目
+    // The tightening operation has no password gate: one click deletes the keyring entry outright
     await act(async () => {
       fireEvent.click(toggle);
     });
@@ -1299,10 +1299,10 @@ describe('components/SettingsModal', () => {
   });
 
   // -------------------------------------------------------------------------
-  // 旅行模式区块（SecurityPane 状态行 + 口令弹窗 + REAUTH 重试）
+  // Travel mode section (SecurityPane status row + passphrase modal + REAUTH retry)
   // -------------------------------------------------------------------------
 
-  /** travel 用例的 hook mock：带 loadIdentities（enter/exit 成功后重载列表） */
+  /** Hook mock for the travel cases: carries loadIdentities (reloads the list after a successful enter/exit) */
   const travelHook = () => {
     const loadIdentities = jest.fn().mockResolvedValue(undefined);
     (usePersonaService as jest.Mock).mockReturnValue({
@@ -1320,8 +1320,8 @@ describe('components/SettingsModal', () => {
   it('renders the travel enter button while inactive and exit while active', async () => {
     travelHook();
 
-    // 挂载期四个 pane 异步首拉：async act 冲掉 resolved promise 的 setState，
-    // 否则落在 act 外刷 "not wrapped in act" 告警
+    // On mount the four panes start their first async fetch: async act flushes the setState of the already-resolved
+    // promises, otherwise the update lands outside act and logs a "not wrapped in act" warning
     await act(async () => {
       render(<SettingsModal isOpen={true} onClose={() => {}} />);
     });
@@ -1330,7 +1330,7 @@ describe('components/SettingsModal', () => {
     });
     expect(screen.queryByTestId('travel-exit-button')).not.toBeInTheDocument();
 
-    // 活动态换显 exit 按钮
+    // In the active state it shows the exit button instead
     mockGetTravelStatus.mockResolvedValue({
       success: true,
       data: {
@@ -1341,8 +1341,8 @@ describe('components/SettingsModal', () => {
       },
     });
     await act(async () => {});
-    // 挂载期四个 pane 异步首拉：async act 冲掉 resolved promise 的 setState，
-    // 否则落在 act 外刷 "not wrapped in act" 告警
+    // On mount the four panes start their first async fetch: async act flushes the setState of the already-resolved
+    // promises, otherwise the update lands outside act and logs a "not wrapped in act" warning
     await act(async () => {
       render(<SettingsModal isOpen={true} onClose={() => {}} />);
     });
@@ -1358,8 +1358,8 @@ describe('components/SettingsModal', () => {
       data: { active: true, entered_at: null, sidecar_exists: false, inconsistent: true },
     });
 
-    // 挂载期四个 pane 异步首拉：async act 冲掉 resolved promise 的 setState，
-    // 否则落在 act 外刷 "not wrapped in act" 告警
+    // On mount the four panes start their first async fetch: async act flushes the setState of the already-resolved
+    // promises, otherwise the update lands outside act and logs a "not wrapped in act" warning
     await act(async () => {
       render(<SettingsModal isOpen={true} onClose={() => {}} />);
     });
@@ -1376,8 +1376,8 @@ describe('components/SettingsModal', () => {
       data: { identities: 2, credentials: 5, attachments: 0, passkeys: 0, wallets: 0, history_rows: 0, files: 0 },
     });
 
-    // 挂载期四个 pane 异步首拉：async act 冲掉 resolved promise 的 setState，
-    // 否则落在 act 外刷 "not wrapped in act" 告警
+    // On mount the four panes start their first async fetch: async act flushes the setState of the already-resolved
+    // promises, otherwise the update lands outside act and logs a "not wrapped in act" warning
     await act(async () => {
       render(<SettingsModal isOpen={true} onClose={() => {}} />);
     });
@@ -1386,7 +1386,7 @@ describe('components/SettingsModal', () => {
     });
     fireEvent.click(screen.getByTestId('travel-enter-button'));
 
-    // 口令窗 mode=set：双录
+    // Passphrase modal mode=set: typed twice
     expect(screen.getByTestId('travel-passphrase-modal')).toBeInTheDocument();
     expect(mockEnterTravel).not.toHaveBeenCalled();
 
@@ -1422,8 +1422,8 @@ describe('components/SettingsModal', () => {
     });
     mockExitTravel.mockResolvedValueOnce({ success: false, error: 'passphrase is wrong' });
 
-    // 挂载期四个 pane 异步首拉：async act 冲掉 resolved promise 的 setState，
-    // 否则落在 act 外刷 "not wrapped in act" 告警
+    // On mount the four panes start their first async fetch: async act flushes the setState of the already-resolved
+    // promises, otherwise the update lands outside act and logs a "not wrapped in act" warning
     await act(async () => {
       render(<SettingsModal isOpen={true} onClose={() => {}} />);
     });
@@ -1432,7 +1432,7 @@ describe('components/SettingsModal', () => {
     });
     fireEvent.click(screen.getByTestId('travel-exit-button'));
 
-    // mode=enter：单录
+    // mode=enter: typed once
     expect(screen.queryByTestId('travel-passphrase-confirm-input')).not.toBeInTheDocument();
     typeTravel('wrong-pw');
     await act(async () => {
@@ -1449,7 +1449,7 @@ describe('components/SettingsModal', () => {
     });
     expect(screen.getByTestId('travel-passphrase-modal')).toBeInTheDocument();
 
-    // 改对口令原地重试成功
+    // Retrying in place with the corrected passphrase succeeds
     mockExitTravel.mockResolvedValueOnce({
       success: true,
       data: { identities: 1, credentials: 0, attachments: 0, passkeys: 0, wallets: 0, history_rows: 0, files: 0 },
@@ -1476,8 +1476,8 @@ describe('components/SettingsModal', () => {
       data: { identities: 1, credentials: 0, attachments: 0, passkeys: 0, wallets: 0, history_rows: 0, files: 0 },
     });
 
-    // 挂载期四个 pane 异步首拉：async act 冲掉 resolved promise 的 setState，
-    // 否则落在 act 外刷 "not wrapped in act" 告警
+    // On mount the four panes start their first async fetch: async act flushes the setState of the already-resolved
+    // promises, otherwise the update lands outside act and logs a "not wrapped in act" warning
     await act(async () => {
       render(<SettingsModal isOpen={true} onClose={() => {}} />);
     });
@@ -1491,7 +1491,7 @@ describe('components/SettingsModal', () => {
       fireEvent.click(screen.getByTestId('travel-passphrase-submit'));
     });
 
-    // 敏感操作门禁：口令窗收起、弹主密码重验
+    // Sensitive-operation gate: the passphrase modal collapses and the master-password re-verification is raised
     await waitFor(() => {
       expect(screen.getByTestId('reauth-modal')).toBeInTheDocument();
     });
@@ -1504,7 +1504,7 @@ describe('components/SettingsModal', () => {
       fireEvent.click(screen.getByRole('button', { name: '确认' }));
     });
 
-    // 验证通过 → 按原意图（enter）重开口令窗，travel 口令需重输
+    // Verification passes -> the passphrase modal reopens for the original intent (enter) and the travel passphrase must be re-entered
     await waitFor(() => {
       expect(mockReauthVerify).toHaveBeenCalledWith('master-pw');
     });
@@ -1516,7 +1516,7 @@ describe('components/SettingsModal', () => {
   });
 
   // -------------------------------------------------------------------------
-  // 身份编辑表单的 travel 标记开关（即时生效）
+  // The travel-marker toggle in the identity edit form (applies immediately)
   // -------------------------------------------------------------------------
 
   it('toggles the identity travel mark immediately and reloads', async () => {
@@ -1545,8 +1545,8 @@ describe('components/SettingsModal', () => {
     });
     mockSetTravelMarked.mockResolvedValue({ success: true, data: true });
 
-    // 挂载期四个 pane 异步首拉：async act 冲掉 resolved promise 的 setState，
-    // 否则落在 act 外刷 "not wrapped in act" 告警
+    // On mount the four panes start their first async fetch: async act flushes the setState of the already-resolved
+    // promises, otherwise the update lands outside act and logs a "not wrapped in act" warning
     await act(async () => {
       render(<SettingsModal isOpen={true} onClose={() => {}} />);
     });
@@ -1569,16 +1569,16 @@ describe('components/SettingsModal', () => {
   });
 
   // -------------------------------------------------------------------------
-  // E2EE sync 设备区块（SyncDevicesSection）
+  // E2EE sync device section (SyncDevicesSection)
   // -------------------------------------------------------------------------
 
-  /** joined 状态的默认响应（本机名为 laptop） */
+  /** Default response for the joined state (the local machine is named laptop) */
   const joinedStatus = {
     success: true,
     data: { joined: true, corrupted: false, device_id: 'dev-self', device_name: 'laptop' },
   };
 
-  /** 同步组两台设备：本机已授权 + phone 待授权 */
+  /** Two devices in the sync group: the local machine authorized + phone awaiting authorization */
   const twoDevices = {
     success: true,
     data: [
@@ -1589,8 +1589,8 @@ describe('components/SettingsModal', () => {
 
   it('shows the join form while not joined and skips the device list', async () => {
     mockIdentityHook();
-    // 挂载期四个 pane 异步首拉：async act 冲掉 resolved promise 的 setState，
-    // 否则落在 act 外刷 "not wrapped in act" 告警
+    // On mount the four panes start their first async fetch: async act flushes the setState of the already-resolved
+    // promises, otherwise the update lands outside act and logs a "not wrapped in act" warning
     await act(async () => {
       render(<SettingsModal isOpen={true} onClose={() => {}} />);
     });
@@ -1604,8 +1604,8 @@ describe('components/SettingsModal', () => {
 
   it('rejects an empty device name without touching the backend', async () => {
     mockIdentityHook();
-    // 挂载期四个 pane 异步首拉：async act 冲掉 resolved promise 的 setState，
-    // 否则落在 act 外刷 "not wrapped in act" 告警
+    // On mount the four panes start their first async fetch: async act flushes the setState of the already-resolved
+    // promises, otherwise the update lands outside act and logs a "not wrapped in act" warning
     await act(async () => {
       render(<SettingsModal isOpen={true} onClose={() => {}} />);
     });
@@ -1625,8 +1625,8 @@ describe('components/SettingsModal', () => {
       data: { device_id: 'dev-new', device_name: '我的笔记本', pending: true },
     });
 
-    // 挂载期四个 pane 异步首拉：async act 冲掉 resolved promise 的 setState，
-    // 否则落在 act 外刷 "not wrapped in act" 告警
+    // On mount the four panes start their first async fetch: async act flushes the setState of the already-resolved
+    // promises, otherwise the update lands outside act and logs a "not wrapped in act" warning
     await act(async () => {
       render(<SettingsModal isOpen={true} onClose={() => {}} />);
     });
@@ -1641,7 +1641,7 @@ describe('components/SettingsModal', () => {
       fireEvent.click(screen.getByTestId('sync-join-button'));
     });
 
-    // 加入前先弹 E2EE 数据范围披露，确认才调后端
+    // Before joining it first raises the E2EE data-scope disclosure; only confirmation calls the backend
     expect(screen.getByTestId('data-scope-modal')).toHaveAttribute('data-scope', 'e2ee');
     expect(mockSyncJoin).not.toHaveBeenCalled();
     await act(async () => {
@@ -1659,8 +1659,8 @@ describe('components/SettingsModal', () => {
     mockSyncStatus.mockResolvedValue(joinedStatus);
     mockSyncList.mockResolvedValue(twoDevices);
 
-    // 挂载期四个 pane 异步首拉：async act 冲掉 resolved promise 的 setState，
-    // 否则落在 act 外刷 "not wrapped in act" 告警
+    // On mount the four panes start their first async fetch: async act flushes the setState of the already-resolved
+    // promises, otherwise the update lands outside act and logs a "not wrapped in act" warning
     await act(async () => {
       render(<SettingsModal isOpen={true} onClose={() => {}} />);
     });
@@ -1669,20 +1669,20 @@ describe('components/SettingsModal', () => {
       expect(screen.getByTestId('sync-devices-joined')).toBeInTheDocument();
     });
     expect(screen.getByText('已加入：laptop')).toBeInTheDocument();
-    // 设备列表在 status.joined 触发的二次 effect 里异步拉取
+    // The device list is fetched asynchronously in the follow-up effect triggered by status.joined
     await waitFor(() => {
       expect(screen.getByTestId('sync-device-this-badge')).toBeInTheDocument();
     });
     expect(screen.getByTestId('sync-device-pending-badge')).toBeInTheDocument();
     expect(mockSyncList).toHaveBeenCalled();
 
-    // 本机行无授权/吊销按钮；待授权的 phone 行有授权按钮
+    // The local row has no authorize/revoke buttons; the phone row awaiting authorization has an authorize button
     expect(screen.getByTestId('sync-authorize-dev-phone')).toBeInTheDocument();
     expect(screen.getByTestId('sync-revoke-dev-phone')).toBeInTheDocument();
     expect(screen.queryByTestId('sync-authorize-dev-self')).not.toBeInTheDocument();
     expect(screen.queryByTestId('sync-revoke-dev-self')).not.toBeInTheDocument();
 
-    // leave 入口
+    // The leave entry
     expect(screen.getByTestId('sync-leave-button')).toBeInTheDocument();
   });
 
@@ -1699,7 +1699,7 @@ describe('components/SettingsModal', () => {
       expect(screen.getByTestId('sync-remark-edit')).toBeInTheDocument();
     });
 
-    // 空备注显示占位文案；他人设备只读（S4：备注只许本人写）
+    // An empty note shows placeholder copy; other people's devices are read-only (S4: only the owner may write a note)
     expect(screen.getByText('暂无备注')).toBeInTheDocument();
     expect(screen.getByText('备用机')).toBeInTheDocument();
     expect(screen.getAllByTestId('sync-remark-edit')).toHaveLength(1);
@@ -1713,7 +1713,7 @@ describe('components/SettingsModal', () => {
     });
 
     expect(mockSyncSetRemark).toHaveBeenCalledWith('  书房的主力机  ');
-    // 行内回填服务端规整值（trim 后），编辑态退出
+    // The server's normalized value (post-trim) is written back inline and the edit state exits
     await waitFor(() => {
       expect(screen.getByText('书房的主力机')).toBeInTheDocument();
     });
@@ -1742,7 +1742,7 @@ describe('components/SettingsModal', () => {
       fireEvent.click(screen.getByTestId('sync-remark-save'));
     });
     expect(toast.error).toHaveBeenCalledWith('remark too long');
-    // 失败不退出编辑态，可改后重试或 Escape 放弃
+    // A failure does not exit the edit state; fix and retry, or abandon with Escape
     expect(screen.getByTestId('sync-remark-input')).toBeInTheDocument();
     fireEvent.keyDown(screen.getByTestId('sync-remark-input'), { key: 'Escape' });
     expect(screen.queryByTestId('sync-remark-input')).not.toBeInTheDocument();
@@ -1753,7 +1753,7 @@ describe('components/SettingsModal', () => {
     mockSyncStatus.mockResolvedValue(joinedStatus);
     mockSyncList.mockResolvedValue(twoDevices);
 
-    // 已最新：组版本号 + 绿色结论 + 最近同步时间
+    // Up to date: group version + green verdict + last sync time
     mockSyncStatusReport.mockResolvedValue({
       success: true,
       data: {
@@ -1775,7 +1775,7 @@ describe('components/SettingsModal', () => {
     expect(screen.queryByTestId('sync-status-behind')).not.toBeInTheDocument();
     expect(screen.getByTestId('sync-status-last-sync')).toHaveTextContent('最近同步');
 
-    // 落后 5 条：黄条取代绿色结论（重挂载取新快照）
+    // Five behind: the yellow bar replaces the green verdict (a fresh snapshot on remount)
     cleanup();
     mockSyncStatusReport.mockResolvedValue({
       success: true,
@@ -1796,7 +1796,7 @@ describe('components/SettingsModal', () => {
     mockIdentityHook();
     mockSyncStatus.mockResolvedValue(joinedStatus);
     mockSyncList.mockResolvedValue(twoDevices);
-    // 服务器不可达：查询失败必须保持行隐藏（不谎报「已最新」）
+    // Server unreachable: a query failure must keep the row hidden (no lying "up to date")
     mockSyncStatusReport.mockResolvedValue({ success: false, data: null });
 
     await act(async () => {
@@ -1805,7 +1805,7 @@ describe('components/SettingsModal', () => {
     await waitFor(() => {
       expect(screen.getByTestId('sync-devices-joined')).toBeInTheDocument();
     });
-    await act(async () => {}); // 冲掉水位 effect 的 rejected promise
+    await act(async () => {}); // flush the watermark effect's rejected promise
     expect(screen.queryByTestId('sync-status-row')).not.toBeInTheDocument();
   });
 
@@ -1816,8 +1816,8 @@ describe('components/SettingsModal', () => {
     mockSyncList.mockResolvedValue(twoDevices);
     mockSyncRevoke.mockResolvedValue({ success: true, data: true });
 
-    // 挂载期四个 pane 异步首拉：async act 冲掉 resolved promise 的 setState，
-    // 否则落在 act 外刷 "not wrapped in act" 告警
+    // On mount the four panes start their first async fetch: async act flushes the setState of the already-resolved
+    // promises, otherwise the update lands outside act and logs a "not wrapped in act" warning
     await act(async () => {
       render(<SettingsModal isOpen={true} onClose={() => {}} />);
     });
@@ -1843,8 +1843,8 @@ describe('components/SettingsModal', () => {
     mockSyncStatus.mockResolvedValue(joinedStatus);
     mockSyncList.mockResolvedValue(twoDevices);
 
-    // 挂载期四个 pane 异步首拉：async act 冲掉 resolved promise 的 setState，
-    // 否则落在 act 外刷 "not wrapped in act" 告警
+    // On mount the four panes start their first async fetch: async act flushes the setState of the already-resolved
+    // promises, otherwise the update lands outside act and logs a "not wrapped in act" warning
     await act(async () => {
       render(<SettingsModal isOpen={true} onClose={() => {}} />);
     });
@@ -1860,8 +1860,8 @@ describe('components/SettingsModal', () => {
     confirmSpy.mockRestore();
   });
 
-  // 轮换入口（阶段 3d）：确认后调 sync_rotate 并汇报计数；取消不调用。
-  // 完整轮换语义在 core runtime + server 真 TCP 测试覆盖。
+  // Rotation entry (phase 3d): after confirmation it calls sync_rotate and reports the count; cancelling never calls it.
+  // The full rotation semantics are covered by the core runtime plus the real-TCP server tests.
   it('rotates the group key after confirm and reports the counts', async () => {
     const confirmSpy = jest.spyOn(window, 'confirm').mockReturnValue(true);
     mockIdentityHook();
@@ -1872,8 +1872,8 @@ describe('components/SettingsModal', () => {
       data: { rewrapped: 2, skipped: 0, pushed: 4 },
     });
 
-    // 挂载期四个 pane 异步首拉：async act 冲掉 resolved promise 的 setState，
-    // 否则落在 act 外刷 "not wrapped in act" 告警
+    // On mount the four panes start their first async fetch: async act flushes the setState of the already-resolved
+    // promises, otherwise the update lands outside act and logs a "not wrapped in act" warning
     await act(async () => {
       render(<SettingsModal isOpen={true} onClose={() => {}} />);
     });
@@ -1899,8 +1899,8 @@ describe('components/SettingsModal', () => {
     mockSyncStatus.mockResolvedValue(joinedStatus);
     mockSyncList.mockResolvedValue(twoDevices);
 
-    // 挂载期四个 pane 异步首拉：async act 冲掉 resolved promise 的 setState，
-    // 否则落在 act 外刷 "not wrapped in act" 告警
+    // On mount the four panes start their first async fetch: async act flushes the setState of the already-resolved
+    // promises, otherwise the update lands outside act and logs a "not wrapped in act" warning
     await act(async () => {
       render(<SettingsModal isOpen={true} onClose={() => {}} />);
     });
@@ -1916,8 +1916,8 @@ describe('components/SettingsModal', () => {
     confirmSpy.mockRestore();
   });
 
-  // 并发轮换互斥（epoch 乐观锁）：后到者拿 CONCURRENT_CONFLICT 码，
-  // 显示针对性重试提示而非笼统「轮换失败」。
+  // Concurrent rotation mutual exclusion (epoch optimistic lock): the later arrival gets the CONCURRENT_CONFLICT code
+  // and a targeted retry hint rather than a generic "rotation failed".
   it('shows a retry hint when rotation hits a concurrent conflict', async () => {
     const confirmSpy = jest.spyOn(window, 'confirm').mockReturnValue(true);
     mockIdentityHook();
@@ -1929,8 +1929,8 @@ describe('components/SettingsModal', () => {
       error_code: 'CONCURRENT_CONFLICT',
     });
 
-    // 挂载期四个 pane 异步首拉：async act 冲掉 resolved promise 的 setState，
-    // 否则落在 act 外刷 "not wrapped in act" 告警
+    // On mount the four panes start their first async fetch: async act flushes the setState of the already-resolved
+    // promises, otherwise the update lands outside act and logs a "not wrapped in act" warning
     await act(async () => {
       render(<SettingsModal isOpen={true} onClose={() => {}} />);
     });
@@ -1957,8 +1957,8 @@ describe('components/SettingsModal', () => {
     mockSyncList.mockResolvedValue(twoDevices);
     mockSyncAuthorize.mockResolvedValue({ success: true, data: true });
 
-    // 挂载期四个 pane 异步首拉：async act 冲掉 resolved promise 的 setState，
-    // 否则落在 act 外刷 "not wrapped in act" 告警
+    // On mount the four panes start their first async fetch: async act flushes the setState of the already-resolved
+    // promises, otherwise the update lands outside act and logs a "not wrapped in act" warning
     await act(async () => {
       render(<SettingsModal isOpen={true} onClose={() => {}} />);
     });
@@ -1983,8 +1983,8 @@ describe('components/SettingsModal', () => {
       data: { joined: false, corrupted: true, device_id: null, device_name: null },
     });
 
-    // 挂载期四个 pane 异步首拉：async act 冲掉 resolved promise 的 setState，
-    // 否则落在 act 外刷 "not wrapped in act" 告警
+    // On mount the four panes start their first async fetch: async act flushes the setState of the already-resolved
+    // promises, otherwise the update lands outside act and logs a "not wrapped in act" warning
     await act(async () => {
       render(<SettingsModal isOpen={true} onClose={() => {}} />);
     });
@@ -1992,17 +1992,17 @@ describe('components/SettingsModal', () => {
     await waitFor(() => {
       expect(screen.getByTestId('sync-devices-corrupted')).toBeInTheDocument();
     });
-    // 损坏状态仍可重新 join（leave 清残留后再加入的路径）
+    // A corrupted state can still re-join (the leave-clears-residue-then-join path)
     expect(screen.getByTestId('sync-join-button')).toBeInTheDocument();
   });
 
   // -------------------------------------------------------------------------
-  // 冲突裁决入口（阶段 3c：syncNow → conflicts>0 → banner + 裁决弹窗）
+  // Conflict arbitration entry (phase 3c: syncNow -> conflicts>0 -> banner + arbitration modal)
   // -------------------------------------------------------------------------
 
-  /** 冲突裁决弹窗的数据面由 SyncConflictsModal.test.tsx 全覆盖；这里只验
-   *  SettingsModal 侧的接线：syncNow 报告 conflicts>0 时亮 banner 并自动
-   *  开窗，conflicts=0 时不出入口。 */
+  /** SyncConflictsModal.test.tsx fully covers the arbitration modal's data surface; this only verifies
+   *  the SettingsModal-side wiring: when syncNow reports conflicts>0 the banner lights up and the modal
+   *  opens automatically; no entry appears at conflicts=0. */
   const conflictedList = {
     success: true,
     data: [
@@ -2053,8 +2053,8 @@ describe('components/SettingsModal', () => {
     });
     mockSyncConflictsList.mockResolvedValue(conflictedList);
 
-    // 挂载期四个 pane 异步首拉：async act 冲掉 resolved promise 的 setState，
-    // 否则落在 act 外刷 "not wrapped in act" 告警
+    // On mount the four panes start their first async fetch: async act flushes the setState of the already-resolved
+    // promises, otherwise the update lands outside act and logs a "not wrapped in act" warning
     await act(async () => {
       render(<SettingsModal isOpen={true} onClose={() => {}} />);
     });
@@ -2069,7 +2069,7 @@ describe('components/SettingsModal', () => {
     await waitFor(() => {
       expect(mockSyncNow).toHaveBeenCalled();
     });
-    // conflicts>0：banner 亮起 + 裁决弹窗自动打开
+    // conflicts>0: the banner lights up and the arbitration modal opens automatically
     await waitFor(() => {
       expect(screen.getByTestId('sync-conflicts-banner')).toBeInTheDocument();
     });
@@ -2090,8 +2090,8 @@ describe('components/SettingsModal', () => {
       data: { pulled: 1, materialized: 1, conflicts: 0, pending_identity: 0, pushed: 0, backfilled: 0 },
     });
 
-    // 挂载期四个 pane 异步首拉：async act 冲掉 resolved promise 的 setState，
-    // 否则落在 act 外刷 "not wrapped in act" 告警
+    // On mount the four panes start their first async fetch: async act flushes the setState of the already-resolved
+    // promises, otherwise the update lands outside act and logs a "not wrapped in act" warning
     await act(async () => {
       render(<SettingsModal isOpen={true} onClose={() => {}} />);
     });
@@ -2119,8 +2119,8 @@ describe('components/SettingsModal', () => {
     mockSyncList.mockResolvedValue(twoDevices);
     mockSyncLeave.mockResolvedValue({ success: true, data: true });
 
-    // 挂载期四个 pane 异步首拉：async act 冲掉 resolved promise 的 setState，
-    // 否则落在 act 外刷 "not wrapped in act" 告警
+    // On mount the four panes start their first async fetch: async act flushes the setState of the already-resolved
+    // promises, otherwise the update lands outside act and logs a "not wrapped in act" warning
     await act(async () => {
       render(<SettingsModal isOpen={true} onClose={() => {}} />);
     });
@@ -2136,7 +2136,7 @@ describe('components/SettingsModal', () => {
       expect(mockSyncLeave).toHaveBeenCalled();
     });
     expect(toast.success).toHaveBeenCalledWith('已离开同步');
-    // 状态切回 join 表单
+    // The state switches back to the join form
     await waitFor(() => {
       expect(screen.getByTestId('sync-join-button')).toBeInTheDocument();
     });
@@ -2144,11 +2144,11 @@ describe('components/SettingsModal', () => {
   });
 
   // -------------------------------------------------------------------------
-  // 失败/异常分支补齐：每个异步动作的 catch 与失败响应都必须给用户反馈，
-  // 不能静默吞掉错误，也不能让界面停留在"假成功"态。
+  // Failure and exception branch coverage: every async action's catch and failure response must give the user
+  // feedback -- errors must not be swallowed silently, and the UI must not be left in a false-success state.
   // -------------------------------------------------------------------------
 
-  /** 打开同步配置表单（开关 → 数据范围披露 → 确认），返回 token 输入框 */
+  /** Opens the sync config form (toggle -> data-scope disclosure -> confirm) and returns the token input */
   const openSyncConfigForm = async () => {
     fireEvent.click(screen.getByTestId('sync-toggle'));
     fireEvent.click(screen.getByTestId('data-scope-confirm'));
@@ -2170,7 +2170,7 @@ describe('components/SettingsModal', () => {
     });
     await openSyncConfigForm();
 
-    // 失败响应：toast 显示后端错误（144）
+    // Failure response: the toast shows the backend error (144)
     mockSetSync.mockResolvedValueOnce({ success: false, error: 'server said no' });
     await act(async () => {
       fireEvent.click(screen.getByTestId('sync-save'));
@@ -2179,7 +2179,7 @@ describe('components/SettingsModal', () => {
       expect(toast.error).toHaveBeenCalledWith('server said no');
     });
 
-    // IPC 异常：toast 显示异常消息（147）
+    // IPC exception: the toast shows the exception message (147)
     mockSetSync.mockRejectedValueOnce(new Error('ipc gone'));
     await act(async () => {
       fireEvent.click(screen.getByTestId('sync-save'));
@@ -2188,7 +2188,7 @@ describe('components/SettingsModal', () => {
       expect(toast.error).toHaveBeenCalledWith('ipc gone');
     });
 
-    // 保存成功后 keyring 存在性查询失败：placeholder 回退到占位文案而非卡死（99）
+    // The keyring existence query fails after a successful save: the placeholder falls back to placeholder copy instead of freezing (99)
     mockSetSync.mockResolvedValueOnce({
       success: true,
       data: {
@@ -2209,10 +2209,10 @@ describe('components/SettingsModal', () => {
   it('shows the sync status load failure message', async () => {
     mockIdentityHook();
 
-    // 失败响应分支（279）。syncDeviceStatus 现由两个区块消费（同步方式区块
-    // 也读派生态展示「未加入」），用持续 mock 而非 mockResolvedValueOnce——
-    // 否则 Once 值被先挂载的同步方式区块取走，本区块看不到失败（交付物 4
-    // 引入第二个消费者，测试按新事实适配，断言意图不变）。
+    // Failure-response branch (279). syncDeviceStatus is now consumed by two sections (the sync-methods section
+    // also reads the derived state to display "not joined"), so a persistent mock is used instead of mockResolvedValueOnce --
+    // otherwise the Once value is taken by the sync-methods section, which mounts first, and this section never sees the failure (deliverable 4
+    // introduced the second consumer and the test adapted to the new fact; the assertion's intent is unchanged).
     mockSyncStatus.mockResolvedValue({ success: false, error: 'locked' });
     await act(async () => {
       render(<SettingsModal isOpen={true} onClose={() => {}} />);
@@ -2221,7 +2221,7 @@ describe('components/SettingsModal', () => {
       expect(screen.getByTestId('sync-devices-error')).toHaveTextContent('同步状态加载失败');
     });
 
-    // IPC 异常分支（280-281）
+    // IPC exception branch (280-281)
     cleanup();
     mockSyncStatus.mockRejectedValue(new Error('backend gone'));
     await act(async () => {
@@ -2249,7 +2249,7 @@ describe('components/SettingsModal', () => {
       target: { value: 'laptop' },
     });
 
-    // 失败响应
+    // Failure response
     mockSyncJoin.mockResolvedValueOnce({ success: false, error: 'denied' });
     await act(async () => {
       fireEvent.click(screen.getByTestId('sync-join-button'));
@@ -2262,7 +2262,7 @@ describe('components/SettingsModal', () => {
     });
     expect(screen.getByTestId('sync-join-button')).toBeInTheDocument();
 
-    // IPC 异常
+    // IPC exception
     mockSyncJoin.mockRejectedValueOnce(new Error('ipc gone'));
     await act(async () => {
       fireEvent.click(screen.getByTestId('sync-join-button'));
@@ -2302,7 +2302,7 @@ describe('components/SettingsModal', () => {
     await waitFor(() => {
       expect(toast.error).toHaveBeenCalledWith('ipc gone');
     });
-    // busy 已复位，按钮可再次点击
+    // busy has reset and the button is clickable again
     expect(screen.getByTestId('sync-now-button')).toBeEnabled();
   });
 
@@ -2357,7 +2357,7 @@ describe('components/SettingsModal', () => {
     await waitFor(() => {
       expect(toast.error).toHaveBeenCalledWith('locked');
     });
-    // 仍在已加入态（不误清空设备列表）
+    // Still in the joined state (does not wrongly clear the device list)
     expect(screen.getByTestId('sync-leave-button')).toBeInTheDocument();
 
     mockSyncLeave.mockRejectedValueOnce(new Error('ipc gone'));
@@ -2389,10 +2389,10 @@ describe('components/SettingsModal', () => {
     await waitFor(() => {
       expect(toast.error).toHaveBeenCalledWith('not allowed');
     });
-    // 设备仍在待授权列表（未刷新丢失）
+    // The device is still on the awaiting-authorization list (not lost to a refresh)
     expect(screen.getByTestId('sync-authorize-dev-phone')).toBeInTheDocument();
 
-    // IPC 异常分支（439）
+    // IPC exception branch (439)
     mockSyncAuthorize.mockRejectedValueOnce(new Error('ipc gone'));
     await act(async () => {
       fireEvent.click(screen.getByTestId('sync-authorize-dev-phone'));
@@ -2424,7 +2424,7 @@ describe('components/SettingsModal', () => {
     });
     expect(screen.getByTestId('sync-revoke-dev-phone')).toBeInTheDocument();
 
-    // IPC 异常分支（458）
+    // IPC exception branch (458)
     mockSyncRevoke.mockRejectedValueOnce(new Error('ipc gone'));
     await act(async () => {
       fireEvent.click(screen.getByTestId('sync-revoke-dev-phone'));
@@ -2447,14 +2447,14 @@ describe('components/SettingsModal', () => {
       expect(screen.getByTestId('sync-remark-edit')).toBeInTheDocument();
     });
 
-    // 取消按钮退出编辑态（640），不触发后端
+    // The cancel button exits the edit state (640) and does not hit the backend
     fireEvent.click(screen.getByTestId('sync-remark-edit'));
     expect(screen.getByTestId('sync-remark-input')).toBeInTheDocument();
     fireEvent.click(screen.getByTestId('sync-remark-cancel'));
     expect(screen.queryByTestId('sync-remark-input')).not.toBeInTheDocument();
     expect(mockSyncSetRemark).not.toHaveBeenCalled();
 
-    // 保存被 IPC 拒绝：catch 分支 toast（478 catch 臂）
+    // The save is rejected by IPC: the catch branch toasts (478 catch arm)
     fireEvent.click(screen.getByTestId('sync-remark-edit'));
     fireEvent.change(screen.getByTestId('sync-remark-input'), {
       target: { value: '新备注' },
@@ -2491,13 +2491,13 @@ describe('components/SettingsModal', () => {
       expect(screen.getByTestId('sync-conflicts-modal')).toBeInTheDocument();
     });
 
-    // 关闭弹窗（747）：暂不处理
+    // Closing the modal (747): not handled yet
     fireEvent.click(within(screen.getByTestId('sync-conflicts-modal')).getByText('暂不处理'));
     await waitFor(() => {
       expect(screen.queryByTestId('sync-conflicts-modal')).not.toBeInTheDocument();
     });
 
-    // 从 banner 按钮再打开（597）
+    // Reopens from the banner button (597)
     fireEvent.click(screen.getByTestId('sync-view-conflicts-button'));
     expect(screen.getByTestId('sync-conflicts-modal')).toBeInTheDocument();
   });
@@ -2515,7 +2515,7 @@ describe('components/SettingsModal', () => {
       expect(toast.error).toHaveBeenCalledWith('locked');
     });
 
-    // IPC 异常分支（896）
+    // IPC exception branch (896)
     mockSetExpiry.mockRejectedValueOnce(new Error('ipc gone'));
     fireEvent.change(screen.getByTestId('password-expiry-select'), { target: { value: '60' } });
     await waitFor(() => {
@@ -2579,7 +2579,7 @@ describe('components/SettingsModal', () => {
       expect(within(reauth).getByTestId('reauth-error')).toHaveTextContent('nope');
     });
 
-    // IPC 异常分支（952）
+    // IPC exception branch (952)
     fireEvent.change(reauth.querySelector('input') as HTMLInputElement, {
       target: { value: 'again' },
     });
@@ -2591,7 +2591,7 @@ describe('components/SettingsModal', () => {
       expect(within(reauth).getByTestId('reauth-error')).toHaveTextContent('指纹解锁设置失败');
     });
 
-    // 关闭重验窗（1132）：恢复可用状态
+    // Closes the re-verification window (1132): usability restored
     fireEvent.click(within(reauth).getByText('取消'));
     await waitFor(() => {
       expect(screen.queryByTestId('reauth-modal')).not.toBeInTheDocument();
@@ -2600,8 +2600,8 @@ describe('components/SettingsModal', () => {
 
   it('keeps the travel modal open on a non-reauth failure and closes it', async () => {
     travelHook();
-    // mockReset 清掉先前用例遗留的 mockResolvedValueOnce 队列
-    // （clearAllMocks 不清 once 队列，REAUTH 用例的"成功"once 会漂移到这里）
+    // mockReset clears the mockResolvedValueOnce queue left over from earlier cases
+    // (clearAllMocks does not clear the once queue; the REAUTH case's "success" once would drift here)
     mockEnterTravel.mockReset();
     mockEnterTravel.mockResolvedValueOnce({ success: false, error: 'denied' });
 
@@ -2620,10 +2620,10 @@ describe('components/SettingsModal', () => {
     await waitFor(() => {
       expect(screen.getByTestId('travel-passphrase-error')).toHaveTextContent('denied');
     });
-    // 弹窗保留可重试；关闭即退出编辑
+    // The modal stays open for a retry; closing exits the edit state
     expect(screen.getByTestId('travel-passphrase-modal')).toBeInTheDocument();
 
-    // IPC 异常分支（991）
+    // IPC exception branch (991)
     mockEnterTravel.mockRejectedValueOnce(new Error('ipc gone'));
     await act(async () => {
       fireEvent.click(screen.getByTestId('travel-passphrase-submit'));
@@ -2673,10 +2673,10 @@ describe('components/SettingsModal', () => {
     await waitFor(() => {
       expect(within(reauth).getByTestId('reauth-error')).toHaveTextContent('bad passphrase');
     });
-    // 重验失败：不重开口令窗（stay in reauth）
+    // Re-verification failed: the passphrase modal does not reopen (stay in reauth)
     expect(screen.queryByTestId('travel-passphrase-modal')).not.toBeInTheDocument();
 
-    // IPC 异常 → 通用操作失败文案
+    // IPC exception -> the generic operation-failed copy
     fireEvent.change(reauth.querySelector('input') as HTMLInputElement, {
       target: { value: 'again' },
     });
@@ -2688,7 +2688,7 @@ describe('components/SettingsModal', () => {
       expect(within(reauth).getByTestId('reauth-error')).toHaveTextContent('旅行模式操作失败');
     });
 
-    // 关闭重验窗（1162-1163）
+    // Closes the re-verification window (1162-1163)
     fireEvent.click(within(reauth).getByText('取消'));
     await waitFor(() => {
       expect(screen.queryByTestId('reauth-modal')).not.toBeInTheDocument();
@@ -2784,7 +2784,7 @@ describe('components/SettingsModal', () => {
       fireEvent.click(screen.getByTestId('travel-mark-toggle-id-1'));
     });
     await waitFor(() => {
-      // catch 分支用 i18n 文案而非 err.message（与失败响应一致的用户口径）
+      // The catch branch uses the i18n copy rather than err.message (same user-facing policy as the failure response)
       expect(toast.error).toHaveBeenCalledWith('旅行标记保存失败');
     });
   });
@@ -2793,7 +2793,7 @@ describe('components/SettingsModal', () => {
     mockIdentityHook();
     const onClose = jest.fn();
     const { container } = render(<SettingsModal isOpen={true} onClose={onClose} />);
-    // 外层遮罩自身是事件目标（target === currentTarget）→ onClose
+    // The outer backdrop is itself the event target (target === currentTarget) -> onClose
     fireEvent.mouseDown(container.firstChild as Element);
     expect(onClose).toHaveBeenCalled();
   });
@@ -2829,12 +2829,12 @@ describe('components/SettingsModal', () => {
     openIdentitiesTab();
     fireEvent.click(screen.getByTitle('编辑'));
 
-    // 类型下拉（1536）：名称输入框与下拉都可能显示 Work，取其中的 select
+    // Type dropdown (1536): both the name input and the dropdown may show Work, so take the select inside it
     const typeSelect = screen
       .getAllByDisplayValue('Work')
       .find((el) => el.tagName === 'SELECT') as HTMLSelectElement;
     fireEvent.change(typeSelect, { target: { value: 'Personal' } });
-    // 邮箱/电话/描述输入（1554/1562/1573）
+    // Email/phone/description inputs (1554/1562/1573)
     const field = (label: string) =>
       screen.getByText(label, { selector: 'label' }).parentElement as HTMLElement;
     fireEvent.change(field('邮箱').querySelector('input') as HTMLInputElement, {

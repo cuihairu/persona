@@ -4,9 +4,9 @@ import type { CredentialType } from '@/types';
 import { EyeIcon, EyeSlashIcon, KeyIcon } from '@heroicons/react/24/outline';
 import { parseOtpauthUri } from './credentialFormModel';
 
-/** 动态表单区：按凭据类型渲染专属字段。无内部状态——payload 草稿
- *  `credentialData` 与显隐开关都由父级持有，经 props 下发（名字与原闭包
- *  捕获一致，函数体逐字保留）。 */
+/** Dynamic form section: renders the type-specific fields per credential type. No internal state -- the payload
+ *  draft `credentialData` and the show/hide toggles are held by the parent and passed down via props (names
+ *  match the original closure captures, function bodies kept verbatim). */
 const CredentialFieldsSection: React.FC<{
   credentialType: CredentialType;
   credentialData: any;

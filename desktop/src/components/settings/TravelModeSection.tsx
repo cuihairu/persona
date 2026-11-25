@@ -3,8 +3,8 @@ import { useTranslation } from 'react-i18next';
 import { useAppStore } from '@/stores/appStore';
 import type { TravelStatus } from '@/types';
 
-/** 旅行模式状态行（SecurityPane 底部）：inactive 显 enter 入口、active 显
- *  exit 入口；inconsistent（旗标在但 sidecar 没了）红警告诚实告知数据已丢 */
+/** Travel mode status row (bottom of SecurityPane): inactive shows the enter entry, active the
+ *  exit entry; inconsistent (flag present but sidecar gone) is a red warning that honestly reports the lost data */
 const TravelModeSection: React.FC<{
   status: TravelStatus | null;
   busy: boolean;

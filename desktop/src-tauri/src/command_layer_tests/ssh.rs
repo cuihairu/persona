@@ -189,7 +189,7 @@ async fn start_stop_ssh_agent_lifecycle() {
     let resp = get_ssh_agent_status(app.state::<AppState>()).await.unwrap();
     assert!(!resp.data.unwrap().running, "no handle and no socket left");
 }
-/// get_ssh_keys 只挑出 SshKey 凭据并带 identity 名；health_scan 出报告。
+/// get_ssh_keys picks out only SshKey credentials with their identity name; health_scan produces a report.
 #[tokio::test]
 async fn get_ssh_keys_and_health_scan() {
     let app = mock_app();
@@ -202,7 +202,7 @@ async fn get_ssh_keys_and_health_scan() {
 
     let (app, identity_id) = app_with_identity().await;
 
-    // 一个 SSH key + 一个 Password 凭据：只有前者出现在列表里。
+    // One SSH key + one Password credential: only the former appears in the list.
     let ssh_req = CreateCredentialRequest {
         identity_id: identity_id.clone(),
         name: "GitHub SSH".to_string(),
@@ -240,7 +240,7 @@ async fn get_ssh_keys_and_health_scan() {
     assert_eq!(keys[0].identity_name, "Cred Holder");
     assert_eq!(keys[0].tags, vec!["git".to_string()]);
 
-    // 健康扫描：无参数默认值 + 自定义阈值都出报告。
+    // Health scan: both no-arg defaults and custom thresholds produce a report.
     let resp = health_scan(None, app.state::<AppState>()).await.unwrap();
     assert!(resp.success, "{:?}", resp.error);
     let report = resp.data.expect("health report");
@@ -260,9 +260,10 @@ async fn get_ssh_keys_and_health_scan() {
     assert!(resp.success, "{:?}", resp.error);
     assert_eq!(resp.data.unwrap().total_credentials, 2);
 }
-/// `query_agent_key_count` 走 std 同步 socket（不经过 tokio reactor，不受
-/// mock 运行时毒化影响）：起一个本地假 agent 服务端按脚本回协议响应，
-/// 覆盖成功计数与各错误分支。
+/// `query_agent_key_count` uses a std synchronous socket (bypassing the tokio
+/// reactor, so it is not poisoned by the mock runtime): a local fake agent
+/// server replies with scripted protocol responses, covering the success count
+/// and every error branch.
 #[cfg(unix)]
 #[test]
 fn query_agent_key_count_protocol_matrix() {
@@ -271,9 +272,10 @@ fn query_agent_key_count_protocol_matrix() {
 
     let dir = tempfile::tempdir().unwrap();
 
-    // 假 agent：读 5 字节 request_identities 请求，回 `payload`。
-    // 返回 (socket 路径, responder 句柄)；join 必须发生在客户端连接之后，
-    // 否则 responder 卡在 accept 而客户端还没跑起来，直接死锁。
+    // Fake agent: reads the 5-byte request_identities request and replies with `payload`.
+    // Returns (socket path, responder handle); join must happen after the client
+    // connects, otherwise the responder blocks in accept while the client never
+    // gets to run -- a guaranteed deadlock.
     let serve_once = |payload: Vec<u8>| -> (String, std::thread::JoinHandle<()>) {
         let sock_path = dir
             .path()
@@ -293,12 +295,12 @@ fn query_agent_key_count_protocol_matrix() {
         (path, handle)
     };
 
-    // 成功：SSH_AGENT_IDENTITIES_ANSWER(12) + 3 把钥匙。
+    // Success: SSH_AGENT_IDENTITIES_ANSWER(12) + 3 keys.
     let (path, responder) = serve_once(vec![12, 0, 0, 0, 3]);
     assert_eq!(query_agent_key_count(&path).unwrap(), 3);
     responder.join().unwrap();
 
-    // 首 byte 非 12 → "Unexpected agent response"。
+    // First byte not 12 -> "Unexpected agent response".
     let (path, responder) = serve_once(vec![99, 0, 0, 0, 3]);
     assert_eq!(
         query_agent_key_count(&path).unwrap_err(),
@@ -306,7 +308,7 @@ fn query_agent_key_count_protocol_matrix() {
     );
     responder.join().unwrap();
 
-    // 响应过短 → "Malformed agent response"。
+    // Response too short -> "Malformed agent response".
     let (path, responder) = serve_once(vec![12, 0]);
     assert_eq!(
         query_agent_key_count(&path).unwrap_err(),
@@ -314,11 +316,11 @@ fn query_agent_key_count_protocol_matrix() {
     );
     responder.join().unwrap();
 
-    // 连不上 → 连接错误。
+    // Cannot connect -> connection error.
     let err = query_agent_key_count(&dir.path().join("absent.sock").to_string_lossy()).unwrap_err();
     assert!(err.starts_with("Failed to connect to agent"), "{}", err);
 }
-/// 状态文件内容畸形时不 panic：pid 解析失败降级为 None。
+/// No panic when the state file contents are malformed: pid parse failure degrades to None.
 #[cfg(unix)]
 #[tokio::test]
 async fn ssh_agent_status_tolerates_malformed_state_files() {
@@ -331,8 +333,9 @@ async fn ssh_agent_status_tolerates_malformed_state_files() {
 
     let resp = get_ssh_agent_status(app.state::<AppState>()).await.unwrap();
     let status = resp.data.unwrap();
-    // 畸形内容本身不许 panic；socket 指向的路径不可连接（无此文件），无
-    // 任务句柄 → 不算运行中（字段照常回显，pid 解析失败降级 None）。
+    // The malformed content itself must not panic; the path the socket points to is
+    // not connectable (file absent) and there is no task handle -> not running
+    // (fields echoed as-is, pid parse failure degrades to None).
     assert!(
         !status.running,
         "malformed state files with no live agent must not mean running"
@@ -340,7 +343,7 @@ async fn ssh_agent_status_tolerates_malformed_state_files() {
     assert_eq!(status.socket_path.as_deref(), Some("/tmp/empty-sock"));
     assert_eq!(status.pid, None, "unparseable pid degrades to None");
 }
-/// PERSONA_AGENT_STATE_DIR 未设置时 agent_state_dir 回落 ~/.persona。
+/// When PERSONA_AGENT_STATE_DIR is unset, agent_state_dir falls back to ~/.persona.
 #[test]
 fn agent_state_dir_falls_back_to_home_when_env_unset() {
     let _guard = crate::command_layer_tests::StateDirGuard::without_env();
@@ -359,7 +362,7 @@ fn query_agent_key_count_fails_on_dead_socket() {
     let sock_path = dir.path().join("dead.sock");
     let listener = UnixListener::bind(&sock_path).unwrap();
 
-    // 服务端：接受连接后立刻丢弃，制造对端 EOF。
+    // Server: drops the connection immediately after accepting, producing a peer EOF.
     let server = std::thread::spawn(move || {
         let (stream, _) = listener.accept().expect("client connects");
         drop(stream);
@@ -370,8 +373,9 @@ fn query_agent_key_count_fails_on_dead_socket() {
 
     server.join().unwrap();
 }
-/// get_ssh_keys 的未初始化/死库臂与 stop_ssh_agent 的空转臂（无 agent 可停
-/// 也要返回成功并清理环境变量）。
+/// The uninitialized/dead-DB arms of get_ssh_keys and the no-op arm of
+/// stop_ssh_agent (with no agent to stop it still returns success and cleans
+/// up the environment variables).
 #[tokio::test]
 async fn ssh_key_listing_and_agent_stop_small_arms() {
     // stop_ssh_agent cleans up state files in the current agent state dir;
@@ -387,7 +391,7 @@ async fn ssh_key_listing_and_agent_stop_small_arms() {
     assert!(resp.success, "{:?}", resp.error);
     assert_eq!(resp.data, Some(true));
 
-    // 已解锁但 DB 是垃圾文件：get_identities 的 repo 错误落 ApiResponse。
+    // Unlocked but the DB is a garbage file: get_identities' repo error lands in the ApiResponse.
     let app = app_with_garbage_db_service().await;
     let resp = get_ssh_keys(app.state::<AppState>()).await.unwrap();
     assert!(!resp.success);
@@ -404,14 +408,15 @@ async fn read_agent_status_requires_state_file_evidence() {
     let dir = tempfile::tempdir().unwrap();
     let _guard = StateDirGuard::sandbox(&dir);
 
-    // 空 state 目录 + 任务句柄"存活"：没有 socket/pid 证据不许报运行中。
-    // 旧实现 running_hint 直通——启动失败被吞成假绿，此断言钉死修复。
+    // Empty state dir + task handle "alive": no socket/pid evidence must not report running.
+    // The old implementation passed running_hint straight through -- startup failure was
+    // swallowed into a false green; this assertion pins the fix.
     let status = crate::commands::read_agent_status(true);
     assert!(!status.running);
     assert!(status.socket_path.is_none());
     assert!(status.pid.is_none());
 
-    // 句柄存活 + state 文件在 → 运行中，字段如实回读。
+    // Handle alive + state files present -> running, fields read back faithfully.
     std::fs::write(dir.path().join("ssh-agent.sock"), "/tmp/persona-fake.sock").unwrap();
     std::fs::write(dir.path().join("ssh-agent.pid"), "12345").unwrap();
     let status = crate::commands::read_agent_status(true);
@@ -422,7 +427,7 @@ async fn read_agent_status_requires_state_file_evidence() {
     );
     assert_eq!(status.pid, Some(12345));
 
-    // 句柄已死（hint=false）：残留 state 文件不算运行中。
+    // Handle dead (hint=false): leftover state files do not count as running.
     let status = crate::commands::read_agent_status(false);
     assert!(!status.running);
 }
@@ -433,10 +438,12 @@ async fn start_ssh_agent_surfaces_bind_failure_as_error() {
     let app = mock_app();
     init_service_ok(&app, "correct-horse").await;
 
-    // 注入指向不存在目录的 socket 路径 → daemon bind 失败退出。修复前：
-    // 错误被 eprintln 吞掉、命令睡 400ms 后无条件报"运行中"。修复后必须
-    // 回 error 响应并写明原因（Windows 同一代码路径，实机验收待装机器）。
-    // 两个 agent env 由同一 guard 持同一把锁注入（不可重入，分开即死锁）。
+    // Inject a socket path in a nonexistent directory -> daemon bind fails and exits. Before the
+    // fix: the error was swallowed by eprintln and the command slept 400ms then unconditionally
+    // reported "running". After the fix it must return an error response stating the reason
+    // (same code path on Windows; on-device acceptance pending a machine).
+    // Both agent envs are injected by the same guard holding the same lock (non-reentrant;
+    // splitting them deadlocks).
     let _guard = StateDirGuard::sandbox_with_socket(
         &dir,
         &dir.path().join("no-such-subdir/persona-agent.sock"),
@@ -461,11 +468,11 @@ async fn start_ssh_agent_surfaces_bind_failure_as_error() {
         "error must state the failure, got: {err}"
     );
 
-    // 失败路径清掉 state 文件，不留假证据。
+    // The failure path clears the state files, leaving no false evidence.
     assert!(!dir.path().join("ssh-agent.sock").exists());
     assert!(!dir.path().join("ssh-agent.pid").exists());
 
-    // 状态查询如实报 stopped。
+    // Status query faithfully reports stopped.
     let resp = get_ssh_agent_status(app.state::<AppState>()).await.unwrap();
     assert!(resp.success);
     assert!(!resp.data.unwrap().running);

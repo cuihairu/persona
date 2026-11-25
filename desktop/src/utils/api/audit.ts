@@ -18,7 +18,7 @@ export const auditApi = {
 
 
   // -------------------------------------------------------------------------
-  // 审计
+  // Audit
   // -------------------------------------------------------------------------
 
   async auditQuery(request: AuditQueryRequest): Promise<ApiResponse<AuditLogEntry[]>> {
@@ -37,7 +37,7 @@ export const auditApi = {
 
 
   // -------------------------------------------------------------------------
-  // Watchtower 健康扫描
+  // Watchtower health scan
   // -------------------------------------------------------------------------
 
   async healthScan(request?: HealthScanRequest): Promise<ApiResponse<HealthReport>> {

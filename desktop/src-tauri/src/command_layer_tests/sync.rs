@@ -11,14 +11,14 @@ async fn sync_device_status_tracks_keyring_record_lifecycle() {
     let db_path = init_service_ok(&app, "master-pw-123").await;
     let state = app.state::<AppState>();
 
-    // 未加入：干净三无
+    // Not joined: clean triple-none
     let resp = sync_device_status(state.clone()).await.unwrap();
     let status = resp.data.expect("status present");
     assert!(!status.joined);
     assert!(!status.corrupted);
     assert_eq!(status.device_id, None);
 
-    // 手写合法记录 → joined + 身份可见
+    // A hand-written legal record -> joined + identity visible
     let identity = persona_core::sync::device::DeviceIdentity::generate("laptop").unwrap();
     state
         .device_store
@@ -31,7 +31,7 @@ async fn sync_device_status_tracks_keyring_record_lifecycle() {
     assert_eq!(status.device_id, Some(identity.device_id.to_string()));
     assert_eq!(status.device_name, Some("laptop".to_string()));
 
-    // 记录损坏（手改半截）→ corrupted 引导重新 join，不猜不带病运行
+    // A corrupted record (half rewritten by hand) -> corrupted leads to re-joining, never guessing or running in a broken state
     state.device_store.set(&db_path, "{\"device_id\":").unwrap();
     let resp = sync_device_status(state.clone()).await.unwrap();
     let status = resp.data.expect("status present");
@@ -42,7 +42,7 @@ async fn sync_device_status_tracks_keyring_record_lifecycle() {
 async fn sync_join_gates_and_never_leaves_partial_state_on_failure() {
     let app = mock_app();
 
-    // 未初始化 service → 拒绝
+    // Uninitialized service -> rejected
     let resp = sync_join("laptop".to_string(), app.state::<AppState>())
         .await
         .unwrap();
@@ -52,14 +52,14 @@ async fn sync_join_gates_and_never_leaves_partial_state_on_failure() {
     let db_path = init_service_ok(&app, "master-pw-123").await;
     let state = app.state::<AppState>();
 
-    // 服务器未配置 → 拒绝（业务失败，不 panic）
+    // Server not configured -> rejected (a business failure, not a panic)
     let resp = sync_join("laptop".to_string(), state.clone())
         .await
         .unwrap();
     assert!(!resp.success);
     assert!(resp.error.unwrap().contains("not configured"));
 
-    // 配置不可达服务器：登记失败 → error 且 keyring 不留半态
+    // Configured an unreachable server: registration fails -> error and keyring keeps no half state
     let resp = set_sync_config(
         true,
         "http://127.0.0.1:1".to_string(),
@@ -70,7 +70,7 @@ async fn sync_join_gates_and_never_leaves_partial_state_on_failure() {
     .unwrap();
     assert!(resp.success, "{:?}", resp.error);
 
-    // 名字校验先于网络（省一轮注定失败的 HTTP）
+    // Name validation precedes the network (saves one round of an HTTP call doomed to fail)
     let resp = sync_join("   ".to_string(), state.clone()).await.unwrap();
     assert!(!resp.success);
     assert!(resp.error.unwrap().contains("1..=128"));
@@ -88,7 +88,7 @@ async fn sync_join_gates_and_never_leaves_partial_state_on_failure() {
         "failed join must not leave a keyring record"
     );
 
-    // 已加入（含损坏记录）→ 拒绝重复 join
+    // Already joined (including a corrupted record) -> a repeated join is rejected
     seed_device_identity(&app, &db_path).await;
     let resp = sync_join("laptop".to_string(), state.clone())
         .await
@@ -108,7 +108,7 @@ async fn sync_leave_clears_local_identity_even_when_server_unreachable() {
     let db_path = init_service_ok(&app, "master-pw-123").await;
     let state = app.state::<AppState>();
 
-    // 未加入 → 拒绝
+    // Not joined -> rejected
     let resp = sync_leave(state.clone()).await.unwrap();
     assert!(!resp.success);
 
@@ -122,13 +122,13 @@ async fn sync_leave_clears_local_identity_even_when_server_unreachable() {
     .unwrap();
     assert!(resp.success, "{:?}", resp.error);
 
-    // 服务器不可达：本地清理优先（吊销失败仅 warn），keyring 必须清干净
+    // Server unreachable: local cleanup comes first (a failed revocation is only a warn), and keyring must be wiped clean
     seed_device_identity(&app, &db_path).await;
     let resp = sync_leave(state.clone()).await.unwrap();
     assert!(resp.success, "{:?}", resp.error);
     assert!(state.device_store.get(&db_path).unwrap().is_none());
 
-    // 二次 leave → 已未加入
+    // A second leave -> already not joined
     let resp = sync_leave(state.clone()).await.unwrap();
     assert!(!resp.success);
 }
@@ -138,7 +138,7 @@ async fn sync_list_authorize_revoke_require_membership() {
     let _db_path = init_service_ok(&app, "master-pw-123").await;
     let state = app.state::<AppState>();
 
-    // 未加入：三条管理命令一律拒绝（先于任何网络访问）
+    // Not joined: all three admin commands are rejected (before any network access)
     let resp = sync_list_devices(state.clone()).await.unwrap();
     assert!(!resp.success);
     let resp = sync_authorize(Uuid::new_v4().to_string(), state.clone())
@@ -150,8 +150,8 @@ async fn sync_list_authorize_revoke_require_membership() {
         .unwrap();
     assert!(!resp.success);
 
-    // 加入后：目标 id 格式校验先于网络
-    // （身份种子只是为了过门禁；不可达服务器下格式错误先报）
+    // After joining: target id format validation precedes the network
+    // (the identity seed is only there to get past the gate; under an unreachable server a format error is reported first)
     let db_path = {
         let guard = state.db_path.lock().await;
         guard.clone().unwrap()
@@ -172,7 +172,7 @@ async fn sync_list_authorize_revoke_require_membership() {
 async fn sync_now_gates_before_any_network_or_crypto() {
     let app = mock_app();
 
-    // 未初始化 service → 拒绝
+    // Uninitialized service -> rejected
     let resp = sync_now(app.state::<AppState>()).await.unwrap();
     assert!(!resp.success, "must reject before init");
     assert!(resp.error.unwrap().contains("not initialized"));
@@ -180,25 +180,25 @@ async fn sync_now_gates_before_any_network_or_crypto() {
     let db_path = init_service_ok(&app, "master-pw-123").await;
     let state = app.state::<AppState>();
 
-    // 未加入 → 拒绝（本地检查先于网络/密码学）
+    // Not joined -> rejected (local checks precede networking/cryptography)
     let resp = sync_now(state.clone()).await.unwrap();
     assert!(!resp.success);
     assert!(resp.error.unwrap().contains("not joined"));
 
-    // 损坏身份记录 → 拒绝（不猜不带病运行）
+    // A corrupted identity record -> rejected (no guessing, no running in a broken state)
     state.device_store.set(&db_path, "{broken").unwrap();
     let resp = sync_now(state.clone()).await.unwrap();
     assert!(!resp.success);
     assert!(resp.error.unwrap().contains("corrupted"));
 
-    // 已加入但服务器未配置 → 拒绝
+    // Joined but the server is not configured -> rejected
     seed_device_identity(&app, &db_path).await;
     let resp = sync_now(state.clone()).await.unwrap();
     assert!(!resp.success);
     assert!(resp.error.unwrap().contains("not configured"));
 
-    // 已配置但不可达：open 拉信封失败（网络错误冒泡，不留半态——
-    // capture 只在整轮周期成功后挂载）
+    // Configured but unreachable: open fails to fetch the envelope (the network error bubbles up, no half state is left —
+    // capture only mounts after the whole cycle succeeds)
     let resp = set_sync_config(
         true,
         "http://127.0.0.1:1".to_string(),
@@ -211,22 +211,24 @@ async fn sync_now_gates_before_any_network_or_crypto() {
     let resp = sync_now(state.clone()).await.unwrap();
     assert!(!resp.success);
 
-    // 锁定后 → 拒绝（门禁在编排之前；lock 同时 detach 捕获缝）
+    // After locking -> rejected (the gate sits ahead of orchestration; lock also detaches the capture seam)
     let resp = lock_service(state.clone()).await.unwrap();
     assert!(resp.success, "{:?}", resp.error);
     let resp = sync_now(state.clone()).await.unwrap();
     assert!(!resp.success);
     assert!(resp.error.unwrap().contains("locked"));
 }
-/// sync_status（§二.5.5 状态显示）与 sync_now 同门禁——共用 open_sync_session：
-/// 只读快照也不越过「未初始化/未加入/未配置/锁定」任何一道，且失败如实
-/// 报错（不返回假 0 水位）。聚合语义（head/水位/落后/待推/最近同步）在
-/// core engine 测试覆盖，宿主层只验门禁。
+/// sync_status (section 2.5.5 status display) shares the same gate as sync_now
+/// — both go through open_sync_session: the read-only snapshot also never
+/// crosses any of "uninitialized / not joined / not configured / locked", and
+/// a failure is reported honestly (never a fake 0 watermark). The aggregation
+/// semantics (head/watermark/behind/pending push/last sync) are covered by the
+/// core engine tests; the host layer only verifies the gate.
 #[tokio::test]
 async fn sync_status_shares_sync_now_gates() {
     let app = mock_app();
 
-    // 未初始化 service → 拒绝
+    // Uninitialized service -> rejected
     let resp = sync_status(app.state::<AppState>()).await.unwrap();
     assert!(!resp.success, "must reject before init");
     assert!(resp.error.unwrap().contains("not initialized"));
@@ -234,34 +236,36 @@ async fn sync_status_shares_sync_now_gates() {
     let db_path = init_service_ok(&app, "master-pw-123").await;
     let state = app.state::<AppState>();
 
-    // 未加入 → 拒绝
+    // Not joined -> rejected
     let resp = sync_status(state.clone()).await.unwrap();
     assert!(!resp.success);
     assert!(resp.error.unwrap().contains("not joined"));
 
-    // 已加入但服务器未配置 → 拒绝（不触网）
+    // Joined but the server is not configured -> rejected (no network touched)
     seed_device_identity(&app, &db_path).await;
     let resp = sync_status(state.clone()).await.unwrap();
     assert!(!resp.success);
     assert!(resp.error.unwrap().contains("not configured"));
 
-    // 锁定后 → 拒绝
+    // Locked -> rejected
     let resp = lock_service(state.clone()).await.unwrap();
     assert!(resp.success, "{:?}", resp.error);
     let resp = sync_status(state.clone()).await.unwrap();
     assert!(!resp.success);
     assert!(resp.error.unwrap().contains("locked"));
 }
-/// 冲突命令族（阶段 3c）与 sync_now 同门禁——共用 open_sync_session：
-/// 未初始化/未加入/未配置/锁定各态先于任何网络或密码学访问被拒；
-/// resolve 的参数格式校验先于会话装配（Malformed 不触网）。裁决的完整
-/// 语义（采纳/淘汰/幂等面）在 core resolve + runtime 测试覆盖，宿主层
-/// 只验门禁与参数面。
+/// The conflict command family (phase 3c) shares the same gate as sync_now —
+/// both go through open_sync_session: uninitialized / not joined / not
+/// configured / locked are each rejected before any network or cryptographic
+/// access; resolve's argument format validation precedes session assembly
+/// (Malformed never touches the network). The full semantics of adjudication
+/// (adopt/evict/idempotency surface) are covered by the core resolve + runtime
+/// tests; the host layer only verifies the gate and the argument plane.
 #[tokio::test]
 async fn sync_conflict_commands_share_sync_now_gates() {
     let app = mock_app();
 
-    // 未初始化 service → 拒绝
+    // Uninitialized service -> rejected
     let resp = sync_conflicts_list(app.state::<AppState>()).await.unwrap();
     assert!(!resp.success, "must reject before init");
     assert!(resp.error.unwrap().contains("not initialized"));
@@ -278,7 +282,7 @@ async fn sync_conflict_commands_share_sync_now_gates() {
     let db_path = init_service_ok(&app, "master-pw-123").await;
     let state = app.state::<AppState>();
 
-    // 未加入 → 拒绝（本地检查先于网络/密码学）
+    // Not joined -> rejected (local checks precede networking/cryptography)
     let resp = sync_conflicts_list(state.clone()).await.unwrap();
     assert!(!resp.success);
     assert!(resp.error.unwrap().contains("not joined"));
@@ -292,8 +296,8 @@ async fn sync_conflict_commands_share_sync_now_gates() {
     assert!(!resp.success);
     assert!(resp.error.unwrap().contains("not joined"));
 
-    // 参数格式校验先于会话装配（Malformed 不触网——此时服务器未配置，
-    // 若顺序错误会报 not configured 而非 Malformed）
+    // Argument format validation precedes session assembly (Malformed never touches the network — the server is not configured at this point,
+    // so with the order wrong it would report not configured instead of Malformed)
     seed_device_identity(&app, &db_path).await;
     let resp = sync_conflict_resolve(
         "not-a-uuid".to_string(),
@@ -314,7 +318,7 @@ async fn sync_conflict_commands_share_sync_now_gates() {
     assert!(!resp.success);
     assert!(resp.error.unwrap().contains("Malformed"));
 
-    // 已加入已配置但服务器不可达：open 拉信封失败 → 拒绝（无半态）
+    // Joined and configured but the server is unreachable: open fails to fetch the envelope -> rejected (no half state)
     let resp = set_sync_config(
         true,
         "http://127.0.0.1:1".to_string(),
@@ -335,22 +339,24 @@ async fn sync_conflict_commands_share_sync_now_gates() {
     .unwrap();
     assert!(!resp.success);
 
-    // 锁定后 → 拒绝
+    // Locked -> rejected
     let resp = lock_service(state.clone()).await.unwrap();
     assert!(resp.success, "{:?}", resp.error);
     let resp = sync_conflicts_list(state.clone()).await.unwrap();
     assert!(!resp.success);
     assert!(resp.error.unwrap().contains("locked"));
 }
-/// 轮换命令（阶段 3d）与 sync_now 同门禁——共用 open_sync_session：
-/// 未初始化/未加入/损坏/未配置/不可达/锁定各态先于任何网络或密码学访问
-/// 被拒。轮换的完整语义（换信封/重包/边界）在 core runtime + server 真
-/// TCP 测试覆盖，宿主层只验门禁与编排。
+/// The rotation command (phase 3d) shares the same gate as sync_now — both go
+/// through open_sync_session: uninitialized / not joined / corrupted / not
+/// configured / unreachable / locked are each rejected before any network or
+/// cryptographic access. The full semantics of rotation (envelope swap /
+/// repackaging / boundaries) are covered by the core runtime + real-TCP server
+/// tests; the host layer only verifies the gate and the orchestration.
 #[tokio::test]
 async fn sync_rotate_gates_before_any_network_or_crypto() {
     let app = mock_app();
 
-    // 未初始化 service → 拒绝
+    // Uninitialized service -> rejected
     let resp = sync_rotate(app.state::<AppState>()).await.unwrap();
     assert!(!resp.success, "must reject before init");
     assert!(resp.error.unwrap().contains("not initialized"));
@@ -358,24 +364,24 @@ async fn sync_rotate_gates_before_any_network_or_crypto() {
     let db_path = init_service_ok(&app, "master-pw-123").await;
     let state = app.state::<AppState>();
 
-    // 未加入 → 拒绝（本地检查先于网络/密码学）
+    // Not joined -> rejected (local checks precede networking/cryptography)
     let resp = sync_rotate(state.clone()).await.unwrap();
     assert!(!resp.success);
     assert!(resp.error.unwrap().contains("not joined"));
 
-    // 损坏身份记录 → 拒绝
+    // A corrupted identity record -> rejected
     state.device_store.set(&db_path, "{broken").unwrap();
     let resp = sync_rotate(state.clone()).await.unwrap();
     assert!(!resp.success);
     assert!(resp.error.unwrap().contains("corrupted"));
 
-    // 已加入但服务器未配置 → 拒绝
+    // Joined but the server is not configured -> rejected
     seed_device_identity(&app, &db_path).await;
     let resp = sync_rotate(state.clone()).await.unwrap();
     assert!(!resp.success);
     assert!(resp.error.unwrap().contains("not configured"));
 
-    // 已配置但不可达：open 拉信封失败 → 拒绝（无半态）
+    // Configured but unreachable: open fails to fetch the envelope -> rejected (no half state)
     let resp = set_sync_config(
         true,
         "http://127.0.0.1:1".to_string(),
@@ -388,7 +394,7 @@ async fn sync_rotate_gates_before_any_network_or_crypto() {
     let resp = sync_rotate(state.clone()).await.unwrap();
     assert!(!resp.success);
 
-    // 锁定后 → 拒绝
+    // Locked -> rejected
     let resp = lock_service(state.clone()).await.unwrap();
     assert!(resp.success, "{:?}", resp.error);
     let resp = sync_rotate(state.clone()).await.unwrap();
@@ -468,8 +474,10 @@ async fn sync_group_pairing_cancel_is_idempotent_without_session() {
         .unwrap();
     assert!(resp.success && resp.data.unwrap(), "cancel is idempotent");
 }
-/// 双端全链路：host create → poll 与 guest join_begin → confirm 并发跑完，
-/// 断言两端短指纹一致、两端 keyring 组密钥一致、会话清理干净。
+/// Full two-side chain: host create -> poll and guest join_begin -> confirm run
+/// concurrently to completion, asserting that both sides' short fingerprints
+/// match, both sides' keyring group keys match, and the session is cleaned
+/// up.
 #[tokio::test]
 async fn sync_group_full_pairing_lands_same_group_key_on_both_sides() {
     let host_app = mock_app();

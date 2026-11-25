@@ -24,14 +24,15 @@ jest.mock('@tauri-apps/plugin-clipboard-manager', () => ({
 
 jest.mock('@/utils/clipboard', () => ({
   __esModule: true,
-  // 保留真实 copyToClipboardWithToast（行内复制与全局 ⌘E 共用，toast 文案
-  // 断言才有意义）；其写入链路走上面 mock 的 tauri 插件。
-  // 注意：不能在这里覆盖 copyWithAutoClear——真实函数引用的是模块内部
-  // 绑定，mock 导出拦不到。
+  // Keep the real copyToClipboardWithToast (shared by inline copy and global ⌘E,
+  // so toast copy assertions are meaningful); its write path uses the Tauri plugin
+  // mock above.
+  // Note: do not override copyWithAutoClear here—the real function refers to a
+  // module-internal binding, so mocking the export cannot intercept it.
   ...jest.requireActual('@/utils/clipboard'),
 }));
 
-// 面板（CredentialDetailPane）经 transitive 生效：哑渲染避免拖入真实 reveal 链路
+// The pane (CredentialDetailPane) takes effect transitively: dummy render avoids pulling in the real reveal chain
 jest.mock('@/components/RevealSecretButton', () => ({
   __esModule: true,
   default: ({ field, label }: any) => (
@@ -39,8 +40,8 @@ jest.mock('@/components/RevealSecretButton', () => ({
   ),
 }));
 
-// 返回类型注解让 tsc 守住 fixture 与 Credential 的形状一致；
-// 可选字段（url/username/notes/last_accessed）缺省即可，无需显式 null
+// The return-type annotation lets tsc keep the fixture shape aligned with Credential;
+// optional fields (url/username/notes/last_accessed) may be omitted—explicit null is unnecessary
 const makeCred = (over: Record<string, any> = {}): Credential => ({
   id: 'c1',
   identity_id: 'i1',
@@ -64,7 +65,7 @@ const setupList = (credentials: any[], serviceOver: Record<string, any> = {}) =>
     deleteCredential: jest.fn(),
     getTotpCode: jest.fn(),
     getCredentialHistory: jest.fn().mockResolvedValue([]),
-    // 挂载期拉取不产生 setState（悬挂 promise），与 DetailPane 专测各自覆盖附件流
+    // Mount-time fetch does not produce setState (dangling promise); DetailPane-specific tests cover attachment flows
     listAttachments: jest.fn(() => new Promise(() => {})),
     attachFileToCredential: jest.fn(),
     saveAttachmentToFile: jest.fn().mockResolvedValue(true),
@@ -93,9 +94,9 @@ describe('filterCredentials (pure)', () => {
     expect(filterCredentials(creds, { types: new Set(['Password']) }).map((c) => c.id)).toEqual(['1']);
     expect(filterCredentials(creds, { tags: new Set(['dev']) }).map((c) => c.id)).toEqual(['2']);
     expect(filterCredentials(creds, { favoritesOnly: true }).map((c) => c.id)).toEqual(['1']);
-    // 命中 query + type 才保留
+    // Kept only when query + type match
     expect(filterCredentials(creds, { query: 'git', types: new Set(['ApiKey']) })).toEqual([]);
-    // 空集合 = 不过滤
+    // Empty sets = no filtering
     expect(filterCredentials(creds, { types: new Set(), tags: new Set() })).toHaveLength(2);
   });
 });
@@ -103,10 +104,10 @@ describe('filterCredentials (pure)', () => {
 describe('components/CredentialList', () => {
   beforeEach(() => {
     jest.clearAllMocks();
-    // 真实 copyToClipboardWithToast 的写入主路（tauri 插件）默认成功
+    // The real copyToClipboardWithToast's primary write path (Tauri plugin) succeeds by default
     mockTauriWriteText.mockReset().mockResolvedValue(undefined);
     mockTauriReadText.mockReset();
-    // 真 store 单例跨用例存活：树筛选复位为"全部条目"，清掉残留的待注入选中
+    // The real store singleton survives across cases: reset the tree filter to "All Items" and clear leftover pending selection
     useAppStore.setState({
       sidebarFilter: { kind: 'all' },
       pendingCredentialSelection: null,
@@ -152,13 +153,13 @@ describe('components/CredentialList', () => {
         useAppStore.setState({ credentialSearchQuery: q });
       });
 
-    // 命中类型名（大小写不敏感）；搜索词在侧栏大搜索框，store 同字段直驱
+    // Match the type name case-insensitively; the search term comes from the large sidebar search box and drives the same store field
     setQuery('api');
     expect(screen.getByText('1 条凭据')).toBeInTheDocument();
     expect(screen.getByText('Keytwo')).toBeInTheDocument();
     expect(screen.queryByText('Bank one')).not.toBeInTheDocument();
 
-    // 无结果：提示调整搜索词，且不渲染首建按钮
+    // No results: prompt adjusting the search term and do not render the first-create button
     setQuery('zzz');
     expect(screen.getByText('未找到凭据')).toBeInTheDocument();
     expect(screen.getByText('试试调整搜索词')).toBeInTheDocument();
@@ -176,30 +177,30 @@ describe('components/CredentialList', () => {
         useAppStore.setState({ sidebarFilter: filter });
       });
 
-    // 仅收藏；列表头标题随筛选态（filterLabel 单一事实源）
+    // Favorites only; the list header title follows filter state (filterLabel is the single source of truth)
     setFilter({ kind: 'favorites' });
     expect(screen.getByRole('heading', { name: '收藏' })).toBeInTheDocument();
     expect(screen.getByText('1 条凭据')).toBeInTheDocument();
     expect(screen.getByText('Fav-one')).toBeInTheDocument();
 
-    // 单选：切分类即替换收藏筛选
+    // Single-select: switching category replaces the favorites filter
     setFilter({ kind: 'category', value: 'api_keys' });
     expect(screen.getByRole('heading', { name: 'API 密钥' })).toBeInTheDocument();
     expect(screen.getByText('1 条凭据')).toBeInTheDocument();
     expect(screen.getByText('Dev-two')).toBeInTheDocument();
     expect(screen.queryByText('Fav-one')).not.toBeInTheDocument();
 
-    // 切标签同样替换（不再叠加）
+    // Switching tags likewise replaces rather than stacks
     setFilter({ kind: 'tag', value: 'dev' });
     expect(screen.getByText('Dev-two')).toBeInTheDocument();
 
-    // 搜索词与树筛选 AND
+    // Search term and tree filter are ANDed
     act(() => {
       useAppStore.setState({ credentialSearchQuery: 'zzz' });
     });
     expect(screen.getByText('未找到凭据')).toBeInTheDocument();
 
-    // 回全部条目并清搜索
+    // Return to all items and clear the search term
     setFilter({ kind: 'all' });
     act(() => {
       useAppStore.setState({ credentialSearchQuery: '' });
@@ -220,7 +221,7 @@ describe('components/CredentialList', () => {
       useAppStore.setState({ sidebarFilter: { kind: 'recent' } });
     });
 
-    // 最近访问在前（新→旧），同刻按名称，从未访问的沉底
+    // Recently accessed first (newest→oldest), same timestamp by name, never-accessed sinks to the bottom
     const order = screen
       .getAllByTestId(/^credential-row-/)
       .map((el) => el.getAttribute('data-testid'));
@@ -248,9 +249,9 @@ describe('components/CredentialList', () => {
       });
     });
 
-    // 消费后即清除，避免下次进列表时再次弹选中
+    // Cleared after consumption, avoiding another selection popup the next time the list is entered
     expect(useAppStore.getState().pendingCredentialSelection).toBeNull();
-    // 注入同时写入 store 选中 id（详情面板与全局 ⌘E 依赖同一事实源）
+    // Injection also writes the store selection id (detail pane and global ⌘E rely on the same source of truth)
     expect(useAppStore.getState().selectedCredentialId).toBe('c1');
   });
 
@@ -271,7 +272,7 @@ describe('components/CredentialList', () => {
   });
 
   it('injecting the pending selection clears search and sidebar filter so the target is visible', () => {
-    // c1 是 Password；侧栏选中 api_keys 分类 + 搜索词都会把它挡住
+    // c1 is a Password; the sidebar api_keys category + search term both hide it
     setupList([
       makeCred({ id: 'c1', name: 'JumpTarget' }),
       makeCred({ id: 'c2', name: 'Other', credential_type: 'ApiKey' }),
@@ -290,7 +291,7 @@ describe('components/CredentialList', () => {
       });
     });
 
-    // 注入同时清筛选：目标行可见、搜索词已清空、侧栏分类复位
+    // Injection also clears filters: target row visible, search term cleared, sidebar category reset
     expect(screen.getByTestId('credential-row-c1')).toBeInTheDocument();
     expect(useAppStore.getState().selectedCredentialId).toBe('c1');
     expect(useAppStore.getState().credentialSearchQuery).toBe('');
@@ -306,12 +307,12 @@ describe('components/CredentialList', () => {
       });
     });
 
-    // 目标已删除：pending 作废防残留
+    // Target deleted: discard pending to prevent residue
     expect(useAppStore.getState().pendingCredentialSelection).toBeNull();
   });
 
   it('keeps the pending selection while the credential list still belongs to the previous identity', () => {
-    // 换身份后旧列表尚未替换的中间态（首元素身份不匹配）：不能误清 pending
+    // Interim state after identity switch where the old list has not yet been replaced (first row identity mismatch): do not accidentally clear pending
     setupList([makeCred({ id: 'c1', name: 'Stale', identity_id: 'i0' })]);
 
     act(() => {
@@ -335,7 +336,7 @@ describe('components/CredentialList', () => {
     fireEvent.click(screen.getByTestId('credential-row-c1'));
     expect(useAppStore.getState().selectedCredentialId).toBe('c1');
 
-    // 侧栏切到 api_keys 分类：c1 不在结果集里 → 选中清空（详情面板随之让位占位）
+    // Sidebar switched to the api_keys category: c1 is not in the result set → selection cleared (detail pane yields to its placeholder)
     act(() => {
       useAppStore.setState({ sidebarFilter: { kind: 'category', value: 'api_keys' } });
     });
@@ -352,18 +353,18 @@ describe('components/CredentialList', () => {
       makeCred({ id: 'c5', name: 'N-High', credential_type: 'BankCard', security_level: 'High', is_favorite: true, last_accessed: '2024-05-06T00:00:00Z' }),
     ]);
 
-    // 五档安全色（含未知档走 default 灰）
+    // Five security color bands (unknown level falls back to default gray)
     expect(document.querySelector('.bg-red-100.text-red-800')).not.toBeNull();
     expect(document.querySelector('.bg-orange-100.text-orange-800')).not.toBeNull();
     expect(document.querySelector('.bg-yellow-100.text-yellow-800')).not.toBeNull();
     expect(document.querySelector('.bg-green-100.text-green-800')).not.toBeNull();
     expect(document.querySelector('.bg-gray-100.text-gray-800')).not.toBeNull();
 
-    // 合法 URL 取 hostname；非法 URL 原样回显（catch 分支）
+    // A valid URL yields hostname; an invalid URL is echoed verbatim (catch branch)
     expect(screen.getByText('wallet.example.com')).toBeInTheDocument();
     expect(screen.getByText('not-a-url')).toBeInTheDocument();
 
-    // 收藏小红心（Last used 断言已迁到 CredentialDetailPane.test.tsx）
+    // Favorite heart (Last used assertion moved to CredentialDetailPane.test.tsx)
     expect(document.querySelector('svg.text-red-500')).not.toBeNull();
   });
 
@@ -371,14 +372,14 @@ describe('components/CredentialList', () => {
     setupList([makeCred({ id: 'c1', name: 'One' })]);
     expect(screen.getByTestId('credential-row-c1').className).not.toContain('bg-primary-50');
 
-    // 外部（全局快捷键路径）直接写 store id → 行高亮
+    // An external path (global shortcut) writes the store id directly → row highlight
     act(() => {
       useAppStore.setState({ selectedCredentialId: 'c1' });
     });
     expect(screen.getByTestId('credential-row-c1')).toHaveAttribute('aria-current', 'true');
     expect(screen.getByTestId('credential-row-c1').className).toContain('bg-primary-50');
 
-    // id 清空 → 高亮消失
+    // id cleared → highlight removed
     act(() => {
       useAppStore.setState({ selectedCredentialId: null });
     });
@@ -397,11 +398,11 @@ describe('components/CredentialList', () => {
   it('activates row selection with the keyboard, but not from the inline copy button', () => {
     setupList([makeCred({ username: 'alice' })]);
 
-    // 行上按 Enter：选中
+    // Enter on a row: select
     fireEvent.keyDown(screen.getByTestId('credential-row-c1'), { key: 'Enter' });
     expect(useAppStore.getState().selectedCredentialId).toBe('c1');
 
-    // 焦点在行内复制按钮上时，Enter 不触发选中切换
+    // When focus is on the inline copy button, Enter does not trigger selection switching
     act(() => {
       useAppStore.setState({ selectedCredentialId: null });
     });
@@ -418,7 +419,7 @@ describe('components/CredentialList', () => {
     fireEvent.click(screen.getAllByTitle('复制用户名')[1]);
     await act(async () => {});
     expect(toast.success).toHaveBeenCalledWith('用户名 已复制（30 秒后自动清除）');
-    // stopPropagation 生效：未触发选中
+    // stopPropagation works: selection was not triggered
     expect(useAppStore.getState().selectedCredentialId).toBeNull();
   });
 
@@ -433,14 +434,14 @@ describe('components/CredentialList', () => {
     expect(screen.getByTestId('credential-row-c1').className).not.toContain('bg-primary-50');
   });
 
-  // 「关闭面板清空选中 / 加载态 / 删除清空面板」是 App 层组合行为（面板挂在
-  // App 的详情列），覆盖迁至 App.test.tsx；「复制失败 toast」随真实剪贴板
-  // 链路迁至 CredentialDetailPane.test.tsx。
+  // "Closing the pane clears selection / loading state / deletion clears the pane" are App-layer composite behaviors (the pane is
+  // mounted in App's detail column), so their coverage moved to App.test.tsx; "copy failure toast" moved with the real clipboard
+  // chain to CredentialDetailPane.test.tsx.
 
   it('renders cached favicons on rows when the flag is on', () => {
     useAppStore.setState({
       featureFlags: { ...DEFAULT_FEATURE_FLAGS, fetch_favicons: true },
-      // 预置缓存 → useFavicons 的批量读无 pending，不发 IPC
+      // Pre-populate the cache → useFavicons's batch read has no pending request, so no IPC is sent
       faviconCache: { 'site.com': { mime_type: 'image/png', data: 'AAA' } },
     });
     setupList([

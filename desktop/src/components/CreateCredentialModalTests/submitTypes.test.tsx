@@ -13,7 +13,7 @@ import {
   selectType,
 } from './shared';
 
-// jsdom 未注入 TextEncoder（浏览器环境原生可用），Raw 分支提交需要
+// jsdom does not inject TextEncoder (native in a browser environment); the Raw branch submission needs it
 if (typeof globalThis.TextEncoder === 'undefined') {
   (globalThis as any).TextEncoder = jest.requireActual('util').TextEncoder;
 }
@@ -102,7 +102,7 @@ describe('components/CreateCredentialModal', () => {
     await waitFor(() => {
       expect(createCredential).toHaveBeenCalledWith(
         expect.objectContaining({
-          // SecureNote 是真实 credential_type 变体，不走 GameToken 的 TwoFactor 映射
+          // SecureNote is a real credential_type variant; it does not take GameToken's TwoFactor mapping
           credential_type: 'SecureNote',
           credential_data: {
             type: 'SecureNote',
@@ -144,7 +144,7 @@ describe('components/CreateCredentialModal', () => {
             last_name: 'Zhang',
             email: 'alice@example.com',
             id_number: '110101199001310011',
-            // 未填的可选字段不进请求体
+            // Unfilled optional fields do not enter the request body
             passport_number: undefined,
           }),
         }),
@@ -242,7 +242,7 @@ describe('components/CreateCredentialModal', () => {
           credential_type: 'BankCard',
           credential_data: {
             type: 'Raw',
-            // TextEncoder 字节数组（'é' 为 UTF-8 双字节）
+            // TextEncoder byte array ('é' is two UTF-8 bytes)
             data: Array.from(new TextEncoder().encode('héllo')),
           },
         }),
@@ -270,6 +270,6 @@ describe('components/CreateCredentialModal', () => {
   });
 
   // ------------------------------------------------------------------
-  // 编辑模式（editCredential prop）：预填 + 元数据/payload 双保存
+  // Edit mode (the editCredential prop): prefilled + metadata/payload dual save
   // ------------------------------------------------------------------
 });

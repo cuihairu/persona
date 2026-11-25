@@ -40,7 +40,7 @@ const IdentitySwitcher: React.FC<IdentitySwitcherProps> = ({ onCreateIdentity })
 
   return (
     <div className="relative">
-      {/* value 恒受控：currentIdentity 为 Identity|null（永不为 undefined），
+      {/* value is always controlled: currentIdentity is Identity|null (never undefined),
           null !== undefined 即视为受控，避免「非受控→受控」转换告警。
           headlessui 的 useControllable 仅按 value!==undefined 判定受控。 */}
       <Listbox
@@ -162,7 +162,7 @@ const CreateIdentityModal: React.FC<CreateIdentityModalProps> = ({ isOpen, onClo
   const [identityType, setIdentityType] = useState<IdentityType>('Personal');
   const [description, setDescription] = useState('');
   const { createIdentity, isLoading } = usePersonaService();
-  // Esc 关闭；提交中不逃逸
+  // Esc closes; no escape while a submit is in flight
   useEscapeToClose(isOpen && !isLoading, onClose);
 
   const identityTypes: IdentityType[] = ['Personal', 'Work', 'Social', 'Financial', 'Gaming'];

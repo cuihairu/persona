@@ -5,13 +5,14 @@ import { personaAPI } from '../utils/api';
 import type { QuickAccessStatus } from '../types';
 
 /**
- * Quick Access 设置区（对标矩阵 #22：OS 级全局热键 + 浮窗）。
+ * Quick Access settings section (matrix benchmark #22: OS-level global hotkey + floating panel).
  *
- * 三件事：开关、绑定串改写、"到底生效没有"的如实展示。后端把配置真值
- * （DB）与运行态（OS 抢注结果）分开返回，所以这一区能区分两种失败：
- * 语法错（后端拒收，配置不变）与抢注失败（配置已存、热键没生效，
- * `error` 带原因——Wayland 无 portal、被别的应用占用都走这里）。
- * 状态面免解锁可读，锁定后仍能看出"热键是不是活的"。
+ * Three things: the toggle, rewriting the binding string, and an honest display of "is it
+ * actually in effect". The backend returns config truth (DB) and runtime state (the OS grab
+ * result) separately, so this section can tell two failures apart: syntax errors (the backend
+ * rejects them, config unchanged) vs grab failures (config saved but the hotkey is not live;
+ * `error` carries the reason — no portal on Wayland, taken by another app, etc.).
+ * The status surface is readable without unlocking; even locked you can see "whether the hotkey is alive".
  */
 const QuickAccessSection: React.FC = () => {
   const { t } = useTranslation();
@@ -28,7 +29,7 @@ const QuickAccessSection: React.FC = () => {
         setHotkeyInput(resp.data.configured_accelerator);
       }
     } catch {
-      // 状态读取失败不打断面板（保持上次值；首次为 null = 未加载）
+      // A status read failure doesn't disrupt the panel (keep the last value; null on first load = not loaded)
     }
   }, []);
 
@@ -45,7 +46,7 @@ const QuickAccessSection: React.FC = () => {
         setStatus(resp.data);
         setHotkeyInput(resp.data.configured_accelerator);
         if (resp.data.error) {
-          // 落库成功但 OS 抢注失败：绑定已改，只是此刻不生效
+          // Persisted but the OS grab failed: the binding changed, it just isn't active right now
           toast.error(t('settings.quickAccess.savedButNotActive'));
         } else {
           toast.success(t('settings.quickAccess.saved'));
@@ -61,7 +62,7 @@ const QuickAccessSection: React.FC = () => {
   };
 
   const enabled = status?.enabled ?? false;
-  // 生效判定：开关开 + 抢注成功。抢注失败时 configured 与 registered 不一致
+  // Active check: toggle on + grab succeeded. When the grab fails, configured and registered disagree
   const active = enabled && status?.registered_accelerator !== null && status?.registered_accelerator !== undefined;
 
   return (
@@ -144,8 +145,9 @@ const QuickAccessSection: React.FC = () => {
           </p>
         </div>
 
-        {/* 生效状态：抢注失败时把后端原因原样透出（英文是 OS/插件原文，
-            不翻译成"未知错误"——用户要照着它去查 WM 占用或换键） */}
+        {/* Active status: when the grab fails, surface the backend reason verbatim (it's the OS/plugin's
+            original English text; don't translate it into "unknown error" — the user needs it to check WM
+            occupancy or pick a different key) */}
         <div className="text-xs" data-testid="quick-access-status">
           {status === null ? (
             <span className="text-gray-400 dark:text-gray-500">

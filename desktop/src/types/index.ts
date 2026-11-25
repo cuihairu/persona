@@ -1,6 +1,7 @@
-/** 桌面共享类型总出口（与 src-tauri 命令载荷一一对应）。
- *  按域拆分：api/sync/backup/account/credential/ssh/wallet/health，
- *  此处仅 re-export，消费方 `@/types` 路径不变。
+/** Single barrel for the shared desktop types (mirrors the src-tauri command
+ * payloads one-to-one).
+ *  Split by domain: api/sync/backup/account/credential/ssh/wallet/health;
+ *  this file only re-exports, so consumers keep using `@/types` unchanged.
  */
 export * from './api';
 export * from './sync';

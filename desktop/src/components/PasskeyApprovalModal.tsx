@@ -5,12 +5,12 @@ import type { PasskeyApprovalRequest } from '@/types';
 
 export interface PasskeyApprovalModalProps {
   request: PasskeyApprovalRequest | null;
-  /** 后端仍在等待应答的请求总数（>1 时提示还有排队） */
+  /** Total number of requests the backend is still awaiting a response for (when >1, a queue hint is shown) */
   pendingCount?: number;
   onRespond: (requestId: string, allow: boolean) => void;
 }
 
-/** origin 的 hostname（解析失败返回 null） */
+/** Hostname of the origin (null when parsing fails) */
 const hostnameOf = (origin: string): string | null => {
   try {
     return new URL(origin).hostname;
@@ -19,15 +19,17 @@ const hostnameOf = (origin: string): string | null => {
   }
 };
 
-/** 标题 i18n key（渲染处 t()） */
+/** Title i18n key (rendered via t()) */
 const titleFor = (request: PasskeyApprovalRequest): string =>
   request.operation === 'passkey_create' ? 'passkeyApproval.createTitle' : 'passkeyApproval.assertTitle';
 
 /**
- * Passkey 审批弹窗：bridge（浏览器扩展经 Unix socket）请求注册/断言时弹出。
- * 显示完整 origin / rp_id / 账号；Deny 后 bridge 拒绝该请求。
- * rp_id 与 origin hostname 不一致时给出解释——这是跨域请求的可见信号
- * （照扩展 content.ts 的跨域提示先例）。
+ * Passkey approval modal: shown when the bridge (browser extension over a Unix
+ * socket) requests registration/assertion. Displays the full origin / rp_id /
+ * account; after Deny the bridge rejects the request. When rp_id differs from
+ * the origin hostname, an explanation is shown — this is a visible signal for
+ * cross-domain requests (following the cross-domain hint precedent in the
+ * extension's content.ts).
  */
 const PasskeyApprovalModal: React.FC<PasskeyApprovalModalProps> = ({
   request,
@@ -38,7 +40,7 @@ const PasskeyApprovalModal: React.FC<PasskeyApprovalModalProps> = ({
   useEffect(() => {
     if (!request) return;
     const onKey = (e: KeyboardEvent) => {
-      // Esc = 拒绝：安全默认
+      // Esc = deny: safe default
       if (e.key === 'Escape') onRespond(request.request_id, false);
     };
     window.addEventListener('keydown', onKey);
@@ -58,7 +60,7 @@ const PasskeyApprovalModal: React.FC<PasskeyApprovalModalProps> = ({
       role="alertdialog"
       aria-label={t('passkeyApproval.ariaLabel')}
       onMouseDown={(e) => {
-        // 点空白 = 拒绝（安全默认，与 Esc 同口径）；审批必须显式允许
+        // Click on backdrop = deny (safe default, same as Esc); approval must be explicit
         if (e.target === e.currentTarget) onRespond(request.request_id, false);
       }}
     >

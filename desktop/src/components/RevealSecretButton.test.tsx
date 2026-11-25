@@ -3,9 +3,9 @@ import RevealSecretButton from './RevealSecretButton';
 import { personaAPI } from '@/utils/api';
 import { copyWithAutoClear } from '@/utils/clipboard';
 
-// jsdom 下 reauth 弹窗在 act 外打开，无法 fireEvent 交互（见
-// jsdom-act-outside-modal-testing 教训）：mock useReauth，只测按钮的
-// 重试编排；弹窗本体由 ReauthModal.test.tsx 覆盖。
+// Under jsdom the reauth modal opens outside act and fireEvent cannot interact with it (see the
+// jsdom-act-outside-modal-testing lesson): mock useReauth and only test the button's retry
+// orchestration; the modal itself is covered by ReauthModal.test.tsx.
 const requestReauth = jest.fn();
 
 jest.mock('@/hooks/useReauth', () => ({
@@ -56,7 +56,7 @@ describe('components/RevealSecretButton', () => {
     expect(screen.getByTestId('revealed-value').textContent).toBe('s3cret');
     expect(screen.getByTestId('reveal-countdown').textContent).toBe('2 秒后隐藏');
 
-    // 每秒递减，归零自动隐藏并复位重试标记
+    // Decrements every second; auto-hides at zero and resets the retry flag
     await act(async () => {
       jest.advanceTimersByTime(1000);
     });
@@ -90,14 +90,14 @@ describe('components/RevealSecretButton', () => {
 
   it('cancellation does not consume the retry; hide resets it', async () => {
     const REAUTH = { success: false, data: undefined, error_code: 'REAUTH_REQUIRED' };
-    // reveal 响应队列：默认 REAUTH_REQUIRED
+    // reveal response queue: REAUTH_REQUIRED by default
     const queue: any[] = [];
     reveal.mockImplementation(() => Promise.resolve(queue.shift() ?? REAUTH));
 
     render(<RevealSecretButton credentialId="c1" field="password" label="Password" />);
     const trigger = () => screen.getByTestId('reveal-trigger');
 
-    // 第一轮：取消 → 不重试、不显示
+    // Round 1: cancel → no retry, nothing shown
     requestReauth.mockResolvedValue(false);
     fireEvent.click(trigger());
     await waitFor(() => {
@@ -105,13 +105,13 @@ describe('components/RevealSecretButton', () => {
     });
     expect(screen.queryByTestId('revealed-value')).not.toBeInTheDocument();
 
-    // 取消没有消耗重试机会：再点仍会弹窗
+    // Cancelling does not consume the retry: clicking again still opens the modal
     fireEvent.click(trigger());
     await waitFor(() => {
       expect(requestReauth).toHaveBeenCalledTimes(2);
     });
 
-    // 授权 → 自动重试 → 显示
+    // Approve → automatic retry → shown
     requestReauth.mockResolvedValue(true);
     queue.push(REAUTH, resolveOk('shown'));
     fireEvent.click(trigger());
@@ -120,7 +120,7 @@ describe('components/RevealSecretButton', () => {
     });
     expect(requestReauth).toHaveBeenCalledTimes(3);
 
-    // 手动 Hide 复位重试标记 → 下一轮 REAUTH_REQUIRED 才会再弹
+    // A manual Hide resets the retry flag → only the next REAUTH_REQUIRED round opens the modal again
     fireEvent.click(screen.getByLabelText('隐藏Password'));
     queue.push(REAUTH, resolveOk('again'));
     fireEvent.click(trigger());
@@ -173,7 +173,7 @@ describe('components/RevealSecretButton', () => {
     expect(onCopy).toHaveBeenCalledWith('copy-me');
     expect(copyWithAutoClear).not.toHaveBeenCalled();
 
-    // 无自定义 handler → copyWithAutoClear（第一个组件已 reveal，无 trigger）
+    // No custom handler → copyWithAutoClear (the first component already revealed, so there is no trigger)
     render(
       <RevealSecretButton credentialId="c2" field="ssh_private_key" label="Private Key" />,
     );
@@ -199,14 +199,14 @@ describe('components/RevealSecretButton', () => {
     expect(screen.queryByTestId('revealed-value')).not.toBeInTheDocument();
     expect(reveal).toHaveBeenLastCalledWith('c1', 'wallet_mnemonic', undefined);
 
-    // 提交条目密码 → 自动带第二因子重试
+    // Submit the item password → automatically retries with the second factor
     fireEvent.change(screen.getByTestId('item-password-input'), { target: { value: 'item-pass' } });
     fireEvent.click(screen.getByTestId('item-password-submit'));
     await waitFor(() => {
       expect(screen.getByTestId('revealed-value').textContent).toBe('seed words');
     });
     expect(reveal).toHaveBeenLastCalledWith('c1', 'wallet_mnemonic', 'item-pass');
-    // 内联输入随成功收起
+    // The inline input collapses on success
     expect(screen.queryByTestId('item-password-input')).not.toBeInTheDocument();
   });
 

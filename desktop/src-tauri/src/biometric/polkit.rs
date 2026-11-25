@@ -1,34 +1,38 @@
-//! Linux：polkit `CheckAuthorization` 认证弹框。
+//! Linux: the polkit `CheckAuthorization` authentication prompt.
 //!
-//! 不依赖 zbus_polkit（<5.1.0 的 CVE-2026-78422：unix-process subject
-//! 的 uid 编码错型，可被 PID 复用绕过）——手写一条 D-Bus 调用，subject
-//! 用 system-bus-name：polkit 经 bus daemon 自己解析对端凭据，天然免疫
-//! PID 复用类缺陷。zbus 5 已因 keyring 在依赖树里，零新增依赖。
+//! Deliberately does not depend on zbus_polkit (CVE-2026-78422 in <5.1.0:
+//! mistyped uid encoding for unix-process subjects, bypassable via PID reuse)
+//! — instead it issues a hand-written D-Bus call using a system-bus-name subject:
+//! polkit resolves the peer credentials itself through the bus daemon, which is
+//! inherently immune to PID-reuse style defects. zbus 5 is already in the
+//! dependency tree via keyring, so there are zero new dependencies.
 //!
-//! action 文件（`desktop/src-tauri/polkit/*.policy`）随 deb 安装到
-//! `/usr/share/polkit-1/actions/`；rpm/AppImage/dev 构建没装它时
-//! `CheckAuthorization` 报 ActionUnknown → availability/ceremony 失败
-//! → 功能 fail-closed 降级（文档明示）。
+//! The action file (`desktop/src-tauri/polkit/*.policy`) is installed by the
+//! deb into `/usr/share/polkit-1/actions/`; on rpm/AppImage/dev builds where it
+//! is not installed, `CheckAuthorization` reports ActionUnknown, availability and
+//! ceremony fail, and the feature degrades fail-closed (documented).
 
 use zbus::blocking::{Connection, Proxy};
 
-/// polkit action id（与应用 identifier 对齐，见 tauri.conf.json）
+/// polkit action id (aligned with the app identifier, see tauri.conf.json)
 const ACTION_ID: &str = "com.persona.desktop.biometric-unlock";
 
 const POLKIT_DBUS: &str = "org.freedesktop.PolicyKit1";
 const POLKIT_PATH: &str = "/org/freedesktop/PolicyKit1/Authority";
 const POLKIT_IFACE: &str = "org.freedesktop.PolicyKit1.Authority";
 
-/// CheckAuthorizationFlags 的 AllowUserInteraction 位（允许 polkit 弹
-/// agent 认证框，而非直接拒绝不可交互的授权）
+/// AllowUserInteraction bit of CheckAuthorizationFlags (lets polkit pop the
+/// agent authentication dialog instead of immediately denying an
+/// authorization that cannot interact)
 const ALLOW_USER_INTERACTION: u32 = 1;
 
 pub fn platform_name() -> &'static str {
     "linux-polkit"
 }
 
-/// system bus 可达且 polkit daemon 在运行（有属主）。action 文件缺失
-/// 不在此处探测——它留给 ceremony 的真实错误暴露，避免两跳 D-Bus。
+/// system bus is reachable and the polkit daemon is running (has an owner).
+/// A missing action file is not probed here — that is left to surface through
+/// the ceremony's real error, avoiding a two-hop D-Bus round trip.
 pub fn available() -> bool {
     let Ok(conn) = Connection::system() else {
         return false;
@@ -49,15 +53,18 @@ pub fn available() -> bool {
     has_owner
 }
 
-/// 弹出系统 polkit 认证框（本机无指纹设备时 agent 自动回落到密码
-/// 认证，同样是合法验证面——auth_self 语义）。
+/// Pops the system polkit authentication dialog (when the machine has no
+/// fingerprint device, the agent automatically falls back to password
+/// authentication, which is equally a legitimate verification surface —
+/// auth_self semantics).
 pub fn ceremony(reason: &str) -> Result<(), String> {
     let conn = Connection::system().map_err(|e| format!("system bus unavailable: {e}"))?;
     let authority = Proxy::new(&conn, POLKIT_DBUS, POLKIT_PATH, POLKIT_IFACE)
         .map_err(|e| format!("polkit proxy failed: {e}"))?;
 
-    // system-bus-name subject：值是本连接在 system bus 上的唯一名，
-    // polkit 拿它向 bus daemon 查对端凭据（uid/pid），不经调用方自报
+    // system-bus-name subject: the value is this connection's unique name on
+    // the system bus; polkit uses it to ask the bus daemon for the peer
+    // credentials (uid/pid), rather than trusting a caller-supplied claim
     let unique_name = conn
         .unique_name()
         .map(|name| name.to_string())
@@ -83,7 +90,7 @@ pub fn ceremony(reason: &str) -> Result<(), String> {
         .map_err(|e| format!("unexpected polkit reply: {e}"))?;
 
     if outcome.0 {
-        let _ = reason; // polkit 弹框文案由 .policy 文件的 message 提供
+        let _ = reason; // the polkit dialog wording is provided by the .policy file's message
         Ok(())
     } else {
         Err("polkit authorization denied".to_string())

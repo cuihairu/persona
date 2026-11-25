@@ -1,9 +1,11 @@
 import type { TrayLocaleLabels } from '@/types';
 
 /**
- * 托盘右键菜单文案：真值在 i18n locale 表（tray.* 命名空间）。原生托盘
- * 菜单不归 useTranslation 管（构建在 Rust 侧），由前端把当前语言的
- * 文案推给 set_tray_locale 命令渲染——语言切换后立即生效。
+ * Tray right-click menu labels: the source of truth is the i18n locale table
+ * (the tray.* namespace). The native tray menu is outside useTranslation's
+ * reach (it is built on the Rust side), so the frontend pushes the current
+ * language's labels to the set_tray_locale command — switching language takes
+ * effect immediately.
  */
 export function trayLocaleLabels(t: (key: string) => string): TrayLocaleLabels {
   return {

@@ -3,19 +3,19 @@ import { useTranslation } from 'react-i18next';
 import { formatLabel, type WalletExportFormat } from './walletExport';
 
 interface ExportWalletModalProps {
-  /** 目标钱包名；null 时文案走通用提示 */
+  /** Target wallet name; null falls back to the generic copy */
   walletName: string | null;
-  /** 可用格式与限制提示由父层按钱包派生 */
+  /** Available formats and restriction hints are derived by the parent per wallet */
   formats: WalletExportFormat[];
   restrictionHint: string | null;
   format: WalletExportFormat;
-  /** 切格式时父层复位导出输出与 includePrivate */
+  /** On a format switch the parent resets the export output and includePrivate */
   onFormatChange: (format: WalletExportFormat) => void;
   includePrivate: boolean;
   onIncludePrivateChange: (value: boolean) => void;
   password: string;
   onPasswordChange: (value: string) => void;
-  /** 导出结果（json 走文件下载不展示在这里） */
+  /** Export result (json goes through file download and is not shown here) */
   output: string | null;
   onPerform: () => void;
   onClose: () => void;
@@ -28,7 +28,7 @@ const needsPassword = (format: WalletExportFormat, includePrivate: boolean): boo
   format === 'keystore' ||
   (format === 'json' && includePrivate);
 
-/** 导出钱包弹窗：格式选择 + 限制提示 + 敏感格式密码门 + 结果展示 */
+/** Export-wallet modal: format selection + restriction hints + password gate for sensitive formats + result display */
 const ExportWalletModal: React.FC<ExportWalletModalProps> = ({
   walletName,
   formats,

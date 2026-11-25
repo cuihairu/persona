@@ -5,21 +5,21 @@ import { personaAPI } from '@/utils/api';
 import DataLossWarning from './DataLossWarning';
 import type { SyncJoinBeginOutcome, SyncPairingCreateOutcome } from '@/types';
 
-/** 同步组配对节（S1 桌面接线）：出码 / 输码 / 指纹比对 / 入组。 */
+/** Sync group pairing section (S1 desktop wiring): emit code / enter code / fingerprint comparison / join. */
 export default function SyncGroupSection() {
   const { t } = useTranslation();
   const [joined, setJoined] = useState<boolean | null>(null);
   const [busy, setBusy] = useState(false);
-  /** host 出码会话（None = 未发起） */
+  /** Host code-emitting session (None = not started) */
   const [pairing, setPairing] = useState<SyncPairingCreateOutcome | null>(null);
-  /** host 侧等待结果：指纹到位即配对完成 */
+  /** Host-side wait result: pairing is done once the fingerprint arrives */
   const [hostFingerprint, setHostFingerprint] = useState<string | null>(null);
   const [hostError, setHostError] = useState<string | null>(null);
-  /** guest 侧：join_begin 结果（指纹待比对） */
+  /** Guest side: join_begin result (fingerprint awaiting comparison) */
   const [joining, setJoining] = useState<SyncJoinBeginOutcome | null>(null);
   const [guestLink, setGuestLink] = useState('');
   const [guestError, setGuestError] = useState<string | null>(null);
-  // poll 在途标记（防重入；取消后 poll 以错误返回，不覆盖新状态）
+  // Poll in-flight flag (prevents re-entry; after a cancel the poll returns an error and must not overwrite newer state)
   const pollInFlight = useRef(false);
 
   const refreshStatus = useCallback(async (): Promise<void> => {
@@ -27,7 +27,7 @@ export default function SyncGroupSection() {
       const resp = await personaAPI.syncGroupStatus();
       if (resp.success && resp.data !== undefined) setJoined(resp.data);
     } catch {
-      // 状态读取失败保持旧值（同 SyncDevicesSection 口径），不打断 UI
+      // A failed status read keeps the old value (same policy as SyncDevicesSection), so the UI is not interrupted
     }
   }, []);
 
@@ -35,13 +35,13 @@ export default function SyncGroupSection() {
     void refreshStatus();
   }, [refreshStatus]);
 
-  /** host：出码后立即挂起等待（阻塞至完成/90s；cancel 后本调用报错返回） */
+  /** Host: suspend and wait right after emitting the code (blocks until completion / 90s; after a cancel this call returns an error) */
   const driveHost = useCallback(async (sessionId: string) => {
     if (pollInFlight.current) return;
     pollInFlight.current = true;
     try {
       const resp = await personaAPI.syncGroupPairingPoll(sessionId);
-      // 会话被取消/被新会话替换时后端返回错误；此时不覆盖当前状态
+      // The backend returns an error when the session was cancelled or superseded by a newer one; do not overwrite the current state in that case
       if (resp.success && resp.data?.completed) {
         setHostFingerprint(resp.data.fingerprint);
         setHostError(null);
@@ -82,7 +82,7 @@ export default function SyncGroupSection() {
       try {
         await personaAPI.syncGroupPairingCancel(pairing.session_id);
       } catch {
-        // 本地状态无论如何复位（中转信箱过期由 TTL 兜底）
+        // Reset the local state regardless (an expired relay mailbox is backstopped by its TTL)
       }
     }
     setPairing(null);
@@ -136,7 +136,7 @@ export default function SyncGroupSection() {
       try {
         await personaAPI.syncGroupJoinCancel(joining.session_id);
       } catch {
-        // 同 cancelPairing：本地状态复位优先
+        // Same as cancelPairing: resetting the local state takes priority
       }
     }
     setJoining(null);
@@ -167,8 +167,9 @@ export default function SyncGroupSection() {
       </div>
 
       {hostFingerprint ? (
-        // 完成面优先于组状态面：配对刚结束时用户要看到指纹与结果，
-        // 不能被入组状态面直接顶掉（关闭后回组状态面）
+        // The completion view takes priority over the group status view: right after pairing finishes the user needs
+        // to see the fingerprint and the result, so it must not be pushed aside by the join status view
+        // (closing returns to the group status view)
         <div
           className="border border-green-200 rounded-lg p-4 dark:border-green-800"
           data-testid="sync-group-host-done"
@@ -201,8 +202,8 @@ export default function SyncGroupSection() {
           <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
             {t('settings.syncGroup.joinedHint')}
           </p>
-          {/* S5-b 首次启用强提示：单设备且无备份时在位常驻（非一次性弹窗），
-              第二台设备或备份凭证任一到位即消失 */}
+          {/* S5-b first-enable strong prompt: resident while in place on a single device with no backup
+              (not a one-shot dialog); it disappears as soon as a second device or a backup credential arrives */}
           <DataLossWarning variant="strong" />
         </div>
       ) : (

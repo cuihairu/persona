@@ -32,7 +32,7 @@ export const serviceApi = {
   },
 
 
-  /** 窄写 features 四个开关位，返回更新后的全量设置作为服务端真相 */
+  /** Narrow write of the four feature switches; returns the updated full settings as the server's truth */
   async setFeatureFlags(flags: FeatureFlags): Promise<ApiResponse<WorkspaceSettings>> {
     return invoke('set_feature_flags', {
       ssh_agent: flags.ssh_agent,
@@ -43,25 +43,25 @@ export const serviceApi = {
   },
 
 
-  /** 窄写主密码过期策略（天）；null = 不过期。返回更新后的全量设置 */
+  /** Narrow write of the master password expiry policy (days); null = never expires. Returns the updated full settings */
   async setPasswordExpiry(days: number | null): Promise<ApiResponse<WorkspaceSettings>> {
     return invoke('set_password_expiry', { days });
   },
 
 
-  /** 窄写界面语言（"zh-CN" / "en"）。返回更新后的全量设置 */
+  /** Narrow write of the UI language ("zh-CN" / "en"). Returns the updated full settings */
   async setLocale(locale: string): Promise<ApiResponse<WorkspaceSettings>> {
     return invoke('set_locale', { locale });
   },
 
 
-  /** 托盘右键菜单文案换语言：真值在 i18n locale 表（tray.*），Rust 只渲染 */
+  /** Re-language the tray right-click menu labels: the truth is in the i18n locale table (tray.*), Rust only renders */
   async setTrayLocale(labels: TrayLocaleLabels): Promise<ApiResponse<boolean>> {
     return invoke('set_tray_locale', { labels });
   },
 
 
-  /** 修改主密码（旧密码仅存在于本次请求，不落盘不进日志）；成功后前端需重新 init */
+  /** Change the master password (the old password exists only within this request, never on disk or in logs); after success the frontend must re-init */
   async changeMasterPassword(
     oldPassword: string,
     newPassword: string,
@@ -106,25 +106,25 @@ export const serviceApi = {
   },
 
 
-  /** biometric unlock 状态（免解锁只读；解锁屏 mount 即查，决定指纹按钮显隐） */
+  /** Biometric unlock status (read-only without unlocking; queried at unlock-screen mount to decide whether the fingerprint button shows) */
   async biometricStatus(dbPath?: string): Promise<ApiResponse<BiometricStatus>> {
     return invoke('biometric_status', { dbPath: dbPath ?? null });
   },
 
 
-  /** 启用 biometric unlock：后端先验密码再弹 OS 认证框，然后托管进 keyring */
+  /** Enable biometric unlock: the backend verifies the password, then pops the OS auth prompt, then hosts the secret into the keyring */
   async biometricEnable(masterPassword: string): Promise<ApiResponse<BiometricStatus>> {
     return invoke('biometric_enable', { request: { master_password: masterPassword } });
   },
 
 
-  /** 禁用 biometric unlock：幂等删 keyring 条目 */
+  /** Disable biometric unlock: idempotently deletes the keyring entry */
   async biometricDisable(): Promise<ApiResponse<BiometricStatus>> {
     return invoke('biometric_disable');
   },
 
 
-  /** biometric 解锁：OS 认证 → keyring 取回主密码走 init_service（密码不出进程） */
+  /** Biometric unlock: OS authentication → fetch the master password from the keyring and run init_service (the password never leaves the process) */
   async biometricUnlock(dbPath?: string): Promise<ApiResponse<boolean>> {
     return invoke('biometric_unlock', { request: { db_path: dbPath ?? null } });
   },

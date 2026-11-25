@@ -53,8 +53,8 @@ describe('hooks/usePersonaService', () => {
     });
     expect(useAppStore.getState().sshAgentStatus).toEqual({ running: true });
 
-    // data 为空时归一为 null（Rust 实际下发 null；类型收窄为 undefined，
-    // hook 侧 `?? null` 统一归一）
+    // Empty data is normalized to null (Rust actually sends null; the type narrows to undefined,
+    // so the hook normalizes it with `?? null`)
     status.mockResolvedValueOnce({ success: true, data: undefined, error: undefined });
     await act(async () => {
       await result.current.refreshSshAgentStatus();
@@ -110,8 +110,9 @@ describe('hooks/usePersonaService', () => {
     await act(async () => {
       await result.current.startSshAgent();
     });
-    // 异常路径必须透出底层错误文本（api 层把 Tauri 字符串 rejection 归一成
-    // Error 后，这里拿到 message），不再只报通用"启动 SSH Agent 失败"
+    // The exception path must surface the underlying error text (the api layer normalizes a Tauri
+    // string rejection into an Error, so we get the message here) instead of only the generic
+    // "failed to start the SSH Agent"
     expect(toastError).toHaveBeenLastCalledWith('x');
 
     jest.spyOn(personaAPI, 'stopSshAgent').mockResolvedValueOnce({

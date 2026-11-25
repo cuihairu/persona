@@ -1,33 +1,37 @@
-/** 同步域：配置、设备、配对/加入流程产出、冲突与轮换报表。 */
+/** Sync domain: configuration, devices, pairing/join outcomes, conflict and rotation reports. */
 
 import type { AccountBinding } from './account';
 import type { BackupEvidence } from './backup';
 import type { FeatureFlags } from './api';
 
-/** 同步服务器（persona-server Events API）客户端配置（对应 Rust SyncConfig） */
+/** Client configuration for the sync server (persona-server Events API) (mirrors Rust SyncConfig) */
 export interface SyncConfig {
   enabled: boolean;
   server_url: string;
   /**
-   * 后端恒返回空串——token 真值存 OS keyring，不经 IPC 回读。
-   * 提交空串 = 保留 keyring 既有令牌（前端不回填，避免常驻内存）。
+   * The backend always returns an empty string — the real token lives in the
+   * OS keyring and is never read back over IPC.
+   * Submitting an empty string = keep the token already in the keyring
+   * (the frontend does not echo it, so it never sits in memory).
    */
   server_token: string;
   /**
-   * 云盘传输（Phase 2）的同步文件夹本机路径（iCloud Drive / Dropbox /
-   * Google Drive 的本地同步目录）。非 secret，存 settings JSON；null =
-   * 未配置。仅 `sync_transport === 'cloud'` 时有意义。
+   * Local path of the sync folder for the cloud-drive transport (Phase 2)
+   * (the local sync directory of iCloud Drive / Dropbox / Google Drive).
+   * Not a secret, stored in the settings JSON; null = not configured.
+   * Only meaningful when `sync_transport === 'cloud'`.
    */
   cloud_drive_dir?: string | null;
-  /** 指令流走哪条传输：`server`（persona-server HTTP，默认）/ `cloud`
-   * （云盘目录文件交换）。旧 JSON 缺键由后端 serde 回退 `server`。 */
+  /** Which transport carries the command stream: `server` (persona-server
+   * HTTP, default) / `cloud` (file exchange in a cloud-drive directory).
+   * A missing key in older JSON is defaulted to `server` by backend serde. */
   sync_transport?: 'server' | 'cloud';
 }
 
-/** E2EE sync 设备管理（对应 Rust SyncDeviceStatus / SyncJoinOutcome / SyncDeviceView） */
+/** E2EE sync device management (mirrors Rust SyncDeviceStatus / SyncJoinOutcome / SyncDeviceView) */
 export interface SyncDeviceStatus {
   joined: boolean;
-  /** keyring 有记录但解析失败——UI 引导重新 join */
+  /** The keyring has a record but it fails to parse — the UI guides a re-join */
   corrupted: boolean;
   device_id: string | null;
   device_name: string | null;
@@ -36,7 +40,7 @@ export interface SyncDeviceStatus {
 export interface SyncJoinOutcome {
   device_id: string;
   device_name: string;
-  /** 已登记但尚未被授权（需在另一台已授权设备上授权） */
+  /** Registered but not yet authorized (authorize it from another authorized device) */
   pending: boolean;
 }
 
@@ -44,39 +48,39 @@ export interface SyncDeviceView {
   id: string;
   device_name: string;
   created_at: string;
-  /** 设备主人的自由备注（仅设备本人可写，全员可读） */
+  /** Free-form remark from the device owner (writable by that device only, readable by all) */
   remark: string;
   authorized: boolean;
   this_device: boolean;
 }
 
-/** `sync_now` 返回：一轮同步的计数汇总（对应 Rust SyncNowReport） */
+/** `sync_now` return: counts from one round of sync (mirrors Rust SyncNowReport) */
 export interface SyncNowReport {
-  /** 新拉取落库的远端 op 条数 */
+  /** Remote ops newly pulled and stored */
   pulled: number;
-  /** 物化进主库的条目数（新行或更新） */
+  /** Items materialized into the main database (new rows or updates) */
   materialized: number;
-  /** 当前待裁决的冲突条目数（>0 时打开冲突弹窗） */
+  /** Items currently awaiting conflict resolution (open the conflict dialog when > 0) */
   conflicts: number;
-  /** 因身份未同步而挂起的条目数（下轮补齐） */
+  /** Items held back because their identity is not synced yet (filled in next round) */
   pending_identity: number;
-  /** push 出去的本地 op 条数 */
+  /** Local ops pushed out */
   pushed: number;
-  /** 本次灌入 oplog 的存量凭据条数（通常只在首次同步非零） */
+  /** Pre-existing credentials backfilled into the oplog this round (non-zero usually only on the first sync) */
   backfilled: number;
 }
 
-/** `sync_rotate` 返回：一次 group key 轮换的计数汇总（对应 Rust SyncRotateReport） */
+/** `sync_rotate` return: counts from one group key rotation (mirrors Rust SyncRotateReport) */
 export interface SyncRotateReport {
-  /** 以新组密钥重新入账的凭据条数 */
+  /** Credentials re-wrapped under the new group key */
   rewrapped: number;
-  /** 因 legacy/解密失败跳过的条数（轮换后仍只有旧组密文） */
+  /** Entries skipped due to legacy format / decryption failure (still only the old group ciphertext after rotation) */
   skipped: number;
-  /** 轮换全程 push 出去的 op 总条数 */
+  /** Total ops pushed across the whole rotation */
   pushed: number;
 }
 
-/** 同步快照明文（对应 Rust SyncItemSnapshot；冲突对比展示用，data 不展开） */
+/** Sync snapshot plaintext (mirrors Rust SyncItemSnapshot; used for conflict comparison display, data is not expanded) */
 export interface SyncItemSnapshotView {
   identity_id: string;
   name: string;
@@ -88,34 +92,34 @@ export interface SyncItemSnapshotView {
   tags: string[];
   is_favorite: boolean;
   is_active: boolean;
-  /** 凭据数据（Rust CredentialData 的 serde 形态；前端只做整体对比） */
+  /** Credential data (serde shape of Rust CredentialData; the frontend only compares it as a whole) */
   data: unknown;
 }
 
-/** 冲突条目的单个版本（对应 Rust desktop SyncConflictVersion） */
+/** A single version of a conflicted entry (mirrors Rust desktop SyncConflictVersion) */
 export interface SyncConflictVersion {
-  /** 采纳时传给 sync_conflict_resolve 的 op id */
+  /** Op id passed to sync_conflict_resolve when adopting */
   op_id: string;
-  /** 产生该版本的设备 id（对比本机 device_id 标「本机」） */
+  /** Device id that produced this version (compared against this device's device_id to mark "this device") */
   device_id: string;
   lamport: number;
-  /** 仅展示，不参与裁决排序（LWW 只看 lamport + device） */
+  /** Display only, does not participate in resolution ordering (LWW only looks at lamport + device) */
   timestamp: string | null;
-  /** tombstone 版本：采纳 = 删除该条目；此时无 snapshot */
+  /** Tombstone version: adopting = delete the entry; no snapshot in that case */
   deleted: boolean;
   snapshot: SyncItemSnapshotView | null;
 }
 
-/** 一个条目的冲突视图（对应 Rust desktop SyncConflictEntry） */
+/** Conflict view for one entry (mirrors Rust desktop SyncConflictEntry) */
 export interface SyncConflictEntry {
   item_id: string;
-  /** 当前版本（LWW 主位——什么都不做就保留它） */
+  /** Current version (the LWW primary — doing nothing keeps it) */
   primary: SyncConflictVersion;
-  /** 待裁决副本（每份可采纳，采纳后其余版本淘汰） */
+  /** Copies awaiting resolution (each can be adopted; adopting eliminates the other versions) */
   copies: SyncConflictVersion[];
 }
 
-/** workspace 设置全量（对应 Rust WorkspaceSettings；由 settings 命令返回） */
+/** Full workspace settings (mirrors Rust WorkspaceSettings; returned by the settings command) */
 export interface WorkspaceSettings {
   encryption_enabled: boolean;
   auto_backup_hours: number;
@@ -124,64 +128,64 @@ export interface WorkspaceSettings {
   require_confirmation: boolean;
   default_identity_type: string;
   features: FeatureFlags;
-  /** 主密码有效期（天）；null = 不过期（默认，旧 JSON 缺键时为 null） */
+  /** Master password validity period (days); null = never expires (default; null when the key is missing from older JSON) */
   password_expiry_days: number | null;
-  /** 界面语言（"zh-CN" / "en"）；null = 默认基准语言 zh-CN */
+  /** UI language ("zh-CN" / "en"); null = the default base language zh-CN */
   locale: string | null;
-  /** 可选同步服务器配置（旧 JSON 缺键时为 null） */
+  /** Optional sync server configuration (null when the key is missing from older JSON) */
   sync: SyncConfig | null;
-  /** 同步方式开关（跨设备同步默认开、账号同步默认关；旧 JSON 缺键回退默认）。
-   * 只控设置页入口可用性——关闭 ≠ 离开同步组、不删 keyring、不触发网络。 */
+  /** Sync-method switches (cross-device sync on by default, account sync off by default; missing keys in older JSON fall back to the defaults).
+   * Only controls whether the settings-page entries are available — off ≠ leaving the sync group, it neither deletes the keyring nor triggers network traffic. */
   sync_methods: { cross_device_sync: boolean; account_sync: boolean };
-  /** Quick Access 全局热键是否启用（默认 true，旧 JSON 缺键时为 true） */
+  /** Whether the Quick Access global hotkey is enabled (default true; true when the key is missing from older JSON) */
   quick_access_enabled: boolean;
-  /** Quick Access 全局热键绑定串；null = 用桌面端平台默认绑定 */
+  /** Quick Access global hotkey binding string; null = the desktop's platform default binding */
   quick_access_hotkey: string | null;
-  /** 账号域绑定（null = 未绑定；账号功能默认关闭，绑定是显式动作） */
+  /** Account-domain binding (null = not bound; account features are off by default, binding is an explicit action) */
   account: AccountBinding | null;
-  /** 自救口备份凭证（null = 从未在本机导出过；旧 JSON 缺键时为 null） */
+  /** Recovery-phrase backup evidence (null = never exported on this machine; null when the key is missing from older JSON) */
   backup: BackupEvidence | null;
 }
 
-/** 同步组配对（对应 Rust SyncPairingCreateOutcome）：host 出码面 */
+/** Sync-group pairing (mirrors Rust SyncPairingCreateOutcome): what the host presents */
 export interface SyncPairingCreateOutcome {
-  /** 动态密码（9 位 Crockford base32，与对方人工核对） */
+  /** Dynamic code (9-digit Crockford base32, verified manually with the other side) */
   code: string;
-  /** 邀请串 persona-pair-1.{b64url 载荷}（QR / 剪贴板递给对方） */
+  /** Invite string persona-pair-1.{b64url payload} (handed over via QR / clipboard) */
   invite_link: string;
-  /** 中转会话 id（poll / cancel 定位用） */
+  /** Relay session id (locates the session for poll / cancel) */
   session_id: string;
-  /** 中转会话剩余有效期（秒） */
+  /** Remaining validity of the relay session (seconds) */
   expires_in_secs: number;
 }
 
-/** `sync_group_pairing_poll` 返回（对应 Rust SyncPairingPollOutcome） */
+/** `sync_group_pairing_poll` return (mirrors Rust SyncPairingPollOutcome) */
 export interface SyncPairingPollOutcome {
   completed: boolean;
-  /** host 侧 6 位数字短指纹（与 guest 端展示比对） */
+  /** Host-side 6-digit short fingerprint (compared against what the guest displays) */
   fingerprint: string | null;
 }
 
-/** `sync_group_join_begin` 返回（对应 Rust SyncJoinBeginOutcome） */
+/** `sync_group_join_begin` return (mirrors Rust SyncJoinBeginOutcome) */
 export interface SyncJoinBeginOutcome {
-  /** guest 侧 6 位数字短指纹（与 host 端比对，一致才 confirm） */
+  /** Guest-side 6-digit short fingerprint (compared with the host side; confirm only when they match) */
   fingerprint: string;
-  /** 邀请串里的动态密码（与手输码核对） */
+  /** Dynamic code from the invite string (verified against the code typed by hand) */
   code: string;
-  /** 中转会话 id（confirm / cancel 定位用） */
+  /** Relay session id (locates the session for confirm / cancel) */
   session_id: string;
 }
 
-/** `sync_status` 返回（对应 Rust SyncStatusInfo）：组同步水位快照 */
+/** `sync_status` return (mirrors Rust SyncStatusInfo): watermark snapshot of group sync */
 export interface SyncStatusReport {
-  /** 组最新版本号（服务器指令流最大 seq；空组 0） */
+  /** Newest group version (max seq in the server command stream; 0 for an empty group) */
   headSeq: number;
-  /** 本机已同步水位（已拉到的 seq；从未拉过 0） */
+  /** This device's synced watermark (the seq it has pulled; 0 if never pulled) */
   localWatermark: number;
-  /** 落后组多少条指令 */
+  /** How many commands behind the group */
   behind: number;
-  /** 本机已产生、尚未推上组的指令数 */
+  /** Commands produced locally but not yet pushed to the group */
   pendingPush: number;
-  /** 最近一次成功同步（RFC3339；null = 从未同步） */
+  /** Last successful sync (RFC3339; null = never synced) */
   lastSyncAt: string | null;
 }

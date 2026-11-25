@@ -30,12 +30,13 @@ import CustomFieldsSection from './credentialDetail/CustomFieldsSection';
 import HistorySection from './credentialDetail/HistorySection';
 
 /**
- * 右侧常驻详情面板：原 CredentialDetailModal 平移，外壳从全屏 overlay
- * 换成双栏右栏的 card 容器（lg 下 sticky 跟随滚动）。
+ * The right-hand resident detail panel: the former CredentialDetailModal moved as-is, with the shell
+ * swapped from a full-screen overlay for a card container in the right column of the two-column layout
+ * (sticky-following the scroll at the lg breakpoint).
  */
 interface CredentialDetailPaneProps {
   credential: Credential;
-  /** 详情数据；null = 取数中（显示 loading 占位） */
+  /** Detail data; null = a fetch is in progress (shows a loading placeholder) */
   credentialData: any;
   onClose: () => void;
   onCopy: (text: string, label: string) => void;
@@ -63,7 +64,7 @@ const CredentialDetailPane: React.FC<CredentialDetailPaneProps> = ({
   } = usePersonaService();
   const faviconsEnabled = useAppStore((s) => s.featureFlags.fetch_favicons);
   const setEditingCredential = useAppStore((s) => s.setEditingCredential);
-  // 头部图标预取（列表页通常已拉好，这里幂等兜底）
+  // Prefetch the header icon (the list page has usually already fetched it; this is an idempotent backstop)
   useFavicons([credential.url]);
   const [isFetchingIcon, setIsFetchingIcon] = useState(false);
   const [isFavorite, setIsFavorite] = useState(credential.is_favorite);
@@ -72,11 +73,11 @@ const CredentialDetailPane: React.FC<CredentialDetailPaneProps> = ({
   const [totpCode, setTotpCode] = useState<string | null>(null);
   const [totpRemaining, setTotpRemaining] = useState<number | null>(null);
   const [isTotpLoading, setIsTotpLoading] = useState(false);
-  // Item history：懒加载——展开时才查一次历史表，切换凭据即重置
+  // Item history: lazy load — the history table is queried only once when expanded, and reset when the credential switches
   const [isHistoryOpen, setIsHistoryOpen] = useState(false);
   const [history, setHistory] = useState<CredentialHistoryEntry[] | null>(null);
   const [isRestoringVersion, setIsRestoringVersion] = useState(false);
-  // 钱包条目独立密码管理：启用态以 payload 为初值，本地维护（hash 无需回显）
+  // Wallet item standalone password management: the enabled state is initialized from the payload and maintained locally (the hash does not need to be echoed back)
   const [itemPwdEnabled, setItemPwdEnabled] = useState(
     !!credentialData?.data?.item_password_hash,
   );
@@ -85,14 +86,14 @@ const CredentialDetailPane: React.FC<CredentialDetailPaneProps> = ({
   const [itemPwdHintValue, setItemPwdHintValue] = useState('');
   const [isItemPwdBusy, setIsItemPwdBusy] = useState(false);
   const [itemPwdError, setItemPwdError] = useState<string | null>(null);
-  // Attachments：主功能，选中即拉取；切换凭据重置后重拉
+  // Attachments: a primary feature — fetched on selection; re-fetched after a reset on credential switch
   const [attachments, setAttachments] = useState<AttachmentEntry[]>([]);
   const [isAttachmentBusy, setIsAttachmentBusy] = useState(false);
-  // 结构化自定义字段（1Password 对齐）：per-item key 密封，解锁态才读得到；
-  // null=读失败（如实显示错误行，不冒充空表）
+  // Structured custom fields (1Password parity): sealed with the per-item key, only readable in the unlocked state;
+  // null = a read failure (an error row is displayed as-is, not impersonating an empty table)
   const [customFields, setCustomFields] = useState<CustomField[] | null>(null);
   const [customFieldsError, setCustomFieldsError] = useState<string | null>(null);
-  // concealed 行的 UI 层打码（值已随列表解密，隐藏只为防肩窥）
+  // UI-layer masking for concealed rows (the values are already decrypted with the list; hiding is only to prevent shoulder-surfing)
   const [revealedFieldIds, setRevealedFieldIds] = useState<Set<string>>(new Set());
   const IconComponent = getCredentialIcon(credential.credential_type);
 
@@ -109,10 +110,10 @@ const CredentialDetailPane: React.FC<CredentialDetailPaneProps> = ({
     return () => {
       cancelled = true;
     };
-    // listAttachments 来自 context hook，返回值每渲染重建但仅作启动调用
+    // listAttachments comes from the context hook; its return value is rebuilt on every render but is only used as a kickoff call
   }, [credential.id]);
 
-  // 自定义字段随条目切换重读；读失败留错误行（不冒充空表）
+  // Custom fields are re-read as the credential switches; a read failure leaves an error row (not impersonating an empty table)
   useEffect(() => {
     const cancelled = { flag: false };
     setCustomFields(null);
@@ -129,16 +130,16 @@ const CredentialDetailPane: React.FC<CredentialDetailPaneProps> = ({
     return () => {
       cancelled.flag = true;
     };
-    // getCredentialCustomFields 来自 context hook，返回值每渲染重建但仅作启动调用
+    // getCredentialCustomFields comes from the context hook; its return value is rebuilt on every render but is only used as a kickoff call
   }, [credential.id]);
 
-  // 切换凭据时重置历史折叠态（不预取）
+  // Reset the history collapse state when the credential switches (no prefetch)
   useEffect(() => {
     setIsHistoryOpen(false);
     setHistory(null);
   }, [credential.id]);
 
-  // 切换凭据时重置条目独立密码表单（启用态由 credentialData 初值决定）
+  // Reset the item standalone password form when the credential switches (the enabled state is decided by the credentialData initial value)
   useEffect(() => {
     setItemPwdForm(null);
     setItemPwdValue('');
@@ -147,7 +148,7 @@ const CredentialDetailPane: React.FC<CredentialDetailPaneProps> = ({
     setIsItemPwdBusy(false);
   }, [credential.id]);
 
-  // 取数完成/切换条目后，启用态跟随 payload 的 hash 字段
+  // After the fetch completes / the entry switches, the enabled state follows the payload's hash field
   useEffect(() => {
     setItemPwdEnabled(!!credentialData?.data?.item_password_hash);
   }, [credentialData]);
@@ -161,7 +162,7 @@ const CredentialDetailPane: React.FC<CredentialDetailPaneProps> = ({
     return () => {
       cancelled = true;
     };
-    // history 作为"已加载"标记参与依赖，避免重复拉取
+    // history participates in the dependency array as an "already loaded" flag to avoid duplicate fetches
   }, [isHistoryOpen, credential.id, history]);
 
   const refreshTotp = useCallback(async () => {
@@ -178,7 +179,7 @@ const CredentialDetailPane: React.FC<CredentialDetailPaneProps> = ({
     }
   }, [credential.credential_type, credential.id, getTotpCode]);
 
-  // 条目独立密码启用/清除共用提交：后端校验失败（如当前密码错）在行内报错
+  // Enabling and clearing the item standalone password share one submit: a backend validation failure (e.g. a wrong current password) reports inline on the row
   const handleItemPwdSubmit = useCallback(async () => {
     if (itemPwdForm === null || isItemPwdBusy || !itemPwdValue) return;
     setIsItemPwdBusy(true);
@@ -266,12 +267,12 @@ const CredentialDetailPane: React.FC<CredentialDetailPaneProps> = ({
     }
   };
 
-  /** 添加附件：原生文件选择 → 恒走加密封存（凭据 item key）→ 追加进列表 */
+  /** Add attachment: native file picker → always a sealed save (with the credential item key) → appended to the list */
   const handleAttachFile = async () => {
     if (isAttachmentBusy) return;
     const selected = await openFileDialog({ multiple: false, title: t('detail.attachFileTitle') });
     const filePath = Array.isArray(selected) ? selected[0] : selected;
-    if (!filePath) return; // 用户取消
+    if (!filePath) return; // the user cancelled
     setIsAttachmentBusy(true);
     try {
       const attachment = await attachFileToCredential(credential.id, filePath, true);
@@ -281,14 +282,14 @@ const CredentialDetailPane: React.FC<CredentialDetailPaneProps> = ({
     }
   };
 
-  /** 保存附件：原生保存对话框 → 解密写出 */
+  /** Save attachment: native save dialog → decrypt and write out */
   const handleSaveAttachment = async (attachment: AttachmentEntry) => {
     if (isAttachmentBusy) return;
     const outputPath = await saveFileDialog({
       title: t('detail.saveAttachmentTitle'),
       defaultPath: attachment.filename,
     });
-    if (!outputPath) return; // 用户取消
+    if (!outputPath) return; // the user cancelled
     setIsAttachmentBusy(true);
     try {
       await saveAttachmentToFile(attachment.id, outputPath);

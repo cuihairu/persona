@@ -1,9 +1,12 @@
 use super::*;
 
-/// 只读 favicon 开关：vault 打不开/行不存在一律视为关。
+/// Read-only favicon flag: an unopenable vault / missing row is always
+/// treated as off.
 ///
-/// 这是 favicon 外联的后端兜底门禁——不依赖前端藏按钮，开关关闭时
-/// `fetch_credential_favicon` 直接拒绝、`get_favicons` 静默回空。
+/// This is the backend fallback gate for favicon outbound fetching — it does
+/// not rely on the frontend hiding the button: with the flag off,
+/// `fetch_credential_favicon` refuses outright and `get_favicons` silently
+/// returns empty.
 pub(crate) async fn favicon_flag_enabled(db_path: &str) -> bool {
     let Ok(db) = Database::from_file(db_path).await else {
         return false;
@@ -112,8 +115,9 @@ pub async fn create_credential(
     }
 }
 
-/// Edit credential metadata（name/username/url/notes/tags/security_level；
-/// 条目类型不可变，payload 编辑走 update_credential_data）
+/// Edit credential metadata (name/username/url/notes/tags/security_level;
+/// the item type is immutable, and payload edits go through
+/// update_credential_data)
 #[command]
 pub async fn update_credential(
     request: UpdateCredentialRequest,
@@ -201,8 +205,10 @@ pub async fn update_credential(
     }
 }
 
-/// Edit a credential's encrypted payload（敏感：复用原 item key 重封，
-/// 附件不受影响；走敏感门禁，reauth 超时返回 REAUTH_REQUIRED）
+/// Edit a credential's encrypted payload (sensitive: the original item key
+/// is reused for resealing, and attachments are unaffected; goes through
+/// the sensitive-operation gate, so a reauth timeout returns
+/// REAUTH_REQUIRED)
 #[command]
 pub async fn update_credential_data(
     request: UpdateCredentialDataRequest,
@@ -394,7 +400,7 @@ pub async fn set_credential_custom_fields(
 }
 
 /// Get change history for a credential (item history; metadata-only,
-/// 字段级 diff 不含任何密文/密钥材料)
+/// field-level diffs contain no ciphertext/key material)
 #[command(rename_all = "snake_case")]
 pub async fn get_credential_history(
     credential_id: String,
@@ -430,8 +436,10 @@ pub async fn get_credential_history(
 }
 
 /// Restore a credential's metadata to an earlier item-history version.
-/// 只回滚元数据（name/username/url/notes/tags 等 9 字段）；历史快照从不含
-/// 密文，密码等秘密不会被回滚。删除行无可恢复状态，不支持重建已删条目。
+/// Only metadata is rolled back (the 9 fields name/username/url/notes/tags
+/// etc.); history snapshots never contain ciphertext, so secrets such as
+/// passwords are not rolled back. Deleted rows have no restorable state,
+/// so rebuilding a deleted item is not supported.
 #[command(rename_all = "snake_case")]
 pub async fn restore_credential_version(
     credential_id: String,
@@ -483,15 +491,17 @@ pub async fn get_totp_code(
         ok_or_error_response!(credential_data.ok_or_else(|| "Credential not found".to_string()));
     match data {
         CredentialData::TwoFactor(tf) => {
-            // HOTP 是计数器型，桌面端没有计数器概念：明确报错（指向 CLI
-            // 的 --counter 用法），而不是按时间窗返回错误码。
+            // HOTP is counter-based; the desktop has no counter concept —
+            // fail explicitly (pointing at the CLI's --counter usage)
+            // rather than returning an error code about a time window.
             if tf.hotp.unwrap_or(false) {
                 return Ok(ApiResponse::error(
                     "HOTP entries require an explicit counter — use `persona totp code <id> --counter N`"
                         .to_string(),
                 ));
             }
-            // 协议逻辑统一下沉到 core（RFC 4226/6238），桌面端只做调用。
+            // The protocol logic is pushed down into core (RFC 4226/6238);
+            // the desktop side only calls it.
             let generated = ok_or_error_response_ctx!(
                 persona_core::crypto::totp::totp_now(&tf),
                 "Failed to generate TOTP code: {}"
@@ -507,8 +517,9 @@ pub async fn get_totp_code(
                 account_name: tf.account_name,
             }))
         }
-        // 游戏令牌经 core 统一调度器（Steam Guard 离线可算；绑定型
-        // provider 在此报错而不是生成错误码）
+        // Game tokens go through core's unified scheduler (Steam Guard can
+        // be computed offline; a binding-bound provider errors here rather
+        // than emitting an error code)
         CredentialData::GameToken(gt) => {
             let generated = ok_or_error_response_ctx!(
                 persona_core::crypto::game_token::generate_game_token_code_now(&gt),
@@ -573,21 +584,29 @@ pub async fn generate_password(
 
 /// Generate passwords with full generator options (desktop Generator panel).
 ///
-/// 纯计算（`core::PasswordGenerator`），不触碰库与主密钥——无需解锁即可
-/// 调用（后续 Quick Access/锁屏场景可直接复用）。length 夹取到 4..=256、
-/// count 夹取到 1..=10（滑杆 UI 天然受限，这里兜底防滥用）；选项组合
-/// 非法（无字符集/可发音无字母/words越界）透传 core 的校验错误。
+/// Pure computation (`core::PasswordGenerator`), touches neither the vault
+/// nor the master key — no unlock needed to call it (the follow-up Quick
+/// Access / lock screen scenarios can reuse it directly). length is
+/// clamped to 4..=256, count to 1..=10 (the slider UI is naturally
+/// constrained; this is the backstop against abuse); invalid option
+/// combinations (no character set / pronounceable without letters /
+/// words out of range) pass through core's validation errors.
 ///
-/// `rename_all = "snake_case"`：Tauri 2 默认按 camelCase 查 invoke 参数键
-/// （宏默认 `ArgumentCase::Camel`，`v.get(key)` 精确匹配、无大小写回退），
-/// 而前端 api.ts 全文件统一发 snake_case 键——缺此属性会报
-/// "missing required key includeLowercase"。键契约由
-/// `command_layer_tests::generate_password_advanced_ipc_arg_contract` 钉住。
+/// `rename_all = "snake_case"`: Tauri 2 looks up invoke argument keys as
+/// camelCase by default (the macro default is `ArgumentCase::Camel`, where
+/// `v.get(key)` matches exactly with no case fallback), but the frontend
+/// api.ts sends snake_case keys throughout — without this attribute it
+/// reports "missing required key includeLowercase". The key contract is
+/// pinned by
+/// `command_layer_tests::generate_password_advanced_ipc_arg_contract`.
 ///
-/// 8 个平铺参数超 clippy `too_many_arguments` 阈值（7）：这是 IPC 线格式，
-/// 键名即前端 `invoke` 载荷键，由上面的审计回归钉死，不能为了过 lint 改成
-/// 请求结构体（会改动已发布的线格式）。与仓库其他平铺选项函数同样按
-/// lint 豁免处理（core/cli 共 10 处同因）。
+/// 8 flat arguments exceed clippy's `too_many_arguments` threshold (7): this
+/// is the IPC wire format, and the key names are the frontend's `invoke`
+/// payload keys, pinned by the audit regression above — it cannot be
+/// changed to a request struct just to satisfy the lint (that would alter
+/// the published wire format). Other flat-options functions in the repo are
+/// handled the same way (10 sites in core/cli share this cause) with lint
+/// exemptions.
 #[allow(clippy::too_many_arguments)]
 #[command(rename_all = "snake_case")]
 pub async fn generate_password_advanced(
@@ -629,12 +648,14 @@ pub async fn generate_password_advanced(
     }))
 }
 
-/// 生成器熵值估计（仅显示参考）：
-/// - 随机模式：`log2(字符池) × 长度`（core 保证每个启用集至少出一字符，
-///   这里按均匀采样近似，差一位 shuffle 熵，忽略）；
-/// - 可发音模式：与 core 的辅音/元音交替算法同构，按位累加 `log2(当前位池)`
-///   （数字/符号的注入替换不增熵，保守忽略）。
-/// - 单词式 passphrase 模式：`log2(7772) × word_count`（EFF large wordlist 大小）。
+/// Generator entropy estimate (display reference only):
+/// - Random mode: `log2(character pool) x length` (core guarantees at least
+///   one character from each enabled set; this approximates with uniform
+///   sampling, i.e. one short of the shuffle entropy — ignored);
+/// - Pronounceable mode: isomorphic to core's consonant/vowel alternation
+///   algorithm, accumulating `log2(current position pool)` per position
+///   (injecting digits/symbols adds no entropy, conservatively ignored).
+/// - Word passphrase mode: `log2(7772) x word_count` (EFF large wordlist size).
 pub(crate) fn estimate_generator_entropy(
     options: &persona_core::password::PasswordGeneratorOptions,
 ) -> (f64, usize) {
@@ -643,7 +664,8 @@ pub(crate) fn estimate_generator_entropy(
         let pool = 7772;
         ((pool as f64).log2() * word_count as f64, pool)
     } else if options.pronounceable {
-        // 辅音池 21、元音池 5；大小写同开时各翻倍（与 core 常量一致）
+        // Consonant pool 21, vowel pool 5; with both cases on, each doubles
+        // (matching the core constants)
         let letter_sets = options.include_lowercase as usize + options.include_uppercase as usize;
         let consonants = 21 * letter_sets;
         let vowels = 5 * letter_sets;
@@ -749,15 +771,18 @@ pub async fn toggle_credential_favorite(
     }
 }
 
-/// 按需抓取凭据对应站点的 favicon 并入缓存（隐私红线：唯一外联入口，
-/// 由详情面板 "Fetch icon" 按钮触发；flag 关闭时后端兜底拒绝）。
+/// Fetch the favicon for a credential's site on demand and cache it (privacy
+/// red line: this is the only outbound entry point, triggered by the detail
+/// panel's "Fetch icon" button; with the flag off the backend refuses as
+/// the fallback).
 #[command(rename_all = "snake_case")]
 pub async fn fetch_credential_favicon(
     credential_id: String,
     state: State<'_, AppState>,
 ) -> std::result::Result<ApiResponse<SerializableFavicon>, String> {
-    // 检查顺序照 set_feature_flags：service 状态在先（错误语义优先），
-    // flag 门禁随后（开新 DB 连接的 IO 不持 service 锁做）
+    // Check order follows set_feature_flags: service status first (so the
+    // error semantics win), the flag gate second (the IO of opening a new DB
+    // connection is not done while holding the service lock)
     let service_unlocked = {
         let guard = state.service.lock().await;
         match guard.as_ref() {
@@ -819,10 +844,12 @@ pub async fn fetch_credential_favicon(
     }
 }
 
-/// 批量读已缓存的 favicon（纯本地读，绝不外联）。
+/// Read the cached favicons in bulk (purely local reads, never outbound).
 ///
-/// flag 关闭 / 未初始化 / 锁定一律静默回空数组——批量读是列表渲染的
-/// 后台优化路径，缺席项回退静态图标即可，报错无意义。
+/// With the flag off / uninitialized / locked, always silently return an
+/// empty array — the bulk read is a background optimization path for list
+/// rendering, so missing entries just fall back to a static icon and an
+/// error would be meaningless.
 #[command]
 pub async fn get_favicons(
     hosts: Vec<String>,

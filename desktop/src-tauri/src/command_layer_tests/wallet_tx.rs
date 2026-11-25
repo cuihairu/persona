@@ -221,7 +221,7 @@ async fn wallet_sign_refuses_address_poisoning_without_ack() {
     let own = wallet.first_address.clone();
     assert!(own.len() >= 12);
 
-    // 仿冒地址：与钱包自身地址前 6 + 后 6 字符相同、中段不同
+    // Spoofed address: same first 6 + last 6 characters as the wallet's own address, different middle
     let spoof = format!(
         "{}{}{}",
         &own[..6],
@@ -251,7 +251,7 @@ async fn wallet_sign_refuses_address_poisoning_without_ack() {
         .expect("transaction id")
         .to_string();
 
-    // 缺 ack：拒绝签名，且不落 signed_transactions。
+    // Missing ack: the signature is rejected and nothing is written to signed_transactions.
     let resp = wallet_sign_transaction(
         WalletSignTransactionRequest {
             transaction_id: tx_id.clone(),
@@ -271,7 +271,7 @@ async fn wallet_sign_refuses_address_poisoning_without_ack() {
         resp.error
     );
 
-    // 带 ack（桌面确认弹窗展示告警后的二次确认）：放行并正常落库。
+    // With ack (the second confirmation after the desktop confirmation dialog showed the warning): allowed through and stored normally.
     let resp = wallet_sign_transaction(
         WalletSignTransactionRequest {
             transaction_id: tx_id,
@@ -292,17 +292,19 @@ async fn wallet_sign_refuses_address_poisoning_without_ack() {
         signed["transaction_hash"]
     );
 }
-/// 多链签名路径（命令层可达部分）：
-/// - Bitcoin：命令层无法提供 UTXO inputs（metadata 恒空），build_raw 失败 →
-///   走 audit-only 落库（raw 为空、hash 带 `audit:` 前缀）——这是无 UTXO
-///   集时唯一可落库的签名记录路径。
-/// - Solana：命令层无法携带 raw_transaction_data，签名直接被拒。
+/// Multi-chain signing paths (the parts reachable from the command layer):
+/// - Bitcoin: the command layer cannot supply UTXO inputs (metadata is always
+///   empty), build_raw fails -> it falls through to an audit-only record (raw is
+///   empty and the hash carries an `audit:` prefix) — the only signing record
+///   that can be stored when no UTXO set is available.
+/// - Solana: the command layer cannot carry raw_transaction_data, so signing is
+///   rejected outright.
 #[tokio::test]
 async fn wallet_sign_bitcoin_audit_only_and_solana_rejection() {
     let (app, identity_id) = app_with_identity().await;
     let mnemonic = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
 
-    // Bitcoin 单地址钱包（mnemonic 派生 P2WPKH）。
+    // Bitcoin single-address wallet (P2WPKH derived from the mnemonic).
     let resp = wallet_import(
         identity_id.clone(),
         WalletImportRequest {
@@ -320,7 +322,7 @@ async fn wallet_sign_bitcoin_audit_only_and_solana_rejection() {
     assert!(resp.success, "{:?}", resp.error);
     let btc = resp.data.expect("btc wallet");
 
-    // 创建 pending BTC 交易。
+    // Create the pending BTC transaction.
     let resp = wallet_create_transaction(
         WalletCreateTransactionRequest {
             wallet_id: btc.id.clone(),
@@ -341,7 +343,7 @@ async fn wallet_sign_bitcoin_audit_only_and_solana_rejection() {
     let pending = resp.data.expect("pending btc tx");
     let tx_id = pending["id"].as_str().expect("tx id").to_string();
 
-    // 签名落库：audit-only 记录。
+    // Sign and store: an audit-only record.
     let resp = wallet_sign_transaction(
         WalletSignTransactionRequest {
             transaction_id: tx_id,
@@ -368,7 +370,7 @@ async fn wallet_sign_bitcoin_audit_only_and_solana_rejection() {
         "audit-only record must not carry raw bytes"
     );
 
-    // Solana 钱包：签名因缺 raw_transaction_data 被拒。
+    // Solana wallet: signing rejected for lack of raw_transaction_data.
     let resp = wallet_import(
         identity_id,
         WalletImportRequest {
@@ -425,8 +427,8 @@ async fn wallet_sign_bitcoin_audit_only_and_solana_rejection() {
         resp.error
     );
 }
-/// wallet_pending_transactions 列出未签名请求；db_path 缺失时报
-/// "Database path unavailable"（wallet_db 的 None 臂）。
+/// wallet_pending_transactions lists unsigned requests; when db_path is missing
+/// it reports "Database path unavailable" (the None arm of wallet_db).
 #[tokio::test]
 async fn wallet_pending_transactions_round_trip_and_missing_db() {
     let (app, identity_id) = app_with_identity().await;
@@ -467,7 +469,7 @@ async fn wallet_pending_transactions_round_trip_and_missing_db() {
     let created = resp.data.expect("pending request created");
     let request_id = created["id"].as_str().expect("request id").to_string();
 
-    // 列出 pending：包含刚创建的请求。
+    // List pending: includes the request just created.
     let resp = wallet_pending_transactions(wallet.wallet_id.clone(), app.state::<AppState>())
         .await
         .unwrap();
@@ -476,7 +478,7 @@ async fn wallet_pending_transactions_round_trip_and_missing_db() {
     assert_eq!(pending.len(), 1);
     assert_eq!(pending[0]["id"].as_str(), Some(request_id.as_str()));
 
-    // db_path 缺失：wallet_db 报 "Database path unavailable"。
+    // Missing db_path: wallet_db reports "Database path unavailable".
     {
         let state = app.state::<AppState>();
         *state.db_path.lock().await = None;

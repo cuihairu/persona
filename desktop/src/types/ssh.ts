@@ -1,17 +1,17 @@
-/** SSH 域：agent 状态与密钥、审批请求、config 解析产出。 */
+/** SSH domain: agent status and keys, approval requests, config parsing output. */
 
-/** persona://ssh-approval 事件负载：待审批的 SSH 签名请求 */
+/** persona://ssh-approval event payload: an SSH signing request awaiting approval */
 export interface SshApprovalRequest {
   request_id: string;
-  /** 凭据 UUID（非敏感） */
+  /** Credential UUID (non-sensitive) */
   key_id: string;
-  /** 公钥指纹（SHA256 前 8 字节，用于人工核对） */
+  /** Public key fingerprint (first 8 bytes of SHA256, for manual verification) */
   fingerprint: string;
-  /** 操作名（当前恒为 "sign"） */
+  /** Operation name (currently always "sign") */
   operation: string;
-  /** 目标主机（未知时为 null） */
+  /** Target host (null when unknown) */
   peer: string | null;
-  /** 触发原因（策略说明） */
+  /** Trigger reason (explains the policy) */
   reason: string;
 }
 
@@ -31,17 +31,17 @@ export interface SshAgentKey {
   tags: string[];
   created_at: string;
   updated_at: string;
-  /** 线格式算法（ssh-ed25519 等）；数据取不到时为 null */
+  /** Wire-format algorithm (ssh-ed25519 etc.); null when the data is unavailable */
   ssh_algorithm?: string | null;
-  /** SHA256 指纹（SHA256:…），与导入/生成确认处同口径 */
+  /** SHA256 fingerprint (SHA256:…), same convention as the import/generate confirmation */
   fingerprint?: string | null;
-  /** 位数/曲线标签（Ed25519→256、RSA→4096、ECDSA→P-256）；不适用为 null */
+  /** Bit length / curve label (Ed25519→256, RSA→4096, ECDSA→P-256); null when not applicable */
   key_size?: string | null;
-  /** 完整公钥行，供一键复制 */
+  /** Full public key line, for one-click copy */
   public_key?: string | null;
 }
 
-/** inspect_ssh_key_file 响应：导入确认弹框展示（指纹人工核对） */
+/** inspect_ssh_key_file response: shown in the import confirmation dialog (fingerprint verified manually) */
 export interface SshKeyInspection {
   file_name: string;
   key_type: string;
@@ -52,7 +52,7 @@ export interface SshKeyInspection {
   encrypted: boolean;
 }
 
-/** import_ssh_key 响应 */
+/** import_ssh_key response */
 export interface SshKeyImported {
   credential_id: string;
   name: string;
@@ -61,7 +61,7 @@ export interface SshKeyImported {
   fingerprint: string;
 }
 
-/** generate_ssh_key 响应：与导入同形（成功态展示复用） */
+/** generate_ssh_key response: same shape as import (reused by the success view) */
 export interface SshKeyGenerated {
   credential_id: string;
   name: string;
@@ -71,67 +71,69 @@ export interface SshKeyGenerated {
 }
 
 export interface SshIntegrationStatus {
-  /** 锚点块存在且指向当前 agent socket */
+  /** The anchor block exists and points at the current agent socket */
   enabled: boolean;
-  /** 锚点块存在但指向别处（旧路径/手改）——重新启用即修复 */
+  /** The anchor block exists but points elsewhere (old path / hand-edited) — re-enabling fixes it */
   anomaly: string | null;
-  /** 锚点块之外用户手写的 persona IdentityAgent（提示，不自动动它） */
+  /** A persona IdentityAgent written by hand outside the anchor block (shown as a hint, never touched automatically) */
   manualEntry: boolean;
-  /** ~/.ssh/config 实际路径 */
+  /** Actual path of ~/.ssh/config */
   configPath: string;
-  /** agent 稳定 socket（写入值/比对基准） */
+  /** Stable agent socket (the value written / the comparison baseline) */
   socketPath: string;
-  /** 锚点块当前 IdentityAgent 值（未启用 null） */
+  /** Current IdentityAgent value of the anchor block (null when not enabled) */
   identityAgent: string | null;
-  /** OpenSSH 版本（探测失败 null；IdentityAgent 需 8.3+） */
+  /** OpenSSH version (null if detection failed; IdentityAgent needs 8.3+) */
   sshVersion: string | null;
-  /** config 文件在盘上（不存在不算错误：首次启用会创建） */
+  /** The config file exists on disk (absence is not an error: first enable creates it) */
   configExists: boolean;
-  /** 读失败原因（权限/IO）——如实显示，绝不静默吞；enable 时会拒绝写 */
+  /** Why reading failed (permissions/IO) — shown as-is, never silently swallowed; enable refuses to write */
   readError: string | null;
 }
 
-/** ~/.ssh/config 里的单条 agent 相关配置（对应 Rust SshConfigEntry） */
+/** One agent-related entry in ~/.ssh/config (mirrors Rust SshConfigEntry) */
 export interface SshConfigEntry {
-  /** 所在文件绝对路径（Include 展开后可能是别的文件） */
+  /** Absolute path of the containing file (may be a different file after Include expansion) */
   file: string;
-  /** 行号（1 起） */
+  /** Line number (1-based) */
   line: number;
-  /** 作用域行原文（空串 = 顶层全局；否则 Host/Match 行） */
+  /** Raw scope line (empty string = top-level global; otherwise a Host/Match line) */
   scope: string;
-  /** 关键字原文（保留大小写） */
+  /** Raw keyword (case preserved) */
   keyword: string;
-  /** 值（去引号） */
+  /** Value (quotes stripped) */
   value: string;
 }
 
-/** `ssh_agent_config_analysis` 返回（对应 Rust SshConfigAgentAnalysis）：
- *  ~/.ssh/config 的 agent 面只读分析——Include 展开 + 环境变量 + socket 探测 */
+/** `ssh_agent_config_analysis` return (mirrors Rust SshConfigAgentAnalysis):
+ *  read-only analysis of the agent surface of ~/.ssh/config — Include expansion
+ *  + environment variables + socket probing */
 export interface SshConfigAgentAnalysis {
   configPath: string;
-  /** config 文件在盘上 */
+  /** The config file exists on disk */
   configExists: boolean;
-  /** 主文件可读（Include 子文件读失败只进 warnings） */
+  /** The main file is readable (read failures on Included sub-files only land in warnings) */
   readable: boolean;
-  /** 主文件读失败原因（权限/IO/非 UTF-8） */
+  /** Why the main file read failed (permissions/IO/non-UTF-8) */
   readError: string | null;
-  /** 解析过程中的非致命问题（Include 缺文件/循环/超深度等） */
+  /** Non-fatal problems found while parsing (missing Include file, loop, excessive depth, etc.) */
   warnings: string[];
-  /** agent 相关条目（IdentityAgent/ForwardAgent/AddKeysToAgent/ProxyAgent；
-   *  persona 锚点块内不计） */
+  /** Agent-related entries (IdentityAgent/ForwardAgent/AddKeysToAgent/ProxyAgent;
+   *  entries inside the persona anchor block are not counted) */
   entries: SshConfigEntry[];
-  /** ForwardAgent 条目（转发经常单列展示） */
+  /** ForwardAgent entries (forwarding is often shown separately) */
   forwardAgentEntries: SshConfigEntry[];
-  /** 生效 IdentityAgent：首个顶层条目优先（ssh first-wins，块在 EOF 被
-   *  更早的用户全局条目压过）；无用户全局条目时取 persona 锚点块值；
-   *  两者皆无时 null 不妄断 */
+  /** Effective IdentityAgent: the first top-level entry wins (ssh is first-wins;
+   *  a block at EOF is overridden by an earlier user global entry); when no user
+   *  global entry exists, the persona anchor block value is used; null when
+   *  neither exists — no guessing */
   identityAgentEffective: string | null;
-  /** 环境 SSH_AUTH_SOCK */
+  /** Environment SSH_AUTH_SOCK */
   sshAuthSock: string | null;
-  /** 生效 socket：identityAgentEffective 优先，否则退 SSH_AUTH_SOCK */
+  /** Effective socket: identityAgentEffective first, falling back to SSH_AUTH_SOCK */
   effectiveSocket: string | null;
-  /** effectiveSocket 连通探测：true 有进程在听 / false 无人听 / null 未知 */
+  /** Reachability probe of effectiveSocket: true = a process is listening / false = nothing listening / null = unknown */
   socketAlive: boolean | null;
-  /** persona agent 稳定 socket 连通探测（agent 进程是否活着） */
+  /** Reachability probe of the persona agent's stable socket (whether the agent process is alive) */
   personaSocketAlive: boolean;
 }

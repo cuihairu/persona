@@ -1,22 +1,29 @@
-//! 桌面填充注入的**跨进程**集成测试（安全评审 codex-2026-11-05 P1 修复
-//! 验收）。单测（desktop_fill.rs win_tests）在测试进程内造窗，验证的是
-//! 注入链路本身；这里用独立靶进程（`fill-test-host` bin）验证真正的
-//! 跨进程语义：
+//! **Cross-process** integration test for desktop fill injection (acceptance
+//! for the security review codex-2026-11-05 P1 fix). The unit tests
+//! (desktop_fill.rs win_tests) create windows inside the test process and verify
+//! the injection pipeline itself; this suite uses a separate target process (the
+//! `fill-test-host` bin) to verify true cross-process semantics:
 //!
-//! 1. ES_PASSWORD 框注入成功（真目标进程）；
-//! 2. 两个普通 Edit 的进程被拒绝（不再猜"第二个框"）；
-//! 3. 同标题伪装进程拒绝（pid/进程指纹不换不放行）；
-//! 4. HWND 销毁重建（注入前完成）拒绝 + 同进程同指纹复用限制如实断言；
-//! 5. 注入请求**在途**时销毁重建（竞态钩子）整体拒绝，密文不落新窗口。
+//! 1. ES_PASSWORD box injection succeeds (a real target process);
+//! 2. a process with two plain Edit controls is rejected (no more guessing "the
+//!    second box");
+//! 3. a same-title impostor process is rejected (pid/process fingerprint must
+//!    not have changed to allow the fill);
+//! 4. HWND destroy/recreate (completed before injection) is rejected, plus an
+//!    honest assertion of the same-process same-fingerprint reuse restriction;
+//! 5. destroy/recreate while the injection request is **in flight** (race hook)
+//!    rejects the whole injection and no ciphertext lands in the new window.
 //!
-//! 运行条件：Windows + `--features fill-test-host`（bin 挂 feature 门禁，
-//! 正常构建不产出）。真机验收（openclaw Windows Server 2022，需**交互式
-//! 桌面会话**——SSH 会话里 IsWindowVisible 恒 false、GetForegroundWindow
-//! 恒 null，本套件的资格校验与目标捕获依赖真实桌面）跑本套件：
+//! Run requirements: Windows + `--features fill-test-host` (the bin sits behind
+//! a feature gate; normal builds produce nothing). Acceptance on real hardware
+//! (openclaw Windows Server 2022, which needs an **interactive desktop
+//! session** — in an SSH session IsWindowVisible is always false and
+//! GetForegroundWindow always null, and this suite's eligibility checks and
+//! target capture depend on a real desktop):
 //!   cargo test --features fill-test-host --test desktop_fill_cross_process
-//! （套件放在独立 test-only crate，原因见 ../Cargo.toml 头注释；运行
-//! 命令 `cargo test --features fill-test-host -p persona-fill-test
-//! --test desktop_fill_cross_process`。）
+//! (The suite lives in a separate test-only crate; see the ../Cargo.toml header
+//! comment for why. Run command: `cargo test --features fill-test-host -p
+//! persona-fill-test --test desktop_fill_cross_process`.)
 
 #![cfg(all(target_os = "windows", feature = "fill-test-host"))]
 
@@ -33,15 +40,20 @@ use persona_desktop::desktop_fill::{execute_fill, FillError};
 
 const HOST_EXE: &str = env!("CARGO_BIN_EXE_fill-test-host");
 
-/// 本套件直测注入引擎层（不经过命令层的确认绑定），槽位重查恒放行；
-/// 取消边界（清槽/换目标的在途中止）由 desktop_fill.rs win_tests 的
-/// 可控时序用例覆盖。错误侧只关心常规拒绝（Rejected 原文透传）。
+/// This suite tests the injection engine layer directly (bypassing the command
+/// layer's confirmation binding), so the slot recheck always passes; the
+/// cancellation boundary (in-flight abort on slot clear / target swap) is
+/// covered by the controlled-timing cases in desktop_fill.rs win_tests. On the
+/// error side only regular rejections matter (the Rejected message passes
+/// through verbatim).
 fn no_slot_check() -> Result<(), persona_desktop::desktop_fill::ConfirmBindRejection> {
     Ok(())
 }
 
-/// 解包常规拒绝的原文（历史 String 错误形态）；引擎在中途快照失效时
-/// 返回 Aborted——本套件不绑定槽位，不会出现，出现即断言失败。
+/// Unwrap the raw message of a regular rejection (the historical String error
+/// shape); the engine returns Aborted when the snapshot becomes invalid
+/// mid-fill — this suite does not bind a slot, so that must not happen, and any
+/// occurrence is an assertion failure.
 fn rejected_of(err: FillError) -> String {
     match err {
         FillError::Rejected(msg) => msg,
@@ -49,7 +61,8 @@ fn rejected_of(err: FillError) -> String {
     }
 }
 
-/// 靶进程句柄：Drop 时保证进程被回收（测试 panic 也不留孤儿窗口）
+/// Handle to the target process: Drop guarantees the process is reaped (a test
+/// panic must not leave an orphan window behind)
 struct HostProcess {
     child: Child,
     stdin: std::process::ChildStdin,
@@ -106,7 +119,7 @@ impl HostProcess {
         }
     }
 
-    /// 销毁并同标题重建窗口，返回新 hwnd
+    /// Destroy the window and recreate it with the same title, returning the new hwnd
     fn destroy_recreate(&mut self) -> isize {
         writeln!(self.stdin, "destroy-recreate").expect("write destroy-recreate");
         self.stdin.flush().expect("flush stdin");
@@ -136,8 +149,10 @@ impl HostProcess {
         let _ = self.child.wait();
     }
 
-    /// 在 username 框上挂竞态钩子：下一次 WM_SETTEXT（注入在途）完成写入
-    /// 后，宿主在同一消息处理内同步销毁重建顶层窗口（RACE_TRIGGERED）。
+    /// Arm the race hook on the username box: after the next WM_SETTEXT (injection
+    /// in flight) completes its write, the host synchronously destroys and
+    /// recreates the top-level window inside the same message handling
+    /// (RACE_TRIGGERED).
     fn arm_race_hook(&mut self) {
         writeln!(self.stdin, "arm-race-hook").expect("write arm-race-hook");
         self.stdin.flush().expect("flush stdin");
@@ -155,11 +170,15 @@ impl HostProcess {
         }
     }
 
-    /// 靶进程**同进程**读回两个 Edit 的文本（长度前缀协议帧 → 解码）。
-    /// 密码断言的唯一可靠通道：Windows 跨进程 WM_GETTEXT 读 ES_PASSWORD
-    /// 控件恒返回空串（平台限制，见套件头注释）。帧协议保证空字段被
-    /// 长度前缀如实携带（`0:`）——单字段残留不会被吞成双空；帧残缺/
-    /// 前缀非法直接报协议错，绝不静默当全空。
+    /// Read back the text of the two Edit controls **in the target process**
+    /// (length-prefixed protocol frame -> decoded). The only reliable channel for
+    /// the password assertion: cross-process WM_GETTEXT on an ES_PASSWORD
+    /// control always returns an empty string on Windows (a platform limitation,
+    /// see the suite's header comment). The frame protocol guarantees an empty
+    /// field is carried faithfully by the length prefix (`0:`) — a single-field
+    /// residue is not swallowed into double empty; a truncated frame or invalid
+    /// prefix reports a protocol error directly, never silently treated as
+    /// all-empty.
     fn readback(&mut self) -> (String, String) {
         writeln!(self.stdin, "readback").expect("write readback");
         self.stdin.flush().expect("flush stdin");
@@ -185,7 +204,7 @@ impl HostProcess {
     }
 }
 
-/// 按标题查找顶层窗口（轮询等待宿主窗口就绪）
+/// Find a top-level window by title (polls until the host window is ready)
 fn find_window_by_title(title: &str) -> isize {
     use windows::core::{HSTRING, PCWSTR};
     use windows::Win32::UI::WindowsAndMessaging::FindWindowW;
@@ -204,9 +223,11 @@ fn find_window_by_title(title: &str) -> isize {
     }
 }
 
-/// 真实指纹快照（与产品 capture_foreground 同源：类名/进程路径用同一批
-/// helper 查询；snapshot_id 由测试侧现造——本套件直测注入引擎层，不经过
-/// 命令层的确认绑定，引擎只按指纹说话）
+/// A real fingerprint snapshot (same source as the product's
+/// capture_foreground: the class name / process path are queried with the same
+/// helpers; the snapshot_id is made up by the test side — this suite tests the
+/// injection engine layer directly, bypassing the command layer's confirmation
+/// binding, so the engine speaks only by fingerprint)
 fn snapshot_for(hwnd: isize, title: &str, pid: u32) -> FillTarget {
     FillTarget {
         hwnd,
@@ -218,8 +239,8 @@ fn snapshot_for(hwnd: isize, title: &str, pid: u32) -> FillTarget {
     }
 }
 
-/// 跨进程 EM_GETPASSWORDCHAR（掩码字符元数据，非敏感、允许跨进程读）。
-/// 返回 0 = 无掩码（普通框）。
+/// Cross-process EM_GETPASSWORDCHAR (mask-character metadata, non-sensitive and
+/// allowed to be read across processes). Returns 0 = no mask (a plain box).
 fn password_char(field_hwnd: isize) -> u32 {
     use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
     use windows::Win32::UI::Controls::EM_GETPASSWORDCHAR;
@@ -235,8 +256,9 @@ fn password_char(field_hwnd: isize) -> u32 {
     }
 }
 
-/// 真机验收核心：跨进程对独立靶进程的 ES_PASSWORD 框注入成功，普通框
-/// 一个字符都不落。
+/// The core of the acceptance on real hardware: cross-process injection into
+/// the ES_PASSWORD box of a separate target process succeeds, and not a single
+/// character lands in the plain box.
 #[test]
 fn cross_process_password_field_injection_succeeds() {
     let mut host = HostProcess::spawn("persona xproc login", true);
@@ -262,7 +284,7 @@ fn cross_process_password_field_injection_succeeds() {
     let fields = enumerate_edit_fields(hwnd);
     assert_eq!(fields.len(), 2);
 
-    // 普通框（跨进程 WM_GETTEXT 不受限）：值必须原样落在框里
+    // Plain box (cross-process WM_GETTEXT is unrestricted): the value must land in the box verbatim
     assert!(!fields[0].is_password, "first edit must be plain");
     assert_eq!(
         password_char(fields[0].hwnd),
@@ -271,8 +293,9 @@ fn cross_process_password_field_injection_succeeds() {
     );
     assert_eq!(read_field_text(fields[0].hwnd), "alice@example.com");
 
-    // ES_PASSWORD 框：样式与掩码字符跨进程可验证（写入本身由 execute_fill
-    // 的 WM_SETTEXT 返回值担保——非零即写入成功）
+    // ES_PASSWORD box: style and mask char are verifiable across processes (the
+    // write itself is guaranteed by execute_fill's WM_SETTEXT return value —
+    // non-zero means the write succeeded)
     assert!(fields[1].is_password, "second edit must carry ES_PASSWORD");
     assert_ne!(
         password_char(fields[1].hwnd),
@@ -280,12 +303,15 @@ fn cross_process_password_field_injection_succeeds() {
         "ES_PASSWORD edit must report a password char"
     );
 
-    // 平台行为实录（2026-11-06 openclaw Windows Server 2022 实测观察）：
-    // 跨进程 WM_GETTEXT 读 ES_PASSWORD 控件在该系统上返回空串
-    //（WM_GETTEXTLENGTH 同理返回 0）——WM_SETTEXT 写入成功但读被系统隐藏。
-    // **不作为通用断言**（未在其他 Windows 版本验证是否恒然），只记录本次
-    // 实测观察值；注入成功的判据不依赖跨进程读密码框，见下方靶进程
-    // 同进程读回断言。
+    // Platform behavior record (measured 2026-11-06 on openclaw Windows Server 2022):
+    // cross-process WM_GETTEXT on an ES_PASSWORD control returned an empty
+    // string on that system (WM_GETTEXTLENGTH likewise returned 0) — the
+    // WM_SETTEXT write succeeded but the read was hidden by the system. **Not
+    // asserted as a universal invariant** (it has not been verified whether this
+    // holds on other Windows versions); only this measured observation is
+    // recorded. The injection-success criterion does not depend on
+    // cross-process password reading, see the target process's same-process
+    // readback assertion below.
     let cross_read = read_field_text(fields[1].hwnd);
     eprintln!(
         "observed: cross-process WM_GETTEXT on ES_PASSWORD read {cross_read:?} \
@@ -293,9 +319,11 @@ fn cross_process_password_field_injection_succeeds() {
          recorded as observation, not asserted as a universal invariant)"
     );
 
-    // 密码注入成功的决定性断言：靶进程**同进程**读回两个框——用户名与
-    // 密码都必须与注入值逐字符一致（读回在宿主进程内完成，绕开平台对
-    // 跨进程读密码框的隐藏，不构成对注入语义的削弱）
+    // Decisive assertion of successful password injection: read back both boxes
+    // **in the target process** — username and password must each match the
+    // injected value character for character (the readback happens inside the
+    // host process, bypassing the platform's hiding of cross-process password
+    // reads, which does not weaken the injection semantics)
     let (host_user, host_pwd) = host.readback();
     assert_eq!(
         host_user, "alice@example.com",
@@ -308,8 +336,9 @@ fn cross_process_password_field_injection_succeeds() {
     host.quit();
 }
 
-/// 恶意形态一：目标进程只有两个普通 Edit（无 ES_PASSWORD）→ 整体拒绝，
-/// 任何框都不落值（历史"第二个框"启发式的攻击面已移除）。
+/// Malicious shape one: the target process has only two plain Edits (no
+/// ES_PASSWORD) -> the whole injection is rejected and no box gets any value
+/// (the historical "second box" heuristic attack surface has been removed).
 #[test]
 fn cross_process_plain_edit_window_rejected() {
     let mut host = HostProcess::spawn("persona xproc plain trap", false);
@@ -340,9 +369,10 @@ fn cross_process_plain_edit_window_rejected() {
     host.quit();
 }
 
-/// 恶意形态二：同标题伪装进程拒绝。靶 A 销毁后，另一个进程（同 exe、
-/// 同窗口类、同标题，只有 pid/进程身份不同）顶上来——快照仍指向 A，
-/// 注入必须拒绝。
+/// Malicious shape two: same-title impostor process rejection. After target A
+/// is destroyed, another process (same exe, same window class, same title, only
+/// the pid/process identity differs) takes its place — the snapshot still points
+/// at A, and the injection must be rejected.
 #[test]
 fn cross_process_spoofed_title_process_rejected() {
     let mut host_a = HostProcess::spawn("persona xproc spoof target", true);
@@ -358,7 +388,8 @@ fn cross_process_spoofed_title_process_rejected() {
         "decoy must be a different process"
     );
 
-    // 快照指向已死的 A：hwnd 失效（或值复用但 pid 不符）→ 注入拒绝
+    // Snapshot points at the now-dead A: hwnd is invalid (or the value is reused
+    // but the pid does not match) -> injection rejected
     let err = rejected_of(
         execute_fill(
             &snapshot_a,
@@ -372,25 +403,33 @@ fn cross_process_spoofed_title_process_rejected() {
     assert_eq!(err, "CAPTURED_TARGET_INVALID");
     assert!(!validate_target(&snapshot_a, std::process::id()));
 
-    // B 自己的窗口作为独立目标是合法的（验证拒绝不是因为窗口形态问题）
+    // B's own window is a legitimate independent target (verifies the rejection is not caused by window-shape issues)
     let snapshot_b = snapshot_for(hwnd_b, "persona xproc spoof target", host_b.pid());
     assert!(validate_target(&snapshot_b, std::process::id()));
     host_b.quit();
 }
 
-/// 恶意形态三：HWND 销毁重建（注入**前**完成）。快照后窗口被销毁重建
-///（同进程同标题），随后另一进程顶上同标题——旧快照在任何一步都不得把
-/// 密码写进错误目标：
-/// - 进程内重建后旧快照若已失效 → 注入拒绝；
-/// - **同进程同指纹 HWND 值复用限制（如实描述，不声称拒绝）**：若 hwnd
-///   值被同进程同标题窗口复用（全指纹仍指向同一进程同一标题，平台层面
-///   无法区分），注入会写入**同一靶进程的同标题窗口**——语义上仍在快照
-///   声明的宿主进程内，非跨进程劫持；此平台固有限制由确认面（目标应用
-///   名展示）与 snapshot_id 确认绑定兜底，测试如实断言两种结局且值只落
-///   在宿主进程内。
+/// Malicious shape three: HWND destroy/recreate (completed **before**
+/// injection). After the snapshot the window is destroyed and recreated (same
+/// process, same title), then another process takes over the same title — the
+/// old snapshot must never write the password into the wrong target at any
+/// step:
+/// - if the old snapshot became invalid after the in-process recreate ->
+///   injection rejected;
+/// - **same-process same-fingerprint HWND value reuse limitation (described
+///   honestly, not claimed to be rejected)**: if the hwnd value is reused by a
+///   same-process same-title window (the full fingerprint still points to the
+///   same process and title, indistinguishable at platform level), the
+///   injection writes into **the same-title window of the same target process**
+///   — semantically still within the host process declared by the snapshot, not
+///   a cross-process hijack; this platform-inherent limitation is backstopped by
+///   the confirmation plane (target app name display) and snapshot_id
+///   confirmation binding. The test honestly asserts both outcomes, and the
+///   value only ever lands inside the host process.
 ///
-/// 真正的**在途**竞态（注入请求跑到一半目标被销毁重建）由
-/// `cross_process_inflight_destroy_rebuild_rejected` 覆盖。
+/// The true **in-flight** race (the injection request is half done when the
+/// target is destroyed and recreated) is covered by
+/// `cross_process_inflight_destroy_rebuild_rejected`.
 #[test]
 fn cross_process_destroy_recreate_race_rejected() {
     let mut host = HostProcess::spawn("persona xproc race", true);
@@ -398,8 +437,10 @@ fn cross_process_destroy_recreate_race_rejected() {
     let snapshot = snapshot_for(hwnd_old, "persona xproc race", host.pid());
 
     let hwnd_new = host.destroy_recreate();
-    // 进程内重建后：旧快照要么失效（hwnd 不同/已死）→ 拒绝；
-    // 要么 hwnd 值被同进程同标题窗口复用 → 填的仍是宿主自己的窗口。
+    // After the in-process recreate: either the old snapshot is invalid (different
+    // hwnd / already dead) -> rejected; or the hwnd value is reused by a
+    // same-process same-title window -> what gets filled is still the host's own
+    // window.
     if hwnd_new != hwnd_old {
         let err = rejected_of(
             execute_fill(
@@ -414,8 +455,9 @@ fn cross_process_destroy_recreate_race_rejected() {
         assert_eq!(err, "CAPTURED_TARGET_INVALID");
         assert!(!validate_target(&snapshot, std::process::id()));
     } else {
-        // hwnd 值复用路径：注入只允许落在宿主进程（pid 校验保证），且
-        // 值必须出现在宿主当前窗口的控件里
+        // hwnd value-reuse path: injection is only allowed to land in the host process
+        // (guaranteed by the pid check), and the value must appear in a control
+        // of the host's current window
         let (_, _, _) = execute_fill(
             &snapshot,
             "race@example.com",
@@ -432,8 +474,9 @@ fn cross_process_destroy_recreate_race_rejected() {
         );
     }
 
-    // 决定性拒绝场景：宿主退出后另一个进程用同标题顶上（销毁+重建的
-    // 跨进程形态）——旧快照注入必须拒绝
+    // Decisive rejection scenario: after the host exits, another process takes the
+    // same title (the cross-process flavor of destroy + recreate) — injection
+    // with the old snapshot must be rejected
     host.quit();
     let mut decoy = HostProcess::spawn("persona xproc race", true);
     let err = rejected_of(
@@ -451,12 +494,16 @@ fn cross_process_destroy_recreate_race_rejected() {
     decoy.quit();
 }
 
-/// 恶意形态四（真竞态）：**注入请求在途时**目标被销毁重建。竞态钩子挂在
-/// username 框上：execute_fill 的第一条 WM_SETTEXT（username 写入）完成
-/// 后、密码写入前，宿主在同一消息处理内同步销毁并重建顶层窗口——测试
-/// 线程此刻还阻塞在 username 的 SendMessageW 上，属于真正的在途换目标。
-/// 注入必须整体拒绝（密码不得落进任何窗口）；重建出的同标题新窗口是
-/// 销毁后的新目标，不是快照声明的目标——密文一个字符都不能落进去。
+/// Malicious shape four (the real race): the target is destroyed and
+/// recreated **while the injection request is in flight**. The race hook sits on
+/// the username box: after execute_fill's first WM_SETTEXT (the username write)
+/// completes and before the password write, the host synchronously destroys and
+/// recreates the top-level window inside the same message handling — the test
+/// thread is still blocked on the username SendMessageW at that moment, which is
+/// a genuine in-flight target swap. The injection must be rejected as a whole
+/// (the password must not land in any window); the recreated same-title window
+/// is a new target after the destruction, not the target the snapshot declared —
+/// not a single character of ciphertext may land in it.
 #[test]
 fn cross_process_inflight_destroy_rebuild_rejected() {
     let mut host = HostProcess::spawn("persona xproc inflight race", true);
@@ -464,7 +511,8 @@ fn cross_process_inflight_destroy_rebuild_rejected() {
     let snapshot = snapshot_for(hwnd_old, "persona xproc inflight race", host.pid());
     assert!(validate_target(&snapshot, std::process::id()));
 
-    // 挂钩：下一次 WM_SETTEXT 完成写入后，宿主就地销毁重建
+    // Arm the hook: after the next WM_SETTEXT completes its write, the host destroys
+    // and recreates the window in place
     host.arm_race_hook();
 
     let err = rejected_of(
@@ -477,14 +525,17 @@ fn cross_process_inflight_destroy_rebuild_rejected() {
         )
         .expect_err("in-flight destroy+rebuild must reject the fill"),
     );
-    // 拒绝点：username 写完后销毁重建，密码写入前的逐控件重验证失败
-    //（或旧 hwnd 彻底失效时的 CAPTURED_TARGET_INVALID——两种拒绝都算）
+    // Rejection point: destroy/recreate after the username write, so the
+    // per-control re-verification before the password write fails (or
+    // CAPTURED_TARGET_INVALID when the old hwnd is entirely invalid — either
+    // rejection counts)
     assert!(
         err == "CAPTURED_TARGET_INVALID" || err.contains("gone") || err.contains("no longer"),
         "rejection must come from target/field invalidation: {err}"
     );
 
-    // 决定性断言：销毁后重建的同标题新窗口里，密文一个字符都不能落
+    // Decisive assertion: not a single character of ciphertext may land in the
+    // recreated same-title window
     let fields_new = enumerate_edit_fields(find_window_by_title("persona xproc inflight race"));
     assert_eq!(fields_new.len(), 2, "recreated window must have both edits");
     assert_eq!(
@@ -497,11 +548,13 @@ fn cross_process_inflight_destroy_rebuild_rejected() {
         "",
         "recreated password field must be empty — the password write must never happen after the in-flight destroy"
     );
-    // 宿主进程同进程读回交叉确认（绕开跨进程读限制，直接问宿主）。
-    // 长度前缀协议下空字段被如实携带（`0:`）——这里的两个断空是决定性
-    // 的零残留证明：任何单字段残留（哪怕 username 空 + password 非空）
-    // 都会如实在帧里出现并被断言拦下，不会被旧协议的「不足 3 段按双空」
-    // 吞掉。
+    // Cross-check by reading back in the host process (bypassing the cross-process
+    // read restriction and asking the host directly). Under the length-prefixed
+    // protocol empty fields are carried faithfully (`0:`) — so the two
+    // empty-assertions here are decisive proof of zero residue: any single-field
+    // residue (even empty username + non-empty password) appears faithfully in
+    // the frame and is caught by the assertions, instead of being swallowed by
+    // the old protocol's "fewer than 3 segments means double empty".
     let (host_user, host_pwd) = host.readback();
     assert_eq!(
         host_user, "",

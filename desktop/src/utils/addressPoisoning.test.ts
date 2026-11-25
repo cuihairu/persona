@@ -35,7 +35,7 @@ describe('looksLikeAddressPoisoning', () => {
       'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
       'solanaBase58AddressHead111111TailABCDEF',
     ];
-    // 同前缀 + 同尾缀，仅中段不同 → 疑似模仿
+    // Same prefix + same suffix, only the middle differs → suspected mimicry
     const mimic = 'solanaBase58AddressHead222222TailABCDEF';
     expect(looksLikeAddressPoisoning(mimic, knownMany)).toBe(knownMany[1]);
   });

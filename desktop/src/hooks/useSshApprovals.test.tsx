@@ -129,8 +129,8 @@ describe('hooks/useSshApprovals', () => {
       (capturedHandler as ListenHandler)({ payload: sampleRequest });
     });
 
-    // 后端拒绝了应答：请求必须留在队列里（可重试）而不是静默消失，
-    // 否则 Allow 丢失后 agent 连接会挂到 120s 超时
+    // The backend rejected the response: the request must stay queued (retryable) instead of vanishing,
+    // otherwise losing the Allow would leave the agent connection hanging until the 120s timeout
     (personaAPI.sshApprovalRespond as jest.Mock).mockResolvedValueOnce({
       success: false,
       data: undefined,
@@ -172,7 +172,7 @@ describe('hooks/useSshApprovals', () => {
     const sendNotification = jest.requireMock('@tauri-apps/plugin-notification')
       .sendNotification as jest.Mock;
     sendNotification.mockClear();
-    // 触发前把 document.hidden 置真（失焦态），事后还原
+    // Force document.hidden true before firing (unfocused state), restore afterwards
     const hiddenSpy = jest
       .spyOn(document, 'hidden', 'get')
       .mockReturnValue(true);

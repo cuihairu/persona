@@ -12,8 +12,9 @@ export interface ReauthModalProps {
 }
 
 /**
- * 敏感操作重新认证弹窗：输入主密码 → reauth_verify。
- * 由 useReauth 驱动；Esc/取消/关闭都会以失败结束挂起的 Promise。
+ * Re-authentication modal for sensitive operations: enter the master password
+ * → reauth_verify. Driven by useReauth; Esc/cancel/close all settle the
+ * pending Promise as a failure.
  */
 const ReauthModal: React.FC<ReauthModalProps> = ({
   isOpen,
@@ -29,12 +30,12 @@ const ReauthModal: React.FC<ReauthModalProps> = ({
   useEffect(() => {
     if (isOpen) {
       setPassword('');
-      // 等挂载后聚焦
+      // Focus after mount
       requestAnimationFrame(() => inputRef.current?.focus());
     }
   }, [isOpen]);
 
-  // Esc 即关（useEscapeToClose 共享实现；叠开时上层弹窗收口下层监听）
+  // Esc closes immediately (shared useEscapeToClose implementation; with stacked modals the top one takes over the lower one's listener)
   useEscapeToClose(isOpen, onClose);
   if (!isOpen) return null;
 
@@ -49,7 +50,7 @@ const ReauthModal: React.FC<ReauthModalProps> = ({
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
       data-testid="reauth-modal"
       onMouseDown={(e) => {
-        // 点空白 = 关闭，与 Esc/关闭按钮同口径
+        // Click on backdrop = close, same as Esc/the close button
         if (e.target === e.currentTarget) onClose();
       }}
     >

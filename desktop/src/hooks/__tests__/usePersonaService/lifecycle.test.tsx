@@ -139,7 +139,7 @@ describe('hooks/usePersonaService', () => {
     expect(toastSuccess).toHaveBeenCalled();
   });
 
-  // -- 以下为补全：各 action 的成功/失败/异常臂 ----------------------------
+  // -- remaining coverage: success/failure/exception arms of each action ----
 
   it('lockService clears session state on success', async () => {
     mockUnlockedOnMount();
@@ -164,10 +164,10 @@ describe('hooks/usePersonaService', () => {
     expect(useAppStore.getState().identities).toEqual([]);
     expect(useAppStore.getState().currentIdentity).toBeNull();
     expect(useAppStore.getState().credentials).toEqual([]);
-    // 选中与待注入跳转随锁作废
+    // The selection and the pending injection jump are invalidated with the lock
     expect(useAppStore.getState().selectedCredentialId).toBeNull();
     expect(useAppStore.getState().pendingCredentialSelection).toBeNull();
-    // 侧栏分类选中随锁复位（解锁后不残留上一会话的树选中）
+    // Sidebar category selection is reset with the lock (no leftover tree selection from the previous session after unlocking)
     expect(useAppStore.getState().sidebarFilter).toEqual({ kind: 'all' });
     expect(toastSuccess).toHaveBeenCalledWith('服务已锁定');
   });
@@ -212,13 +212,13 @@ describe('hooks/usePersonaService', () => {
 
     const consoleError = jest.spyOn(console, 'error').mockImplementation(() => {});
 
-    // 第一次 mount：探针抛异常 → setError
+    // First mount: the probe throws -> setError
     renderHook(() => usePersonaService());
     await waitFor(() => {
       expect(useAppStore.getState().error).toBe('检查服务状态失败');
     });
 
-    // 第二次 mount：已解锁 → 拉身份列表
+    // Second mount: already unlocked -> fetch the identity list
     renderHook(() => usePersonaService());
     await waitFor(() => {
       expect(useAppStore.getState().isUnlocked).toBe(true);
@@ -228,7 +228,7 @@ describe('hooks/usePersonaService', () => {
     consoleError.mockRestore();
   });
 
-  // -- biometric 解锁（返回原始 ApiResponse 供解锁屏分流） ------------------
+  // -- biometric unlock (returns the raw ApiResponse for the unlock screen to route on) --
 
   it('unlockWithBiometric succeeds, unlocks and returns the raw response', async () => {
     jest.spyOn(personaAPI, 'isServiceUnlocked').mockResolvedValue({
@@ -263,7 +263,7 @@ describe('hooks/usePersonaService', () => {
     expect(resp.success).toBe(true);
     expect(useAppStore.getState().isUnlocked).toBe(true);
     expect(useAppStore.getState().identities).toHaveLength(1);
-    // 成功路径与密码解锁同款 toast
+    // The success path toasts the same way password unlock does
     expect(toastSuccess).toHaveBeenCalled();
   });
 
@@ -290,7 +290,7 @@ describe('hooks/usePersonaService', () => {
     expect(resp.success).toBe(false);
     expect(resp.error_code).toBe('BIOMETRIC_RESET');
     expect(useAppStore.getState().isUnlocked).toBe(false);
-    // 后端消息是英文：给用户的是本地化提示
+    // The backend message is English: what the user sees is the localized hint
     expect(useAppStore.getState().error).toBe(
       '指纹解锁已失效（系统钥匙串中的托管条目不存在或密码已变更），请改用主密码解锁。',
     );
@@ -316,9 +316,9 @@ describe('hooks/usePersonaService', () => {
       resp = await result.current.unlockWithBiometric();
     });
 
-    // 取消 ≠ 失败：错误码原样透传（解锁屏据此静默回原状态、保留指纹
-    // 按钮），但全局 error 不被置位、不弹任何提示（入口 clearError 后
-    // 保持 null）
+    // Cancel is not failure: the error code is passed through untouched (the unlock screen uses it to
+    // silently return to its previous state and keep the fingerprint button), but the global error is
+    // not set and nothing is toasted (it stays null after the entry point's clearError)
     expect(resp.success).toBe(false);
     expect(resp.error_code).toBe('BIOMETRIC_CANCELLED');
     expect(useAppStore.getState().isUnlocked).toBe(false);
@@ -344,7 +344,7 @@ describe('hooks/usePersonaService', () => {
       await result.current.unlockWithBiometric();
     });
 
-    // 与密码路径共用 forced 改密弹窗机制，不走通用错误
+    // Shares the password path's forced password-change dialog mechanism, instead of the generic error
     expect(useAppStore.getState().passwordChangeRequired).toBe(true);
     expect(toastError).not.toHaveBeenCalled();
   });
@@ -369,12 +369,12 @@ describe('hooks/usePersonaService', () => {
     expect(resp.success).toBe(false);
     expect(useAppStore.getState().isUnlocked).toBe(false);
     expect(useAppStore.getState().error).toBe('服务初始化失败');
-    // 失败不 toast：解锁屏的错误条是唯一反馈面
+    // No toast on failure: the unlock screen's error bar is the only feedback surface
     expect(toastError).not.toHaveBeenCalled();
   });
 
   it('finalizeVaultRestore clears stale vault state and re-probes unlock status', async () => {
-    // 旧库的内存残留（恢复换库后不得跨库存活）
+    // In-memory leftovers from the old vault (must not survive a restore that swaps the vault)
     useAppStore.setState({
       isUnlocked: true,
       identities: [{ id: 'old-id', name: 'Old' } as any],
@@ -396,18 +396,18 @@ describe('hooks/usePersonaService', () => {
       await result.current.finalizeVaultRestore();
     });
 
-    // 后端换库段已取下 service（is_service_unlocked=false）→ 前端回解锁屏
+    // The backend's vault-swap stage has already taken the service down (is_service_unlocked=false) -> the frontend returns to the unlock screen
     expect(isUnlockedSpy).toHaveBeenCalled();
     expect(useAppStore.getState().isUnlocked).toBe(false);
     expect(useAppStore.getState().isInitialized).toBe(true);
-    // 旧库身份/凭据清空，重新解锁时 loadIdentities 才会按新库重选
+    // The old vault's identities/credentials are cleared, so loadIdentities will reselect against the new vault once unlocking happens again
     expect(useAppStore.getState().identities).toEqual([]);
     expect(useAppStore.getState().currentIdentity).toBeNull();
     expect(useAppStore.getState().credentials).toEqual([]);
     expect(useAppStore.getState().passwordChangeRequired).toBe(false);
   });
 
-  // -- 补全：解锁/创建的错误与异常臂 --------------------------------------
+  // -- remaining coverage: error and exception arms of unlock/create -------
 
   it('initializeService flags PASSWORD_CHANGE_REQUIRED without a generic error toast', async () => {
     mockUnlockedOnMount();

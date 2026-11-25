@@ -49,7 +49,7 @@ export const passkeyApi = {
 
 
   // -------------------------------------------------------------------------
-  // Passkey 审批（bridge 经 Unix socket 转来的 create/assert 请求）
+  // Passkey approvals (create/assert requests forwarded by the bridge over a Unix socket)
   // -------------------------------------------------------------------------
 
   async passkeyApprovalRespond(requestId: string, allow: boolean): Promise<ApiResponse<boolean>> {

@@ -7,11 +7,11 @@ interface SelectedWalletAddressesProps {
   wallet: WalletSummary;
   addresses: WalletAddress[];
   onGenerate: () => void;
-  /** 打开该地址的二维码弹窗 */
+  /** Opens the QR modal for that address */
   onShowQr: (address: string) => void;
 }
 
-/** 选中钱包的地址面板：标题行 + 地址表（QR/复制动作）+ 空态 */
+/** Address panel for the selected wallet: title row + address table (QR/copy actions) + empty state */
 const SelectedWalletAddresses: React.FC<SelectedWalletAddressesProps> = ({
   wallet,
   addresses,

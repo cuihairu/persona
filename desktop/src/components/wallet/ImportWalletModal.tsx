@@ -16,11 +16,11 @@ interface ImportWalletModalProps {
   form: ImportWalletForm;
   setForm: React.Dispatch<React.SetStateAction<ImportWalletForm>>;
   onImport: () => void;
-  /** 关闭并复位表单（父层负责） */
+  /** Closes and resets the form (parent's responsibility) */
   onClose: () => void;
 }
 
-/** 导入钱包弹窗：助记词/私钥/WIF/keystore 四种来源，类型联动网络与地址数 */
+/** Import-wallet modal: four source kinds (mnemonic/private key/WIF/keystore); the kind drives network and address count */
 const ImportWalletModal: React.FC<ImportWalletModalProps> = ({
   form,
   setForm,

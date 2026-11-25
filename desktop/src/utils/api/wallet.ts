@@ -62,19 +62,19 @@ export const walletApi = {
   },
 
 
-  /** BIP-39 助记词校验（词表+校验和+词数），纯计算不触库 */
+  /** Validates a BIP-39 mnemonic (wordlist + checksum + word count); pure computation, never touches the database */
   async walletValidateMnemonic(phrase: string): Promise<ApiResponse<{ valid: boolean; word_count: number | null; error: string | null }>> {
     return invoke('wallet_validate_mnemonic', { phrase });
   },
 
 
-  /** 生成 BIP-39 助记词（12/15/18/21/24 词），纯计算不触库 */
+  /** Generates a BIP-39 mnemonic (12/15/18/21/24 words); pure computation, never touches the database */
   async walletGenerateMnemonic(wordCount: number): Promise<ApiResponse<string>> {
     return invoke('wallet_generate_mnemonic', { word_count: wordCount });
   },
 
 
-  /** 设置/更换钱包条目独立密码（Argon2id hash 后随条目密文存储） */
+  /** Sets or replaces the wallet entry's item password (Argon2id-hashed and stored alongside the entry's ciphertext) */
   async walletSetItemPassword(
     credentialId: string,
     password: string,
@@ -88,7 +88,7 @@ export const walletApi = {
   },
 
 
-  /** 清除钱包条目独立密码（需当前条目密码验证，防解锁态直接摘除保护） */
+  /** Clears the wallet entry's item password (requires the current item password, so an unlocked session cannot just strip the protection) */
   async walletClearItemPassword(credentialId: string, itemPassword: string): Promise<ApiResponse<boolean>> {
     return invoke('wallet_clear_item_password', {
       credential_id: credentialId,
@@ -98,7 +98,7 @@ export const walletApi = {
 
 
   // -------------------------------------------------------------------------
-  // 钱包交易
+  // Wallet transactions
   // -------------------------------------------------------------------------
 
   async walletCreateTransaction(

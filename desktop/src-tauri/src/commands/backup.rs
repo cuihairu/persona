@@ -40,18 +40,21 @@ pub async fn export_identity(
     }
 }
 
-/// `backup_export_to_file` 请求：目标文件路径 + 备份口令。
+/// `backup_export_to_file` request: destination file path + backup passphrase.
 ///
-/// 备份口令与主密码相互独立（设计稿 §6.5：主库不解密、主密码不参与备份
-/// 链路）；强度要求由前端把关，后端只做非空校验。口令本身永不落盘。
+/// The backup passphrase is fully independent of the master password
+/// (design spec §6.5: the primary vault is never decrypted and the master
+/// password never enters the backup chain); strength requirements are the
+/// frontend's job, the backend only checks non-emptiness. The passphrase
+/// itself is never written to disk.
 #[derive(Debug, Deserialize)]
 pub struct BackupExportRequest {
     pub path: String,
     pub passphrase: String,
 }
 
-/// 导出结果（非敏感元数据，与 WorkspaceSettings.backup 的
-/// BackupEvidence 对账）。
+/// Export result (non-sensitive metadata, reconciled against the
+/// WorkspaceSettings.backup BackupEvidence).
 #[derive(Debug, Serialize)]
 pub struct BackupExportOutcome {
     pub path: String,
@@ -60,11 +63,14 @@ pub struct BackupExportOutcome {
     pub exported_at: String,
 }
 
-/// 整库加密备份导出到本地文件（S5 自救口第一批）。
+/// Export a full encrypted vault backup to a local file (first batch of the
+/// S5 self-rescue exits).
 ///
-/// 流程：VACUUM INTO 快照 → gzip → 口令加密 → 同目录 `.part` 临时文件
-/// + rename 原子落盘 → 导出凭证（BackupEvidence）写入 workspace
-/// settings。主库全程不解密、不需要主密码；导出中途失败不毁旧备份文件。
+/// Flow: VACUUM INTO snapshot -> gzip -> passphrase encryption -> a
+/// same-directory `.part` temp file + rename for an atomic landing -> the
+/// export evidence (BackupEvidence) written into workspace settings. The
+/// primary vault is never decrypted and no master password is needed; a
+/// mid-export failure does not destroy the previous backup file.
 #[command(rename_all = "snake_case")]
 pub async fn backup_export_to_file(
     request: BackupExportRequest,
@@ -91,8 +97,9 @@ pub async fn backup_export_to_file(
         "Failed to create backup: {}"
     );
 
-    // 原子落盘：`backup.enc` → `backup.enc.part` 写完再 rename，中途
-    // 失败（磁盘满/进程被杀）旧文件原样保留
+    // Atomic landing: `backup.enc` -> `backup.enc.part`, renamed once fully
+    // written; a mid-flight failure (disk full / process killed) leaves the
+    // previous file untouched
     let dest = std::path::Path::new(&request.path);
     let part = dest.with_extension(format!(
         "{}part",
@@ -133,38 +140,49 @@ pub async fn backup_export_to_file(
     }))
 }
 
-/// `backup_restore_from_file` 请求：本地备份文件路径 + 备份口令。
-/// 口令是既有的（导出时用户自定）——不做双录，前端仍应二次确认。
+/// `backup_restore_from_file` request: local backup file path + backup
+/// passphrase. The passphrase is the existing one (chosen by the user at
+/// export time) — no double-entry here; the frontend should still confirm.
 #[derive(Debug, Deserialize)]
 pub struct BackupRestoreRequest {
     pub path: String,
     pub passphrase: String,
 }
 
-/// 恢复结果：原库副本 `.bak` 的路径（原库不存在 = 无副本，None）。
+/// Restore result: the path of the original vault's `.bak` copy (no copy was
+/// made when the vault did not exist -> None).
 #[derive(Debug, Serialize)]
 pub struct BackupRestoreOutcome {
     pub backup_copy: Option<String>,
 }
 
-/// 从本地文件恢复整库（S5 自救口第二批，与 CLI `restore --file` 同语义）。
+/// Restore the full vault from a local file (second batch of the S5
+/// self-rescue exits, same semantics as the CLI `restore --file`).
 ///
-/// 失败口径分两段：
-/// - **口令错 / 文件坏 / 头校验失败**：staged `.restore.tmp` 复验阶段就
-///   报错——现有库分毫未动、会话不受影响（`current vault was not
-///   touched`）。
-/// - **换库段**（staged 成功后）：① 排空——先取下 `service` 槽位（drop
-///   活跃连接池；正跑持锁的命令等它自然跑完），再**持有 `db_path` 锁到
-///   rename 完成**——期间其他需要开库的命令一律排队（这是「连接排空
-///   约束」的两半，未排空在 Windows 上 rename 会撞 Access denied）；
-///   ② 原库 `fs::copy` 成 `.bak`（留存对价）；③ staged → 原路径同目录
-///   原子 rename。
+/// Failure behavior is split into two phases:
+/// - **Wrong passphrase / corrupt file / header check failure**: errors out
+///   at the staged `.restore.tmp` re-verification stage — the current vault
+///   is untouched and the session unaffected (`current vault was not
+///   touched`).
+/// - **Vault-swap phase** (after staging succeeds): (1) drain — first take
+///   down the `service` slot (dropping the active connection pool; commands
+///   already holding the lock run to completion naturally), then **hold the
+///   `db_path` lock until the rename completes** — other commands that need
+///   to open the vault queue in the meantime (these are the two halves of
+///   the "connection drain constraint"; without draining, the rename hits
+///   Access denied on Windows); (2) `fs::copy` the original vault to
+///   `.bak` (preservation hedge); (3) atomically rename the staged file
+///   over the original path in the same directory.
 ///
-/// 换库后 `service` 保持未初始化：恢复出的库主密码可能与当前会话不同，
-/// 由前端 `checkServiceStatus` → 解锁屏 → `init_service` 重新走解锁。
-/// 命令不持有主密码无法代答；换库段失败同口径（库已保全/未动，会话降锁）。
+/// After the swap `service` stays uninitialized: the restored vault's
+/// master password may differ from the current session, so the frontend
+/// goes through `checkServiceStatus` -> unlock screen -> `init_service`
+/// to re-unlock. The command does not hold the master password and cannot
+/// answer on the user's behalf; a vault-swap failure follows the same
+/// convention (vault preserved or untouched, session downgraded to locked).
 ///
-/// staged 复验与换库段都在 [`restore_vault_staged`]（与服务器恢复共用）。
+/// Both the staged re-verification and the vault swap live in
+/// [`restore_vault_staged`] (shared with the server restore).
 #[command(rename_all = "snake_case")]
 pub async fn backup_restore_from_file(
     request: BackupRestoreRequest,
@@ -200,15 +218,21 @@ pub async fn backup_restore_from_file(
     Ok(ApiResponse::success(BackupRestoreOutcome { backup_copy }))
 }
 
-/// staged 复验 + 换库段的共享实现（文件恢复与服务器恢复同语义，见
-/// `backup_restore_from_file` 文档）。
+/// Shared implementation of the staged re-verification + vault swap (same
+/// semantics for file and server restore, see the
+/// `backup_restore_from_file` docs).
 ///
-/// 失败返回用户可读消息（`Ok(ApiResponse::error)` 口径由调用方包一层）：
-/// - staged 复验失败 → 现有库分毫未动、会话不受影响（`was not touched`）；
-/// - 换库段失败 → 原库已保全为 `.bak` / 未动（`restore aborted` / `.bak`）。
+/// On failure returns a user-readable message (the caller wraps it into the
+/// `Ok(ApiResponse::error)` convention):
+/// - staged re-verification failure -> the current vault is untouched and
+///   the session unaffected (`was not touched`);
+/// - vault-swap failure -> the original vault was preserved as `.bak` /
+///   untouched (`restore aborted` / `.bak`).
 ///
-/// 成功返回原库 `.bak` 副本路径（原库不存在 = `None`），且 `service` 槽位
-/// 已取下（由调用方驱动前端回解锁屏重新走 `init_service`）。
+/// On success returns the original vault's `.bak` copy path (`None` when the
+/// vault did not exist), and the `service` slot has been taken down (the
+/// caller drives the frontend back to the unlock screen to run
+/// `init_service` again).
 pub(crate) async fn restore_vault_staged(
     state: &State<'_, AppState>,
     ciphertext: &[u8],
@@ -219,8 +243,9 @@ pub(crate) async fn restore_vault_staged(
         None => return Err("Database path unavailable. Initialize the service first.".to_string()),
     };
 
-    // staged 复验：解密 + gzip + SQLite 头校验写到同目录 `.restore.tmp`。
-    // 这一步只碰 staged 文件——失败时现有库与会话都不受影响。
+    // Staged re-verification: decrypt + gunzip + SQLite header check written
+    // to a same-directory `.restore.tmp`. This step only touches the staged
+    // file — on failure the current vault and session are unaffected.
     let mut staged = std::path::PathBuf::from(&db_path);
     staged.set_extension("restore.tmp");
     if let Err(e) = persona_core::backup::restore_backup_bytes(ciphertext, passphrase, &staged) {
@@ -230,7 +255,8 @@ pub(crate) async fn restore_vault_staged(
         ));
     }
 
-    // ---- 换库段：排空（service 取下在前，db_path 闸持到 rename 完成）----
+    // ---- Vault-swap phase: drain (service taken down first; the db_path
+    // gate is held until the rename completes) ----
     *state.service.lock().await = None;
     let db_path_guard = state.db_path.lock().await;
     let db_path = db_path_guard.clone().unwrap_or(db_path);
@@ -268,14 +294,17 @@ pub(crate) async fn restore_vault_staged(
     Ok(backup_copy)
 }
 
-/// `backup_push_to_server` 请求：备份口令。服务器收到的已是密文
-/// （VACUUM INTO 快照 → gzip → 口令加密），口令与主密码永不离开本机。
+/// `backup_push_to_server` request: backup passphrase. What the server
+/// receives is already ciphertext (VACUUM INTO snapshot -> gzip ->
+/// passphrase encryption); the passphrase and master password never leave
+/// this machine.
 #[derive(Debug, Deserialize)]
 pub struct BackupPushRequest {
     pub passphrase: String,
 }
 
-/// 推送结果：服务器返回的元数据（`PushResult` 镜像）+ 本地导出凭证时刻。
+/// Push result: the server-returned metadata (a `PushResult` mirror) plus
+/// the local export-evidence timestamp.
 #[derive(Debug, Serialize)]
 pub struct BackupPushOutcome {
     pub backup_id: String,
@@ -283,16 +312,20 @@ pub struct BackupPushOutcome {
     pub size_bytes: i64,
     pub sha256: String,
     pub created_at: String,
-    /// 同设备最新版本 sha256 相同时服务器去重（200），未产生新版本。
+    /// The server deduplicated (200) because it matched the newest version's
+    /// sha256 for the same device; no new version was created.
     pub deduplicated: bool,
     pub exported_at: String,
 }
 
-/// 整库加密备份推送到服务器密文仓（S5-d，与 CLI `backup push` 同语义）。
+/// Push the full encrypted vault backup to the server ciphertext store
+/// (S5-d, same semantics as the CLI `backup push`).
 ///
-/// 流程：快照加密（同文件导出）→ `BackupClient.push`（token 由
-/// settings.sync + OS keyring 提供）→ 导出凭证（`destination: "server"`）
-/// 写入 workspace settings。要求已解锁（快照需要读库；与文件导出同门禁）。
+/// Flow: snapshot encryption (same as the file export) -> `BackupClient.push`
+/// (token from settings.sync + OS keyring) -> export evidence
+/// (`destination: "server"`) written into workspace settings. Requires being
+/// unlocked (the snapshot needs to read the vault; same gate as the file
+/// export).
 #[command(rename_all = "snake_case")]
 pub async fn backup_push_to_server(
     request: BackupPushRequest,
@@ -347,14 +380,15 @@ pub async fn backup_push_to_server(
     }))
 }
 
-/// `backup_list_server_versions` 请求：页大小（1-100，缺省 20）。
+/// `backup_list_server_versions` request: page size (1-100, default 20).
 #[derive(Debug, Deserialize)]
 pub struct BackupServerListRequest {
     #[serde(default)]
     pub limit: Option<u32>,
 }
 
-/// 服务器侧备份版本的桌面视图（`BackupMeta` 镜像，id 改名 backup_id）。
+/// Desktop view of server-side backup versions (a `BackupMeta` mirror with
+/// id renamed to backup_id).
 #[derive(Debug, Serialize)]
 pub struct BackupVersionView {
     pub backup_id: String,
@@ -364,10 +398,11 @@ pub struct BackupVersionView {
     pub created_at: String,
 }
 
-/// 列出服务器密文仓的备份版本（倒序：新→旧）。
+/// List backup versions in the server ciphertext store (newest first).
 ///
-/// 免解锁：锁屏救库也要能先看服务器上有哪些版本（与恢复同门禁——只要
-/// db_path 已知 + sync 配置齐备）。
+/// No unlock required: even from the lock screen you need to see which
+/// versions exist on the server before rescuing the vault (same gate as
+/// restore — only db_path known + sync configuration complete).
 #[command(rename_all = "snake_case")]
 pub async fn backup_list_server_versions(
     request: BackupServerListRequest,
@@ -397,20 +432,23 @@ pub async fn backup_list_server_versions(
     ))
 }
 
-/// `backup_restore_from_server` 请求：备份 ID + 备份口令。
+/// `backup_restore_from_server` request: backup ID + backup passphrase.
 #[derive(Debug, Deserialize)]
 pub struct BackupServerRestoreRequest {
     pub backup_id: String,
     pub passphrase: String,
 }
 
-/// 从服务器密文仓恢复整库（S5-d，与 CLI `backup pull` + `restore --file`
-/// 组合同语义）。
+/// Restore the full vault from the server ciphertext store (S5-d, same
+/// semantics as the CLI `backup pull` + `restore --file` combination).
 ///
-/// 免解锁（锁屏救库是核心场景，与文件恢复的锁定态自救同口径），但要求
-/// db_path 已知。下载即做 ETag sha256 完整性自检（`BackupClient` 内）；
-/// staged 复验失败库不动、换库段排空 + `.bak` 保全，全部走
-/// [`restore_vault_staged`]。
+/// No unlock required (rescuing the vault from the lock screen is the core
+/// scenario, same convention as the locked-state self-rescue of the file
+/// restore), but db_path must be known. The download performs an ETag
+/// sha256 integrity self-check (inside `BackupClient`); a staged
+/// re-verification failure leaves the vault untouched, and the vault-swap
+/// phase drains + preserves a `.bak` — all handled by
+/// [`restore_vault_staged`].
 #[command(rename_all = "snake_case")]
 pub async fn backup_restore_from_server(
     request: BackupServerRestoreRequest,
@@ -426,7 +464,8 @@ pub async fn backup_restore_from_server(
             "Backup ID must not be empty".to_string(),
         ));
     }
-    // 门禁前置：db_path 未知时立刻拒（restore_vault_staged 内会再取一次）
+    // Gate first: reject immediately when db_path is unknown
+    // (restore_vault_staged will fetch it again)
     let _ = db_path_or_return!(state);
     let (server_url, token) = ok_or_error_response!(sync_server_creds_for(&state).await);
     let client = ok_or_error_response_ctx!(
@@ -443,19 +482,21 @@ pub async fn backup_restore_from_server(
     Ok(ApiResponse::success(BackupRestoreOutcome { backup_copy }))
 }
 
-/// `backup_delete_server_version` 请求：备份 ID。
+/// `backup_delete_server_version` request: backup ID.
 #[derive(Debug, Deserialize)]
 pub struct BackupServerDeleteRequest {
     pub backup_id: String,
 }
 
-/// 删除结果（服务器 404 幂等视为成功，`deleted` 恒 true）。
+/// Delete result (a server 404 is treated as idempotent success; `deleted`
+/// is always true).
 #[derive(Debug, Serialize)]
 pub struct BackupServerDeleteOutcome {
     pub deleted: bool,
 }
 
-/// 删除服务器上的备份版本（幂等：已删除时 404 视为成功）。免解锁。
+/// Delete a backup version on the server (idempotent: a 404 for an already
+/// deleted version counts as success). No unlock required.
 #[command(rename_all = "snake_case")]
 pub async fn backup_delete_server_version(
     request: BackupServerDeleteRequest,

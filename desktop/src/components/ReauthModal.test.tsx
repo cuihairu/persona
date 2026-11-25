@@ -21,7 +21,7 @@ describe('components/ReauthModal', () => {
   it('closes on backdrop mousedown (click lands on the overlay itself)', () => {
     renderModal();
 
-    // 点空白 = 关闭：事件直接派发在 overlay 上 → target === currentTarget
+    // Backdrop mousedown = close: the event is dispatched on the overlay itself → target === currentTarget
     fireEvent.mouseDown(screen.getByTestId('reauth-modal'));
     expect(onClose).toHaveBeenCalledTimes(1);
   });
@@ -38,18 +38,18 @@ describe('components/ReauthModal', () => {
   });
 
   it('submits on Enter (form submit) and blocks empty or verifying submissions', () => {
-    // 空密码不触发提交
+    // An empty password does not submit
     const first = renderModal();
     fireEvent.submit(first.container.querySelector('form')!);
     expect(onSubmit).not.toHaveBeenCalled();
     first.unmount();
 
-    // verifying 中按钮禁用
+    // While verifying, the button is disabled
     const second = renderModal({ isVerifying: true });
     expect(screen.getByRole('button', { name: '验证中…' })).toBeDisabled();
     second.unmount();
 
-    // 输入密码后回车提交
+    // Enter after typing the password submits
     renderModal();
     fireEvent.change(screen.getByPlaceholderText('主密码'), {
       target: { value: 'pw' },
@@ -75,7 +75,7 @@ describe('components/ReauthModal', () => {
     fireEvent.keyDown(window, { key: 'Escape' });
     expect(onClose).toHaveBeenCalledTimes(3);
 
-    // 关闭后不再监听 Escape
+    // Escape is no longer watched once closed
     rerender(<ReauthModal isOpen={false} onClose={onClose} onSubmit={onSubmit} />);
     fireEvent.keyDown(window, { key: 'Escape' });
     expect(onClose).toHaveBeenCalledTimes(3);

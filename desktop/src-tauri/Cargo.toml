@@ -10,19 +10,21 @@ edition = "2021"
 [lib]
 name = "persona_desktop"
 
-# 跨进程注入测试套件不在本包：见 ../fill-test（独立 test-only crate，
-# 避免包内 tauri 主 bin 内嵌 manifest 与 RUSTFLAGS /MANIFEST:EMBED 冲突）
+# The cross-process injection test suite does not live in this package: see
+# ../fill-test (a separate test-only crate, so the tauri main bin's embedded
+# manifest in this package does not clash with RUSTFLAGS /MANIFEST:EMBED)
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-# E2EE sync 宿主侧（HttpSyncRemote/SyncAdminApi/信封）+ 账号域代理
-# （accounts/remote.rs AccountsApi）；core default 不含——CLI headless
-# 同样按需开
+# E2EE sync host side (HttpSyncRemote/SyncAdminApi/envelope) + the account-domain
+# proxy (AccountsApi in accounts/remote.rs); core's default features do not
+# include these — CLI headless likewise enables them on demand
 persona-core = { path = "../../core", features = ["remote-auth", "accounts"] }
 persona-ssh-agent = { path = "../../agents/ssh-agent" }
-# Connect HTTP 端点（DR-1 A1 宿主内嵌；router/三防线在独立 crate 与 CLI 共用）
+# Connect HTTP endpoints (DR-1 A1 host-embedded; the router/three defense lines
+# live in a separate crate shared with the CLI)
 persona-connect-server = { path = "../../connect-server" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
@@ -38,31 +40,37 @@ tracing = "0.1"
 dirs = "5.0"
 byteorder = "1.5"
 base64 = "0.22"
-# 云盘同步目录变更 watcher（sync_watcher.rs）：notify 为主触发源，目录在
-# 网络文件系统/监听启动失败时降级为 mtime 轮询。只进 desktop（core 保持
-# 依赖无关）。
+# Cloud-drive sync directory-change watcher (sync_watcher.rs): notify is the
+# primary trigger source, falling back to mtime polling when the directory sits
+# on a network filesystem or watching fails to start. Desktop only (core stays
+# dependency-free of it).
 notify = "8"
-# 主密钥包裹层中间值用 Zeroizing 清零（与 core 同版本；desktop 独立
-# workspace，不能用 .workspace 继承——同 axum 先例）
+# Zeroizing wipes master-key wrapping intermediate values (same version as core;
+# desktop is a separate workspace so .workspace inheritance cannot be used — same
+# precedent as axum)
 zeroize = { version = "1.8", features = ["derive"] }
 hex = "0.4"
 sha2 = "0.10"
 chrono = { version = "0.4", features = ["serde"] }
-# sync token 字段级加密存储（默认 v1 feature = apple/windows/zbus-secret-service 三平台后端）
+# Field-level encrypted storage for the sync token (default v1 feature = the three platform backends apple/windows/zbus-secret-service)
 keyring = "4"
 tauri-plugin-dialog = "2"
-# OS 级全局热键（Quick Access 唤出，对标矩阵 #22）。Linux 走 X11
-# （global-hotkey 用 x11-dl 运行时 dlopen，不链 X 库，无需额外系统依赖）；
-# Wayland 无 portal 时抢注会失败 → 运行态如实回报给设置页，不静默
+# OS-level global hotkey (Quick Access summon, matrix item #22). Linux goes via
+# X11 (global-hotkey uses x11-dl with runtime dlopen, does not link the X
+# libraries, no extra system dependencies needed); on Wayland without a portal
+# grabbing the hotkey fails -> the runtime state is reported honestly to the
+# settings page, never silently.
 tauri-plugin-global-shortcut = "2"
 
-# biometric unlock 的 OS 认证弹框（zbus 已因 keyring 在 Linux 树里，无新增；
-# windows 钉 0.61 对齐 tauri 已拉入的版本避免整树复制）
+# OS auth dialog for biometric unlock (zbus is already in the Linux tree via
+# keyring, so nothing new; windows pinned to 0.61 to match the version tauri
+# already pulls in and avoid duplicating the whole tree)
 [target.'cfg(target_os = "linux")'.dependencies]
 zbus = "5"
 
-# Connect 本机自动化端点（CONNECT_AUTOMATION_DESIGN DR-1 A1；与 server 同
-# 版本先例，desktop 独立 workspace 自行声明）
+# Connect local automation endpoints (CONNECT_AUTOMATION_DESIGN DR-1 A1; same
+# version precedent as the server — desktop is a separate workspace and declares
+# it itself)
 axum = "0.7"
 
 [target.'cfg(target_os = "macos")'.dependencies]
@@ -70,16 +78,18 @@ block2 = "0.6"
 objc2 = "0.6"
 objc2-foundation = { version = "0.3", features = ["NSString", "NSError"] }
 objc2-local-authentication = { version = "0.3", features = ["block2"] }
-# Secure Enclave 路线 B'（biometric/macos_se.rs）：SE 密钥生成 + ECIES。
-# 仅 macOS 编译；真机行为见 docs/biometric-unlock-design.md §5 spike。
+# Secure Enclave route B' (biometric/macos_se.rs): SE key generation + ECIES.
+# Compiles on macOS only; see docs/biometric-unlock-design.md §5 spike for
+# real-device behavior.
 objc2-security = { version = "0.3", features = [
   "SecAccessControl",
   "SecBase",
   "SecItem",
   "SecKey",
 ] }
-# CF 基础类型（CFBoolean/CFData/CFDictionary/CFError/CFNumber；CFType/
-# CFRetained 无条件可用）——走直接依赖而非 objc2-foundation 重导出
+# CF base types (CFBoolean/CFData/CFDictionary/CFError/CFNumber; CFType/
+# CFRetained available unconditionally) — a direct dependency rather than the
+# objc2-foundation re-exports
 objc2-core-foundation = { version = "0.3", features = [
   "CFData",
   "CFDictionary",
@@ -89,20 +99,21 @@ objc2-core-foundation = { version = "0.3", features = [
 ] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
-# Security_Credentials_UI = 门禁层 Windows Hello（UserConsentVerifier）；
-# Win32_Security_Cryptography = 硬件包裹层的 NCrypt（Passport KSP，见
-# biometric/windows_tpm.rs 与 docs/biometric-unlock-design.md §6）；
-# Win32_Foundation = HRESULT/WIN32_ERROR 常量（NTE_USER_CANCELLED 等，
-# 错误分流要用）
+# Security_Credentials_UI = gate layer Windows Hello (UserConsentVerifier);
+# Win32_Security_Cryptography = the hardware wrapping layer's NCrypt (Passport
+# KSP, see biometric/windows_tpm.rs and docs/biometric-unlock-design.md §6);
+# Win32_Foundation = HRESULT/WIN32_ERROR constants (NTE_USER_CANCELLED etc.,
+# needed for error routing)
 windows = { version = "0.61", features = [
   "Security_Credentials_UI",
   "Foundation",
   "Win32_Foundation",
   "Win32_Security_Cryptography",
-  # 桌面填充注入（desktop_fill.rs，#12）：EDIT 子控件枚举/WM_SETTEXT 直写
-  # = WindowsAndMessaging；Ctrl+V 键击与跨线程聚焦 = KeyboardAndMouse；
-  # 剪贴板中转备份/恢复 = DataExchange + Memory + Ole(CF_UNICODETEXT)；
-  # AttachThreadInput 的线程 id = Threading
+  # Desktop fill injection (desktop_fill.rs, #12): EDIT child control
+  # enumeration / WM_SETTEXT direct write = WindowsAndMessaging; the Ctrl+V key
+  # stroke and cross-thread focus = KeyboardAndMouse; clipboard round-trip
+  # backup/restore = DataExchange + Memory + Ole (CF_UNICODETEXT); the thread id
+  # for AttachThreadInput = Threading
   "Win32_UI_WindowsAndMessaging",
   "Win32_UI_Input_KeyboardAndMouse",
   "Win32_System_DataExchange",

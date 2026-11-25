@@ -1,32 +1,39 @@
-//! OS 级生物识别/用户确认 provider（Touch ID / Windows Hello / polkit）。
+//! OS-level biometric / user-presence provider (Touch ID / Windows Hello /
+//! polkit).
 //!
-//! 实现 core 的同步 [`BiometricProvider`] trait，而三个平台的系统弹框
-//! API 全是阻塞或回调式——`run_with_timeout` 在专用短命线程上跑
-//! ceremony 并限时收回结果，把阻塞限制在线程边界内（token_store 在
-//! async 命令里同步调 keyring/zbus 是同一既成事实）。超时后线程悬挂
-//! 至系统弹窗自行结束即退出（detached，每次 ceremony 一条短命线程，
-//! 无泄漏累积）。
+//! Implements core's synchronous [`BiometricProvider`] trait, while the
+//! platform system-dialog APIs are all blocking or callback-based —
+//! `run_with_timeout` runs the ceremony on a dedicated short-lived thread
+//! and reclaims the result within a deadline, confining the blocking to the
+//! thread boundary (calling keyring/zbus synchronously from async commands
+//! in token_store is the same established fact). On timeout the thread
+//! simply exits once the system dialog ends on its own (detached; one
+//! short-lived thread per ceremony, no accumulating leak).
 //!
-//! 解锁屏 ceremony 没有活的 PersonaService，provider 挂在 AppState
-//! （`types::AppState::biometric_provider`）；命令层调用时一律再包
-//! `spawn_blocking`，不泊车 tokio worker。
+//! The unlock-screen ceremony has no live PersonaService, so the provider
+//! hangs off AppState (`types::AppState::biometric_provider`); command-layer
+//! calls always wrap it further in `spawn_blocking` and never park a tokio
+//! worker.
 //!
-//! availability 探测 fail-closed：无 secret service / 无 polkit /
-//! 非 三大桌面平台一律不可用，前端隐藏指纹入口。
+//! The availability probe is fail-closed: no secret service / no polkit /
+//! not one of the three desktop platforms means unavailable, and the
+//! frontend hides the fingerprint entry.
 
 use persona_core::{BiometricAuthResult, BiometricPlatform, BiometricPrompt, BiometricProvider};
 use std::sync::Arc;
 use std::time::Duration;
 use zeroize::Zeroizing;
 
-/// 一次系统认证弹窗的最长等待（超时 = 用户放弃，视为失败）
+/// Maximum wait for one system authentication dialog (timeout = the user
+/// gave up, treated as failure)
 const CEREMONY_TIMEOUT: Duration = Duration::from_secs(120);
 
-/// availability 探测的最长等待——解锁屏 mount 就要查 status，坏掉的
-/// 系统服务不能拖慢界面，超时按不可用处理（fail-closed）
+/// Maximum wait for the availability probe — the unlock screen mounts and
+/// must check status, so a broken system service must not slow the UI; on
+/// timeout treat as unavailable (fail-closed)
 const AVAILABILITY_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// 在专用线程上执行 `f` 并限时等待结果。
+/// Run `f` on a dedicated thread and wait for the result with a deadline.
 fn run_with_timeout<T, F>(f: F, timeout: Duration) -> Result<T, String>
 where
     T: Send + 'static,
@@ -36,7 +43,8 @@ where
     std::thread::Builder::new()
         .name("persona-biometric".to_string())
         .spawn(move || {
-            // 接收端超时放弃后线程随系统弹窗结束自然退出，send 失败无所谓
+            // Once the receiver times out and gives up, the thread exits
+            // naturally when the system dialog ends; a failed send doesn't matter
             let _ = tx.send(f());
         })
         .map_err(|e| format!("biometric thread spawn failed: {e}"))?;
@@ -50,7 +58,7 @@ where
 }
 
 // ---------------------------------------------------------------------------
-// 平台分发（各模块暴露 available/ceremony/platform_name 三个自由函数）
+// Platform dispatch (each module exposes the free functions available/ceremony/platform_name)
 // ---------------------------------------------------------------------------
 
 #[cfg(target_os = "macos")]
@@ -79,7 +87,7 @@ mod unsupported;
 #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
 use unsupported as os;
 
-/// trait 层回报的平台枚举（沿用 ssh-agent detect_platform 的既有映射）
+/// Platform enum reported at the trait layer (reuses ssh-agent detect_platform's existing mapping)
 fn result_platform() -> BiometricPlatform {
     #[cfg(target_os = "macos")]
     {
@@ -99,11 +107,13 @@ fn result_platform() -> BiometricPlatform {
     }
 }
 
-/// OS 直连的 biometric provider（解锁 ceremony 与 SSH agent 策略共用）。
+/// OS-direct biometric provider (shared by the unlock ceremony and the SSH
+/// agent policy).
 ///
-/// `is_available` 忽略 `hint`（调用方对平台的猜测无关紧要，这里探测的
-/// 就是本机真实认证栈）；`prompt.user_id` 同样被忽略——OS 认证的是
-/// 登录会话用户，不是 vault 里的某个身份。
+/// `is_available` ignores `hint` (the caller's guess about the platform
+/// doesn't matter; what is probed here is this machine's real
+/// authentication stack); `prompt.user_id` is likewise ignored — the OS
+/// authenticates the logged-in session user, not some identity in the vault.
 pub struct OsBiometricProvider;
 
 impl BiometricProvider for OsBiometricProvider {
@@ -123,20 +133,22 @@ impl BiometricProvider for OsBiometricProvider {
     }
 }
 
-/// 前端 status 展示用的平台名（"touch-id" / "windows-hello" /
-/// "linux-polkit" / "unsupported"）
+/// Platform name for frontend status display ("touch-id" / "windows-hello" /
+/// "linux-polkit" / "unsupported")
 pub fn platform_name() -> &'static str {
     os::platform_name()
 }
 
 // ---------------------------------------------------------------------------
-// 硬件绑定包裹层（biometric_wrap trait 的宿主侧装配）
+// Hardware-bound wrapping layer (host-side assembly of the biometric_wrap trait)
 // ---------------------------------------------------------------------------
 
-/// 门禁档桩：capability OsGateOnly → `wrap_master_key`/`unwrap_master_key`
-/// 显式 Unsupported，enable/unlock 命令据此走历史门禁层（keyring 密码
-/// 托管）路径。Linux 恒定此档（无硬件封装，设计文档 §7.1）；Windows 在
-/// Passport Key 落地前同此；macOS 无 spike 环境变量时也落此档。
+/// Gate-tier stub: with capability OsGateOnly, `wrap_master_key`/
+/// `unwrap_master_key` return Unsupported explicitly, and enable/unlock
+/// commands route through the historical gate layer (keyring password
+/// escrow) accordingly. Linux is always on this tier (no hardware wrapping,
+/// design doc §7.1); Windows is the same until Passport Key lands; macOS
+/// also lands here without the spike env var.
 pub struct GateOnlyKeyWrapper;
 
 impl persona_core::BiometricKeyWrapper for GateOnlyKeyWrapper {
@@ -145,8 +157,9 @@ impl persona_core::BiometricKeyWrapper for GateOnlyKeyWrapper {
     }
 
     fn is_available(&self) -> bool {
-        // 门禁档的可用性由 biometric_provider 单独探测；包裹层永远
-        // "不可用"——两个概念，这里 fail-closed。
+        // Gate-tier availability is probed separately by biometric_provider;
+        // the wrapping layer is always "unavailable" — two distinct concepts,
+        // fail-closed here.
         false
     }
 
@@ -195,11 +208,12 @@ impl persona_core::BiometricKeyWrapper for GateOnlyKeyWrapper {
     }
 }
 
-/// 装配当前平台的密钥包裹器。macOS 在 `PERSONA_BIOMETRIC_SE_SPIKE=1`
-/// 时返回 Secure Enclave 路线 B' 实现（真机 spike 用，见设计文档 §5），
-/// Windows 在 `PERSONA_BIOMETRIC_TPM_SPIKE=1` 时返回 Passport KSP 实现
-/// （同上，§6）；其余一律门禁档桩——生产 unlock 主链路不含未经真机验证
-/// 的路径。
+/// Assembles the key wrapper for the current platform. macOS returns the
+/// Secure Enclave route B' implementation when `PERSONA_BIOMETRIC_SE_SPIKE=1`
+/// (for on-device spikes, see design doc §5), and Windows returns the
+/// Passport KSP implementation when `PERSONA_BIOMETRIC_TPM_SPIKE=1`
+/// (ditto, §6); everything else falls back to the gate-tier stub — the
+/// production unlock path contains no route unverified on real hardware.
 pub fn key_wrapper() -> Arc<dyn persona_core::BiometricKeyWrapper> {
     #[cfg(target_os = "macos")]
     {
@@ -222,7 +236,8 @@ mod tests {
 
     #[test]
     fn ceremony_timeout_returns_error() {
-        // 闭包睡过时限：run_with_timeout 必须超时返回错误而非挂死
+        // The closure sleeps past the deadline: run_with_timeout must return
+        // an error on timeout rather than hang
         let result = run_with_timeout(
             || {
                 std::thread::sleep(Duration::from_secs(6));
@@ -242,7 +257,7 @@ mod tests {
 
     #[test]
     fn availability_failure_is_false() {
-        // 探测失败（错误或超时）一律 fail-closed 为不可用
+        // A failed probe (error or timeout) is fail-closed as unavailable
         let probe: Result<bool, String> =
             run_with_timeout(|| Err("no secret service".into()), AVAILABILITY_TIMEOUT);
         assert!(!probe.unwrap_or(false));

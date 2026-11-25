@@ -4,9 +4,9 @@ import { DocumentDuplicateIcon, LockClosedIcon } from '@heroicons/react/24/outli
 import RevealSecretButton from '@/components/RevealSecretButton';
 import type { Credential } from '@/types';
 
-/** 按凭据类型渲染详情载荷（原 `renderCredentialData` 内联闭包平移）。
- *  无内部状态——TOTP 条、钱包独立密码表单与复制回调都由父级持有，
- *  经 props 下发（名字与原闭包捕获一致，函数体逐字保留）。 */
+/** Renders the detail payload per credential type (the former inline `renderCredentialData` closure moved as-is).
+ *  Holds no internal state — the TOTP row, the wallet standalone password form and the copy callbacks are all
+ *  owned by the parent and passed down as props (names match the original closure captures, body preserved verbatim). */
 const CredentialDataSection: React.FC<{
   credential: Credential;
   credentialData: any;
@@ -421,7 +421,7 @@ const CredentialDataSection: React.FC<{
       );
 
     case 'Identity': {
-      // 证件号等敏感字段随 per-item key 加密，读回走敏感操作门禁
+      // Sensitive fields such as the ID number are encrypted with the per-item key; reading them back goes through the sensitive-action gate
       const fields: Array<[string, string | undefined, boolean]> = [
         [t('detail.labels.fullName'), [data.first_name, data.last_name].filter(Boolean).join(' '), false],
         [t('detail.labels.email'), data.email, false],

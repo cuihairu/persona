@@ -8,11 +8,11 @@ import type { GeneratedPasswords } from '@/types';
 
 const MIN_LENGTH = 4;
 const MAX_LENGTH = 64;
-// Diceware 词数界（core generate_words 的校验范围）
+// Diceware word-count bounds (the validation range of core generate_words)
 const MIN_WORDS = 3;
 const MAX_WORDS = 10;
 
-/** 熵值分档（bits）：颜色 + 标签（阈值与 1Password 的弱/可/强/极强近似） */
+/** Entropy tiers (bits): color + label (thresholds roughly match 1Password's weak/fair/strong/very strong) */
 const strengthFor = (bits: number): { tone: string; labelKey: string } => {
   if (bits < 40) {
     return { tone: 'bg-red-500', labelKey: 'generator.strength.veryWeak' };
@@ -56,7 +56,7 @@ const CharsetToggle: React.FC<CharsetToggleProps> = ({ testId, label, checked, d
   </label>
 );
 
-/** 密码生成器面板（主航道视图，无需选中身份；生成是纯计算不触碰库）。 */
+/** Password generator panel (main-path view, no identity selection required; generating is pure computation that never touches the vault). */
 const GeneratorPanel: React.FC = () => {
   const { t } = useTranslation();
   const [length, setLength] = useState(16);
@@ -73,7 +73,7 @@ const GeneratorPanel: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
 
   const hasLetterSet = includeLowercase || includeUppercase;
-  // 词组模式无字符集约束（core 先行短路）；字符/可发音模式的约束见下
+  // Words mode has no character-set constraint (core short-circuits first); the constraints for character/pronounceable modes are below
   const canGenerate = wordsMode
     ? true
     : pronounceable
@@ -97,7 +97,7 @@ const GeneratorPanel: React.FC = () => {
         include_symbols: includeSymbols,
         pronounceable,
         count,
-        // 词组模式下 core 短路进 Diceware（字符集选项被忽略，熵按 EFF 词表计）
+        // In words mode core short-circuits into Diceware (character-set options are ignored, and entropy is computed over the EFF word list)
         ...(wordsMode ? { words: wordCount } : {}),
       });
       if (res.success && res.data) {
@@ -138,7 +138,7 @@ const GeneratorPanel: React.FC = () => {
         </div>
 
         <div className="mt-6 grid grid-cols-1 gap-6 md:grid-cols-2">
-          {/* 长度（词组模式下换成词数滑杆——长度对 Diceware 无意义） */}
+          {/* Length (becomes the word-count slider in words mode — length is meaningless for Diceware) */}
           {wordsMode ? (
             <div>
               <div className="flex items-center justify-between">
@@ -184,7 +184,7 @@ const GeneratorPanel: React.FC = () => {
             </div>
           )}
 
-          {/* 候选数量 */}
+          {/* Candidate count */}
           <div>
             <label htmlFor="generator-count" className="text-sm font-medium text-gray-700 dark:text-gray-300">
               {t('generator.count')}
@@ -204,7 +204,7 @@ const GeneratorPanel: React.FC = () => {
             </select>
           </div>
 
-          {/* 字符集 */}
+          {/* Character sets */}
           <div className="space-y-2 md:col-span-2">
             <p className="text-sm font-medium text-gray-700 dark:text-gray-300">{t('generator.charsets')}</p>
             <div className="flex flex-wrap gap-x-6 gap-y-2">
@@ -269,7 +269,7 @@ const GeneratorPanel: React.FC = () => {
           data-testid="generator-results"
           className="bg-white dark:bg-gray-900 shadow rounded-xl border border-gray-100 dark:border-gray-800"
         >
-          {/* 熵值计量条 */}
+          {/* Entropy meter */}
           <div className="p-6 border-b border-gray-100 dark:border-gray-800">
             <div className="flex items-center justify-between text-sm">
               <span className="text-gray-600 dark:text-gray-300">{t('generator.entropy')}</span>
@@ -292,7 +292,7 @@ const GeneratorPanel: React.FC = () => {
             </p>
           </div>
 
-          {/* 候选口令列表 */}
+          {/* Candidate password list */}
           <ul className="divide-y divide-gray-200 dark:divide-gray-700">
             {result.passwords.map((password, idx) => (
               <li key={`${idx}-${password}`} className="px-6 py-3 flex items-center justify-between gap-4">

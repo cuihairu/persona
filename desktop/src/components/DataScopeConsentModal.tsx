@@ -3,8 +3,9 @@ import { ShieldCheckIcon, XMarkIcon } from '@heroicons/react/24/outline';
 import { useTranslation } from 'react-i18next';
 import { useEscapeToClose } from '@/hooks/useEscapeToClose';
 
-/** 披露面：audit = 同步服务器开关（审计事件上报）；e2ee = 加入端到端同步；
- * account = 注册/绑定 persona-server 账号（账号材料外发面） */
+/** Disclosure surface: audit = sync server toggle (audit event reporting);
+ * e2ee = joining end-to-end sync; account = registering/binding a
+ * persona-server account (outbound surface for account material) */
 export type DataScope = 'audit' | 'e2ee' | 'account';
 
 interface DataScopeConsentModalProps {
@@ -14,10 +15,13 @@ interface DataScopeConsentModalProps {
 }
 
 /**
- * 隐私红线「默认关闭、显式开启、开启时明示数据范围」的披露确认弹窗：
- * 逐条列出该通道服务器会看到什么 / 永不出本机什么，用户显式确认后才
- * 放行——audit 面确认后展开同步服务器配置表单，e2ee 面确认后才执行
- * sync_join。取消 / Esc / 点空白一律不放行（开关保持关闭、不加入）。
+ * Disclosure confirmation dialog for the privacy rule "off by default,
+ * explicitly enabled, with the data scope spelled out at enable time":
+ * lists item by item what the channel's server will see / what never leaves
+ * this machine, and only releases once the user explicitly confirms — the
+ * audit surface then expands the sync server config form, and e2ee only runs
+ * sync_join after confirmation. Cancel / Esc / clicking the backdrop never
+ * releases (the toggle stays off and nothing is joined).
  */
 const DataScopeConsentModal: React.FC<DataScopeConsentModalProps> = ({
   scope,
@@ -31,7 +35,7 @@ const DataScopeConsentModal: React.FC<DataScopeConsentModalProps> = ({
       : scope === 'e2ee'
         ? 'settings.syncDevices.consent'
         : 'settings.account.consent';
-  // 文案为固定数组（i18n 资源内联，模块加载即在位）；returnObjects 取整组
+  // Copy is a fixed array (i18n resources inlined, present as soon as the module loads); returnObjects fetches the whole set
   const sees = t(`${base}.sees`, { returnObjects: true }) as string[];
   const notSees = t(`${base}.no`, { returnObjects: true }) as string[];
 
@@ -43,7 +47,7 @@ const DataScopeConsentModal: React.FC<DataScopeConsentModalProps> = ({
       data-testid="data-scope-modal"
       data-scope={scope}
       onMouseDown={(e) => {
-        // 点空白 = 不放行，与 Esc / 关闭按钮同口径
+        // Clicking the backdrop = do not release, same rule as Esc / the close button
         if (e.target === e.currentTarget) onCancel();
       }}
     >

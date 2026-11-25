@@ -3,8 +3,9 @@ import { useTranslation } from 'react-i18next';
 import { EyeIcon, EyeSlashIcon } from '@heroicons/react/24/outline';
 import type { CustomField } from '@/types';
 
-/** 自定义字段编辑器（gap #5 余项）：整表替换语义。读取失败只渲染错误
- *  ——读不到旧表还盲存会把既有字段清掉。行状态由父级持有，经 props 下发。 */
+/** Custom fields editor (remaining item of gap #5): whole-table replacement semantics. A read failure only
+ *  renders the error -- blindly saving without the old table would wipe the existing fields. Row state is held
+ *  by the parent and passed down via props. */
 const CustomFieldsEditor: React.FC<{
   customFieldsError: string | null;
   customFields: CustomField[];

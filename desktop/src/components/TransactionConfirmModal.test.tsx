@@ -22,7 +22,7 @@ const wallet = {
 } as unknown as WalletSummary;
 
 const knownAddress = '0x1111111111111111111111111111111111111111';
-// 头 6 位与尾 6 位相同、中段不同 → 投毒启发式命中
+// Same first 6 and last 6 chars, different middle → hits the poisoning heuristic
 const lookalikeAddress = '0x1111112222111111111111111111111111111111';
 
 const signedTx = {
@@ -98,7 +98,7 @@ describe('components/TransactionConfirmModal', () => {
     expect(warning).toHaveAttribute('role', 'alert');
     expect(warning.textContent).toContain(knownAddress);
 
-    // 正常地址无告警
+    // Normal address: no warning
     fireEvent.change(screen.getByTestId('to-address-input'), {
       target: { value: '0x9999999999999999999999999999999999999999' },
     });
@@ -124,22 +124,22 @@ describe('components/TransactionConfirmModal', () => {
     expect(personaAPI.walletSignTransaction).toHaveBeenCalledWith({
       transaction_id: 't-1',
       password: 'wallet-pass',
-      // 正常地址未命中投毒启发式：不带确认
+      // Normal address misses the poisoning heuristic: no confirmation flag
       confirm_poisoning_check: false,
     });
 
     expect(screen.getByTestId('tx-hash').textContent).toBe('0xdeadbeef');
-    // raw bytes 以两位十六进制展示
+    // raw bytes rendered as two-digit hex
     expect(screen.getByText(/01ff10/)).toBeInTheDocument();
     expect(onSuccess).toHaveBeenCalledWith(signedTx);
 
-    // 复制按钮走 copyWithAutoClear
+    // The copy button goes through copyWithAutoClear
     fireEvent.click(screen.getByLabelText('复制哈希'));
     expect(copyWithAutoClear).toHaveBeenCalledWith('0xdeadbeef');
   });
 
-  // 投毒告警可见时用户仍在确认中点击确认 = 显式 ack（后端签名入口
-  // 会再跑一次启发式，缺 ack 拒绝签名）。
+  // Confirming while the poisoning warning is visible = explicit ack (the
+  // backend sign entry re-runs the heuristic and rejects signing without the ack).
   it('carries the poisoning ack when the recipient mimics a known address', async () => {
     renderModal();
     fillForm({ to: lookalikeAddress });
@@ -190,7 +190,7 @@ describe('components/TransactionConfirmModal', () => {
     await waitFor(() => {
       expect(screen.getByTestId('tx-error')).toHaveTextContent('wrong password');
     });
-    // 签名失败后密码已清空，需重填才能再签
+    // After a sign failure the password is cleared and must be re-entered to sign again
     expect((screen.getByTestId('sign-password-input') as HTMLInputElement).value).toBe('');
   });
 

@@ -14,7 +14,7 @@ import type {
 import { readStoredTheme } from '@/utils/theme';
 import { readSidebarPrefs, writeSidebarPrefs, type SidebarGroupKey, type SidebarPrefs } from '@/utils/sidebarPrefs';
 
-/** 高级功能开关出厂值：1Password 式默认全关，解锁后从 workspace settings 拉取 */
+/** Out-of-box advanced feature flags: 1Password-style, all off by default, fetched from workspace settings after unlock */
 export const DEFAULT_FEATURE_FLAGS: FeatureFlags = {
   ssh_agent: false,
   wallet: false,
@@ -22,13 +22,13 @@ export const DEFAULT_FEATURE_FLAGS: FeatureFlags = {
   fetch_favicons: false,
 };
 
-/** favicon 缓存条目（host 级；data 为 base64，直接拼 data: URL 渲染） */
+/** favicon cache entry (host level; data is base64, rendered by building a data: URL) */
 export interface FaviconEntry {
   mime_type: string;
   data: string;
 }
 
-/** 侧栏分类树出厂筛选：全部条目（换身份时 reset 回此值） */
+/** Out-of-box sidebar category filter: all entries (reset back to this on identity switch) */
 export const DEFAULT_SIDEBAR_FILTER: SidebarFilter = { kind: 'all' };
 
 interface AppState {
@@ -47,30 +47,31 @@ interface AppState {
   // UI state
   isLoading: boolean;
   error: string | null;
-  /** init 返回 PASSWORD_CHANGE_REQUIRED 时置位：解锁屏渲染强制改密弹窗 */
+  /** Set when init returns PASSWORD_CHANGE_REQUIRED: the unlock screen renders the forced password-change modal */
   passwordChangeRequired: boolean;
-  /** 主题偏好（'system' 跟随系统；<html>.dark 的唯一应用点是 useTheme） */
+  /** Theme preference ('system' follows the OS; useTheme is the sole application site for <html>.dark) */
   theme: ThemePreference;
-  /** 侧栏分类树选中项（单选；Sidebar 写、CredentialList 读，换身份时 reset） */
+  /** Selected sidebar category (single choice; written by Sidebar, read by CredentialList, reset on identity switch) */
   sidebarFilter: SidebarFilter;
-  /** 侧栏整栏收起（图标条形态；localStorage 持久化，跨会话记忆） */
+  /** Sidebar collapsed as a whole (icon rail form; persisted in localStorage across sessions) */
   sidebarCollapsed: boolean;
-  /** 侧栏内折叠的分组 key（类别/保险库/标签/工具；同上持久化） */
+  /** Keys of groups collapsed inside the sidebar (category/vault/tag/tool; persisted the same way) */
   collapsedSidebarGroups: SidebarGroupKey[];
-  /** 凭据列表本地搜索词（CredentialList 读写；换身份/锁屏清空）。
-   *  放 store 而非组件 state：pending 注入需与选中/侧栏筛选同一批更新，
-   *  React state 慢一帧会产生"选中已置、搜索词未清"的中间帧误触清选中 */
+  /** Local search query for the credential list (read/written by CredentialList; cleared on identity switch/lock).
+   *  Lives in the store rather than component state: a pending injection must land in the same batch as the
+   *  selection and sidebar filter, since React state lagging a frame creates an intermediate frame where the
+   *  selection is set but the query is not cleared, which wrongly trips the selection-clear effect */
   credentialSearchQuery: string;
-  /** 待注入的凭据选中项（QuickSearch 写、CredentialList 消费后清除） */
+  /** Pending credential selection to inject (written by QuickSearch, cleared once CredentialList consumes it) */
   pendingCredentialSelection: PendingCredentialSelection | null;
-  /** 当前选中凭据 id（CredentialList 派生详情对象；锁屏清空） */
+  /** Currently selected credential id (CredentialList derives the detail object from it; cleared on lock) */
   selectedCredentialId: string | null;
-  /** 编辑中的凭据（null = 无编辑；DetailPane 写、App 层 CreateCredentialModal 消费，
-   *  data 是打开编辑时面板已解密的 payload，null = 未取到（字段留空重填）） */
+  /** Credential being edited (null = none; written by DetailPane, consumed by the App-level CreateCredentialModal.
+   *  data is the payload already decrypted when the pane opened; null = could not be fetched (fields left blank for re-entry) */
   editingCredential: { credential: Credential; data: CredentialData | null } | null;
-  /** favicon 缓存（host → 条目；命中渲染，锁屏清空、身份切换不清——跨身份共享） */
+  /** favicon cache (host -> entry; hits are rendered, cleared on lock but not on identity switch -- shared across identities) */
   faviconCache: Record<string, FaviconEntry>;
-  /** favicon 负缓存：批量读未命中的 host，避免重复 IPC（Fetch 成功后移除） */
+  /** favicon negative cache: hosts missed by a batch read, to avoid duplicate IPC (dropped after a successful fetch) */
   faviconMisses: Record<string, true>;
 
   // Actions
@@ -92,11 +93,11 @@ interface AppState {
   clearPendingCredentialSelection: () => void;
   setSelectedCredentialId: (id: string | null) => void;
   setEditingCredential: (editing: { credential: Credential; data: CredentialData | null } | null) => void;
-  /** 批量合并 favicon 缓存，并把命中的 host 从负缓存移除 */
+  /** Merge favicon cache entries in bulk, dropping the hit hosts from the negative cache */
   setFaviconEntries: (entries: FaviconData[]) => void;
-  /** 标记批量读未命中的 host（已缓存的忽略） */
+  /** Mark hosts missed by a batch read (ignore ones already cached) */
   setFaviconMisses: (hosts: string[]) => void;
-  /** 清空 favicon 缓存与负缓存（锁屏时调用） */
+  /** Clear the favicon cache and negative cache (called on lock) */
   clearFaviconCache: () => void;
   setLoading: (loading: boolean) => void;
   setError: (error: string | null) => void;
@@ -175,7 +176,7 @@ export const useAppStore = create<AppState>((set) => ({
     set((state) => {
       const faviconMisses = { ...state.faviconMisses };
       for (const host of hosts) {
-        // 已有缓存的 host 不落负缓存（缓存赢过陈旧 miss）
+        // Hosts already cached do not go into the negative cache (a cache hit beats a stale miss)
         if (!(host in state.faviconCache)) {
           faviconMisses[host] = true;
         }

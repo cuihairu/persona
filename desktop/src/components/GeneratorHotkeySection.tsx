@@ -5,10 +5,12 @@ import { personaAPI } from '../utils/api';
 import type { GeneratorStatus } from '../types';
 
 /**
- * 生成器热键设置区（gap #9 余项：OS 级任意应用内呼出生成器浮窗）。
+ * Generator hotkey settings section (remaining item from gap #9: OS-level
+ * summon of the generator overlay from any app).
  *
- * 与 QuickAccessSection 同构：开关、绑定串改写、"到底生效没有"的如实
- * 展示。状态面免解锁可读，锁定后仍能看出"热键是不是活的"。
+ * Mirrors QuickAccessSection: toggle, binding rewrite, and an honest display
+ * of "is it actually active". The status panel is readable without unlocking,
+ * so even when locked you can tell whether the hotkey is alive.
  */
 const GeneratorHotkeySection: React.FC = () => {
   const { t } = useTranslation();
@@ -25,7 +27,7 @@ const GeneratorHotkeySection: React.FC = () => {
         setHotkeyInput(resp.data.configured_accelerator);
       }
     } catch {
-      // 状态读取失败不打断面板（保持上次值；首次为 null = 未加载）
+      // A failed status read doesn't break the panel (keep the last value; null on first load = not loaded)
     }
   }, []);
 
@@ -42,7 +44,7 @@ const GeneratorHotkeySection: React.FC = () => {
         setStatus(resp.data);
         setHotkeyInput(resp.data.configured_accelerator);
         if (resp.data.error) {
-          // 落库成功但 OS 抢注失败：绑定已改，只是此刻不生效
+          // Persisted but OS registration failed: the binding changed, it is just not active right now
           toast.error(t('settings.generatorHotkey.savedButNotActive'));
         } else {
           toast.success(t('settings.generatorHotkey.saved'));
@@ -58,7 +60,7 @@ const GeneratorHotkeySection: React.FC = () => {
   };
 
   const enabled = status?.enabled ?? false;
-  // 生效判定：开关开 + 抢注成功。抢注失败时 configured 与 registered 不一致
+  // Active check: toggle on + registration succeeded. On registration failure configured and registered diverge
   const active =
     enabled && status?.registered_accelerator !== null && status?.registered_accelerator !== undefined;
 
@@ -142,8 +144,9 @@ const GeneratorHotkeySection: React.FC = () => {
           </p>
         </div>
 
-        {/* 生效状态：抢注失败时把后端原因原样透出（英文是 OS/插件原文，
-            不翻译成"未知错误"——用户要照着它去查 WM 占用或换键） */}
+        {/* Active status: when registration fails, pass the backend reason through
+            verbatim (the English is the OS/plugin's own text — don't rewrite it as
+            "unknown error"; the user needs it to check WM grabs or pick another key) */}
         <div className="text-xs" data-testid="generator-hotkey-status">
           {status === null ? (
             <span className="text-gray-400 dark:text-gray-500">

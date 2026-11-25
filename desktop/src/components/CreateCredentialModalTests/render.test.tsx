@@ -15,7 +15,7 @@ import {
   selectType,
 } from './shared';
 
-// jsdom 未注入 TextEncoder（浏览器环境原生可用），Raw 分支提交需要
+// jsdom does not inject TextEncoder (native in a browser environment); the Raw branch submission needs it
 if (typeof globalThis.TextEncoder === 'undefined') {
   (globalThis as any).TextEncoder = jest.requireActual('util').TextEncoder;
 }
@@ -76,7 +76,7 @@ describe('components/CreateCredentialModal', () => {
       );
     });
 
-    // 密码框旁的眼睛按钮切换明文
+    // The eye button next to the password field toggles plaintext
     const eyeButton = input.parentElement!.querySelector('button')!;
     fireEvent.click(eyeButton);
     expect((screen.getByPlaceholderText('输入密码') as HTMLInputElement).type).toBe('text');
@@ -106,7 +106,7 @@ describe('components/CreateCredentialModal', () => {
     expect(screen.getByPlaceholderText(/otpauth:\/\//)).toBeInTheDocument();
     expect(screen.getByPlaceholderText('JBSWY3DPEHPK3PXP')).toBeInTheDocument();
 
-    // 其余类型（BankCard/ServerConfig/Certificate）走 Raw 分支
+    // The remaining types (BankCard/ServerConfig/Certificate) take the Raw branch
     selectType('BankCard');
     expect(screen.getByPlaceholderText('输入凭据数据')).toBeInTheDocument();
   });
@@ -137,8 +137,8 @@ describe('components/CreateCredentialModal', () => {
       'JBSWY3DP',
     );
     expect((getSelect('SHA1') as HTMLSelectElement).value).toBe('SHA1');
-    expect(getSelect('8')).toBeDefined(); // digits 从 6 切到 8
-    // query 参数 issuer 优先于 label 前缀
+    expect(getSelect('8')).toBeDefined(); // digits switched from 6 to 8
+    // the issuer query parameter takes precedence over the label prefix
     expect(
       (screen.getByPlaceholderText('GitHub') as HTMLInputElement).value,
     ).toBe('Ignored');
@@ -148,7 +148,7 @@ describe('components/CreateCredentialModal', () => {
     expect(
       (screen.getByPlaceholderText(/otpauth:\/\//) as HTMLInputElement).value,
     ).toContain('digits=8');
-    // period input（number）取到解析出的 60
+    // the period input (number) picks up the parsed 60
     const period = screen.getByDisplayValue(60) as HTMLInputElement;
     expect(period.type).toBe('number');
   });
@@ -194,7 +194,7 @@ describe('components/CreateCredentialModal', () => {
       );
     });
 
-    // 生成填入触发防抖后的实时校验反馈
+    // Filling in the generated value triggers the debounced live validation feedback
     await waitFor(
       () => {
         expect(screen.getByText(/BIP-39 校验通过/)).toBeInTheDocument();
@@ -223,7 +223,7 @@ describe('components/CreateCredentialModal', () => {
     expect(
       screen.getByPlaceholderText(/加密笔记内容/),
     ).toBeInTheDocument();
-    // 与其他类型 notes 字段（明文列）的差别必须在表单里说清楚
+    // The difference from the notes field of the other types (a plaintext column) must be spelled out in the form
     expect(screen.getByText(/per-item key/)).toBeInTheDocument();
   });
 
@@ -235,7 +235,7 @@ describe('components/CreateCredentialModal', () => {
       target: { value: 'definitely not a url' },
     });
 
-    // new URL 抛错走 catch：任何字段都不填充
+    // new URL throwing falls into the catch: no field is filled at all
     expect((screen.getByPlaceholderText('JBSWY3DPEHPK3PXP') as HTMLInputElement).value).toBe('');
     expect(screen.getByPlaceholderText(/otpauth:\/\//)).toHaveValue('definitely not a url');
   });

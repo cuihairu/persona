@@ -15,20 +15,21 @@ import Highlight from './Highlight';
 import ReauthModal from './ReauthModal';
 import type { ApiResponse, Credential, DesktopFillResult, Identity, SecretField } from '@/types';
 
-/** 后端唤醒事件（quick_access.rs OPENED_EVENT）：热键唤起时清查询 + 重新探解锁态 */
+/** Backend wake event (quick_access.rs OPENED_EVENT): on hotkey launch, clear the query and re-probe unlock state */
 const OPENED_EVENT = 'persona://quick-access-opened';
-/** 锁户事件（主窗口侧锁定 / auto-lock 到期都发这个）：浮窗立刻收起 */
+/** Lock event (emitted both by a main-window lock and auto-lock expiry): the floating panel hides immediately */
 const AUTO_LOCK_EVENT = 'persona://auto-lock';
-/** 输入停顿 200ms 才发起后端搜索（同 QuickSearch：本地 SQLite LIKE） */
+/** Fires the backend search only after a 200ms typing pause (same as QuickSearch: local SQLite LIKE) */
 const DEBOUNCE_MS = 200;
 
 /**
- * 凭据类型 → Enter 键复制的敏感字段。
+ * Credential type -> the sensitive field Enter copies.
  *
- * 只覆盖后端 `extract_secret_field` 真正支持的组合（Password / ApiKey /
- * SshKey / CryptoWallet）；其余类型（银行卡、身份、许可证、SecureNote…）
- * 在详情面板里本来就没有单字段揭示入口，这里返回 null —— 面板只提供
- * "复制用户名 / 复制 TOTP / 在 Persona 中打开"，不假装能取到密文。
+ * Covers only the combinations the backend `extract_secret_field` actually supports
+ * (Password / ApiKey / SshKey / CryptoWallet); the remaining types (bank cards,
+ * identities, licenses, SecureNote...) have no single-field reveal entry in the
+ * detail pane to begin with, so null is returned here -- the pane only offers
+ * "copy username / copy TOTP / open in Persona", it does not pretend to fetch ciphertext.
  */
 const primarySecretField = (type: string): SecretField | null => {
   switch (type) {
@@ -45,7 +46,7 @@ const primarySecretField = (type: string): SecretField | null => {
   }
 };
 
-/** 按 identities 顺序把命中结果归到各身份名下（组内保持后端 created_at DESC 序） */
+/** Bucket hits under each identity, following the identities order (within a group the backend created_at DESC order is kept) */
 const groupByIdentity = (
   results: Credential[],
   identities: Identity[],
@@ -61,25 +62,26 @@ const groupByIdentity = (
     .filter((group) => group.items.length > 0);
 };
 
-/** 非 Tauri 环境（jest/jsdom）下 getCurrentWindow 同步抛错，隐藏动作降级为空操作 */
+/** In a non-Tauri environment (jest/jsdom) getCurrentWindow throws synchronously, so the hide action degrades to a no-op */
 const hideSelf = async () => {
   try {
     await getCurrentWindow().hide();
   } catch {
-    // jsdom / 非 Tauri 环境：__TAURI_INTERNALS__ 缺失
+    // jsdom / non-Tauri environments: __TAURI_INTERNALS__ is missing
   }
 };
 
 /**
- * Quick Access 浮窗（对标矩阵 #22）：OS 级全局热键唤起的跨身份检索面。
+ * Quick Access floating panel (comparison matrix #22): cross-identity search surface summoned by an OS-level global hotkey.
  *
- * 键位（与 i18n 提示行一致）：
- * - ↑/↓ 移动、Enter 复制主密文（无密文字段时退回复制用户名）
- * - ⌘/Ctrl+U 复制用户名、⌘/Ctrl+T 复制 TOTP、⌘/Ctrl+O 在 Persona 中打开
- * - Esc 收起
+ * Keys (matching the i18n hint lines):
+ * - Up/Down to move, Enter copies the primary secret (falls back to copying the username when there is no secret field)
+ * - Cmd/Ctrl+U copies the username, Cmd/Ctrl+T copies the TOTP, Cmd/Ctrl+O opens in Persona
+ * - Esc hides
  *
- * 锁定态刻意**不复刻解锁流**（小窗里塞解锁屏 + 生物弹框体验很差，且
- * 跨窗口会话同步要另开通道）：只提示并把主窗口拉到前台。
+ * The locked state deliberately does **not reproduce the unlock flow** (a small window crammed with the
+ * unlock screen plus the biometric prompt is a poor experience, and cross-window session sync would need a
+ * separate channel): it only surfaces a hint and pulls the main window to the foreground.
  */
 const QuickAccessPanel: React.FC = () => {
   const { t } = useTranslation();
@@ -93,10 +95,13 @@ const QuickAccessPanel: React.FC = () => {
   const [activeIndex, setActiveIndex] = useState(0);
   const [copied, setCopied] = useState<string | null>(null);
   /**
-   * 桌面填充确认面（安全评审 P1）：注入前展示目标应用名（可执行文件名）
-   * + 窗口标题，用户显式确认才注入。null = 无待确认注入。`snapshotId`
-   * 是探测时捕获的快照标识（P1 确认绑定）——确认后原样带回后端，
-   * 在途请求期间目标被重新捕获/浮窗收起都会被如实拒绝，不转投新目标。
+   * Desktop-fill confirmation surface (security review P1): shows the target app name
+   * (executable file name) plus the window title before injection; injection happens
+   * only after the user explicitly confirms. null = no injection awaiting confirmation.
+   * `snapshotId` is the snapshot identifier captured at probe time (P1 confirmation binding)
+   * -- handed back to the backend unchanged after confirmation, and if the target is
+   * re-captured or the panel is hidden while a request is in flight it is refused honestly,
+   * never switched to a new target.
    */
   const [fillConfirm, setFillConfirm] = useState<{
     credential: Credential;
@@ -124,8 +129,9 @@ const QuickAccessPanel: React.FC = () => {
     setFillConfirm(null);
   }, []);
 
-  // 唤醒通道：热键每次唤起都要重新探解锁态（主窗口的解锁/锁定本窗口收不到
-  // 事件通知，store 又是每窗口一份）+ 清掉上一次的查询
+  // Wake channel: every hotkey launch must re-probe unlock state (the main window's
+  // unlock/lock is never delivered to this window as an event, and the store exists once
+  // per window) + clear the previous query
   useEffect(() => {
     let unlisten: (() => void) | undefined;
     let cancelled = false;
@@ -133,10 +139,10 @@ const QuickAccessPanel: React.FC = () => {
       const pending = listen(OPENED_EVENT, () => {
         void checkRef.current();
         reset();
-        // 等下一帧再聚焦：show() 之后 webview 才拿到键盘焦点
+        // Focus one frame later: only after show() does the webview receive keyboard focus
         window.setTimeout(() => inputRef.current?.focus(), 50);
       });
-      // rejection handler 吃掉非 Tauri 环境的 listen 失败（同 useQuickAccessBridge）
+      // The rejection handler swallows listen failures in non-Tauri environments (as in useQuickAccessBridge)
       pending.then(
         (fn) => {
           if (cancelled) fn();
@@ -145,7 +151,7 @@ const QuickAccessPanel: React.FC = () => {
         () => {},
       );
     } catch {
-      // 非 Tauri 环境无 listen
+      // Non-Tauri environments have no listen
     }
     return () => {
       cancelled = true;
@@ -153,7 +159,7 @@ const QuickAccessPanel: React.FC = () => {
     };
   }, [reset]);
 
-  // 锁户（含主窗口锁定与 auto-lock 到期）→ 浮窗立刻收起，不留检索结果在屏上
+  // Lock (including a main-window lock and auto-lock expiry) -> the panel hides immediately, leaving no search results on screen
   useEffect(() => {
     let unlisten: (() => void) | undefined;
     let cancelled = false;
@@ -169,7 +175,7 @@ const QuickAccessPanel: React.FC = () => {
         () => {},
       );
     } catch {
-      // 非 Tauri 环境无 listen
+      // Non-Tauri environments have no listen
     }
     return () => {
       cancelled = true;
@@ -177,7 +183,7 @@ const QuickAccessPanel: React.FC = () => {
     };
   }, []);
 
-  // debounce 搜索；空查询直接清结果不发请求
+  // Debounced search; an empty query clears results and issues no request
   useEffect(() => {
     const trimmed = query.trim();
     if (!isUnlocked || !trimmed) {
@@ -186,7 +192,7 @@ const QuickAccessPanel: React.FC = () => {
       return;
     }
     setIsSearching(true);
-    // 查询变更后旧响应可能后到覆盖新结果：cleanup 置 stale 丢弃过期结果。
+    // After the query changes an old response may land later and overwrite the new one: the cleanup flag marks it stale to discard expired results.
     let stale = false;
     const timer = window.setTimeout(async () => {
       const res = await searchRef.current(trimmed);
@@ -200,7 +206,7 @@ const QuickAccessPanel: React.FC = () => {
     };
   }, [query, isUnlocked]);
 
-  /** 揭示 + 复制一个敏感字段；REAUTH_REQUIRED 走 ReauthModal 重试一次 */
+  /** Reveal and copy a sensitive field; REAUTH_REQUIRED goes through ReauthModal for one retry */
   const copySecret = useCallback(
     async (credential: Credential, field: SecretField) => {
       const reveal = async (): Promise<string | null> => {
@@ -265,12 +271,13 @@ const QuickAccessPanel: React.FC = () => {
   );
 
   /**
-   * 桌面应用内填充注入（#12）——**两步确认流**（安全评审 P1 收紧）：
-   * 第一步（requestFill）探测注入目标并弹出确认面：浮窗展示目标应用名
-   * （可执行文件名）与窗口标题，并捕获快照标识；用户显式确认后第二步才
-   * 带 `confirmed=true` + `snapshot_id` 调用后端注入——确认绑定到具体
-   * 快照，后端对未确认/目标已换/目标已丢的调用一律如实拒绝。
-   * 成功后浮窗自动收起——焦点回到目标窗口，用户直接看到填好的字段。
+   * In-app desktop fill injection (#12) -- a **two-step confirmation flow** (tightened by security review P1):
+   * step one (requestFill) probes the injection target and raises the confirmation surface: the panel shows the
+   * target app name (executable file name) and window title and captures a snapshot identifier; only after the
+   * user explicitly confirms does step two call the backend with `confirmed=true` + `snapshot_id` -- the
+   * confirmation is bound to the specific snapshot, and the backend honestly refuses unconfirmed / target-changed /
+   * target-discarded calls.
+   * On success the panel auto-hides -- focus returns to the target window and the user sees the filled fields.
    */
   const requestFill = useCallback(
     async (credential: Credential) => {
@@ -307,8 +314,8 @@ const QuickAccessPanel: React.FC = () => {
           toast.error(t('common.serviceLocked'));
           return null;
         }
-        // 确认绑定（P1）：确认后目标被换/被丢的在途请求——如实说原因，
-        // 提示重新走确认流，绝不复用旧确认
+        // Confirmation binding (P1): an in-flight request whose target changed or was discarded after confirmation --
+        // report the reason honestly, prompt the user to redo the confirmation flow, never reuse the old confirmation
         if (res.error_code === 'FILL_TARGET_CHANGED') {
           toast.error(t('quickAccess.fillTargetChanged'));
           return null;
@@ -335,7 +342,7 @@ const QuickAccessPanel: React.FC = () => {
     [reauth, t],
   );
 
-  /** Enter：优先复制主密文字段，没有则退回复制用户名（面板不猜别的密文字段） */
+  /** Enter: copy the primary secret field first, falling back to copying the username (the pane does not guess at other secret fields) */
   const copyPrimary = useCallback(
     (credential: Credential) => {
       const field = primarySecretField(credential.credential_type);
@@ -349,7 +356,7 @@ const QuickAccessPanel: React.FC = () => {
   );
 
   const onKeyDown = (event: React.KeyboardEvent) => {
-    // 确认面打开时拦截键盘：Esc 取消注入确认，Enter 确认注入
+    // While the confirmation surface is open, intercept keyboard input: Esc cancels the fill confirmation, Enter confirms the fill
     if (fillConfirm) {
       event.preventDefault();
       if (event.key === 'Escape') {
@@ -381,7 +388,7 @@ const QuickAccessPanel: React.FC = () => {
       event.preventDefault();
       copyPrimary(active);
     } else if (mod && event.key.toLowerCase() === 'u') {
-      // ⌘U 不与输入框的原生行为冲突（⌘C 会与文本选择冲突，故不用）
+      // Cmd+U does not clash with the input's native behavior (Cmd+C conflicts with text selection, so it is not used)
       event.preventDefault();
       copyUsername(active);
     } else if (mod && event.key.toLowerCase() === 't') {
@@ -391,8 +398,8 @@ const QuickAccessPanel: React.FC = () => {
       event.preventDefault();
       void openInPersona(active);
     } else if (mod && event.key.toLowerCase() === 'f') {
-      // ⌘F 桌面填充：先探测目标并弹确认面（仅 Password 凭据；其余类型
-      // 后端也填不了用户名/密码）
+      // Cmd+F desktop fill: probe the target first and raise the confirmation surface (only Password credentials;
+      // the backend cannot fill username/password for the other types)
       event.preventDefault();
       if (active.credential_type === 'Password') {
         void requestFill(active);

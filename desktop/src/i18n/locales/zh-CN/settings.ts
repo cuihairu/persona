@@ -1,6 +1,6 @@
 /**
- * 简体中文资源（基准语言——新增文案先在这里定稿，en.ts 跟随）。
- * 顶层 key 按组件/领域分 namespace：common 为跨组件复用词。
+ * Simplified Chinese resources (base locale - finalise new copy here first, en.ts follows).
+ * Top-level keys are namespaced by component/domain: common holds words reused across components.
  */
 export default {
   settings: {

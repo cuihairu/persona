@@ -66,7 +66,7 @@ describe('components/GeneratorPanel', () => {
     expect(getByTestId('generator-password-0')).toHaveTextContent('aB1!aB1!aB1!aB1!');
     expect(getByTestId('generator-password-1')).toHaveTextContent('Zz9?Zz9?Zz9?Zz9?');
     expect(getByTestId('generator-entropy-value')).toHaveTextContent('103');
-    // 102.7/128 ≈ 80.2% 宽度的强口令色条
+    // 102.7/128 ≈ 80.2% wide strong-password color bar
     expect(getByTestId('generator-entropy-bar')).toHaveAttribute(
       'style',
       expect.stringContaining('80.2')
@@ -75,7 +75,7 @@ describe('components/GeneratorPanel', () => {
     fireEvent.click(getByTestId('generator-copy-1'));
     expect(mockCopy).toHaveBeenCalledWith('Zz9?Zz9?Zz9?Zz9?', '密码');
 
-    // 键盘可达性：复制是普通按钮
+    // Keyboard accessibility: copy is a plain button
     expect(getAllByRole('button', { name: '复制' }).length).toBeGreaterThanOrEqual(2);
   });
 
@@ -85,8 +85,8 @@ describe('components/GeneratorPanel', () => {
     const { getByTestId } = render(<GeneratorPanel />);
     fireEvent.change(getByTestId('generator-length-input'), { target: { value: '32' } });
     fireEvent.change(getByTestId('generator-count-select'), { target: { value: '5' } });
-    fireEvent.click(getByTestId('generator-toggle-symbols')); // 关掉符号
-    fireEvent.click(getByTestId('generator-toggle-pronounceable')); // 开可发音
+    fireEvent.click(getByTestId('generator-toggle-symbols')); // turn symbols off
+    fireEvent.click(getByTestId('generator-toggle-pronounceable')); // turn pronounceable on
 
     fireEvent.click(getByTestId('generator-generate'));
     await waitFor(() => expect(mockGenerate).toHaveBeenCalled());
@@ -136,7 +136,7 @@ describe('components/GeneratorPanel', () => {
     await waitFor(() => {
       expect(getByTestId('generator-error')).toHaveTextContent('At least one character set');
     });
-    // 错误后不再渲染上一次的结果
+    // After an error, the previous result is no longer rendered
     expect(document.querySelector('[data-testid="generator-results"]')).toBeNull();
   });
 
@@ -151,7 +151,7 @@ describe('components/GeneratorPanel', () => {
 
     await waitFor(() => expect(getByTestId('generator-results')).toBeInTheDocument());
     expect(getByTestId('generator-entropy-bar').className).toContain('bg-red-500');
-    // 强度行渲染为 "强度: 非常弱"（两个 text 节点），用子串匹配
+    // The strength row renders the strength label and value as two separate text nodes, so match by substring
     expect(getByText(/非常弱/)).toBeInTheDocument();
   });
 
@@ -167,7 +167,7 @@ describe('components/GeneratorPanel', () => {
     expect(getByTestId('generator-words-value')).toHaveTextContent('5');
     expect(getByText(/EFF 大词表/)).toBeInTheDocument();
 
-    // 词组模式不勾任何字符集也能生成（core 短路进 Diceware），警示条也不出现
+    // Words mode generates even with no character set ticked (core short-circuits into Diceware), and no warning bar appears
     fireEvent.click(getByTestId('generator-toggle-lowercase'));
     fireEvent.click(getByTestId('generator-toggle-uppercase'));
     fireEvent.click(getByTestId('generator-toggle-numbers'));
@@ -175,7 +175,7 @@ describe('components/GeneratorPanel', () => {
     expect(getByTestId('generator-generate')).toBeEnabled();
     expect(queryByText('至少需要勾选一个字符集')).not.toBeInTheDocument();
 
-    // 关掉词组恢复长度滑杆
+    // Turning words off restores the length slider
     fireEvent.click(getByTestId('generator-toggle-words'));
     expect(getByTestId('generator-length-input')).toBeInTheDocument();
     expect(queryByTestId('generator-words-input')).not.toBeInTheDocument();
@@ -193,7 +193,7 @@ describe('components/GeneratorPanel', () => {
 
     const { getByTestId } = render(<GeneratorPanel />);
     fireEvent.click(getByTestId('generator-toggle-words'));
-    // 全部字符集关掉，词组模式照样生成
+    // All character sets off: words mode still generates
     fireEvent.click(getByTestId('generator-toggle-lowercase'));
     fireEvent.click(getByTestId('generator-toggle-uppercase'));
     fireEvent.click(getByTestId('generator-toggle-numbers'));

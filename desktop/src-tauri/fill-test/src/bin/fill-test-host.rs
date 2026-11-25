@@ -1,42 +1,55 @@
-//! fill-test-host：桌面填充注入的跨进程测试靶进程（安全评审
-//! codex-2026-11-05 P1 修复的验收工具，**仅测试构建**——bin 挂在
-//! `fill-test-host` feature 后面，正常 `cargo build`/`tauri build`
-//! 不产出该二进制）。
+//! fill-test-host: the cross-process target process for the desktop fill
+//! injection tests (the acceptance tool for the security review
+//! codex-2026-11-05 P1 fix, **test builds only** — the bin sits behind the
+//! `fill-test-host` feature, so a normal `cargo build`/`tauri build` does not
+//! produce this binary).
 //!
-//! 职责：在自己的进程里创建一个真实顶层窗口 + 两个 EDIT 子控件
-//!（第一个普通框，第二个按 `--password-style` 决定是否挂 ES_PASSWORD），
-//! 跑消息循环等命令。集成测试 `tests/desktop_fill_cross_process.rs`
-//! 用它验证：跨进程注入成功/拒绝、同标题伪装进程拒绝、HWND 销毁
-//! 重建竞态拒绝——这些是测试进程内造窗覆盖不到的真跨进程语义。
+//! Responsibilities: create a real top-level window plus two EDIT child
+//! controls in its own process (the first a plain box, the second with
+//! ES_PASSWORD applied according to `--password-style`), then run a message
+//! loop waiting for commands. The integration test
+//! `tests/desktop_fill_cross_process.rs` uses it to verify: cross-process
+//! injection success/rejection, same-title impostor process rejection, HWND
+//! destroy/recreate race rejection — these are true cross-process semantics
+//! that creating windows inside the test process cannot cover.
 //!
-//! stdin 命令（按行）：
-//! - `readback`：**同进程**读回两个 Edit 的当前文本（WM_GETTEXTLENGTH +
-//!   WM_GETTEXT），按长度前缀协议打回
-//!   `READBACK <unit-count>:<hex> <unit-count>:<hex>`（UTF-16 hex 每单元
-//!   4 位小写，空字段 = `0:`；长度前缀保住空字段信息，见 fill-test/lib.rs）。
-//!   存在的原因：Windows 平台限制——跨进程 WM_GETTEXT 读 ES_PASSWORD
-//!   控件恒返回空串（2026-11-06 openclaw Server 2022 实测），注入成功的
-//!   密码断言只能由宿主进程自己读回；
-//! - `destroy-recreate`：销毁当前顶层窗口并**同标题同样式**重建
-//!   （HWND 复用/重建竞态用例），完成后向 stdout 打 `RECREATED <hwnd>`；
-//! - `arm-race-hook`：在 username 框上挂竞态钩子（旧式子类化）：下一次
-//!   收到 `WM_SETTEXT`（即注入请求**在途**）时，先让原过程写入、随后在
-//!   同一消息处理内**同步销毁并重建**顶层窗口——注入请求跑到一半目标
-//!   就地换人，打回 `RACE_ARMED` / `RACE_TRIGGERED <hwnd>`；
-//! - `arm-pause-hook`：在 username 框上挂**暂停钩子**（旧式子类化）：
-//!   下一次 `WM_SETTEXT` 在原过程写入完成后，宿主**在同一消息处理内停住**
-//!   （注入线程仍阻塞在这条跨进程 SendMessageW 上），打回 `PAUSE_ARMED` /
-//!   `HOOK_PAUSED`；收到 stdin 命令 `hook-go` 才放行，打回 `HOOK_RESUMED`。
-//!   给命令层取消时序套件（tests/desktop_fill_command_cancel.rs）提供
-//!   **确定性**的第一字段写入完成后的插桩点：测试侧在 `HOOK_PAUSED` 与
-//!   `hook-go` 之间改动槽位，时序不是靠轮询碰运气；
-//! - `quit`：干净退出（销毁窗口，EXIT 0）。
+//! stdin commands (one per line):
+//! - `readback`: read back the current text of the two Edit controls **in this
+//!   process** (WM_GETTEXTLENGTH + WM_GETTEXT) and reply with a length-prefixed
+//!   `READBACK <unit-count>:<hex> <unit-count>:<hex>` frame (UTF-16 hex, 4
+//!   lowercase digits per unit, empty field = `0:`; the length prefix preserves
+//!   empty-field information, see fill-test/lib.rs). Why it exists: a Windows
+//!   platform limitation — cross-process WM_GETTEXT on an ES_PASSWORD control
+//!   always returns an empty string (measured 2026-11-06 on openclaw Server 2022),
+//!   so the injected-password assertion can only be read back by the host
+//!   process itself;
+//! - `destroy-recreate`: destroy the current top-level window and recreate it
+//!   with the **same title and style** (the HWND reuse/recreate race case),
+//!   printing `RECREATED <hwnd>` to stdout when done;
+//! - `arm-race-hook`: arm a race hook on the username box (classic subclassing):
+//!   the next time `WM_SETTEXT` arrives (i.e. the injection request is
+//!   **in flight**), let the original procedure write first, then
+//!   **synchronously destroy and recreate** the top-level window inside the same
+//!   message handling — the target swaps out from under the half-finished
+//!   injection request, replying `RACE_ARMED` / `RACE_TRIGGERED <hwnd>`;
+//! - `arm-pause-hook`: arm a **pause hook** on the username box (classic
+//!   subclassing): after the next `WM_SETTEXT` completes its write through the
+//!   original procedure, the host **stops inside the same message handling** (the
+//!   injection thread is still blocked on that cross-process SendMessageW),
+//!   replying `PAUSE_ARMED` / `HOOK_PAUSED`; it is released only on the stdin
+//!   command `hook-go`, replying `HOOK_RESUMED`. This gives the command-layer
+//!   cancellation timing suite (tests/desktop_fill_command_cancel.rs) a
+//!   **deterministic** instrumentation point after the first field write
+//!   completes: the test side mutates the slot between `HOOK_PAUSED` and
+//!   `hook-go`, so the timing does not depend on lucky polling;
+//! - `quit`: clean exit (destroy the window, EXIT 0).
 //!
-//! 非 Windows 平台：入口直接退出 0（不参与任何测试）。
+//! Non-Windows platforms: the entry point exits 0 directly (takes part in no
+//! tests).
 
 #[cfg(not(target_os = "windows"))]
 fn main() {
-    // Linux/macOS CI：该 bin 仅在显式 feature 下构建，无任何行为
+    // Linux/macOS CI: this bin is only built under an explicit feature and has no behavior at all
     std::process::exit(0);
 }
 
@@ -62,37 +75,48 @@ fn main() {
     static TOP_HWND: AtomicIsize = AtomicIsize::new(0);
     static USERNAME_HWND: AtomicIsize = AtomicIsize::new(0);
     static PASSWORD_HWND: AtomicIsize = AtomicIsize::new(0);
-    /// quit 命令置位后才在 WM_DESTROY 里投递 PostQuitMessage——destroy-
-    /// rebuild 同样会触发 WM_DESTROY，但那个场景消息循环必须活下去
+    /// PostQuitMessage is only posted from WM_DESTROY once the quit command has
+    /// been set — destroy-recreate also triggers WM_DESTROY, but in that case
+    /// the message loop must stay alive
     static QUITTING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-    /// 自定义消息：wndproc 线程内销毁并重建顶层窗口（DestroyWindow 必须在
-    /// 创建线程调用，stdin 线程只能投递）
+    /// Custom message: destroy and recreate the top-level window from the
+    /// wndproc thread (DestroyWindow must be called from the creating thread;
+    /// the stdin thread can only post)
     const WM_DESTROY_RECREATE: u32 = WM_APP + 1;
-    /// 自定义消息：在 username 框上挂竞态钩子（同样必须在创建线程做）
+    /// Custom message: arm the race hook on the username box (must likewise be
+    /// done on the creating thread)
     const WM_ARM_RACE_HOOK: u32 = WM_APP + 2;
-    /// 自定义消息：在 username 框上挂暂停钩子（同样必须在创建线程做）
+    /// Custom message: arm the pause hook on the username box (must likewise be
+    /// done on the creating thread)
     const WM_ARM_PAUSE_HOOK: u32 = WM_APP + 3;
-    /// username 框的原 wndproc（竞态钩子子类化前的过程指针；0 = 未挂钩）
+    /// Original wndproc of the username box (procedure pointer before the race
+    /// hook subclasses it; 0 = not hooked)
     static ORIG_USERNAME_PROC: AtomicIsize = AtomicIsize::new(0);
-    /// 竞态钩子已触发（首次 WM_SETTEXT 后销毁重建）——只触发一次
+    /// Race hook has fired (destroy/recreate after the first WM_SETTEXT) —
+    /// fires only once
     static RACE_TRIGGERED: std::sync::atomic::AtomicBool =
         std::sync::atomic::AtomicBool::new(false);
-    /// username 框的原 wndproc（暂停钩子子类化前的过程指针；0 = 未挂钩。
-    /// 与竞态钩子分开存：两个钩子各自一个宿主实例，互不同时挂）
+    /// Original wndproc of the username box (procedure pointer before the pause
+    /// hook subclasses it; 0 = not hooked. Stored separately from the race
+    /// hook: each hook has its own host instance and they are never armed at
+    /// the same time)
     static ORIG_PAUSE_PROC: AtomicIsize = AtomicIsize::new(0);
-    /// 暂停钩子已触发（首次 WM_SETTEXT 后停住）——只触发一次
+    /// Pause hook has fired (stopped after the first WM_SETTEXT) — fires only
+    /// once
     static PAUSE_TRIGGERED: std::sync::atomic::AtomicBool =
         std::sync::atomic::AtomicBool::new(false);
-    /// 暂停钩子的放行开关（stdin `hook-go` 置位；60 秒兜底超时后自行放行，
-    /// 测试进程崩了也不留死锁的窗口）
+    /// Release switch for the pause hook (set by the stdin `hook-go`; it also
+    /// releases itself after a 60s fallback timeout, so a dead test process
+    /// does not leave a deadlocked window)
     static PAUSE_GO: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
     fn pcw(s: &HSTRING) -> PCWSTR {
         PCWSTR(s.as_ptr())
     }
 
-    /// 同进程读回一个 Edit 的文本并按 UTF-16 hex 编码（每单元 4 位小写，
-    /// 管道/console 编码无关）。hwnd 为 0 或读不到时返回空串。
+    /// Read back an Edit's text in this process and encode it as UTF-16 hex (4
+    /// lowercase digits per unit, independent of pipe/console encoding). Returns
+    /// an empty string when hwnd is 0 or the text cannot be read.
     unsafe fn control_text_hex(hwnd_value: isize) -> String {
         if hwnd_value == 0 {
             return String::new();
@@ -119,10 +143,13 @@ fn main() {
             .collect()
     }
 
-    /// 同进程读回两个 Edit 的文本并按**长度前缀协议**打回 READBACK 帧
-    ///（`READBACK <unit-count>:<hex> <unit-count>:<hex>`，空字段 = `0:`）。
-    /// 长度前缀保住空字段信息：旧空格分隔协议下「username 空 + password
-    /// 非空」的帧只剩 2 段，被解析端误判双空，单字段残留无法检出。
+    /// Read back the two Edit controls' text in this process and reply with a
+    /// READBACK frame using the **length-prefixed protocol**
+    /// (`READBACK <unit-count>:<hex> <unit-count>:<hex>`, empty field = `0:`).
+    /// The length prefix preserves empty-field information: under the old
+    /// space-separated protocol a "empty username + non-empty password" frame had
+    /// only 2 segments and was misjudged as double empty by the parser, so a
+    /// single-field residue could not be detected.
     unsafe fn readback_frame() -> String {
         let user = control_text_hex(USERNAME_HWND.load(Ordering::Acquire));
         let pwd = control_text_hex(PASSWORD_HWND.load(Ordering::Acquire));
@@ -188,8 +215,9 @@ fn main() {
         lparam: LPARAM,
     ) -> LRESULT {
         if msg == WM_DESTROY {
-            // 只有 quit 流程才退出消息循环（destroy-recreate 的 WM_DESTROY
-            // 必须继续泵消息，否则宿主假死、测试进程 wait() 永久阻塞）
+            // Only the quit flow exits the message loop (destroy-recreate's WM_DESTROY
+            // must keep pumping messages, otherwise the host hangs and the test
+            // process's wait() blocks forever)
             if QUITTING.load(Ordering::Acquire) {
                 PostQuitMessage(0);
             }
@@ -239,10 +267,13 @@ fn main() {
         DefWindowProcW(hwnd, msg, wparam, lparam)
     }
 
-    /// 竞态钩子过程（旧式子类化 username 框）：正常消息全部转交原过程；
-    /// 首次 `WM_SETTEXT`（注入请求在途）在原过程写入后，**同一消息处理内**
-    /// 同步销毁并重建顶层窗口——测试线程此刻仍阻塞在这条 SendMessageW 上，
-    /// 返回后它面对的已是「密码框销毁、窗口换新」的世界。
+    /// Race hook procedure (classic subclassing of the username box): normal
+    /// messages are forwarded to the original procedure; on the first
+    /// `WM_SETTEXT` (the injection request in flight), after the original
+    /// procedure writes, the top-level window is **synchronously destroyed and
+    /// recreated inside the same message handling** — the test thread is still
+    /// blocked on that SendMessageW at that moment, and on return it faces a
+    /// world where "the password box is gone and the window is new".
     unsafe extern "system" fn race_proc(
         hwnd: HWND,
         msg: u32,
@@ -258,9 +289,11 @@ fn main() {
             DefWindowProcW(hwnd, msg, wparam, lparam)
         };
         if msg == WM_SETTEXT && !RACE_TRIGGERED.swap(true, Ordering::AcqRel) {
-            // 注入值已落进旧窗口（此刻它仍是快照声明的合法目标）；
-            // 紧接着在写入完成的消息处理内销毁重建——在途请求的后半段
-            // （密码写入）将面对已销毁的字段
+            // The injected value has landed in the old window (still a legal target
+            // per the snapshot at this moment); immediately after, the window is
+            // destroyed and recreated inside the message handling that completed
+            // the write — the second half of the in-flight request (the password
+            // write) will face destroyed fields
             let top = TOP_HWND.load(Ordering::Acquire);
             if top != 0 {
                 let _ = DestroyWindow(HWND(top as *mut _));
@@ -272,12 +305,16 @@ fn main() {
         result
     }
 
-    /// 暂停钩子过程（旧式子类化 username 框）：正常消息全部转交原过程；
-    /// 首次 `WM_SETTEXT` 在原过程写入完成后**停在同一消息处理里**——注入
-    /// 线程此刻仍阻塞在这条跨进程 SendMessageW 上，直到测试进程观察到
-    /// `HOOK_PAUSED`、改完槽位并发来 `hook-go` 才放行。这给命令层取消时序
-    /// 套件一个确定性的插桩点：清槽/换目标严格落在第一字段写入完成之后、
-    /// 注入流程恢复之前，不靠轮询时序碰运气。
+    /// Pause hook procedure (classic subclassing of the username box): normal
+    /// messages are forwarded to the original procedure; after the first
+    /// `WM_SETTEXT` completes its write through the original procedure, the
+    /// process **stops inside that same message handling** — the injection
+    /// thread is still blocked on that cross-process SendMessageW until the test
+    /// process observes `HOOK_PAUSED`, mutates the slot, and sends `hook-go` to
+    /// release it. This gives the command-layer cancellation timing suite a
+    /// deterministic instrumentation point: clearing the slot / switching the
+    /// target lands strictly after the first field write completes and before
+    /// the injection flow resumes, without relying on lucky poll timing.
     unsafe extern "system" fn pause_proc(
         hwnd: HWND,
         msg: u32,
@@ -293,8 +330,10 @@ fn main() {
             DefWindowProcW(hwnd, msg, wparam, lparam)
         };
         if msg == WM_SETTEXT && !PAUSE_TRIGGERED.swap(true, Ordering::AcqRel) {
-            // 注入值已落进 username 框（注入线程还阻塞在这条消息上）；
-            // 停住等 hook-go（60 秒兜底：测试进程意外死亡也不永久挂死）
+            // The injected value has landed in the username box (the injection thread
+            // is still blocked on this message); stop and wait for hook-go (60s
+            // fallback: an unexpected death of the test process must not hang
+            // this forever)
             println!("HOOK_PAUSED");
             let _ = std::io::stdout().flush();
             let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
@@ -347,7 +386,7 @@ fn main() {
         let _ = std::io::stdout().flush();
     }
 
-    // stdin 命令线程：解析 destroy-recreate / quit
+    // stdin command thread: dispatches destroy-recreate / quit
     let stdin = std::thread::spawn(|| {
         let stdin = std::io::stdin();
         for line in stdin.lock().lines() {

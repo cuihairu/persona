@@ -10,8 +10,8 @@ jest.mock('@/components/IdentitySwitcher', () => ({
   ),
 }));
 
-// 返回类型注解让 tsc 守住 fixture 与 Credential 的形状一致；
-// 可选字段（url/username/notes/last_accessed）缺省即可，无需显式 null
+// The return type annotation makes tsc guard that the fixture matches Credential's shape;
+// optional fields (url/username/notes/last_accessed) may be omitted, no explicit null needed
 const makeCred = (over: Record<string, any> = {}): Credential => ({
   id: 'c1',
   identity_id: 'i1',
@@ -204,7 +204,7 @@ describe('components/Sidebar', () => {
     expect(onOpenSettings).toHaveBeenCalledTimes(1);
     expect(onLock).toHaveBeenCalledTimes(1);
 
-    // 快捷键提示（title 不影响可访问名）
+    // Shortcut hint (title does not affect the accessible name)
     expect(settings).toHaveAttribute('title', '设置 (⌘,)');
     expect(lock).toHaveAttribute('title', '锁定 (⌘L)');
   });

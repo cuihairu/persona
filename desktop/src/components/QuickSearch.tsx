@@ -10,10 +10,10 @@ import Highlight from './Highlight';
 import { useFavicons } from '@/hooks/useFavicons';
 import type { Credential, Identity } from '@/types';
 
-/** 输入停顿 200ms 才发起后端搜索（本地 SQLite LIKE 查询，无需更长） */
+/** Only issue the backend search after a 200ms typing pause (a local SQLite LIKE query, nothing longer is needed) */
 const DEBOUNCE_MS = 200;
 
-/** 按 identities 顺序把命中结果归到各身份名下（组内保持后端 created_at DESC 序） */
+/** Attribute the hits to each identity in identities order (within a group keep the backend created_at DESC order) */
 const groupByIdentity = (
   results: Credential[],
   identities: Identity[],
@@ -30,9 +30,11 @@ const groupByIdentity = (
 };
 
 /**
- * 全局快速搜索（⌘K / 顶栏入口）：跨身份搜索凭据，结果按身份分组。
- * 点击结果 → 写入 pendingCredentialSelection（跨身份则顺带 switchIdentity），
- * 由 CredentialList 注入选中并打开详情面板。
+ * Global quick search (⌘K / top-bar entry): searches credentials across
+ * identities, grouping the results by identity. Clicking a result writes
+ * pendingCredentialSelection (switching identity along the way when it crosses
+ * identities), and CredentialList injects the selection and opens the detail
+ * panel.
  */
 const QuickSearch = () => {
   const { t } = useTranslation();
@@ -43,7 +45,7 @@ const QuickSearch = () => {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<Credential[]>([]);
-  // flag 开时预取结果页 favicon（overlay 关闭也不影响缓存复用）
+  // Prefetch favicons for the result page when the flag is on (closing the overlay does not affect cache reuse)
   useFavicons(results.map((c) => c.url));
   const [isSearching, setIsSearching] = useState(false);
   const [activeIndex, setActiveIndex] = useState(0);
@@ -51,10 +53,10 @@ const QuickSearch = () => {
   const searchRef = useRef(searchCredentials);
   searchRef.current = searchCredentials;
 
-  // ⌘K / Ctrl+K 全局打开（组件只挂在解锁后的 workspace 内，锁定态天然无监听）
+  // ⌘K / Ctrl+K opens globally (the component is only mounted inside the post-unlock workspace, so there is naturally no listener while locked)
   useGlobalShortcut('k', () => setOpen(true));
 
-  // debounce 搜索；空查询直接清结果不发请求
+  // Debounced search; an empty query clears the results without sending a request
   useEffect(() => {
     const trimmed = query.trim();
     if (!open || !trimmed) {
@@ -63,8 +65,10 @@ const QuickSearch = () => {
       return;
     }
     setIsSearching(true);
-    // 防抖清理不能取消在途 await：查询变更后旧响应后到会覆盖新结果。
-    // cleanup 置 stale 丢弃过期结果（React 标准过期请求守卫）。
+    // Debounce cleanup cannot cancel the in-flight await: after the query changes a
+    // late response from the old query would overwrite the new results. cleanup
+    // flips stale and discards the expired result (React's standard
+    // stale-request guard).
     let stale = false;
     const timer = setTimeout(async () => {
       const res = await searchRef.current(trimmed);
@@ -104,7 +108,8 @@ const QuickSearch = () => {
       identityId: credential.identity_id,
       credentialId: credential.id,
     });
-    // silent：跳转目标是用户点击的条目，"Switched to ..." toast 只会盖住跳转本身
+    // silent: the navigation target is the entry the user clicked, and a
+    // "Switched to ..." toast would only cover up the navigation itself
     switchIdentity(target, { silent: true });
   };
 

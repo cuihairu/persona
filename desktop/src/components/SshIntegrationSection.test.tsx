@@ -54,7 +54,7 @@ const mockAnalysis = personaAPI.sshAgentConfigAnalysis as jest.Mock;
 describe('components/SshIntegrationSection', () => {
   beforeEach(() => {
     jest.clearAllMocks();
-    // 默认分析查询失败 → 面板隐藏（只影响状态行，不影响既有断言）
+    // Analysis query fails by default → panel hidden (only affects the status row, not existing assertions)
     mockAnalysis.mockResolvedValue({ success: false, data: null });
   });
 
@@ -71,7 +71,7 @@ describe('components/SshIntegrationSection', () => {
 
     expect(queryByTestId('ssh-integration-section')).toBeInTheDocument();
 
-    // 查询失败：整区隐藏不谎报未启用（卸载旧实例后重渲染失败态）
+    // Query failed: hide the whole section instead of lying "not enabled" (unmount the old instance and re-render the failure state)
     cleanup();
     mockStatus.mockResolvedValue({ success: false, data: null });
     const failed = render(<SshIntegrationSection />);
@@ -82,7 +82,7 @@ describe('components/SshIntegrationSection', () => {
 
   it('enables idempotently and flips to enabled badge', async () => {
     mockStatus.mockResolvedValue({ success: true, data: statusOf() });
-    // enable 落盘的同时把状态查询（回读）切到已生效值
+    // While enable persists, switch the status query (readback) to the effective value
     const enabledStatus = {
       success: true,
       data: statusOf({ enabled: true, identityAgent: '/run/user/1000/persona/ssh-agent.sock' }),
@@ -99,12 +99,12 @@ describe('components/SshIntegrationSection', () => {
 
     await waitFor(() => expect(mockEnable).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(getByTestId('ssh-integration-badge')).toHaveTextContent('已启用'));
-    // 启用后按钮变成「一键停用」（状态联动），且联动来自回读而非响应快照
+    // After enabling the button becomes "disable in one click" (state sync), driven by the readback rather than the response snapshot
     expect(getByTestId('ssh-integration-toggle')).toHaveTextContent('一键停用');
     expect(mockStatus.mock.calls.length).toBeGreaterThan(statusCallsBefore);
     expect(toast.success).toHaveBeenCalled();
 
-    // 再点 = 停用链路
+    // Clicking again = disable path
     mockDisable.mockImplementation(async () => {
       mockStatus.mockResolvedValue({ success: true, data: statusOf() });
       return { success: true, data: statusOf() };
@@ -115,8 +115,8 @@ describe('components/SshIntegrationSection', () => {
   });
 
   it('re-reads real state after mutation instead of trusting the response snapshot', async () => {
-    // 写入响应的快照谎报未启用（响应迟到/为空的漂移场景）：
-    // 界面必须以盘上真实状态回读为准，不允许停在快照值
+    // The snapshot in the mutation response lies "not enabled" (late/empty response drift scenario):
+    // the UI must trust the real on-disk state readback and never settle on the snapshot value
     mockStatus.mockResolvedValue({ success: true, data: statusOf() });
     mockEnable.mockImplementation(async () => {
       mockStatus.mockResolvedValue({
@@ -138,7 +138,7 @@ describe('components/SshIntegrationSection', () => {
     mockStatus.mockResolvedValue({ success: true, data: statusOf() });
     mockAnalysis.mockResolvedValue({ success: true, data: analysisOf() });
     mockEnable.mockImplementation(async () => {
-      // 盘上已生效：回读到的配置分析出现锚点块条目
+      // Effective on disk: the readback config analysis now carries the anchor block entry
       mockStatus.mockResolvedValue({
         success: true,
         data: statusOf({ enabled: true, identityAgent: '/run/user/1000/persona/ssh-agent.sock' }),
@@ -168,7 +168,7 @@ describe('components/SshIntegrationSection', () => {
     const analysisCallsBefore = mockAnalysis.mock.calls.length;
     fireEvent.click(getByTestId('ssh-integration-toggle'));
 
-    // 不点手动刷新：一键启用后的统一回读应把配置分析面板一起带到最新
+    // No manual refresh click: the unified readback after one-click enable should bring the config analysis panel up to date too
     await waitFor(() => expect(getByTestId('ssh-analysis-entries')).toBeInTheDocument());
     expect(getByTestId('ssh-analysis-entries')).toHaveTextContent(
       'IdentityAgent /run/user/1000/persona/ssh-agent.sock',
@@ -187,7 +187,7 @@ describe('components/SshIntegrationSection', () => {
 
     await waitFor(() => expect(toast.error).toHaveBeenCalledWith('boom'));
     expect(getByTestId('ssh-integration-badge')).toHaveTextContent('未启用');
-    // 失败没有变更发生：不触发状态回读
+    // Failure means no change happened: no status readback is triggered
     await Promise.resolve();
     await Promise.resolve();
     expect(mockStatus.mock.calls.length).toBe(statusCallsBefore);
@@ -208,7 +208,7 @@ describe('components/SshIntegrationSection', () => {
     expect(getByTestId('ssh-integration-anomaly')).toHaveTextContent(
       '/tmp/persona-ssh-agent-99.sock',
     );
-    // 异常态仍提供一键启用（= 修复路径）
+    // The anomaly state still offers one-click enable (= the fix path)
     expect(getByTestId('ssh-integration-toggle')).toHaveTextContent('一键启用');
   });
 
@@ -221,7 +221,7 @@ describe('components/SshIntegrationSection', () => {
 
     const snippet = getByTestId('ssh-integration-snippet');
     expect(snippet).toHaveTextContent('# persona managed begin');
-    // Host * 作用域行与后端锚点块同构（缺它块会落入最后一个 Host 块作用域）
+    // The Host * scope line mirrors the backend anchor block (without it the block falls under the last Host block's scope)
     expect(snippet).toHaveTextContent('Host *');
     expect(snippet).toHaveTextContent(
       'IdentityAgent /run/user/1000/persona/ssh-agent.sock',
@@ -269,16 +269,16 @@ describe('components/SshIntegrationSection', () => {
 
     const { getByTestId } = render(<SshIntegrationSection />);
     await waitFor(() => expect(getByTestId('ssh-analysis-panel')).toBeInTheDocument());
-    // 环境变量与生效值（读出来的真状态）
+    // Environment variable and effective value (real state read from disk)
     expect(getByTestId('ssh-analysis-sock-env')).toHaveTextContent('/env/sock');
     expect(getByTestId('ssh-analysis-effective-agent')).toHaveTextContent(
       '/run/user/1000/persona/ssh-agent.sock',
     );
-    // socket 存活灯 = 探测结果（绿/运行中）
+    // Socket liveness light = probe result (green/running)
     expect(getByTestId('ssh-analysis-alive')).toHaveClass('bg-green-500');
     expect(getByTestId('ssh-analysis-persona-alive')).toHaveClass('bg-green-500');
     expect(getByTestId('ssh-analysis-panel')).toHaveTextContent('运行中');
-    // 条目列表：作用域行 + 文件:行号（Include 展开也进列表）
+    // Entry list: scope line + file:line (Include expansions included)
     const entries = getByTestId('ssh-analysis-entries');
     expect(entries).toHaveTextContent('Host github.com → ForwardAgent no');
     expect(entries).toHaveTextContent('/home/user/.ssh/config:4');
@@ -305,10 +305,10 @@ describe('components/SshIntegrationSection', () => {
     expect(getByTestId('ssh-analysis-warnings')).toHaveTextContent(
       'Include 无匹配文件：conf.d/*.conf',
     );
-    // 无人监听：红点 + 文案
+    // Nobody listening: red dot + label
     expect(getByTestId('ssh-analysis-alive')).toHaveClass('bg-red-500');
     expect(getByTestId('ssh-analysis-panel')).toHaveTextContent('无人监听');
-    // 读不出条目 ≠ 空列表渲染
+    // Unreadable entries ≠ rendering an empty list
     expect(queryByTestId('ssh-analysis-entries')).toBeNull();
   });
 
@@ -357,7 +357,7 @@ describe('components/SshIntegrationSection', () => {
     const { getByTestId } = render(<SshIntegrationSection />);
     await waitFor(() => expect(getByTestId('ssh-integration-version')).toBeInTheDocument());
     expect(getByTestId('ssh-integration-version')).toHaveTextContent('未探测到');
-    // 无法判定 ≠ 通过：既不绿也不红
+    // Undecidable ≠ passing: neither green nor red
     expect(getByTestId('ssh-integration-version-verdict')).toHaveTextContent('需 8.3+');
     expect(getByTestId('ssh-integration-version-verdict')).toHaveClass('text-gray-400');
   });
@@ -371,7 +371,7 @@ describe('components/SshIntegrationSection', () => {
     const statusCallsBefore = mockStatus.mock.calls.length;
     const analysisCallsBefore = mockAnalysis.mock.calls.length;
 
-    // 外部改了 config：重读后拉到的分析是新值
+    // Config changed externally: the analysis fetched on re-read carries the new value
     mockAnalysis.mockResolvedValue({
       success: true,
       data: analysisOf({ identityAgentEffective: '/fresh/sock', socketAlive: true }),

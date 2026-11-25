@@ -1,12 +1,14 @@
-//! macOS：LocalAuthentication（Touch ID，密码回退）。
+//! macOS: LocalAuthentication (Touch ID with password fallback).
 //!
-//! `kLAPolicyDeviceOwnerAuthentication` = 生物识别 + 系统密码回退，
-//! 对齐 1Password 的解锁语义。evaluatePolicy 的 reply 回调在私有
-//! dispatch queue 上执行——内层 channel 等回调到达（时限比外层
-//! CEREMONY_TIMEOUT 短 10s，让本层先超时报出更精确的错误）。等待期间
-//! `StackBlock` 活在本函数栈帧上，回调到达时 block 一定仍然有效。
+//! `kLAPolicyDeviceOwnerAuthentication` = biometrics + system password
+//! fallback, aligned with 1Password's unlock semantics. The evaluatePolicy
+//! reply callback runs on a private dispatch queue — the inner channel waits
+//! for the callback to arrive (with a deadline 10s shorter than the outer
+//! CEREMONY_TIMEOUT, so this layer times out first and reports a more precise
+//! error). While waiting, `StackBlock` lives on this function's stack frame, so
+//! the block is guaranteed to still be valid when the callback arrives.
 //!
-//! 仅经 nightly CI 编译验证（本仓库无 macOS 实机）。
+//! Only compile-verified via nightly CI (no macOS hardware in this repo).
 
 use block2::StackBlock;
 use objc2::runtime::Bool;
@@ -14,7 +16,8 @@ use objc2_foundation::NSString;
 use objc2_local_authentication::{LAContext, LAPolicy};
 use std::time::Duration;
 
-/// 内层等待 reply 回调的时限（外层 biometric::CEREMONY_TIMEOUT 为 120s）
+/// Deadline for the inner wait on the reply callback (the outer
+/// biometric::CEREMONY_TIMEOUT is 120s)
 const REPLY_TIMEOUT: Duration = Duration::from_secs(110);
 
 pub fn platform_name() -> &'static str {
@@ -22,10 +25,12 @@ pub fn platform_name() -> &'static str {
 }
 
 pub fn available() -> bool {
-    // objc2 0.6 代系将 +new 标记为 unsafe（初始化约定未被证明安全）
+    // The objc2 0.6 generation marks +new as unsafe (the initialization
+    // convention is not proven safe)
     let ctx = unsafe { LAContext::new() };
-    // canEvaluatePolicy_error 返回 Result<(), Retained<NSError>>：
-    // Err（无生物硬件/系统限制）一律按不可用处理
+    // canEvaluatePolicy_error returns Result<(), Retained<NSError>>:
+    // Err (no biometric hardware / system restrictions) is always treated as
+    // unavailable
     unsafe { ctx.canEvaluatePolicy_error(LAPolicy::DeviceOwnerAuthentication) }.is_ok()
 }
 
@@ -33,10 +38,12 @@ pub fn ceremony(reason: &str) -> Result<(), String> {
     let ctx = unsafe { LAContext::new() };
     let reason_ns = NSString::from_str(reason);
     let (tx, rx) = std::sync::mpsc::channel::<bool>();
-    // StackBlock 要求 'static：tx move 进闭包（rx 在本函数继续等）
+    // StackBlock requires 'static: tx is moved into the closure (rx keeps waiting
+    // in this function)
     let reply = StackBlock::new(
         move |success: Bool, _error: *mut objc2_foundation::NSError| {
-            // 接收端超时放弃后 send 失败无所谓（弹窗已被系统收走）
+            // Once the receiver times out and gives up, a failed send is fine — the dialog
+            // has already been dismissed by the system
             let _ = tx.send(success.as_bool());
         },
     );

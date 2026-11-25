@@ -1,7 +1,8 @@
 use super::*;
 
-/// settings.sync.server_url（账号与 sync 共用同一服务器地址）。只用
-/// url，不读 token——账号 bearer 独立存 account token store。
+/// settings.sync.server_url (the account and sync share the same server
+/// address). Uses only the url, never reads the token — the account bearer is
+/// stored separately in the account token store.
 pub(crate) async fn account_server_for(
     state: &State<'_, AppState>,
 ) -> std::result::Result<String, String> {
@@ -19,7 +20,7 @@ pub(crate) async fn account_server_for(
     Ok(server_url)
 }
 
-/// 账号公开端点客户端（免 Bearer）。
+/// Client for public account endpoints (no Bearer).
 pub(crate) async fn account_api_for(
     state: &State<'_, AppState>,
 ) -> std::result::Result<persona_core::accounts::remote::AccountsApi, String> {
@@ -28,7 +29,8 @@ pub(crate) async fn account_api_for(
         .map_err(|e| format!("Invalid account server configuration: {e}"))
 }
 
-/// 账号 Bearer 端点客户端：从 keyring 解析账号 bearer（fail-closed）。
+/// Client for Bearer account endpoints: resolves the account bearer from the
+/// keyring (fail-closed).
 pub(crate) async fn account_api_with_bearer_for(
     state: &State<'_, AppState>,
 ) -> std::result::Result<persona_core::accounts::remote::AccountsApi, String> {
@@ -48,13 +50,17 @@ pub(crate) async fn account_api_with_bearer_for(
         .map_err(|e| format!("Invalid account server configuration: {e}"))
 }
 
-/// Bearer 解析（引导链闭合版）：优先账号会话令牌；没有账号会话时回退
-/// 静态服务器令牌（sync 配置写入 `token_store` 的那枚）。服务器
-/// `require_account_bearer` 对静态令牌与账号令牌一视同仁——全新账号
-/// 注册第一把 SRP 凭证时还没有任何账号会话，静态令牌是契约内的合法
-/// 引导 Bearer；不回退则 SRP 凭证永远无法创建（死锁）。仅用于引导型
-/// 命令（`account_srp_register_with_password`）；常规 Bearer 命令仍走
-/// [`account_api_with_bearer_for`] 保持"账号会话 fail-closed"语义。
+/// Bearer resolution (bootstrap-chain-closing version): prefer the account
+/// session token; with no account session, fall back to the static server
+/// token (the one the sync config writes into `token_store`). The server's
+/// `require_account_bearer` treats the static token and the account token
+/// alike — when a brand-new account registers its first SRP credential there
+/// is no account session yet, and the static token is a contract-legal
+/// bootstrap Bearer; without the fallback the SRP credential could never be
+/// created (deadlock). Used only by the bootstrap-style command
+/// (`account_srp_register_with_password`); regular Bearer commands still go
+/// through [`account_api_with_bearer_for`], keeping the "account session
+/// fail-closed" semantics.
 pub(crate) async fn account_api_with_bearer_or_bootstrap_for(
     state: &State<'_, AppState>,
 ) -> std::result::Result<persona_core::accounts::remote::AccountsApi, String> {
@@ -217,11 +223,13 @@ impl From<persona_core::accounts::remote::AccountDeviceInfo> for AccountDeviceIn
     }
 }
 
-/// 账号域绑定写入（显式动作）：`Some` = 绑定（向导注册/登录成功后由
-/// 前端调用），`None` = 解绑（退出账号时随 revoke_session 一起）。
-/// 非敏感标识存 vault JSON（`WorkspaceSettings.account`）；令牌真值在
-/// OS keyring（ACCOUNT_SERVICE），不经此命令。读取走
-/// `get_workspace_settings`（同一条 settings 直出）。
+/// Writes the account-domain binding (explicit action): `Some` = bind (called
+/// by the frontend after a wizard signup/login succeeds), `None` = unbind
+/// (together with revoke_session when signing out of the account).
+/// Non-sensitive identifiers are stored in the vault JSON
+/// (`WorkspaceSettings.account`); the token's real value lives in the OS
+/// keyring (ACCOUNT_SERVICE) and never passes through this command. Reads go
+/// through `get_workspace_settings` (the same settings are served directly).
 #[command(rename_all = "snake_case")]
 pub async fn set_account_binding(
     binding: Option<persona_core::models::workspace::AccountBinding>,
@@ -241,7 +249,7 @@ pub async fn set_account_binding(
     Ok(ApiResponse::success(updated.settings))
 }
 
-/// 公开注册新账号（无需认证）。
+/// Register a new account publicly (no authentication required).
 #[command(rename_all = "snake_case")]
 pub async fn account_register(
     request: AccountRegisterRequest,
@@ -264,8 +272,9 @@ pub async fn account_register(
     }
 }
 
-/// passkey 注册选项（公开端点）。响应是服务器签发的裸 WebAuthn
-/// creation options（120s 一次性挑战），原样透传。
+/// Passkey registration options (public endpoint). The response is the bare
+/// WebAuthn creation options issued by the server (a 120s one-time challenge),
+/// passed through unchanged.
 #[command(rename_all = "snake_case")]
 pub async fn account_passkey_create_options(
     account_id: String,
@@ -290,8 +299,9 @@ pub async fn account_passkey_create_options(
     }
 }
 
-/// passkey 注册完成（公开端点）。提交认证器 attestation，服务器做 RP 侧
-/// 完整验证后存公钥材料。
+/// Passkey registration completion (public endpoint). Submits the
+/// authenticator's attestation; after the server performs full RP-side
+/// verification it stores the public key material.
 #[command(rename_all = "snake_case")]
 pub async fn account_passkey_register(
     account_id: String,
@@ -315,8 +325,9 @@ pub async fn account_passkey_register(
     }
 }
 
-/// passkey 登录选项（公开端点，登录仪式第一步）。按凭据 id 换取服务器
-/// 挑战（120s 一次性），断言时消费。
+/// Passkey login options (public endpoint, first step of the login ceremony).
+/// Exchanges the credential id for the server challenge (120s one-time),
+/// consumed at assertion time.
 #[command(rename_all = "snake_case")]
 pub async fn account_passkey_login_options(
     account_id: String,
@@ -344,8 +355,9 @@ pub async fn account_passkey_login_options(
     }
 }
 
-/// SRP 凭据登记（Bearer 端点）。账号内设备的 SRP salt+verifier 登记
-/// （密码登录的兜底凭据）。
+/// SRP credential registration (Bearer endpoint). Registers the SRP
+/// salt+verifier for a device within the account (the fallback credential for
+/// password login).
 #[command(rename_all = "snake_case")]
 pub async fn account_srp_register(
     account_id: String,
@@ -369,7 +381,7 @@ pub async fn account_srp_register(
     }
 }
 
-/// SRP 挑战请求（公开端点，登录步骤）。发起账号 SRP 登录握手。
+/// SRP challenge request (public endpoint, login step). Starts the account SRP login handshake.
 #[command(rename_all = "snake_case")]
 pub async fn account_srp_challenge(
     account_id: String,
@@ -395,9 +407,10 @@ pub async fn account_srp_challenge(
     }
 }
 
-/// SRP 验证完成（公开端点，登录步骤）。完成握手，返回 15 分钟 SRP 登录
-/// 令牌；本命令除透传外，把令牌写入 keyring 作为账号 bearer 的解析源
-/// （后续 Bearer 门禁命令免前端回传）。
+/// SRP verification completion (public endpoint, login step). Finishes the handshake and returns
+/// the 15-minute SRP login token; besides passing the result through, this command writes the
+/// token into the keyring as the resolution source for the account bearer (so later
+/// Bearer-gated commands don't need the frontend to send it back).
 #[command(rename_all = "snake_case")]
 pub async fn account_srp_verify(
     account_id: String,
@@ -439,11 +452,12 @@ pub async fn account_srp_verify(
     }))
 }
 
-/// 向导式 SRP 凭证注册（引导命令）：口令在 core 推导成 salt/verifier
-/// 并注册到账号，wire 值与口令都不经前端周转。Bearer 走
-/// [`account_api_with_bearer_or_bootstrap_for`]（账号会话 → 静态服务器
-/// 令牌回退）；裸 wire 的 [`account_srp_register`] 保持账号会话
-/// fail-closed 不变，两条路的 Bearer 语义不同。
+/// Wizard-style SRP credential registration (bootstrap command): the password is derived into
+/// salt/verifier in core and registered on the account, and neither the wire values nor the
+/// password ever round-trip through the frontend. Bearer goes through
+/// [`account_api_with_bearer_or_bootstrap_for`] (account session, falling back to the static
+/// server token); the raw-wire [`account_srp_register`] keeps its account-session
+/// fail-closed behaviour unchanged. The two paths have different Bearer semantics.
 #[command(rename_all = "snake_case")]
 pub async fn account_srp_register_with_password(
     account_id: String,
@@ -470,10 +484,12 @@ pub async fn account_srp_register_with_password(
     }
 }
 
-/// 向导式 SRP 登录：challenge/verify 两跳与 M2 核验全部在 core 编排
-/// （服务器证明不过不交付令牌），15 分钟令牌直写 `account_token_store`
-/// ——响应不含令牌本体，渲染层只见有效期与会话指纹。后续兑换 24h
-/// 会话走 [`account_create_session`]（带 srp_token 证据）。
+/// Wizard-style SRP login: the challenge/verify two-leg dance and the M2 check are all
+/// orchestrated in core (the token is never handed over if the server proof fails), and the
+/// 15-minute token is written straight to `account_token_store` — the response carries no token
+/// body, only the validity period and the session fingerprint, which is all the render layer
+/// sees. Exchanging it for a 24h session goes through [`account_create_session`] (with the
+/// srp_token evidence).
 #[command(rename_all = "snake_case")]
 pub async fn account_srp_login(
     account_id: String,
@@ -513,11 +529,13 @@ pub async fn account_srp_login(
     }))
 }
 
-/// 兑换 24h 账号会话（编排命令）：keyring 里的 15 分钟 SRP 令牌同时作
-/// Bearer 与 body 证据（服务器 sessions 端点是 Bearer + 恰好一种证据的
-/// 双闸，SRP 路径下两者是同一枚令牌），换得的 24h 会话令牌直写 keyring
-/// 覆盖短期令牌。令牌本体全程不过 IPC；passkey 断言证据路径仍走裸
-/// [`account_create_session`]（断言由渲染层的 WebAuthn 仪式产出）。
+/// Exchange for a 24h account session (orchestration command): the 15-minute SRP token in the
+/// keyring serves as both the Bearer and the body evidence (the server sessions endpoint is a
+/// double gate of Bearer plus exactly one kind of evidence; on the SRP path both are the same
+/// token), and the resulting 24h session token is written straight to the keyring, overwriting
+/// the short-lived token. The token body never crosses IPC; the passkey-assertion evidence path
+/// still uses the bare [`account_create_session`] (the assertion is produced by the frontend's
+/// WebAuthn ceremony).
 #[command(rename_all = "snake_case")]
 pub async fn account_exchange_session(
     account_id: String,
@@ -567,11 +585,12 @@ pub async fn account_exchange_session(
     }))
 }
 
-/// 退出账号（编排命令）：吊销 keyring 里的当前令牌（15 分钟短期令牌与
-/// 24h 会话都在服务器 `account_sessions` 表里，同一 DELETE 自吊销）并
-/// 清除本机 keyring。服务器吊销尽力而为（过期/不存在不拦退出），本机
-/// 清理是硬性语义——keyring 清除失败才报错。绑定（settings.account）
-/// 由前端随成功响应一并清除。
+/// Sign out of the account (orchestration command): revokes the current token held in the
+/// keyring (both the 15-minute short-lived token and the 24h session live in the server's
+/// `account_sessions` table, and the same DELETE revokes itself) and clears the local keyring.
+/// Server-side revocation is best-effort (expired/nonexistent tokens don't block sign-out);
+/// local cleanup is a hard semantic — only a failed keyring clear is an error. The binding
+/// (settings.account) is cleared by the frontend along with the success response.
 #[command(rename_all = "snake_case")]
 pub async fn account_sign_out(
     account_id: String,
@@ -594,7 +613,7 @@ pub async fn account_sign_out(
         .map_err(|e| format!("OS keyring read failed: {e}"))?
         .filter(|t| !t.trim().is_empty());
     let Some(bearer) = bearer else {
-        // 本机已无令牌 = 已退出；幂等成功（revoked_on_server=false）
+        // No local token left = already signed out; idempotent success (revoked_on_server=false)
         return Ok(ApiResponse::success(AccountSignOutResponse {
             revoked_on_server: false,
         }));
@@ -620,7 +639,8 @@ pub async fn account_sign_out(
     }))
 }
 
-/// 生成恢复码（Bearer 端点）。每次调用生成新一组（8 个），旧未用的作废。
+/// Generate recovery codes (Bearer endpoint). Each call produces a fresh batch (8 codes);
+/// previously unused ones are invalidated.
 #[command(rename_all = "snake_case")]
 pub async fn account_generate_recovery_codes(
     account_id: String,
@@ -643,7 +663,7 @@ pub async fn account_generate_recovery_codes(
     }
 }
 
-/// 验证恢复码（公开端点）。一次性消费，验证成功后标记为已用。
+/// Verify a recovery code (public endpoint). One-time use; marked as consumed once verified.
 #[command(rename_all = "snake_case")]
 pub async fn account_verify_recovery_code(
     account_id: String,
@@ -667,8 +687,8 @@ pub async fn account_verify_recovery_code(
     }
 }
 
-/// 为账号授权设备（Bearer 端点）。把已登记的 sync 设备（按 device_id +
-/// 公钥比对）关联到账号。
+/// Authorize a device for the account (Bearer endpoint). Associates an already-registered sync
+/// device (matched by device_id + public key) with the account.
 #[command(rename_all = "snake_case")]
 pub async fn account_authorize_device(
     account_id: String,
@@ -693,7 +713,7 @@ pub async fn account_authorize_device(
     }
 }
 
-/// 获取账号下的已授权设备列表（Bearer 端点）。
+/// List the devices authorized under the account (Bearer endpoint).
 #[command(rename_all = "snake_case")]
 pub async fn account_list_devices(
     account_id: String,
@@ -716,7 +736,7 @@ pub async fn account_list_devices(
     }
 }
 
-/// 吊销账号下的设备（Bearer 端点）。204 无体成功。
+/// Revoke a device under the account (Bearer endpoint). A 204 with no body signals success.
 #[command(rename_all = "snake_case")]
 pub async fn account_revoke_device(
     account_id: String,
@@ -738,9 +758,10 @@ pub async fn account_revoke_device(
     }
 }
 
-/// 创建账号会话（Bearer 端点）。凭恰好一种登录证据（SRP 15 分钟令牌或
-/// passkey 断言）兑换 24h 账号会话令牌；成功后令牌覆盖 keyring 的账号
-/// bearer（登出/续期语义：最后一次登录的会话为本机有效会话）。
+/// Create an account session (Bearer endpoint). Exchanges exactly one piece of login evidence (the
+/// SRP 15-minute token or a passkey assertion) for a 24h account session token; on success the
+/// token overwrites the account bearer in the keyring (sign-out/renewal semantics: the most
+/// recent login's session is the one valid locally).
 #[command(rename_all = "snake_case")]
 pub async fn account_create_session(
     account_id: String,
@@ -781,8 +802,9 @@ pub async fn account_create_session(
     Ok(ApiResponse::success(AccountSessionInfo::from(resp)))
 }
 
-/// 吊销账号会话（Bearer 端点）。登出该会话令牌；若吊销的正是本机
-/// keyring 里存的有效会话，一并清除（自吊销 = 本机退出账号登录）。
+/// Revoke an account session (Bearer endpoint). Signs out that session token; if the revoked
+/// token is exactly the active session held in the local keyring, it is cleared too (self
+/// revocation = signing the local account out).
 #[command(rename_all = "snake_case")]
 pub async fn account_revoke_session(
     account_id: String,

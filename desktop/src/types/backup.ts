@@ -1,17 +1,17 @@
-/** 备份域：证据、导出/恢复/推送产出、版本与远端删除。 */
+/** Backup domain: evidence, export/restore/push outcomes, versions and remote deletion. */
 
-/** 一次整库加密备份的导出记录（core `BackupEvidence` 镜像）。
- * 非敏感元数据；备份口令永不落盘。 */
+/** Export record of one full-vault encrypted backup (mirror of core `BackupEvidence`).
+ * Non-sensitive metadata; the backup passphrase is never written to disk. */
 export interface BackupEvidence {
-  /** 导出时刻（RFC3339） */
+  /** When the export happened (RFC3339) */
   exported_at: string;
-  /** 目标类型："file"（本地文件）/ "server"（服务器密文仓，后续批） */
+  /** Destination type: "file" (local file) / "server" (server ciphertext vault, later batch) */
   destination: string;
-  /** 密文字节数 */
+  /** Ciphertext size in bytes */
   size_bytes: number;
 }
 
-/** `backup_export_to_file` 的返回（含与 BackupEvidence 对账的元数据）。 */
+/** `backup_export_to_file` return (metadata reconcilable with BackupEvidence). */
 export interface BackupExportOutcome {
   path: string;
   size_bytes: number;
@@ -19,25 +19,26 @@ export interface BackupExportOutcome {
   exported_at: string;
 }
 
-/** `backup_restore_from_file` 的返回：换库段留下的原库副本 `.bak` 路径
- * （原库不存在时为 null——全新安装上的首次恢复没有可留存的旧库）。 */
+/** `backup_restore_from_file` return: path of the `.bak` copy of the original
+ * vault left behind during the swap (null when there was no original vault —
+ * a first restore on a fresh install has nothing to preserve). */
 export interface BackupRestoreOutcome {
   backup_copy: string | null;
 }
 
-/** `backup_push_to_server` 的返回（服务器返回元数据 + 本地导出凭证时刻）。 */
+/** `backup_push_to_server` return (server-returned metadata + the local export timestamp). */
 export interface BackupPushOutcome {
   backup_id: string;
   device_name: string;
   size_bytes: number;
   sha256: string;
   created_at: string;
-  /** 同设备最新版本 sha256 相同时服务器去重（未产生新版本） */
+  /** Server deduped because it matches the device's newest version sha256 (no new version produced) */
   deduplicated: boolean;
   exported_at: string;
 }
 
-/** 服务器密文仓里的一个备份版本（列表视图）。 */
+/** One backup version in the server ciphertext vault (list view). */
 export interface BackupVersionView {
   backup_id: string;
   device_name: string;
@@ -46,7 +47,7 @@ export interface BackupVersionView {
   created_at: string;
 }
 
-/** `backup_delete_server_version` 的返回（服务器 404 幂等，恒 true）。 */
+/** `backup_delete_server_version` return (server 404s are idempotent, always true). */
 export interface BackupServerDeleteOutcome {
   deleted: boolean;
 }

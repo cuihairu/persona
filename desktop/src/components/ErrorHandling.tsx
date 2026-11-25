@@ -5,8 +5,8 @@ import { invoke } from '@tauri-apps/api/core';
 import i18n from '@/i18n';
 
 /**
- * production 前端错误落本地日志文件（Rust 侧脱敏 subscriber），上报失败
- * 静默——错误已经发生，上报路径不允许再制造二次噪声。
+ * In production frontend errors land in a local log file (Rust-side sanitized subscriber); a failed upload
+ * stays silent -- the error has already happened, and the reporting path must not create secondary noise.
  */
 const reportFrontendError = (
   message: string,

@@ -12,13 +12,15 @@ import type {
 import ReauthModal from './ReauthModal';
 
 /**
- * Connect 本机自动化设置区（CONNECT_AUTOMATION_DESIGN DR-5：桌面设置页
- * token 管理面）。listener 默认关闭 = 后端不创建 listener；token 创建/吊销
- * 走 reauth 门禁（core 权威），明文只在创建响应里出现一次。
+ * Connect local-automation settings section (CONNECT_AUTOMATION_DESIGN DR-5:
+ * the desktop settings page's token management surface). The listener is off
+ * by default = the backend creates no listener; token creation/revocation
+ * goes through the reauth gate (core is authoritative) and plaintext appears
+ * only in the creation response, once.
  */
 
-/** 可授权类型词汇表（与 core ConnectItemType snake_case 一致；passkey/
- * wallet/ssh/custom 恒不可授权，不在列） */
+/** Authorizable-type vocabulary (aligned with core ConnectItemType snake_case;
+ * passkey/wallet/ssh/custom are never authorizable and are not listed) */
 const CONNECT_ITEM_TYPES: { value: string; label: string }[] = [
   { value: 'password', label: 'settings.connect.typePassword' },
   { value: 'api_key', label: 'settings.connect.typeApiKey' },
@@ -32,7 +34,7 @@ const CONNECT_ITEM_TYPES: { value: string; label: string }[] = [
   { value: 'software_license', label: 'settings.connect.typeSoftwareLicense' },
 ];
 
-/** scope 摘要（列表行）：身份 + 类型 + 只读 */
+/** Scope summary (list row): identity + type + read-only */
 function scopeSummary(t: TFunction, scope: ConnectTokenScope): string {
   const identityPart =
     scope.identities.length === 0
@@ -53,7 +55,7 @@ const ConnectAutomationSection: React.FC = () => {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // 创建流：表单 →（REAUTH_REQUIRED 时先 reauth）→ 明文一次性展示
+  // Creation flow: form -> (reauth first when REAUTH_REQUIRED) -> plaintext shown once
   const [createOpen, setCreateOpen] = useState(false);
   const [label, setLabel] = useState('');
   const [allIdentities, setAllIdentities] = useState(true);
@@ -76,7 +78,7 @@ const ConnectAutomationSection: React.FC = () => {
       const idResp = await personaAPI.getIdentities();
       if (idResp.success && idResp.data) setIdentities(idResp.data);
     } catch {
-      // 状态读取失败不打断面板
+      // A failed status read does not interrupt the panel
     }
   }, []);
 
@@ -115,7 +117,7 @@ const ConnectAutomationSection: React.FC = () => {
     setCreateOpen(true);
   };
 
-  /** 组装 scope 并创建；REAUTH_REQUIRED → 关表单弹 reauth，成功后原样重试 */
+  /** Assemble the scope and create; REAUTH_REQUIRED -> close the form to surface reauth, then retry as-is on success */
   const submitCreate = async () => {
     if (!label.trim()) {
       setFormError(t('settings.connect.labelRequired'));
@@ -157,7 +159,7 @@ const ConnectAutomationSection: React.FC = () => {
     }
   };
 
-  /** reauth 成功后按原表单意图重开创建流（表单态未销毁） */
+  /** After a successful reauth, reopen the creation flow with the original form intent (the form state was never destroyed) */
   const handleReauth = async (masterPassword: string) => {
     setSubmitting(true);
     try {

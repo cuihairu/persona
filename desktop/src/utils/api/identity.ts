@@ -53,7 +53,7 @@ export const identityApi = {
 
 
   // -------------------------------------------------------------------------
-  // 导出 / 敏感字段 reveal / 重新认证
+  // Export / sensitive-field reveal / re-authentication
   // -------------------------------------------------------------------------
 
   async exportIdentity(identityId: string): Promise<ApiResponse<IdentityExport>> {
@@ -62,28 +62,28 @@ export const identityApi = {
 
 
   // ---------------------------------------------------------------------
-  // 旅行模式（Travel Mode）
+  // Travel mode
   // ---------------------------------------------------------------------
 
-  /** 旅行模式状态（免解锁读取；inconsistent = active && !sidecar_exists） */
+  /** Travel mode status (read-only without unlocking; inconsistent = active && !sidecar_exists) */
   async getTravelStatus(): Promise<ApiResponse<TravelStatus>> {
     return invoke('get_travel_status');
   },
 
 
-  /** 窄写身份的 travel 标记位（enter 时随之移出本设备的身份清单） */
+  /** Narrow write of an identity's travel-marked flag (on enter, the marked identity moves off this device's identity list) */
   async setTravelMarked(identityId: string, marked: boolean): Promise<ApiResponse<boolean>> {
     return invoke('set_travel_marked', { identityId, marked });
   },
 
 
-  /** 进入旅行模式：被标记身份打包加密进 sidecar 并从主库删除 */
+  /** Enter travel mode: the marked identities are packed and encrypted into a sidecar and removed from the main database */
   async enterTravelMode(passphrase: string): Promise<ApiResponse<TravelCounts>> {
     return invoke('enter_travel_mode', { passphrase });
   },
 
 
-  /** 退出旅行模式：输 travel 口令把被移除身份原样恢复回主库 */
+  /** Exit travel mode: supply the travel passphrase to restore the removed identities into the main database verbatim */
   async exitTravelMode(passphrase: string): Promise<ApiResponse<TravelCounts>> {
     return invoke('exit_travel_mode', { passphrase });
   },

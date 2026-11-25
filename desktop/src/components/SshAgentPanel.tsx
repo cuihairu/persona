@@ -21,8 +21,9 @@ import { useAppStore } from '@/stores/appStore';
 import type { SshAgentKey, SshKeyGenerated, SshKeyInspection } from '@/types';
 import { clsx } from 'clsx';
 
-/// 导入确认弹框的会话状态：文件路径 + 预览 + 表单输入 + 就地错误。
-/// 拖拽与文件选择器两条入口都汇聚到同一条 inspect → 确认 → import 流水线。
+/// Session state for the import confirm dialog: file path + preview + form
+/// input + in-place errors. Both entry points, drag-and-drop and the file
+/// picker, funnel into the same inspect → confirm → import pipeline.
 interface ImportSession {
   path: string;
   inspection: SshKeyInspection;
@@ -32,8 +33,9 @@ interface ImportSession {
   importing: boolean;
 }
 
-/// 新建（生成）弹框会话：类型 + comment/名称 + 就地错误；成功后 result
-/// 留在弹框里展示公钥（可复制），点「完成」才收尾刷新。
+/// Session for the generate dialog: type + comment/name + in-place errors;
+/// after success the result stays in the dialog showing the public key
+/// (copyable), and "Done" wraps up and refreshes.
 interface GenerateSession {
   key_type: string;
   comment: string;
@@ -43,8 +45,9 @@ interface GenerateSession {
   result: SshKeyGenerated | null;
 }
 
-/// 编辑弹框会话：只动元数据（名称/标签），私钥本体与公钥不可改
-/// （payload 编辑走独立的敏感门禁路径，这里刻意不提供）。
+/// Session for the edit dialog: metadata only (name/tags). The private key
+/// body and public key are immutable (payload editing goes through a separate
+/// sensitive gate path, deliberately not offered here).
 interface EditSession {
   key: SshAgentKey;
   name: string;
@@ -74,7 +77,7 @@ const SshAgentPanel: React.FC = () => {
   const [generateSession, setGenerateSession] = useState<GenerateSession | null>(null);
   const [editSession, setEditSession] = useState<EditSession | null>(null);
   const [copied, setCopied] = useState(false);
-  // 列表行内公钥复制的反馈：记录刚复制的行 id（单例 copied 态是生成结果用的）
+  // Feedback for copying a public key inside a list row: track the id of the just-copied row (the singleton copied state is for the generated result)
   const [copiedKeyId, setCopiedKeyId] = useState<string | null>(null);
   const [dragActive, setDragActive] = useState(false);
 
@@ -83,10 +86,13 @@ const SshAgentPanel: React.FC = () => {
     loadSshKeys();
   }, []);
 
-  // 回到窗口时重读：agent 可被 CLI（add-to-agent 自动拉起 daemon）或
-  // 其他入口起停/装载密钥，面板只在挂载时拉取会陈旧——用户切回看到的
-  // 徽章与列表就是现状，灯=真状态。服务函数每渲染重建，ref 捕获最新
-  // 引用；visibilitychange 与 focus 在切回时连发，1s 节流防重复拉取。
+  // Re-read when the window becomes visible again: the agent can be started/stopped
+  // or have keys loaded by the CLI (add-to-agent auto-spawns the daemon) or other
+  // entry points, and a panel that only fetches on mount goes stale — what the user
+  // sees when switching back (badge and list) must be the current truth, dot = real
+  // state. The service function is rebuilt every render, so a ref holds the latest
+  // one; visibilitychange and focus fire together when switching back, throttled to
+  // 1s to avoid duplicate fetches.
   const rereadRef = useRef({ refreshSshAgentStatus, loadSshKeys });
   rereadRef.current = { refreshSshAgentStatus, loadSshKeys };
   useEffect(() => {
@@ -106,8 +112,9 @@ const SshAgentPanel: React.FC = () => {
     };
   }, []);
 
-  // 文件拖拽：enter/over 点亮拖放区，drop 带路径走与选择器同一条导入
-  // 流水线；cancel（拖出窗口）熄灭。无路径的拖入（纯文本等）不响应。
+  // File drag-and-drop: enter/over lights up the drop zone, drop carries the path
+  // into the same import pipeline as the picker; cancel (dragged out of the
+  // window) dims it. Drops without a path (plain text etc.) are ignored.
   useEffect(() => {
     let unlisten: (() => void) | undefined;
     const setup = async () => {
@@ -126,7 +133,7 @@ const SshAgentPanel: React.FC = () => {
           }
         });
       } catch {
-        // 非 Tauri 环境（jest/浏览器预览）：拖拽能力静默缺席
+        // Non-Tauri environment (jest/browser preview): drag-and-drop is silently absent
       }
     };
     void setup();
@@ -145,7 +152,7 @@ const SshAgentPanel: React.FC = () => {
     setImportSession({
       path,
       inspection,
-      // 条目名回退与 Rust 侧一致：comment > 文件名（用户可改）
+      // Entry name fallback matches the Rust side: comment > file name (user-editable)
       name: inspection.comment || inspection.file_name,
       passphrase: '',
       error: null,
@@ -184,7 +191,7 @@ const SshAgentPanel: React.FC = () => {
       setImportSession(null);
       loadSshKeys();
     } else {
-      // 错误就地展示（错口令可原地改了重试），弹框不关
+      // Show the error in place (a wrong passphrase can be corrected and retried right there); the dialog stays open
       setImportSession((s) =>
         s
           ? { ...s, importing: false, error: response.error || t('sshAgent.importFailed') }
@@ -202,8 +209,10 @@ const SshAgentPanel: React.FC = () => {
   };
 
   // ---------------------------------------------------------------
-  // 条目元数据编辑与删除（P1-③）：只动名称/标签；删除二次确认防误删。
-  // 私钥本体与公钥不可改——payload 编辑有独立敏感门禁，此处刻意不提供。
+  // Entry metadata editing and deletion (P1-3): name/tags only; deletion needs a
+  // second confirmation to guard against accidents. The private key body and
+  // public key are immutable — payload editing has its own sensitive gate,
+  // deliberately not provided here.
   // ---------------------------------------------------------------
 
   const beginEdit = (key: SshAgentKey) => {
@@ -239,7 +248,7 @@ const SshAgentPanel: React.FC = () => {
   };
 
   const removeKey = async (key: SshAgentKey) => {
-    // 二次确认：删除不可恢复（连同密文私钥一并清出库）
+    // Second confirmation: deletion is unrecoverable (the encrypted private key is purged from the vault along with it)
     if (!window.confirm(t('sshAgent.deleteConfirm', { name: key.name }))) return;
     try {
       const resp = await personaAPI.deleteCredential(key.id);
@@ -284,7 +293,7 @@ const SshAgentPanel: React.FC = () => {
       setGenerateSession((s) => (s ? { ...s, generating: false, result: generated } : s));
       loadSshKeys();
     } else {
-      // 错误就地展示，弹框不关（可改参数重试）
+      // Show the error in place; the dialog stays open (parameters can be changed and retried)
       setGenerateSession((s) =>
         s
           ? { ...s, generating: false, error: response.error || t('sshAgent.generateFailed') }
@@ -295,7 +304,7 @@ const SshAgentPanel: React.FC = () => {
 
   const handleCopyPublicKey = async (publicKey: string) => {
     try {
-      // 公钥不是机密：普通复制即可，不走敏感数据的 30s 自动清除
+      // A public key is not a secret: an ordinary copy is fine, no 30s auto-clear for sensitive data
       await navigator.clipboard.writeText(publicKey);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
@@ -304,7 +313,7 @@ const SshAgentPanel: React.FC = () => {
     }
   };
 
-  // 列表行内复制：同一模式，但反馈钉在触发行上
+  // Copy inside a list row: same pattern, but the feedback pins to the row that triggered it
   const handleCopyRowPublicKey = async (keyId: string, publicKey: string) => {
     try {
       await navigator.clipboard.writeText(publicKey);
@@ -588,8 +597,9 @@ const SshAgentPanel: React.FC = () => {
           data-testid="ssh-import-modal"
           className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50"
           onMouseDown={(e) => {
-            // 点空白（遮罩自身）= 取消；带未保存口令输入时同样直接取消：
-            // 口令本就没有"保存"语义，误触代价只是重拖一次文件
+            // Clicking the backdrop (the overlay itself) = cancel; with an unsaved
+            // passphrase input it still cancels outright: a passphrase has no
+            // "save" semantics anyway, and a mis-click only costs re-dropping the file
             if (e.target === e.currentTarget) setImportSession(null);
           }}
         >
@@ -696,8 +706,9 @@ const SshAgentPanel: React.FC = () => {
           data-testid="ssh-generate-modal"
           className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50"
           onMouseDown={(e) => {
-            // 点空白（遮罩自身）= 取消；但生成进行中不允许——后台仍会把
-            // 钥匙入库，关掉弹框会丢结果视图，让人误以为没生成
+            // Clicking the backdrop (the overlay itself) = cancel; not allowed while a
+            // generation is in flight — the backend still stores the key, and closing
+            // the dialog would lose the result view, making it look like nothing was generated
             if (e.target === e.currentTarget && !generateSession.generating) {
               setGenerateSession(null);
             }
@@ -890,7 +901,7 @@ const SshAgentPanel: React.FC = () => {
           data-testid="ssh-edit-modal"
           className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50"
           onMouseDown={(e) => {
-            // 点空白（遮罩自身）= 取消；保存中不关（防误触丢输入）
+            // Clicking the backdrop (the overlay itself) = cancel; no closing mid-save (guards against a mis-click losing input)
             if (e.target === e.currentTarget && !editSession.saving) setEditSession(null);
           }}
         >

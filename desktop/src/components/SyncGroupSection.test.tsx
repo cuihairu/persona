@@ -52,14 +52,14 @@ describe('components/SyncGroupSection', () => {
   });
 
   it('出码成功后展示动态密码与邀请串；poll 完成后展示指纹并刷新入组状态', async () => {
-    // mount = 未入组，之后的刷新 = 已入组（host 侧完成时组密钥落 keyring）
+    // mount = not joined, the later refresh = joined (the host side stores the group key in the keyring on completion)
     let statusCalls = 0;
     mockStatus.mockImplementation(async () => {
       statusCalls += 1;
       return statusCalls === 1 ? ok(false) : ok(true);
     });
     mockCreate.mockResolvedValue(ok(inviteOutcome));
-    // poll 挂住：waiting 面稳定可见，断言 code/link 后手动完成
+    // Poll hangs: the waiting panel stays visible so we can assert code/link, then complete manually
     let resolvePoll!: (v: unknown) => void;
     mockPoll.mockReturnValue(
       new Promise((resolve) => {
@@ -82,7 +82,7 @@ describe('components/SyncGroupSection', () => {
     await waitFor(() =>
       expect(screen.getByTestId('sync-group-host-fingerprint')).toHaveTextContent('123456')
     );
-    // 完成面常驻（不被入组状态面顶掉）；点关闭后回组状态面
+    // The completion panel persists (not displaced by the joined-state panel); closing returns to the group state panel
     expect(mockStatus).toHaveBeenCalledTimes(2);
     fireEvent.click(screen.getByText('关闭'));
     await waitFor(() => expect(screen.getByTestId('sync-group-joined')).toBeInTheDocument());
@@ -115,7 +115,7 @@ describe('components/SyncGroupSection', () => {
   });
 
   it('guest 全流程：输码拿到指纹，确认后入组并清空输入', async () => {
-    // mount = 未入组，确认成功后的刷新 = 已入组
+    // mount = not joined, the refresh after a successful confirm = joined
     let statusCalls = 0;
     mockStatus.mockImplementation(async () => {
       statusCalls += 1;
@@ -140,7 +140,7 @@ describe('components/SyncGroupSection', () => {
 
     fireEvent.click(screen.getByText('指纹一致，确认入组'));
     await waitFor(() => expect(mockJoinConfirm).toHaveBeenCalledWith('sess-1'));
-    // 入组完成后刷新状态切入组面，配对表单整体卸载
+    // After joining, the status refresh switches to the joined panel and the pairing form unmounts entirely
     await waitFor(() => expect(screen.getByTestId('sync-group-joined')).toBeInTheDocument());
     expect(screen.queryByTestId('sync-group-guest-confirm')).not.toBeInTheDocument();
   });

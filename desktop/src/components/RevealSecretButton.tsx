@@ -9,22 +9,22 @@ import ReauthModal from '@/components/ReauthModal';
 
 export interface RevealSecretButtonProps {
   credentialId: string;
-  /** 要揭示的敏感字段 */
+  /** The sensitive field to reveal */
   field: SecretField;
-  /** 字段显示名（Password / Private Key …） */
+  /** Display name of the field (Password / Private Key …) */
   label: string;
-  /** 揭示后自动隐藏秒数（默认 30） */
+  /** Seconds before auto-hide after revealing (default 30) */
   autoHideSeconds?: number;
-  /** 自定义复制行为（默认 copyWithAutoClear，30s 自动清空剪贴板） */
+  /** Custom copy behavior (defaults to copyWithAutoClear, which clears the clipboard after 30s) */
   onCopy?: (value: string) => void;
 }
 
 /**
- * 统一敏感字段揭示按钮：
- * 点击 → reveal_credential_secret（后端含敏感检查 + 审计）
- *   - 返回 REAUTH_REQUIRED → 弹 ReauthModal，验证通过后自动重试一次
- *   - 成功 → 明文展示并启动自动隐藏倒计时
- * 复制走 copyWithAutoClear（剪贴板 30s 自动清空）。
+ * Unified sensitive-field reveal button:
+ * click → reveal_credential_secret (backend includes sensitivity checks + audit)
+ *   - REAUTH_REQUIRED → open ReauthModal; after successful verification, retry once automatically
+ *   - success → show the plaintext and start the auto-hide countdown
+ * Copying goes through copyWithAutoClear (clipboard auto-cleared after 30s).
  */
 const RevealSecretButton: React.FC<RevealSecretButtonProps> = ({
   credentialId,
@@ -40,8 +40,9 @@ const RevealSecretButton: React.FC<RevealSecretButtonProps> = ({
   const [error, setError] = useState<string | null>(null);
   const reauth = useReauth();
   const retryRef = useRef(false);
-  // 钱包条目独立密码（第二因子）：后端返回 ITEM_PASSWORD_REQUIRED 时展开
-  // 输入行；验证通过后组件内记忆（切条目/关面板随卸载消失）
+  // Wallet item's standalone password (second factor): when the backend returns ITEM_PASSWORD_REQUIRED,
+  // expand the input row; once verified it is remembered within the component (forgotten when switching
+  // items or closing the panel unmounts it)
   const [rememberedItemPwd, setRememberedItemPwd] = useState<string | null>(null);
   const [needsItemPassword, setNeedsItemPassword] = useState(false);
   const [itemPwdInput, setItemPwdInput] = useState('');
@@ -55,12 +56,12 @@ const RevealSecretButton: React.FC<RevealSecretButtonProps> = ({
         if (res.success && res.data) {
           setRevealed(res.data.value);
           setRemaining(autoHideSeconds);
-          // 验证通过的条目密码组件内记忆：同一条目的后续 reveal 免重复输入
+          // Remember a verified item password within the component: later reveals of the same item skip re-entry
           if (itemPassword) setRememberedItemPwd(itemPassword);
           setNeedsItemPassword(false);
           setItemPwdInput('');
         } else if (res.error_code === 'REAUTH_REQUIRED') {
-          // 弹重新认证；成功且未重试过则自动重放一次
+          // Open re-verification; on success, if not retried yet, replay once automatically
           if (!retryRef.current && (await reauth.requestReauth())) {
             retryRef.current = true;
             await doReveal(itemPassword);
@@ -92,7 +93,7 @@ const RevealSecretButton: React.FC<RevealSecretButtonProps> = ({
     setItemPwdInput('');
   };
 
-  // 自动隐藏倒计时
+  // Auto-hide countdown
   useEffect(() => {
     if (remaining === null) return;
     if (remaining <= 0) {

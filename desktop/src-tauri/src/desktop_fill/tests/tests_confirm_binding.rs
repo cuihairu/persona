@@ -11,7 +11,8 @@ fn target(id: &str, hwnd: isize) -> FillTarget {
     }
 }
 
-/// 请求缺 snapshot_id：确认面协议错误，优先如实报出
+/// Request missing snapshot_id: a confirmation-surface protocol error, reported
+/// honestly first
 #[test]
 fn request_without_snapshot_id_is_rejected() {
     let slot = target("snap-a", 1);
@@ -25,7 +26,8 @@ fn request_without_snapshot_id_is_rejected() {
     );
 }
 
-/// 隐藏即丢弃：浮窗收起清槽后，携旧 id 的在途请求拒绝
+/// Hidden means discarded: once the floating window dismisses and clears the
+/// slot, in-flight requests carrying a stale id are rejected
 #[test]
 fn cleared_slot_discards_inflight_confirmation() {
     assert_eq!(
@@ -34,18 +36,21 @@ fn cleared_slot_discards_inflight_confirmation() {
     );
 }
 
-/// 确认 A → 浮窗重新捕获 B：携 A 的 id 的在途请求拒绝，绝不转投 B
+/// A confirmed → floating window re-captures B: in-flight requests carrying
+/// A's id are rejected; never re-routed to B
 #[test]
 fn recaptured_target_rejects_stale_confirmation() {
     let a = target("snap-a", 1);
     let b = target("snap-b", 2);
     let rejection = bind_confirmed_snapshot(Some(&b), Some(&a.snapshot_id));
     assert_eq!(rejection, Err(ConfirmBindRejection::TargetChanged));
-    // 拒绝路径不返回任何可注入目标（类型层面就无法把 B 误当返回值用）
+    // The rejection path returns no injectable target (at the type level it is
+    // impossible to misuse B as a return value)
     assert_ne!(b.snapshot_id, a.snapshot_id);
 }
 
-/// id 与当前槽位一致：放行并绑定到被确认的那份快照
+/// id matches the current slot: allowed through and bound to the confirmed
+/// snapshot
 #[test]
 fn matching_snapshot_binds_confirmation_to_that_target() {
     let a = target("snap-a", 1);
@@ -55,7 +60,8 @@ fn matching_snapshot_binds_confirmation_to_that_target() {
     assert_eq!(bound.hwnd, 1);
 }
 
-/// 同一槽位先后两份快照：只有当前快照的 id 放行，前一份的 id 拒绝
+/// Two snapshots held by the same slot in sequence: only the current
+/// snapshot's id is allowed through; the earlier id is rejected
 #[test]
 fn only_current_snapshot_id_is_accepted() {
     let current = target("snap-b", 2);
@@ -69,9 +75,11 @@ fn only_current_snapshot_id_is_accepted() {
     );
 }
 
-/// 命令层重查闭包工厂（`slot_recheck_for`，第四轮取消边界收口）：
-/// 与绑定比较共用同一语义——槽位在 → 放行；清槽 → Discarded；
-/// 换新快照 → Changed。注入循环内每个字段写入前调用它。
+/// Command-layer recheck closure factory (`slot_recheck_for`, fourth-round
+/// cancellation boundary closure):
+/// shares the same semantics as the binding comparison — slot present → allow
+/// through; slot cleared → Discarded; newer snapshot → Changed. Called before
+/// every field write inside the injection loop.
 #[test]
 fn slot_recheck_closure_matches_bind_semantics() {
     use std::sync::Mutex;
@@ -79,14 +87,16 @@ fn slot_recheck_closure_matches_bind_semantics() {
     let recheck = super::slot_recheck_for(&slot, "snap-live".to_string());
     recheck().expect("current snapshot must pass the recheck");
 
-    // 清槽（浮窗收起）：在途注入的下一次重查必须拒绝
+    // Slot cleared (floating window dismissed): the next recheck of the
+    // in-flight injection must reject
     *slot.lock().unwrap_or_else(|p| p.into_inner()) = None;
     assert_eq!(
         recheck().map(|_| ()),
         Err(ConfirmBindRejection::TargetDiscarded)
     );
 
-    // 重新捕获（换新快照）：携旧 id 的重查必须拒绝
+    // Re-captured (new snapshot replaces it): the recheck carrying the old id
+    // must reject
     *slot.lock().unwrap_or_else(|p| p.into_inner()) = Some(target("snap-new", 8));
     assert_eq!(
         recheck().map(|_| ()),

@@ -11,8 +11,10 @@ import type {
 
 export const backupApi = {
 
-  /** 整库加密备份导出到本地文件（S5 自救口）：口令加密、主库不解密。
-   * 成功后 settings.backup 落导出凭证（服务端真相在返回的 outcome）。 */
+  /** Exports an encrypted full-database backup to a local file (the S5 self-rescue hatch):
+   * passphrase-encrypted, the main database is never decrypted.
+   * On success settings.backup holds the export evidence (the server's truth is
+   * the returned outcome). */
   async backupExportToFile(
     path: string,
     passphrase: string,
@@ -21,10 +23,13 @@ export const backupApi = {
   },
 
 
-  /** 从本地备份文件恢复整库（S5 自救口第二批，与 CLI `restore --file` 同语义）。
-   * 口令错/文件坏在 staged 复验阶段就报错——现有库与会话都不受影响；换库成功后
-   * 后端 service 被取下，调用方须随后 `checkServiceStatus` 驱动回解锁屏
-   * （恢复出的库主密码可能与当前会话不同）。 */
+  /** Restores the whole database from a local backup file (second batch of the S5
+   * self-rescue hatch; same semantics as the CLI `restore --file`).
+   * A wrong passphrase / corrupt file fails at the staged re-verification stage —
+   * the existing database and session are untouched; once the database has been
+   * swapped, the backend service is torn down and the caller must follow up with
+   * `checkServiceStatus` to drive the UI back to the unlock screen (the restored
+   * database's master password may differ from the current session's). */
   async backupRestoreFromFile(
     path: string,
     passphrase: string,
@@ -33,8 +38,10 @@ export const backupApi = {
   },
 
 
-  /** 整库加密备份推送到服务器密文仓（S5-d）。快照加密在本地完成后才出网，
-   * 口令与主密码不出本机；成功后 settings.backup 落 destination=server 凭证。 */
+  /** Pushes an encrypted full-database backup to the server ciphertext vault (S5-d).
+   * The snapshot goes out over the network only after local encryption finishes;
+   * the passphrase and master password never leave this machine; on success
+   * settings.backup holds the destination=server evidence. */
   async backupPushToServer(
     passphrase: string,
   ): Promise<ApiResponse<BackupPushOutcome>> {
@@ -42,7 +49,7 @@ export const backupApi = {
   },
 
 
-  /** 列出服务器密文仓的备份版本（倒序）。免解锁——锁屏救库也要能先看清单。 */
+  /** Lists the backup versions in the server ciphertext vault (newest first). No unlock needed — rescuing the database from the lock screen must still allow reading the list. */
   async backupListServerVersions(
     limit?: number,
   ): Promise<ApiResponse<BackupVersionView[]>> {
@@ -52,8 +59,10 @@ export const backupApi = {
   },
 
 
-  /** 从服务器密文仓恢复整库。免解锁（锁屏救库同文件恢复口径）；换库成功后
-   * 后端 service 被取下，调用方须随后 `checkServiceStatus` 驱动回解锁屏。 */
+  /** Restores the whole database from the server ciphertext vault. No unlock needed
+   * (same treatment as a file restore from the lock screen); once the database has
+   * been swapped, the backend service is torn down and the caller must follow up
+   * with `checkServiceStatus` to drive the UI back to the unlock screen. */
   async backupRestoreFromServer(
     backupId: string,
     passphrase: string,
@@ -64,7 +73,7 @@ export const backupApi = {
   },
 
 
-  /** 删除服务器上的备份版本（幂等：已删除视为成功）。 */
+  /** Deletes a backup version on the server (idempotent: already deleted counts as success). */
   async backupDeleteServerVersion(
     backupId: string,
   ): Promise<ApiResponse<BackupServerDeleteOutcome>> {

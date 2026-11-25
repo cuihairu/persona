@@ -15,7 +15,7 @@ import {
   identity,
 } from './shared';
 
-// jsdom 未注入 TextEncoder（浏览器环境原生可用），Raw 分支提交需要
+// jsdom does not inject TextEncoder (native in a browser environment); the Raw branch submission needs it
 if (typeof globalThis.TextEncoder === 'undefined') {
   (globalThis as any).TextEncoder = jest.requireActual('util').TextEncoder;
 }
@@ -105,11 +105,11 @@ describe('components/CreateCredentialModal', () => {
         />,
       );
 
-      // 元数据先回显；payload 走按 id 补载
+      // Metadata is echoed back first; the payload is fetched by id
       expect(getCredentialData).toHaveBeenCalledWith('c-9');
       expect(screen.getByPlaceholderText(/Gmail 账户/)).toHaveValue('Old Name');
 
-      // 补载未完成：保存禁用（防止空 payload 覆盖既有密文）
+      // Until the fetch finishes, saving is disabled (to stop an empty payload from clobbering the existing ciphertext)
       expect(screen.getByRole('button', { name: '保存' })).toBeDisabled();
 
       resolveFetch({
@@ -129,7 +129,7 @@ describe('components/CreateCredentialModal', () => {
       expect(screen.getByPlaceholderText(/Gmail 账户/)).toHaveValue('Old Name');
       expect((screen.getByPlaceholderText('输入密码') as HTMLInputElement).value).toBe('old-pw');
       expect(screen.getByDisplayValue('olduser')).toBeInTheDocument();
-      // 类型不可变（1Password 语义）
+      // The type is immutable (1Password semantics)
       expect(screen.getByTestId('credential-type-select')).toBeDisabled();
       expect(screen.getByText("条目类型不可更改")).toBeInTheDocument();
     });
@@ -147,7 +147,7 @@ describe('components/CreateCredentialModal', () => {
 
       await waitFor(() => expect(onClose).toHaveBeenCalled());
 
-      // 元数据：全字段提交（空串交给后端 trim 清空）
+      // Metadata: all fields are submitted (empty strings are trimmed away by the backend)
       expect(updateCredential).toHaveBeenCalledWith(
         expect.objectContaining({
           id: 'c-9',
@@ -158,7 +158,7 @@ describe('components/CreateCredentialModal', () => {
           notes: 'old note',
         }),
       );
-      // payload：复用原 item key 重封（REAUTH 由后端门禁控制）
+      // Payload: re-seal with the original item key (REAUTH is gated by the backend)
       expect(updateCredentialData).toHaveBeenCalledWith({
         credential_id: 'c-9',
         credential_data: expect.objectContaining({
@@ -177,8 +177,8 @@ describe('components/CreateCredentialModal', () => {
         generatePassword,
         updateCredential,
         updateCredentialData,
-        // data:null 打开触发按 id 兜底补载；这里补载不到（null），
-        // 只编辑元数据的类型不受影响
+        // Opening with data:null triggers the by-id fallback fetch; here it cannot fetch anything (null),
+        // and types that only edit metadata are unaffected
         getCredentialData: jest.fn().mockResolvedValue(null),
         isLoading: false,
       });
@@ -193,7 +193,7 @@ describe('components/CreateCredentialModal', () => {
       fireEvent.change(screen.getByPlaceholderText(/Gmail 账户/), {
         target: { value: 'Renamed Card' },
       });
-      // 补载是异步微任务：等它 flush（保存按钮从禁用变启用）再点保存
+      // The fetch is an async microtask: wait for it to flush (the save button goes from disabled to enabled) before clicking save
       await waitFor(() =>
         expect(screen.getByRole('button', { name: '保存' })).toBeEnabled(),
       );
@@ -203,7 +203,7 @@ describe('components/CreateCredentialModal', () => {
       expect(updateCredential).toHaveBeenCalledWith(
         expect.objectContaining({ id: 'c-9', name: 'Renamed Card' }),
       );
-      // 无专属字段类型绝不提交空 payload（会盲目覆盖既有密文）
+      // Types without dedicated fields never submit an empty payload (it would blindly clobber the existing ciphertext)
       expect(updateCredentialData).not.toHaveBeenCalled();
     });
 
@@ -218,7 +218,7 @@ describe('components/CreateCredentialModal', () => {
       fireEvent.click(screen.getByRole('button', { name: '保存' }));
 
       await waitFor(() => expect(mockReauth.requestReauth).toHaveBeenCalled());
-      // 拒绝重认证：不重试、不关弹窗（元数据已存，密文可重试）
+      // Refusing re-authentication: no retry and the dialog stays open (metadata is already saved, the ciphertext can be retried)
       expect(updateCredentialData).toHaveBeenCalledTimes(1);
       expect(onClose).not.toHaveBeenCalled();
     });

@@ -6,11 +6,11 @@ import { useEscapeToClose } from '@/hooks/useEscapeToClose';
 import { personaAPI } from '@/utils/api';
 import type { SyncConflictEntry, SyncConflictVersion } from '@/types';
 
-/** 两版本凭据数据是否不同（整体对比，不解释字段——DR-4 原子取舍） */
+/** Whether two versions' credential data differ (whole-object comparison, no field interpretation — DR-4 atomic choice) */
 const dataDiffers = (a: SyncConflictVersion, b: SyncConflictVersion): boolean =>
   JSON.stringify(a.snapshot?.data ?? null) !== JSON.stringify(b.snapshot?.data ?? null);
 
-/** 单版本摘要卡：名称 + 用户名/URL 行 + tombstone 标记 */
+/** Single-version summary card: name + username/URL line + tombstone marker */
 const VersionCard: React.FC<{
   version: SyncConflictVersion;
   badge: string | null;
@@ -52,10 +52,12 @@ const VersionCard: React.FC<{
 };
 
 /**
- * 冲突裁决弹窗（E2EE sync 阶段 3c）：列出全部待裁决条目，主位（当前
- * 版本）与副本并排对比；采纳任一副本后其余版本淘汰出视图（数据不丢，
- * 只是不再出现在裁决视图），列表即时刷新。凭据是原子整体——只做取舍
- * 不做字段级合并。
+ * Conflict arbitration dialog (E2EE sync stage 3c): lists every pending entry,
+ * comparing the primary (current version) against the copies side by side;
+ * adopting any copy retires the remaining versions from the view (the data is
+ * not lost, it just stops appearing in the arbitration view) and the list
+ * refreshes immediately. A credential is an atomic whole — pick or drop, never
+ * field-level merge.
  */
 const SyncConflictsModal: React.FC<{ onClose: () => void }> = ({ onClose }) => {
   const { t } = useTranslation();
@@ -81,7 +83,7 @@ const SyncConflictsModal: React.FC<{ onClose: () => void }> = ({ onClose }) => {
     void refresh();
   }, [refresh]);
 
-  // 裁决清空全部条目后自动关窗（无冲突可裁决）
+  // Auto-close once arbitration has cleared every entry (no conflict left to resolve)
   useEffect(() => {
     if (entries !== null && !loadFailed && entries.length === 0) onClose();
   }, [entries, loadFailed, onClose]);
@@ -110,7 +112,7 @@ const SyncConflictsModal: React.FC<{ onClose: () => void }> = ({ onClose }) => {
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
       data-testid="sync-conflicts-modal"
       onMouseDown={(e) => {
-        // 点空白 = 稍后处理（冲突保持未解决，与 Esc/关闭同口径）
+        // Clicking the backdrop = deal with it later (the conflict stays unresolved, same rule as Esc/close)
         if (e.target === e.currentTarget) onClose();
       }}
     >

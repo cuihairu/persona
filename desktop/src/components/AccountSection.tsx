@@ -5,23 +5,28 @@ import DataScopeConsentModal from './DataScopeConsentModal';
 import type { AccountBinding, AccountDeviceInfo } from '../types';
 
 /**
- * 账号设置区（M2 UI 批）：persona-server 账号的注册/密码登录向导 +
- * 已绑定态的设备管理、恢复码与退出。隐私红线照旧：默认未绑定，绑定
- * 是显式动作；令牌真值全程在 OS keyring（命令层直写），前端只见
- * 有效期/指纹等非敏感元数据。
+ * Account settings section (M2 UI batch): registration / password login wizard for the
+ * persona-server account, plus device management, recovery codes and sign-out in the
+ * bound state. Privacy red line unchanged: unbound by default; binding is an
+ * explicit action. Token truth lives in the OS keyring the whole time (written
+ * directly by the command layer); the frontend only sees non-sensitive metadata
+ * such as expiry / fingerprint.
  *
- * 向导顺序（注册）：accountRegister（得 account_id——服务器无
- * username→id 解析端点，account_id 是登录唯一标识）→
- * accountSrpRegisterWithPassword（SRP 凭证，引导 Bearer 命令层解析）→
- * accountSrpLogin（challenge/M1/M2 核验在 core，15min 令牌入 keyring）
- * → accountExchangeSession（换 24h 会话，入 keyring）→ accountSetBinding。
- * 登录路径同后三步（account_id 由用户填入）。
+ * Wizard order (register): accountRegister (yields account_id — the server has
+ * no username→id resolution endpoint, so account_id is the sole login identifier) →
+ * accountSrpRegisterWithPassword (SRP credentials; sets up Bearer command-layer
+ * resolution) → accountSrpLogin (challenge/M1/M2 verification in core; the 15min
+ * token goes into the keyring) → accountExchangeSession (exchange for a 24h
+ * session, into the keyring) → accountSetBinding.
+ * The login path shares the last three steps (account_id filled in by the user).
  *
- * 隐私红线（M4 同口径）：提交动作（注册/登录）先把账号材料外发面摆到
- * DataScopeConsentModal（account 披露面：服务器会看到什么/永不什么），
- * 确认才执行编排；取消 / Esc / 点空白一律不放行。披露一次管住本机
- * 账号能力面，已绑定后的重新登录/设备管理不再重复弹。组件加载零网络
- * 请求（只读本地 settings）。
+ * Privacy red line (same policy as M4): submit actions (register/login) first put
+ * the account data-exposure surface in front of DataScopeConsentModal (the account
+ * disclosure: what the server will and will never see); only confirmation runs the
+ * orchestration; cancel / Esc / clicking the backdrop never passes through. One
+ * disclosure covers the local account capability surface; re-login / device
+ * management after binding does not re-prompt. Mounting the component makes zero
+ * network requests (reads local settings only).
  */
 
 type WizardMode = 'register' | 'login';
@@ -34,19 +39,20 @@ const AccountSection: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
-  // 向导表单
+  // Wizard form
   const [mode, setMode] = useState<WizardMode>('register');
   const [username, setUsername] = useState('');
   const [accountId, setAccountId] = useState('');
   const [password, setPassword] = useState('');
   const [deviceName, setDeviceName] = useState('');
 
-  // 已绑定态
+  // Bound state
   const [loginPassword, setLoginPassword] = useState('');
   const [devices, setDevices] = useState<AccountDeviceInfo[] | null>(null);
   const [recoveryCodes, setRecoveryCodes] = useState<string[] | null>(null);
 
-  // 披露防火墙：None = 无未决动作；Some = 等用户对披露面显式确认
+  // Disclosure firewall: None = no pending action; Some = awaiting the user's
+  // explicit confirmation of the disclosure surface
   const [consentPending, setConsentPending] = useState<'register' | 'login' | null>(null);
 
   useEffect(() => {
@@ -69,7 +75,7 @@ const AccountSection: React.FC = () => {
     setError(message ?? null);
   }, []);
 
-  /** 登录编排：SRP 登录 → 兑换 24h 会话（令牌全程在命令层 keyring） */
+  /** Sign-in orchestration: SRP login → exchange for a 24h session (the token stays in the command-layer keyring throughout) */
   const signIn = useCallback(
     async (id: string, pw: string, device: string): Promise<boolean> => {
       const login = await personaAPI.accountSrpLogin(id, {
@@ -131,8 +137,9 @@ const AccountSection: React.FC = () => {
     try {
       const id = accountId.trim();
       if (!(await signIn(id, password, deviceName.trim()))) return;
-      // 登录路径拿不到 username（无解析端点）——展示位先用 account_id，
-      // 用户名可在注册设备上查看
+      // The login path cannot get the username (no resolution endpoint) — the
+      // display slot uses account_id for now; the username can be viewed on the
+      // registering device
       const bind = await personaAPI.accountSetBinding({
         account_id: id,
         username: id,

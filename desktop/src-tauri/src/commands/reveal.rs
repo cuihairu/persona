@@ -54,12 +54,16 @@ pub(crate) fn extract_secret_field(
     }
 }
 
-/// 钱包条目级独立密码守卫：种子材料三个字段（助记词/私钥/第 25 词）在条目
-/// 设置了 `item_password_hash` 时需额外比对（防解锁态顺手窥探的第二因子）。
-/// 缺参 → `ITEM_PASSWORD_REQUIRED`；不匹配 → `ITEM_PASSWORD_WRONG`。
-/// 非钱包字段 / 未设密码的条目不受影响。
-/// 返回 `None` 表示放行；`Some((code, message))` 表示拦截，code 为空串表示无专用错误码。
-/// （不用 `Result`：persona_core 通配导出的单参 `Result` 别名在此签名里撞 E0107。）
+/// Wallet item-level independent-password guard: the three seed-material
+/// fields (mnemonic / private key / 25th word) require an extra comparison
+/// when the item has `item_password_hash` set (a second factor guarding
+/// against casually peeking while unlocked).
+/// Missing argument -> `ITEM_PASSWORD_REQUIRED`; mismatch -> `ITEM_PASSWORD_WRONG`.
+/// Non-wallet fields / items without a password are unaffected.
+/// `None` means allow; `Some((code, message))` means block, with an empty
+/// code meaning there is no dedicated error code.
+/// (`Result` is not used: the single-argument `Result` alias re-exported by
+/// persona_core's wildcard export collides with E0107 in this signature.)
 pub(crate) fn ensure_item_password_ok(
     data: &CredentialData,
     field: &str,
@@ -139,9 +143,10 @@ pub async fn reveal_credential_secret(
     }
 }
 
-/// 为钱包条目设置/更换独立密码（CryptoWallet 专属）。密码 Argon2id hash
-/// 后随条目密文存储；提示为明文低敏字段。设置后 reveal 种子材料需携带
-/// 该密码（第二因子）。
+/// Set/replace an independent password for a wallet item (CryptoWallet only).
+/// The password is Argon2id-hashed and stored alongside the item ciphertext;
+/// the hint is a plaintext low-sensitivity field. Once set, revealing the
+/// seed material must carry this password (second factor).
 #[command(rename_all = "snake_case")]
 pub async fn wallet_set_item_password(
     credential_id: String,
@@ -201,8 +206,9 @@ pub async fn wallet_set_item_password(
     }
 }
 
-/// 清除钱包条目独立密码：需携带当前条目密码验证（防解锁态下直接摘除
-/// 保护）。未设置时幂等成功。
+/// Clear a wallet item's independent password: requires the current item
+/// password to verify (to prevent simply stripping the protection while
+/// unlocked). Idempotent success when none is set.
 #[command(rename_all = "snake_case")]
 pub async fn wallet_clear_item_password(
     credential_id: String,
@@ -275,7 +281,8 @@ pub async fn reauth_verify(
     match service_guard.as_mut() {
         Some(service) => match service.authenticate_user(&request.master_password).await {
             Ok(persona_core::AuthResult::Success) => {
-                // 恢复会话并刷新活动时间，让后续敏感操作直接放行
+                // Restore the session and refresh activity time so subsequent
+                // sensitive operations are allowed directly
                 if let Err(e) = service.unlock_session().await {
                     tracing::warn!("unlock_session after re-auth failed: {}", e);
                 }

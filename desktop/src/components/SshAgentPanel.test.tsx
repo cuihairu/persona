@@ -18,12 +18,12 @@ jest.mock('react-hot-toast', () => ({
   Toaster: () => null,
 }));
 
-// 原生文件对话框只在点击导入按钮时触发；jsdom 下由用例编排返回值
+// The native file dialog only fires when the import button is clicked; under jsdom the cases script the return value
 jest.mock('@tauri-apps/plugin-dialog', () => ({
   open: jest.fn(),
 }));
 
-// 条目编辑/删除（P1-③）走 personaAPI 直调（不经 service hook）
+// Entry edit/delete (P1-③) goes through personaAPI directly (not via the service hook)
 jest.mock('@/utils/api', () => ({
   personaAPI: {
     updateCredential: jest.fn(),
@@ -31,7 +31,7 @@ jest.mock('@/utils/api', () => ({
   },
 }));
 
-// 拖拽事件挂在 webview 上；这里捕获处理器供用例手动派发
+// Drag events are attached to the webview; the handler is captured here so cases can dispatch it manually
 let dragHandler: ((event: any) => void) | undefined;
 jest.mock('@tauri-apps/api/webview', () => ({
   getCurrentWebview: () => ({
@@ -100,7 +100,7 @@ describe('components/SshAgentPanel', () => {
   });
 
   it('rereads agent status and keys when the window becomes visible again', async () => {
-    // agent 可被 CLI 起停/装载密钥：切回窗口时徽章与列表须跟上现状
+    // The agent can be started/stopped and keys loaded by the CLI: the badge and list must catch up when the window is focused again
     const refreshSshAgentStatus = jest.fn();
     const loadSshKeys = jest.fn();
 
@@ -113,32 +113,32 @@ describe('components/SshAgentPanel', () => {
     const callsAfterMount = refreshSshAgentStatus.mock.calls.length;
     const keyCallsAfterMount = loadSshKeys.mock.calls.length;
 
-    // 受控时钟：节流窗口（1s）靠 Date.now 判定
+    // Controlled clock: the throttle window (1s) is decided via Date.now
     let clock = 1_000_000;
     const nowSpy = jest.spyOn(Date, 'now').mockImplementation(() => clock);
 
-    // 可见性变化（切回 tab/还原窗口）→ 自动重读
+    // Visibility change (returning to the tab / restoring the window) → automatic re-read
     act(() => {
       document.dispatchEvent(new Event('visibilitychange'));
     });
     expect(refreshSshAgentStatus.mock.calls.length).toBeGreaterThan(callsAfterMount);
     expect(loadSshKeys.mock.calls.length).toBeGreaterThan(keyCallsAfterMount);
 
-    // 1s 节流：窗口内连发（visibilitychange+focus 切回时成对到达）不重复拉取
+    // 1s throttle: bursts within the window (visibilitychange+focus arrive in pairs on refocus) do not re-fetch
     clock += 300;
     act(() => {
       window.dispatchEvent(new Event('focus'));
     });
     expect(refreshSshAgentStatus.mock.calls.length).toBe(callsAfterMount + 1);
 
-    // 越过窗口后，窗口聚焦同样触发（OS 级切回不产生 visibilitychange 的场景）
+    // Past the window, window focus triggers too (for OS-level refocus that produces no visibilitychange)
     clock += 2000;
     act(() => {
       window.dispatchEvent(new Event('focus'));
     });
     expect(refreshSshAgentStatus.mock.calls.length).toBe(callsAfterMount + 2);
 
-    // 隐藏态不拉取
+    // Hidden state does not fetch
     clock += 2000;
     jest.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden');
     act(() => {
@@ -169,7 +169,8 @@ describe('components/SshAgentPanel', () => {
   });
 
   // -----------------------------------------------------------------
-  // P1-③：条目元数据编辑与删除（二次确认；私钥本体不提供编辑）
+  // P1-③: entry metadata edit and delete (with confirmation; the private
+  // key material itself offers no editing)
   // -----------------------------------------------------------------
 
   it('edits entry name/tags via updateCredential and refreshes (P1-③)', async () => {
@@ -186,7 +187,7 @@ describe('components/SshAgentPanel', () => {
     fireEvent.click(getByTestId('ssh-key-edit-k1'));
     const modal = getByTestId('ssh-edit-modal');
     expect(modal).toBeTruthy();
-    // 名称预填、标签逗号串预填；i18n 键命中（裸 key= 漏键回归）
+    // Name pre-filled, tags pre-filled as a comma string; the i18n key resolves (a bare key= is the missed-key regression)
     expect((getByTestId('ssh-edit-name') as HTMLInputElement).value).toBe('laptop');
     expect((getByTestId('ssh-edit-tags') as HTMLInputElement).value).toBe('dev');
     expect(getByTestId('ssh-edit-cancel')).toHaveTextContent('取消');
@@ -195,7 +196,7 @@ describe('components/SshAgentPanel', () => {
     fireEvent.change(getByTestId('ssh-edit-tags'), { target: { value: 'dev, work' } });
     fireEvent.click(getByTestId('ssh-edit-save'));
 
-    // snake_case 契约：只传 id/name/tags（其余元数据字段不动）
+    // snake_case contract: only id/name/tags are sent (other metadata fields untouched)
     await waitFor(() =>
       expect(personaAPI.updateCredential).toHaveBeenCalledWith({
         id: 'k1',
@@ -244,7 +245,8 @@ describe('components/SshAgentPanel', () => {
   });
 
   // -----------------------------------------------------------------
-  // 行内复制在「操作」列（用户令 2026-11-08：复制公钥挪进操作列，就叫复制）
+  // Inline copy lives in the "Actions" column (user directive 2026-11-08:
+  // copy-public-key moved into the actions column, simply named Copy)
   // -----------------------------------------------------------------
 
   it('copies the public key from the actions column button labeled 复制', async () => {
@@ -255,10 +257,10 @@ describe('components/SshAgentPanel', () => {
     );
 
     const { getByTestId, getByText } = render(<SshAgentPanel />);
-    // 按钮「复制」位于操作列（同一单元格内有编辑/删除）
+    // The Copy button sits in the actions column (edit/delete share the same cell)
     const copyBtn = getByTestId('ssh-key-copy-k1');
     expect(copyBtn.textContent).toContain('复制');
-    // 公钥列只做纯文本展示，不再承载复制按钮
+    // The public-key column is plain text display only; it no longer hosts the copy button
     expect(copyBtn.contains(getByText('ssh-ed25519 AAAA test'))).toBe(false);
     fireEvent.click(copyBtn);
     await waitFor(() => expect(writeText).toHaveBeenCalledWith('ssh-ed25519 AAAA test'));
@@ -266,7 +268,8 @@ describe('components/SshAgentPanel', () => {
   });
 
   // -----------------------------------------------------------------
-  // P2-⑤：类型列位数/曲线徽标（后端现算，前端纯展示）
+  // P2-⑤: type column key-size/curve badge (computed by the backend,
+  // display-only on the frontend)
   // -----------------------------------------------------------------
 
   it('renders key size badge and hides it when backend reports none (P2-⑤)', () => {
@@ -274,7 +277,7 @@ describe('components/SshAgentPanel', () => {
     const { getByTestId } = render(<SshAgentPanel />);
     expect(getByTestId('ssh-key-size-k1')).toHaveTextContent('256');
 
-    // 证书等不适用容器：key_size 为 null → 徽标不渲染
+    // Certificate and other non-key containers: key_size is null → the badge does not render
     cleanup();
     const noSize = { ...LIST_KEY, id: 'k2', ssh_algorithm: 'cert-authority', key_size: null };
     (usePersonaService as jest.Mock).mockReturnValue(makeService({ sshKeys: [noSize] }));
@@ -283,7 +286,7 @@ describe('components/SshAgentPanel', () => {
   });
 
   it('disables the start button while running, re-enables after stop (BUG ⑦)', async () => {
-    // 运行中：启动按钮禁用置灰、文案「运行中」；重复点击物理禁掉
+    // While running: the start button is disabled/grayed with copy “Running”; repeat clicks are physically blocked
     (usePersonaService as jest.Mock).mockReturnValue(
       makeService({ sshAgentStatus: { running: true, socket_path: '/tmp/s', key_count: 1 } }),
     );
@@ -293,7 +296,7 @@ describe('components/SshAgentPanel', () => {
     expect(start).toHaveTextContent('运行中');
     expect(getByTestId('ssh-agent-stop-button')).toBeEnabled();
 
-    // 停止后状态联动：启动恢复可点、文案回落「启动」；停止按钮禁用
+    // After stop the state follows: the start button is clickable again and its copy falls back to “Start”; the stop button is disabled
     cleanup();
     (usePersonaService as jest.Mock).mockReturnValue(
       makeService({ sshAgentStatus: { running: false, socket_path: null, key_count: 0 } }),
@@ -352,14 +355,14 @@ describe('components/SshAgentPanel', () => {
     await waitFor(() =>
       expect(getByTestId('ssh-import-modal')).toBeTruthy(),
     );
-    // 预览先于入库：指纹在确认弹框里回显
+    // Preview comes before storing: the fingerprint is echoed back in the confirmation dialog
     expect(getByTestId('ssh-import-fingerprint').textContent).toBe(
       INSPECTION.fingerprint,
     );
     expect(inspectSshKeyFile).toHaveBeenCalledWith('/home/cui/.ssh/id_ed25519');
     expect(importSshKey).not.toHaveBeenCalled();
 
-    // 名字默认回退 comment（可改）
+    // The name defaults to the comment fallback (editable)
     const nameInput = getByTestId('ssh-import-name') as HTMLInputElement;
     expect(nameInput.value).toBe('cui@laptop');
     fireEvent.change(nameInput, { target: { value: 'my-key' } });
@@ -408,7 +411,7 @@ describe('components/SshAgentPanel', () => {
     fireEvent.click(getByTestId('ssh-import-button'));
     await waitFor(() => expect(getByTestId('ssh-import-modal')).toBeTruthy());
 
-    // 受保护钥显示口令输入框；口令为空时直接导入也要带 undefined（不是 camelCase 键）
+    // Protected keys show a passphrase field; importing without a passphrase still passes undefined (not a camelCase key)
     fireEvent.click(getByTestId('ssh-import-confirm'));
     await waitFor(() =>
       expect(importSshKey).toHaveBeenCalledWith({
@@ -419,13 +422,13 @@ describe('components/SshAgentPanel', () => {
       }),
     );
 
-    // 错口令：错误就地显示，弹框不关
+    // Wrong passphrase: the error shows in place and the dialog stays open
     await waitFor(() =>
       expect(getByTestId('ssh-import-error').textContent).toContain('incorrect'),
     );
     expect(getByTestId('ssh-import-modal')).toBeTruthy();
 
-    // 补对口令重试：成功后弹框关、成功 toast
+    // Retrying with the corrected passphrase: the dialog closes on success with a success toast
     fireEvent.change(getByTestId('ssh-import-passphrase'), {
       target: { value: 'hunter2' },
     });
@@ -453,13 +456,13 @@ describe('components/SshAgentPanel', () => {
     const { getByTestId, queryByTestId } = render(<SshAgentPanel />);
     await waitFor(() => expect(dragHandler).toBeDefined());
 
-    // 纯文本拖入（无路径）不点亮拖放区
+    // Dragging plain text (no paths) does not light up the dropzone
     await act(async () => {
       dragHandler!({ payload: { type: 'enter', paths: [], position: { x: 1, y: 1 } } });
     });
     expect(queryByTestId('ssh-dropzone')).toBeNull();
 
-    // 文件拖入：点亮；drop 带路径 → 与选择器同一条 inspect 流水线
+    // Dragging files: lights up; a drop with paths → the same inspect pipeline as the file picker
     await act(async () => {
       dragHandler!({ payload: { type: 'enter', paths: ['/tmp/id_rsa'], position: { x: 1, y: 1 } } });
     });
@@ -469,11 +472,11 @@ describe('components/SshAgentPanel', () => {
       dragHandler!({ payload: { type: 'drop', paths: ['/tmp/id_rsa'], position: { x: 1, y: 1 } } });
     });
     await waitFor(() => expect(inspectSshKeyFile).toHaveBeenCalledWith('/tmp/id_rsa'));
-    // drop 后拖放区熄灭、确认弹框打开
+    // After drop the dropzone goes dark and the confirmation dialog opens
     expect(queryByTestId('ssh-dropzone')).toBeNull();
     expect(getByTestId('ssh-import-modal')).toBeTruthy();
 
-    // 取消弹框（点空白）不产生任何入库副作用
+    // Cancelling the dialog (blank-area click) produces no storing side effects
     fireEvent.mouseDown(getByTestId('ssh-import-modal'));
     await waitFor(() => expect(queryByTestId('ssh-import-modal')).toBeNull());
     expect(importSshKey).not.toHaveBeenCalled();
@@ -509,7 +512,8 @@ describe('components/SshAgentPanel', () => {
   });
 
   // -----------------------------------------------------------------
-  // 新建（生成）弹框：类型选择 → 生成入库 → 公钥可复制；点空白取消
+  // Create (generate) dialog: type selection → generate and store →
+  // copyable public key; blank-area click cancels
   // -----------------------------------------------------------------
 
   const GENERATED = {
@@ -535,7 +539,7 @@ describe('components/SshAgentPanel', () => {
     const modal = getByTestId('ssh-generate-modal');
     expect(modal).toBeTruthy();
 
-    // 默认 ed25519 选中；切到 rsa 再切回
+    // ed25519 selected by default; switch to rsa and back
     expect(getByTestId('ssh-generate-type-ed25519')).toHaveProperty('checked', true);
     fireEvent.click(getByTestId('ssh-generate-type-rsa'));
     expect(getByTestId('ssh-generate-type-rsa')).toHaveProperty('checked', true);
@@ -546,7 +550,7 @@ describe('components/SshAgentPanel', () => {
     });
     fireEvent.click(getByTestId('ssh-generate-confirm'));
 
-    // snake_case 键契约：comment/name 空值传 undefined
+    // snake_case key contract: empty comment/name are passed as undefined
     await waitFor(() =>
       expect(generateSshKey).toHaveBeenCalledWith({
         identity_id: 'identity-1',
@@ -558,7 +562,7 @@ describe('components/SshAgentPanel', () => {
     await waitFor(() => expect(toast.success).toHaveBeenCalled());
     expect(loadSshKeys).toHaveBeenCalled();
 
-    // 成功态留在弹框内：公钥 + 复制按钮
+    // On success the dialog stays open: public key + copy button
     await waitFor(() => expect(getByTestId('ssh-generate-result')).toBeTruthy());
     expect(getByTestId('ssh-generate-copy')).toBeTruthy();
 
@@ -568,7 +572,7 @@ describe('components/SshAgentPanel', () => {
       expect(navigator.clipboard.writeText).toHaveBeenCalledWith(GENERATED.public_key),
     );
 
-    // 完成关闭
+    // Done closes the dialog
     fireEvent.click(getByTestId('ssh-generate-done'));
     await waitFor(() => expect(queryByTestId('ssh-generate-modal')).toBeNull());
   });
@@ -602,12 +606,12 @@ describe('components/SshAgentPanel', () => {
     fireEvent.click(getByTestId('ssh-generate-button'));
     fireEvent.click(getByTestId('ssh-generate-confirm'));
 
-    // 生成中：点遮罩不关（后台仍会入库，关了会误以为没生成）
+    // While generating: a mask click does not close it (the background will still store the key, and closing would suggest nothing was generated)
     await waitFor(() => expect(generateSshKey).toHaveBeenCalled());
     fireEvent.mouseDown(getByTestId('ssh-generate-modal'));
     expect(getByTestId('ssh-generate-modal')).toBeTruthy();
 
-    // 生成完成后：点遮罩关闭，且不产生第二次调用
+    // After generation completes: a mask click closes it, and no second call is made
     resolveGenerate({ success: true, data: GENERATED, error: null });
     await waitFor(() => expect(getByTestId('ssh-generate-result')).toBeTruthy());
     fireEvent.mouseDown(getByTestId('ssh-generate-modal'));

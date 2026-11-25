@@ -32,7 +32,7 @@ describe('components/GeneratorOverlay', () => {
 
     expect(screen.getByTestId('generator-overlay')).toBeInTheDocument();
 
-    // 生成是纯计算（CSPRNG），锁定态也能用：直接点生成按钮即可出结果
+    // Generation is pure computation (CSPRNG) and works while locked: just click the generate button to get a result
     fireEvent.click(screen.getByTestId('generator-generate'));
     await waitFor(() => {
       expect(mockGenerate).toHaveBeenCalledTimes(1);

@@ -117,7 +117,7 @@ async fn passkey_commands_round_trip_create_list_selftest_export_delete() {
         .unwrap();
     assert!(resp.data.unwrap().is_none());
 }
-/// passkey 家族的未初始化/坏 UUID/锁定（SERVICE_LOCKED 错误码）门禁。
+/// Gates of the passkey family: not initialized / bad UUID / locked (the SERVICE_LOCKED error code).
 #[tokio::test]
 async fn passkey_gates_fail_closed_with_error_codes() {
     let app = mock_app();
@@ -144,7 +144,7 @@ async fn passkey_gates_fail_closed_with_error_codes() {
 
     init_service_ok(&app, "correct-horse").await;
 
-    // 坏 UUID 都是 ApiResponse 错误（命令内匹配，不用 `?` 传播）。
+    // Bad UUIDs are all ApiResponse errors (matched inside the command, no `?` propagation).
     let resp = passkey_list("nope".to_string(), app.state::<AppState>())
         .await
         .unwrap();
@@ -160,8 +160,8 @@ async fn passkey_gates_fail_closed_with_error_codes() {
         .unwrap();
     assert_eq!(resp.error.as_deref(), Some("Invalid UUID format"));
 
-    // 锁定后：ensure_unlocked 的 AuthenticationFailed("Service is locked")
-    // 被 map_persona_error 映射成机器可读的 SERVICE_LOCKED。
+    // After locking: ensure_unlocked's AuthenticationFailed("Service is locked")
+    // is mapped by map_persona_error into the machine-readable SERVICE_LOCKED.
     let resp = lock_service(app.state::<AppState>()).await.unwrap();
     assert!(resp.success, "{:?}", resp.error);
 
@@ -253,7 +253,7 @@ async fn passkey_commands_surface_db_errors_from_garbage_vault() {
         resp.error
     );
 
-    // 注册请求合法（client_data 可解析），最后一步落到 repo 才报错。
+    // A legal registration request (client_data parses), and the error only surfaces at the final step that reaches the repo.
     let client_data = serde_json::json!({
         "type": "webauthn.create",
         "challenge": base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(b"create-challenge"),
@@ -298,7 +298,7 @@ async fn passkey_gate_spawns_approval_server_only_after_flag_enabled_and_reunloc
     std::mem::forget(vault_dir);
     let db_path_str = db_path.to_string_lossy().to_string();
 
-    // 首次解锁：flag 默认关，门禁不 spawn
+    // First unlock: the flag is off by default, so the gate does not spawn
     let resp = init_service(
         InitRequest {
             master_password: "master-pw-123".to_string(),
@@ -316,7 +316,7 @@ async fn passkey_gate_spawns_approval_server_only_after_flag_enabled_and_reunloc
     tokio::time::sleep(std::time::Duration::from_millis(300)).await;
     assert!(!socket.exists(), "gate closed: no approval socket");
 
-    // 打开 passkeys 开关（当前已解锁，允许写）
+    // Turn on the passkeys switch (currently unlocked, so the write is allowed)
     let resp = set_feature_flags(
         false,
         false,
@@ -329,7 +329,7 @@ async fn passkey_gate_spawns_approval_server_only_after_flag_enabled_and_reunloc
     .unwrap();
     assert!(resp.success, "{:?}", resp.error);
 
-    // lock→unlock（重新 init）：门禁读到开关后 spawn
+    // lock -> unlock (init again): after reading the switch, the gate spawns
     let resp = init_service(
         InitRequest {
             master_password: "master-pw-123".to_string(),
@@ -351,7 +351,7 @@ async fn passkey_gate_spawns_approval_server_only_after_flag_enabled_and_reunloc
         .passkey_server_started
         .load(std::sync::atomic::Ordering::SeqCst));
 
-    // 幂等：已启动后重复 init 不再 spawn（标记保持，无 panic/重复绑定报错）
+    // Idempotent: once started, a repeated init does not spawn again (the flag stays set, no panic or duplicate-binding error)
     let resp = init_service(
         InitRequest {
             master_password: "master-pw-123".to_string(),
@@ -373,7 +373,7 @@ async fn passkey_gate_stays_off_for_missing_vault_and_default_flags() {
         .path()
         .join(crate::passkey_bridge::APPROVAL_SOCKET_NAME);
 
-    // vault 打不开：只读探测失败 → 视为关，不 spawn、不置标记
+    // The vault cannot be opened: the read-only probe fails -> treated as off, no spawn, no flag set
     crate::commands::maybe_start_passkey_server(
         "/nonexistent/vault/gate.db",
         &app.state::<AppState>(),
@@ -387,7 +387,7 @@ async fn passkey_gate_stays_off_for_missing_vault_and_default_flags() {
         .passkey_server_started
         .load(std::sync::atomic::Ordering::SeqCst));
 
-    // 正常 vault 但 flag 保持默认关：init 尾部的门禁同样跳过
+    // A healthy vault but the flag stays off by default: the gate at the end of init is likewise skipped
     init_service_ok(&app, "master-pw-123").await;
     tokio::time::sleep(std::time::Duration::from_millis(200)).await;
     assert!(!socket.exists());

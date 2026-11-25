@@ -53,7 +53,7 @@ describe('components/GeneratorHotkeySection', () => {
     await waitFor(() => {
       expect(screen.getByTestId('generator-hotkey-status')).toHaveTextContent('未生效');
     });
-    // 原因原样透出（英文是 OS/插件原文，不翻译成"未知错误"）
+    // The reason passes through verbatim (the English is the OS/plugin's own text, not rewritten as "unknown error")
     expect(screen.getByTestId('generator-hotkey-status')).toHaveTextContent(
       'Another process has already registered this shortcut',
     );
@@ -63,7 +63,7 @@ describe('components/GeneratorHotkeySection', () => {
     mockStatus.mockResolvedValue({ success: true, data: status({}) });
     render(<GeneratorHotkeySection />);
 
-    // 首次 render（status 还没回来）按钮禁用，避免用未加载的状态去改配置
+    // On first render (status not yet back) the button is disabled, so an unloaded state can't change the config
     expect(screen.getByTestId('generator-hotkey-toggle')).toBeDisabled();
     await waitFor(() => {
       expect(screen.getByTestId('generator-hotkey-toggle')).not.toBeDisabled();
@@ -77,7 +77,7 @@ describe('components/GeneratorHotkeySection', () => {
       data: status({ enabled: false, registered_accelerator: null }),
     });
     render(<GeneratorHotkeySection />);
-    // 等状态真的落到 state（mock 被调用 ≠ setState 已生效，控件此时仍禁用）
+    // Wait until the status actually lands in state (mock called ≠ setState applied; the control is still disabled at this point)
     await waitFor(() => expect(screen.getByTestId('generator-hotkey-toggle')).not.toBeDisabled());
 
     fireEvent.click(screen.getByTestId('generator-hotkey-toggle'));
@@ -97,7 +97,7 @@ describe('components/GeneratorHotkeySection', () => {
       data: status({ configured_accelerator: 'Control+Alt+P', registered_accelerator: 'Control+Alt+P' }),
     });
     render(<GeneratorHotkeySection />);
-    // 等状态真的落到 state（mock 被调用 ≠ setState 已生效，控件此时仍禁用）
+    // Wait until the status actually lands in state (mock called ≠ setState applied; the control is still disabled at this point)
     await waitFor(() => expect(screen.getByTestId('generator-hotkey-toggle')).not.toBeDisabled());
 
     fireEvent.change(screen.getByTestId('generator-hotkey'), {
@@ -120,7 +120,7 @@ describe('components/GeneratorHotkeySection', () => {
       data: status({ configured_accelerator: 'Control+Shift+G' }),
     });
     render(<GeneratorHotkeySection />);
-    // 等状态真的落到 state（mock 被调用 ≠ setState 已生效，控件此时仍禁用）
+    // Wait until the status actually lands in state (mock called ≠ setState applied; the control is still disabled at this point)
     await waitFor(() => expect(screen.getByTestId('generator-hotkey-toggle')).not.toBeDisabled());
 
     fireEvent.click(screen.getByTestId('generator-hotkey-reset'));
@@ -134,7 +134,7 @@ describe('components/GeneratorHotkeySection', () => {
     mockStatus.mockResolvedValue({ success: true, data: status({}) });
     mockSet.mockResolvedValue({ success: false, error: 'invalid accelerator: empty token' });
     render(<GeneratorHotkeySection />);
-    // 等状态真的落到 state（mock 被调用 ≠ setState 已生效，控件此时仍禁用）
+    // Wait until the status actually lands in state (mock called ≠ setState applied; the control is still disabled at this point)
     await waitFor(() => expect(screen.getByTestId('generator-hotkey-toggle')).not.toBeDisabled());
 
     fireEvent.change(screen.getByTestId('generator-hotkey'), { target: { value: 'Ctrl+' } });
@@ -145,7 +145,7 @@ describe('components/GeneratorHotkeySection', () => {
         'invalid accelerator: empty token',
       );
     });
-    // 后端拒收 = 配置没变，切换回"未生效"不该发生（status 保持原值）
+    // Backend rejection = config unchanged; flipping back to "not active" shouldn't happen (status keeps its value)
     expect(screen.getByTestId('generator-hotkey-status')).toHaveTextContent('生效中');
   });
 

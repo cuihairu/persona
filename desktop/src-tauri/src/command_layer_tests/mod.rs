@@ -17,10 +17,10 @@ use tokio::sync::Mutex;
 use uuid::Uuid;
 
 /// Mock app with a fresh, uninitialized `AppState` and explicit backend
-/// parts（sync/biometric 两个 keyring 槽 + biometric provider + 包裹层
-/// wrapper/存储）。各命令族测试按需注入 fake；默认组合见
-/// [`mock_app_with_token_store`] / [`mock_app_with_biometric`] /
-/// [`mock_app_with_biometric_wrap`]。
+/// parts (two keyring slots for sync/biometric + biometric provider + the wrap
+/// layer wrapper/storage). Each command-family test injects fakes as needed;
+/// for the default combinations see [`mock_app_with_token_store`] /
+/// [`mock_app_with_biometric`] / [`mock_app_with_biometric_wrap`].
 fn mock_app_with_parts(
     token_store: Arc<dyn TokenStore>,
     biometric_provider: Arc<dyn persona_core::BiometricProvider>,
@@ -30,17 +30,18 @@ fn mock_app_with_parts(
         token_store,
         biometric_provider,
         biometric_store,
-        // 默认门禁档桩（= CI/headless 的生产装配：Linux/Windows 无硬件
-        // 包裹层，macOS 未开 spike 门控）——门禁层行为测试保持原样
+        // Default gate-tier stub (= the CI/headless production assembly: Linux/Windows
+        // have no hardware wrap layer, macOS has no spike gating) -- gate-layer behavior tests stay as-is
         Arc::new(crate::biometric::GateOnlyKeyWrapper),
         Arc::new(InMemoryTokenStore::default()),
     )
 }
 
-/// [`mock_app_with_parts`] + 包裹层（`biometric_wrapper` /
-/// `biometric_wrap_store`）注入。硬件绑定路径的命令测试用
-/// `MockKeyWrapper` 驱动（`rotate_enrollment` / `set_fail` /
-/// `set_user_cancelled` 覆盖回退链分支），blob 落内存 store 便于断言。
+/// [`mock_app_with_parts`] + wrap layer (`biometric_wrapper` /
+/// `biometric_wrap_store`) injection. Hardware-bound path command tests are
+/// driven by `MockKeyWrapper` (`rotate_enrollment` / `set_fail` /
+/// `set_user_cancelled` cover fallback-chain branches); blobs land in an
+/// in-memory store for easy assertions.
 fn mock_app_with_wrap_parts(
     token_store: Arc<dyn TokenStore>,
     biometric_provider: Arc<dyn persona_core::BiometricProvider>,
@@ -59,39 +60,40 @@ fn mock_app_with_wrap_parts(
         ssh_approvals: Arc::new(std::sync::Mutex::new(HashMap::new())),
         passkey_approvals: Arc::new(std::sync::Mutex::new(HashMap::new())),
         sync_emitter: Mutex::new(None),
-        // CI/headless 没有 secret service——测试一律走内存 fake
+        // CI/headless has no secret service -- tests always use the in-memory fake
         token_store,
         biometric_provider,
         biometric_store,
-        // 包裹层：门禁档桩 / HardwareBound wrapper 由调用方决定
+        // Wrap layer: gate-tier stub / HardwareBound wrapper is chosen by the caller
         biometric_wrapper,
         biometric_wrap_store,
-        // E2EE sync 设备身份槽：默认内存 fake，sync 命令族测试直接从
-        // AppState 取 Arc 写入/断言条目
+        // E2EE sync device identity slot: in-memory fake by default; sync command-family
+        // tests grab the Arc from AppState to write/assert entries
         device_store: Arc::new(InMemoryTokenStore::default()),
-        // 账号 bearer 槽：默认内存 fake，account 命令族测试跨命令断言
-        // 令牌生命周期（srp_verify 写入 / create_session 覆盖 /
-        // revoke_session 自吊销清除）
+        // Account bearer slot: in-memory fake by default; account command-family tests assert
+        // token lifecycle across commands (srp_verify writes / create_session overwrites /
+        // revoke_session clears via self-revocation)
         account_token_store: Arc::new(InMemoryTokenStore::default()),
         connect_server: Mutex::new(None),
-        // Quick Access 运行态：测试里没有 OS 全局热键可抢注，默认空态
-        // （quick_access_* 命令测试直接读写这个槽位断言语义）
+        // Quick Access runtime state: tests cannot register an OS global hotkey, so the default is empty
+        // (quick_access_* command tests read/write this slot directly to assert semantics)
         quick_access: std::sync::Mutex::new(crate::quick_access::QuickAccessRuntime::default()),
-        // 桌面填充注入目标（#12）：测试环境没有热键唤起路径，默认空态
-        //（fill_* 命令测试直接读写这个槽位断言语义）
+        // Desktop fill injection target (#12): the test environment has no hotkey wakeup path, so the
+        // default is empty (fill_* command tests read/write this slot directly to assert semantics)
         fill_target: std::sync::Mutex::new(None),
-        // 同步组配对会话槽：默认空表（pairing 命令族测试跨命令断言状态）
+        // Sync-group pairing session slot: empty table by default (pairing command-family tests assert state across commands)
         pairing_sessions: Arc::new(std::sync::Mutex::new(HashMap::new())),
-        // 同步组组密钥槽：默认内存 fake，配对命令族测试从 AppState 取同
-        // 一 Arc 读回命令写入的组密钥做断言
+        // Sync-group group key slot: in-memory fake by default; pairing command-family tests grab the
+        // same Arc from AppState to read back the group key the command wrote for assertions
         sync_group_store: Arc::new(InMemoryTokenStore::default()),
     });
     app
 }
 
 /// Mock app with a fresh, uninitialized `AppState` and the given token store.
-/// biometric 侧默认注入恒通过的 Mock provider + 独立内存 store（biometric
-/// 专属命令测试用 `mock_app_with_biometric` 换成可控 stub）。
+/// The biometric side injects a always-passing Mock provider plus a separate
+/// in-memory store by default (biometric-specific command tests swap in a
+/// controllable stub via `mock_app_with_biometric`).
 fn mock_app_with_token_store(
     token_store: Arc<dyn TokenStore>,
 ) -> tauri::App<tauri::test::MockRuntime> {
@@ -102,9 +104,11 @@ fn mock_app_with_token_store(
     )
 }
 
-/// Mock app with injectable biometric provider/store（biometric 命令族测试
-/// 入口；provider 用 MockBiometricProvider 的 available/force_fail 组合
-/// 分支，store 通常用 InMemoryTokenStore 便于直接断言条目内容）。
+/// Mock app with injectable biometric provider/store (entry point for the
+/// biometric command-family tests; the provider uses the
+/// available/force_fail combination branches of MockBiometricProvider, the
+/// store is usually an InMemoryTokenStore for easy direct assertion of entry
+/// contents).
 fn mock_app_with_biometric(
     biometric_provider: Arc<dyn persona_core::BiometricProvider>,
     biometric_store: Arc<dyn TokenStore>,
@@ -117,8 +121,9 @@ fn mock_app_with_biometric(
 }
 
 /// Mock app with an injected hardware-bound wrap layer
-/// （`MockKeyWrapper` + 内存 blob 存储）：`biometric_enable` /
-/// `biometric_unlock` 在这个 app 上走密钥包裹链而非门禁层密码托管链。
+/// (`MockKeyWrapper` + in-memory blob storage): `biometric_enable` /
+/// `biometric_unlock` on this app go through the key wrap chain rather than
+/// the gate-tier password escrow chain.
 fn mock_app_with_biometric_wrap(
     wrapper: Arc<dyn persona_core::BiometricKeyWrapper>,
     wrap_store: Arc<dyn TokenStore>,
@@ -132,8 +137,9 @@ fn mock_app_with_biometric_wrap(
     )
 }
 
-/// 测试内解 base64 blob（断言"落盘的是密文信封"用；生产路径的编解码
-/// 在 commands.rs，测试只读不写）。
+/// Decode a base64 blob inside tests (used to assert "what landed on disk is a
+/// ciphertext envelope"; the production encode/decode lives in commands.rs --
+/// tests only read, never write).
 fn base64_decode(blob: &str) -> Vec<u8> {
     use base64::Engine;
     base64::engine::general_purpose::STANDARD
@@ -170,10 +176,10 @@ async fn init_service_ok(app: &tauri::App<tauri::test::MockRuntime>, password: &
 }
 
 // ---------------------------------------------------------------------------
-// 第二批：credential / wallet / reveal / export / passkey
+// Batch 2: credential / wallet / reveal / export / passkey
 // ---------------------------------------------------------------------------
 
-/// 建一个已初始化服务的 app + 一条已存在的身份，返回 (app, identity_id)。
+/// Build an app with an initialized service + one existing identity; returns (app, identity_id).
 async fn app_with_identity() -> (tauri::App<tauri::test::MockRuntime>, String) {
     let app = mock_app();
     init_service_ok(&app, "correct-horse").await;
@@ -218,21 +224,24 @@ fn password_credential_request(identity_id: &str) -> CreateCredentialRequest {
     }
 }
 
-// ---- S5 自救口：整库加密备份文件导出（backup_export_to_file）----
+// ---- S5 self-rescue hatch: full-vault encrypted backup file export (backup_export_to_file) ----
 
-// ---- S5 自救口：从本地文件恢复整库（backup_restore_from_file）----
+// ---- S5 self-rescue hatch: restore the whole vault from a local file (backup_restore_from_file) ----
 
 // ---------------------------------------------------------------------------
-// S5-d 服务器密文仓（persona-server /api/v1/backups 桌面接线）
+// S5-d server ciphertext vault (persona-server /api/v1/backups desktop wiring)
 //
-// 协议正确性归 core（BackupClient）与 server（backups.rs E2E）；这里只测
-// 宿主编排：门禁（未初始化/未配置/锁定）、快照+推送+凭证回写、列表映射、
-// 下载 → staged 换库（与文件恢复同口径）、删除幂等。中转用手搓 TCP 假
-// 服务（与 pairing relay 假服务同构：Bearer 校验 + 内存单槽备份）。
+// Protocol correctness belongs to core (BackupClient) and the server
+// (backups.rs E2E); here we only test the host orchestration: gates
+// (uninitialized/unconfigured/locked), snapshot+push+evidence writeback, list
+// mapping, download -> staged DB swap (same semantics as file restore), and
+// delete idempotency. The relay is a hand-rolled TCP fake server (isomorphic
+// with the pairing relay fake: Bearer validation + single in-memory backup slot).
 // ---------------------------------------------------------------------------
 
-/// 内存单槽假备份服务：返回 base_url。备份 ID 恒 `bk-1`（push 覆盖写，
-/// delete 后 404）；Bearer token 恒 `tok-persona-1`（不符回 401 信封）。
+/// In-memory single-slot fake backup server: returns the base_url. The backup ID is
+/// always `bk-1` (push overwrites, 404 after delete); the Bearer token is always
+/// `tok-persona-1` (a mismatch returns a 401 envelope).
 fn spawn_mock_backup_server() -> String {
     use std::io::{Read, Write};
     use std::net::TcpListener;
@@ -395,7 +404,7 @@ fn spawn_mock_backup_server() -> String {
     format!("http://{addr}")
 }
 
-/// S5-d 前置：sync 配置指向假服务（URL 进 settings，token 进 keyring）。
+/// S5-d prerequisite: the sync config points at the fake server (URL into settings, token into keyring).
 async fn configure_backup_server(
     app: &tauri::App<tauri::test::MockRuntime>,
     base_url: &str,
@@ -413,19 +422,20 @@ async fn configure_backup_server(
 }
 
 // ---------------------------------------------------------------------------
-// 第三批：wallet 交易 / approval respond / SSH agent 状态与生命周期
+// Batch 3: wallet transactions / approval respond / SSH agent state and lifecycle
 // ---------------------------------------------------------------------------
 
-/// 沙箱 agent 状态目录：`PERSONA_AGENT_STATE_DIR` 指向 tempdir，drop 恢复。
+/// Sandboxed agent state dir: `PERSONA_AGENT_STATE_DIR` points at a tempdir, restored on drop.
 ///
-/// env 是进程全局的：并行测试各自 sandbox 会互相改道（socket 落错目录、
-/// 状态断言失败），所以持一把进程级锁——同一时刻只有一个测试在改 env。
+/// env is process-global: parallel tests sandboxing independently would divert each
+/// other (socket landing in the wrong directory, failed status assertions), so a
+/// process-level lock is held -- only one test mutates env at a time.
 pub(crate) struct StateDirGuard {
-    // 先声明先构造、最后 drop：env 先恢复，锁才释放。
+    // Declared first, constructed first, dropped last: env is restored before the lock is released.
     _lock: std::sync::MutexGuard<'static, ()>,
     prev: Option<std::ffi::OsString>,
-    // None = 本 guard 未触碰 SOCKET_PATH；Some(None) = 原值缺失需移除；
-    // Some(Some(v)) = 恢复到 v。
+    // None = this guard never touched SOCKET_PATH; Some(None) = the original value
+    // was absent and must be removed; Some(Some(v)) = restore to v.
     prev_socket: Option<Option<std::ffi::OsString>>,
 }
 
@@ -441,8 +451,9 @@ impl StateDirGuard {
         }
     }
 
-    /// sandbox 同时注入 PERSONA_AGENT_SOCKET_PATH：两个 env 必须在同一把
-    /// 锁内设置（std Mutex 不可重入，分别构造两个 guard 会死锁）。
+    /// The sandbox also injects PERSONA_AGENT_SOCKET_PATH: both envs must be set
+    /// under the same lock (std Mutex is not reentrant; constructing two guards
+    /// separately deadlocks).
     #[cfg(unix)]
     pub(crate) fn sandbox_with_socket(
         dir: &tempfile::TempDir,
@@ -460,8 +471,9 @@ impl StateDirGuard {
         }
     }
 
-    /// 互斥地移除 PERSONA_AGENT_STATE_DIR：驱动 `agent_state_dir` 的
-    /// home 回退臂。持有同一把进程级锁，恢复时 Drop 会移除 env（prev=None）。
+    /// Exclusively removes PERSONA_AGENT_STATE_DIR: drives the home fallback arm
+    /// of `agent_state_dir`. Holds the same process-level lock; on restore, Drop
+    /// removes the env (prev=None).
     fn without_env() -> Self {
         let lock = agent_env_lock();
         let prev = std::env::var("PERSONA_AGENT_STATE_DIR").ok();
@@ -474,8 +486,9 @@ impl StateDirGuard {
     }
 }
 
-/// 进程级互斥：agent 相关 env（PERSONA_AGENT_STATE_DIR / SOCKET_PATH）在
-/// 并行测试里同进程共享，读写必须串行。
+/// Process-level mutex: agent-related envs (PERSONA_AGENT_STATE_DIR / SOCKET_PATH)
+/// are shared within one process across parallel tests, so reads and writes must
+/// be serialized.
 fn agent_env_lock() -> std::sync::MutexGuard<'static, ()> {
     static AGENT_ENV_LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
     let mutex = AGENT_ENV_LOCK.get_or_init(|| std::sync::Mutex::new(()));
@@ -499,47 +512,49 @@ impl Drop for StateDirGuard {
     }
 }
 
-// 后端防投毒强制检查：to 地址模仿本钱包已知地址时，缺 ack 一律拒绝签名，
-// 带 ack 放行（WALLET_DESIGN.md §5 第 3 条）。
+// Backend anti-poisoning enforcement: when the to address mimics an address this
+// wallet already knows, signing is refused without an ack and allowed with one
+// (WALLET_DESIGN.md section 5, item 3).
 
 // Unix-socket probing (stale file / live listener) has no Windows
 // counterpart in this test; the named-pipe flow is a separate work item.
 
 // ---------------------------------------------------------------------------
-// 第四批：wallet import/地址管理/导出矩阵、get_ssh_keys、health_scan、门禁
+// Batch 4: wallet import/address management/export matrix, get_ssh_keys, health_scan, gates
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
-// 第五批：passkey 门禁与错误码、TOTP/凭据数据拒绝路径、审计过滤、工作区改道
+// Batch 5: passkey gates and error codes, TOTP/credential data rejection paths, audit filtering, workspace diversion
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
-// 第六批：reveal 类型矩阵 / 导出与审计门禁 / reauth 余量分支
+// Batch 6: reveal type matrix / export and audit gates / reauth remaining branches
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
-// 第八批：types 层纯函数矩阵（序列化脱敏 + 转换 + 事件映射）
+// Batch 8: types-layer pure function matrix (serialization redaction + conversions + event mapping)
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
-// 第九批：init_service 错误臂 / auto-lock 事件桥闭环 / 路径工具
+// Batch 9: init_service error arms / auto-lock event bridge loop / path utilities
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
-// 第十批：类型/等级矩阵、get_credential_data 全变体标签、锁定错误码矩阵、
-// wallet 网络/DB 失败分支、agent 状态目录回退、agent 协议读错误
+// Batch 10: type/level matrix, get_credential_data all-variant labels, locked error-code matrix,
+// wallet network/DB failure branches, agent state dir fallback, agent protocol read errors
 // ---------------------------------------------------------------------------
 
-// Unix domain socket 专用路径——与上面的 protocol_matrix 同门禁（缺这条
-// 会让 desktop-build windows job 首次编译 test profile 时失败，2026-09-26）
+// Unix domain socket specific path -- same gating as protocol_matrix above (missing this
+// makes the desktop-build windows job fail on its first test-profile compile, 2026-09-26)
 
 // ---------------------------------------------------------------------------
-// 第十一批：active_identity DB 失败、默认 db_path、活跃身份清理、
-// 锁定态凭据/审计错误、wallet_generate 类型拒绝、pending 交易与缺 db_path
+// Batch 11: active_identity DB failure, default db_path, active identity cleanup,
+// locked-state credential/audit errors, wallet_generate type rejection, pending transaction and missing db_path
 // ---------------------------------------------------------------------------
 
-/// 互斥地把 XDG_DATA_HOME 指到临时目录（dirs::data_dir 的 Linux 读法），
-/// 驱动 init_service 的默认 db_path 分支而不触碰真实用户目录。
+/// Exclusively points XDG_DATA_HOME at a temp dir (how dirs::data_dir reads on
+/// Linux), driving the default db_path branch of init_service without touching
+/// the real user directories.
 struct XdgDataDirGuard {
     _lock: std::sync::MutexGuard<'static, ()>,
     prev: Option<std::ffi::OsString>,
@@ -570,10 +585,11 @@ impl Drop for XdgDataDirGuard {
     }
 }
 
-/// 已解锁但 DB 是垃圾文件的 service：sqlx 连接惰性打开，任何 repo 查询才
-/// 报错。init_service 到不了这个状态（migrate 会先失败），所以手工构造
-/// service——用它驱动命令层不可绕过的 repo 错误臂。db_path 也指向同一
-/// 垃圾文件，让自建连接的 workspace/wallet 命令共享同一错误路径。
+/// A service that is unlocked but whose DB is a garbage file: the sqlx connection opens
+/// lazily, so only a repo query errors. init_service cannot reach this state (migrate
+/// fails first), so the service is built by hand -- use it to drive the repo error arms
+/// the command layer cannot bypass. db_path also points at the same garbage file so
+/// workspace/wallet commands that build their own connection share the same error path.
 async fn app_with_garbage_db_service() -> tauri::App<tauri::test::MockRuntime> {
     let app = mock_app();
     let dir = tempfile::tempdir().unwrap();
@@ -591,27 +607,27 @@ async fn app_with_garbage_db_service() -> tauri::App<tauri::test::MockRuntime> {
 }
 
 // ---------------------------------------------------------------------------
-// 第十六批：active identity / wallet / ssh 命令的前置条件与死库矩阵
+// Batch 16: precondition and dead-DB matrix for active identity / wallet / ssh commands
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
-// Workspace settings / feature flags / passkey 审批服务端门禁
+// Workspace settings / feature flags / passkey approval server-side gates
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
-// 同步服务器配置（settings.sync）与审计事件上报器接线
+// Sync server config (settings.sync) and audit event emitter wiring
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
-// Forced master-password rotation（PASSWORD_CHANGE_REQUIRED 码 / 改密命令 /
-// password_expiry_days 窄写）
+// Forced master-password rotation (PASSWORD_CHANGE_REQUIRED code / password change command /
+// password_expiry_days narrow write)
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
-// 旅行模式（Travel Mode）命令族
+// Travel Mode command family
 // ---------------------------------------------------------------------------
 
-/// 初始化服务并建一个 identity，返回其 id。
+/// Initialize the service and create an identity, returning its id.
 async fn seeded_identity(app: &tauri::App<tauri::test::MockRuntime>, name: &str) -> String {
     let resp = create_identity(
         CreateIdentityRequest {
@@ -630,13 +646,13 @@ async fn seeded_identity(app: &tauri::App<tauri::test::MockRuntime>, name: &str)
 }
 
 // ---------------------------------------------------------------------------
-// Attachments（1Password 对齐）：加密附件经凭据 item key 封存，
-// 命令层四命令全链路（list / attach / save / delete）
+// Attachments (1Password-aligned): encrypted attachments are sealed with the credential item key;
+// full chain of the four command-layer commands (list / attach / save / delete)
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
-// Biometric unlock：四命令命令层矩阵（provider 用 Mock 的
-// available/force_fail 组合分支；store 用 InMemoryTokenStore 直接断言条目）
+// Biometric unlock: four-command command-layer matrix (provider uses the Mock's
+// available/force_fail combination branches; store uses InMemoryTokenStore to assert entries directly)
 // ---------------------------------------------------------------------------
 
 fn mock_provider(available: bool, force_fail: bool) -> Arc<persona_core::MockBiometricProvider> {
@@ -647,9 +663,10 @@ fn mock_provider(available: bool, force_fail: bool) -> Arc<persona_core::MockBio
     })
 }
 
-/// set 恒失败、get/delete 委托内部 InMemory 的 keyring fake——测"写失败
-/// 不留半态 / 改密联动 fail-closed 删条目"两条路径（条目需预先放进内部
-/// store 模拟既有配置）。
+/// A keyring fake whose set always fails and whose get/delete delegate to an
+/// internal InMemory store -- tests the two paths "write failure leaves no
+/// half-state" / "password-change linkage fail-closed deletes the entry" (the
+/// entry must be pre-placed in the internal store to simulate existing config).
 struct FailingSetStore(Arc<InMemoryTokenStore>);
 impl TokenStore for FailingSetStore {
     fn set(&self, _: &str, _: &str) -> Result<(), String> {
@@ -664,27 +681,30 @@ impl TokenStore for FailingSetStore {
 }
 
 // ---------------------------------------------------------------------------
-// 硬件绑定包裹链（`mock_app_with_biometric_wrap`：MockKeyWrapper 报
-// HardwareBound，enable/unlock 走密钥包裹而非门禁层密码托管）
+// Hardware-bound wrap chain (`mock_app_with_biometric_wrap`: MockKeyWrapper reports
+// HardwareBound, enable/unlock go through key wrapping rather than gate-tier password escrow)
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
-// Quick Access（全局热键绑定：落库真值 + 抢注失败如实上报）
+// Quick Access (global hotkey binding: persisted truth value + registration failure reported faithfully)
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
-// 生成器热键（gap #9 余项：与 Quick Access 同一套门禁/落库/抢注语义，
-// 独立窗口与独立槽位——改检索绑定不得动生成器，反之亦然）
+// Generator hotkey (gap #9 remainder: same gate/persist/registration semantics as Quick Access,
+// separate window and separate slot -- changing the search binding must not touch the generator,
+// and vice versa)
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
-// E2EE sync 设备管理命令族：协议层在 core（SyncAdminApi 真 TCP 测试在
-// server），这里锁宿主编排——keyring 身份三态、门禁、失败不留半态。
-// 网络路径一律不可达服务器（http://127.0.0.1:1，同 set_sync_config 族口径）。
+// E2EE sync device management command family: the protocol layer lives in core (SyncAdminApi
+// real TCP tests live in server); here we lock down host orchestration -- keyring identity
+// tri-state, gates, failures leave no half-state.
+// Network paths always hit an unreachable server (http://127.0.0.1:1, same convention as the
+// set_sync_config family).
 // ---------------------------------------------------------------------------
 
-/// 直写 device_store 造一条合法本机身份（join 的网络路径测不了，身份
-/// 落 keyring 后的后续命令全靠它驱动）。
+/// Write a valid local device identity directly into device_store (join's network path
+/// cannot be tested; subsequent commands after the identity lands in keyring are all driven by it).
 async fn seed_device_identity(
     app: &tauri::App<tauri::test::MockRuntime>,
     db_path: &str,
@@ -698,7 +718,7 @@ async fn seed_device_identity(
 }
 
 // ---------------------------------------------------------------------------
-// connect_token_* 命令族（create/list/revoke）：Service 槽降级 + 全生命周期。
+// connect_token_* command family (create/list/revoke): Service slot degradation + full lifecycle.
 // ---------------------------------------------------------------------------
 
 fn read_scope() -> persona_core::connect::ConnectTokenScope {
@@ -710,33 +730,36 @@ fn read_scope() -> persona_core::connect::ConnectTokenScope {
 }
 
 // ---------------------------------------------------------------------------
-// connect_server_* 命令族（start/status/stop）：解锁门禁 + 生命周期 + 幂等。
-// listener 只 bind 127.0.0.1:0（OS 分配），无需外部网络。
+// connect_server_* command family (start/status/stop): unlock gate + lifecycle + idempotency.
+// The listener only binds 127.0.0.1:0 (OS-assigned); no external network needed.
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
-// set_locale：与 set_feature_flags 同范式（解锁门禁 + 窄写 + 返回全量），
-// 加非法 locale 拒绝。
+// set_locale: same pattern as set_feature_flags (unlock gate + narrow write + full return),
+// plus rejection of invalid locales.
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
-// set_tray_locale：托盘右键菜单文案（真值在前端 i18n locale 表）的无状态
-// 渲染通道——无锁屏门禁（锁屏时菜单也要跟界面语言），无托盘时是无害 no-op。
+// set_tray_locale: the stateless render channel for tray right-click menu text (the truth lives
+// in the frontend i18n locale tables) -- no lock-screen gate (the menu follows the UI language
+// even when locked), and a harmless no-op when no tray exists.
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
-// connect_token_* 的 Err 臂：锁定（error_with_code 路径）与坏库（纯错误
-// 路径）——上轮 round-trip 只测了 Ok 臂。
+// Err arms of connect_token_*: locked (error_with_code path) and bad DB (pure error
+// path) -- the previous round-trip round only tested the Ok arm.
 // ---------------------------------------------------------------------------
 
-// ---- 账号体系（M2 tauri 代理层）----
+// ---- Account system (M2 tauri proxy layer) ----
 //
-// 门禁语义与 sync 命令族同门第：未初始化/未配置服务器/未解锁各态先于
-// 任何网络访问被拒；Bearer 端点额外要求 keyring 有账号 bearer（
-// fail-closed）。令牌生命周期（srp_verify 写入 → create_session 覆盖
-// → revoke_session 自吊销清除、吊销他人会话不动本机令牌）用一次性
-// TCP 假服务器做端到端断言。wire 契约（路径/方法/Bearer 有无/请求体
-// 透传）由 core accounts::remote 的 16 个用例覆盖，这里不重复。
+// Gate semantics are of the same lineage as the sync command family: uninitialized /
+// server not configured / locked states are all rejected before any network access; Bearer
+// endpoints additionally require an account bearer in keyring (fail-closed). Token
+// lifecycle (srp_verify writes -> create_session overwrites -> revoke_session clears via
+// self-revocation, revoking another session leaves this device's token alone) is asserted
+// end-to-end with a one-shot TCP fake server. The wire contract (paths/methods/Bearer
+// presence/request body passthrough) is covered by core accounts::remote's 16 cases; not
+// repeated here.
 
 struct AccountMockRequest {
     method: String,
@@ -745,9 +768,10 @@ struct AccountMockRequest {
     body: String,
 }
 
-/// 一次性账号域假服务器：每连接读一条请求（head + Content-Length 体），
-/// 调 handler 得 (状态码, 响应体)，回写极简 HTTP/1.1 响应，循环至测试
-/// 结束（监听器随线程生命周期）。
+/// One-shot account-domain fake server: reads one request per connection (head +
+/// Content-Length body), calls the handler for (status code, response body),
+/// writes back a minimal HTTP/1.1 response, and loops until the test ends
+/// (the listener lives for the thread's lifetime).
 fn spawn_account_mock<F>(handler: F) -> String
 where
     F: Fn(&AccountMockRequest) -> (u16, String) + Send + 'static,
@@ -825,15 +849,17 @@ fn encode_b64(bytes: &[u8]) -> String {
 }
 
 // ---------------------------------------------------------------------------
-// 同步组配对命令族（S1 桌面接线）
+// Sync-group pairing command family (S1 desktop wiring)
 //
-// 协议正确性归 core（`sync::pairing` 全握手/错码/篡改/端到端 11 例），这里
-// 只测宿主编排：门禁（未解锁/未配置/已入组）、会话状态机、双端组密钥落地。
-// 中转用手搓 HTTP 假 relay（与 core 测试同构：内存双向信箱，路由与
-// server /pairing/* 一致，单会话）。
+// Protocol correctness belongs to core (`sync::pairing` covers all handshakes/error
+// codes/tampering/end-to-end in 11 cases); here we only test host orchestration: gates
+// (unlocked/not configured/already in a group), the session state machine, and group
+// key landing on both ends. The relay is a hand-rolled HTTP fake relay (isomorphic with
+// the core tests: in-memory bidirectional mailbox, routes identical to server
+// /pairing/*, single session).
 // ---------------------------------------------------------------------------
 
-/// 一次性 TCP 假 relay：返回 base_url。session_id 恒 `sess-1`（单会话测试）。
+/// One-shot TCP fake relay: returns the base_url. The session_id is always `sess-1` (single-session tests).
 fn spawn_mock_pairing_relay() -> String {
     use std::io::{Read, Write};
     use std::net::TcpListener;
@@ -930,7 +956,7 @@ fn spawn_mock_pairing_relay() -> String {
     format!("http://{addr}")
 }
 
-/// 给已初始化的 vault 写 sync 配置（server_url 指向给定地址）。
+/// Write sync config into an already-initialized vault (server_url points at the given address).
 async fn set_sync_server_url(
     _app: &tauri::App<tauri::test::MockRuntime>,
     db_path: &str,

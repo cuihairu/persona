@@ -20,7 +20,7 @@ jest.mock('@/utils/clipboard', () => ({
   copyToClipboardWithToast: jest.fn(),
 }));
 
-// hide/listen 用具名 mock：用例要直接驱动事件回调与断言 hide 调用
+// hide/listen use named mocks: cases drive the event callbacks directly and assert on hide calls
 const mockHide = jest.fn().mockResolvedValue(undefined);
 const mockListen = jest.fn().mockResolvedValue(() => {});
 
@@ -33,8 +33,9 @@ jest.mock('@tauri-apps/api/event', () => ({
 }));
 
 jest.mock('@/hooks/usePersonaService');
-// useReauth 一并接管：真实 hook 的 requestReauth 只有 ReauthModal 提交/取消才
-// resolve，而弹框在本文件被 mock 成 null——不接管 REAUTH 用例会挂死
+// Take over useReauth as well: the real hook's requestReauth only resolves
+// when ReauthModal is submitted/cancelled, and the modal is mocked to null
+// here — without taking over, the REAUTH cases would hang
 const mockRequestReauth = jest.fn();
 jest.mock('@/hooks/useReauth', () => ({
   useReauth: () => ({
@@ -58,7 +59,7 @@ const mockFill = personaAPI.desktopFillCredential as jest.Mock;
 const mockFillTarget = personaAPI.fillTargetStatus as jest.Mock;
 const mockFocusMain = personaAPI.focusMainWindow as jest.Mock;
 
-/** fill_target_status 的默认就绪响应（⌘F 确认面用；snapshot_id 供确认绑定断言） */
+/** Default ready response for fill_target_status (used by the ⌘F confirm face; snapshot_id feeds the confirm-binding assertions) */
 const readyTargetStatus = (app = 'notepad.exe', title = 'Login - Example App') => ({
   success: true,
   data: {
@@ -70,7 +71,7 @@ const readyTargetStatus = (app = 'notepad.exe', title = 'Login - Example App') =
   },
 });
 
-/** 取组件挂载时注册的指定事件回调（mockListen.mock.calls 由 beforeEach 清空） */
+/** Get the handler registered for a given event when the component mounts (mockListen.mock.calls is cleared by beforeEach) */
 const listenerFor = (event: string): (() => void) => {
   const call = mockListen.mock.calls.find(([name]) => name === event);
   if (!call) throw new Error(`listener not registered: ${event}`);
@@ -103,7 +104,7 @@ const credential = (overrides: Partial<Credential>): Credential =>
     ...overrides,
   }) as Credential;
 
-/** 默认：已解锁 + 一个身份 + 搜索返回两条 */
+/** Default: unlocked + one identity + search returning two rows */
 const setup = (results: Credential[] = [credential({}), credential({ id: 'c2', name: 'GitLab' })]) => {
   mockService.mockReturnValue({
     isUnlocked: true,
@@ -114,8 +115,8 @@ const setup = (results: Credential[] = [credential({}), credential({ id: 'c2', n
 };
 
 beforeAll(() => {
-  // react-hot-toast 的 Toaster 挂载即读 matchMedia（prefers-reduced-motion），
-  // jsdom 没实现——不补这个桩，渲染路径随用例顺序随机炸
+  // react-hot-toast's Toaster reads matchMedia (prefers-reduced-motion) as soon as it mounts,
+  // and jsdom doesn't implement it — without this stub the render path blows up depending on case order
   Object.defineProperty(window, 'matchMedia', {
     writable: true,
     value: (query: string) => ({
@@ -380,17 +381,17 @@ describe('components/QuickAccessPanel', () => {
 
     fireEvent.keyDown(screen.getByTestId('quick-access-panel'), { key: 'f', metaKey: true });
 
-    // 确认面出现：展示目标应用名（可执行文件名）与窗口标题；后端此时
-    // 还没有被调用（不可静默直写）
+    // The confirm face appears: it shows the target app name (executable file name)
+    // and window title; the backend has not been called yet (no silent direct write)
     const dialog = await screen.findByTestId('quick-access-fill-confirm');
     expect(dialog.textContent).toContain('victim-notepad.exe');
     expect(dialog.textContent).toContain('Login - Example App');
     expect(mockFill).not.toHaveBeenCalled();
 
-    // 用户显式确认 → 带 confirmed=true + 确认面捕获的 snapshot_id 注入
+    // Explicit user confirmation → inject with confirmed=true + the snapshot_id captured by the confirm face
     fireEvent.click(screen.getByTestId('quick-access-fill-confirm-button'));
     await waitFor(() => expect(mockFill).toHaveBeenCalledWith('c1', true, 'snap-confirm-1'));
-    // 成功后浮窗自动收起：焦点还给目标窗口
+    // On success the floating window collapses automatically: focus goes back to the target window
     await waitFor(() => expect(mockHide).toHaveBeenCalled());
   });
 
@@ -467,8 +468,9 @@ describe('components/QuickAccessPanel', () => {
     await screen.findByTestId('quick-access-fill-confirm');
     fireEvent.click(screen.getByTestId('quick-access-fill-confirm-button'));
 
-    // 确认绑定（P1）：后端按 snapshot_id 拒绝被换目标的在途请求——
-    // 浮窗不收起（用户需重新走确认流），也不重试注入
+    // Confirm binding (P1): the backend rejects an in-flight request whose target
+    // changed, keyed on snapshot_id — the window stays open (the user must go
+    // through the confirm flow again) and the injection is not retried
     await waitFor(() => expect(mockFill).toHaveBeenCalledWith('c1', true, 'snap-confirm-1'));
     await waitFor(() => expect(mockFill).toHaveBeenCalledTimes(1));
     expect(mockHide).not.toHaveBeenCalled();
@@ -487,7 +489,7 @@ describe('components/QuickAccessPanel', () => {
 
     fireEvent.keyDown(screen.getByTestId('quick-access-panel'), { key: 'f', metaKey: true });
 
-    // 没有 snapshot_id 就无法绑定确认（P1）——视同无有效目标，不进确认面
+    // Without a snapshot_id confirmation cannot be bound (P1) — treated as no valid target, no confirm face
     await waitFor(() => expect(mockFillTarget).toHaveBeenCalled());
     expect(screen.queryByTestId('quick-access-fill-confirm')).toBeNull();
     expect(mockFill).not.toHaveBeenCalled();

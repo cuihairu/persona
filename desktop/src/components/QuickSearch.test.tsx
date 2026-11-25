@@ -49,7 +49,7 @@ const setup = (serviceOver: Record<string, any> = {}) => {
   return { searchCredentials, switchIdentity };
 };
 
-/** 打开 overlay 并让 debounce 后的搜索落地 */
+/** Open the overlay and let the debounced search settle */
 const searchFor = async (searchCredentials: jest.Mock, results: any[], term = 'git') => {
   searchCredentials.mockResolvedValueOnce(results);
   fireEvent.change(screen.getByTestId('quick-search-input'), { target: { value: term } });
@@ -100,7 +100,7 @@ describe('components/QuickSearch', () => {
     fireEvent.keyDown(screen.getByTestId('quick-search-input'), { key: 'Escape' });
 
     expect(screen.queryByTestId('quick-search-overlay')).not.toBeInTheDocument();
-    // 重新打开应是干净的空态（查询与结果都复位）
+    // Reopening should be a clean empty state (both query and results reset)
     fireEvent.click(screen.getByTestId('quick-search-trigger'));
     expect(screen.getByTestId('quick-search-input')).toHaveValue('');
     expect(screen.getByText('输入以跨所有身份搜索')).toBeInTheDocument();
@@ -133,7 +133,7 @@ describe('components/QuickSearch', () => {
     const { searchCredentials } = setup();
     fireEvent.click(screen.getByTestId('quick-search-trigger'));
 
-    // 第一次查询：慢响应（手动控制 resolve 时机）
+    // First query: a slow response (resolving it manually)
     let resolveSlow: (v: any[]) => void = () => {};
     const slow = new Promise<any[]>((r) => {
       resolveSlow = r;
@@ -144,7 +144,7 @@ describe('components/QuickSearch', () => {
       jest.advanceTimersByTime(250);
     });
 
-    // 查询变化：新查询返回即时结果
+    // Query changes: the new query returns immediately
     searchCredentials.mockResolvedValueOnce([makeCred({ id: 'new', name: 'NewCred' })]);
     fireEvent.change(screen.getByTestId('quick-search-input'), { target: { value: 'gith' } });
     await act(async () => {
@@ -155,7 +155,7 @@ describe('components/QuickSearch', () => {
     });
     expect(screen.getByText('NewCred')).toBeInTheDocument();
 
-    // 旧查询响应后到：不得覆盖新结果（cleanup stale 守卫）
+    // The old query's response arrives late: it must not overwrite the new results (cleanup stale guard)
     await act(async () => {
       resolveSlow([makeCred({ id: 'old', name: 'OldCred' })]);
       await Promise.resolve();
@@ -175,11 +175,12 @@ describe('components/QuickSearch', () => {
     ]);
 
     expect(searchCredentials).toHaveBeenCalledWith('git');
-    // 身份组头，按 store 中的身份顺序
+    // Identity group header, in the order of identities in the store
     expect(screen.getByText('Personal')).toBeInTheDocument();
     expect(screen.getByText('Work')).toBeInTheDocument();
-    // 组内条目：名称 + 类型徽章 + 用户名（标题含查询词时被 <mark> 拆分，
-    // getByText 的单元素精确匹配拿不到，按行级 textContent 断言）
+    // Entries inside a group: name + type badge + username (a title containing the
+    // query term is split by <mark>, so getByText's exact single-element match cannot
+    // find it; assert on the row-level textContent instead)
     const items = screen.getAllByTestId('quick-search-item');
     expect(items).toHaveLength(3);
     expect(items[0]).toHaveTextContent('GitHub');
@@ -245,13 +246,13 @@ describe('components/QuickSearch', () => {
     expect(items()[0].getAttribute('data-active')).toBe('false');
     expect(items()[1].getAttribute('data-active')).toBe('true');
 
-    // ArrowUp 回退到首项，再回一次则从首项回绕到末项
+    // ArrowUp steps back to the first item; one more step wraps from the first to the last
     fireEvent.keyDown(screen.getByTestId('quick-search-input'), { key: 'ArrowUp' });
     expect(items()[0].getAttribute('data-active')).toBe('true');
     fireEvent.keyDown(screen.getByTestId('quick-search-input'), { key: 'ArrowUp' });
     expect(items()[1].getAttribute('data-active')).toBe('true');
 
-    // Enter 选中当前高亮项（同身份：不切身份）
+    // Enter selects the currently highlighted item (same identity: no identity switch)
     fireEvent.keyDown(screen.getByTestId('quick-search-input'), { key: 'Enter' });
     expect(switchIdentity).not.toHaveBeenCalled();
     expect(useAppStore.getState().pendingCredentialSelection).toEqual({
@@ -265,11 +266,11 @@ describe('components/QuickSearch', () => {
     fireEvent.click(screen.getByTestId('quick-search-trigger'));
     await searchFor(searchCredentials, [makeCred({ id: 'c1' })]);
 
-    // 卡片内按下鼠标（比如准备选中文字）不关闭
+    // Pressing the mouse inside the card (e.g. about to select text) does not close it
     fireEvent.mouseDown(screen.getByTestId('quick-search-input'));
     expect(screen.getByTestId('quick-search-overlay')).toBeInTheDocument();
 
-    // 遮罩（overlay 自身）按下即关闭
+    // Pressing on the backdrop (the overlay itself) closes it
     fireEvent.mouseDown(screen.getByTestId('quick-search-overlay'));
     expect(screen.queryByTestId('quick-search-overlay')).not.toBeInTheDocument();
   });
@@ -295,7 +296,7 @@ describe('components/QuickSearch', () => {
       makeCred({ id: 'c9', identity_id: 'ghost', name: 'Orphan' }),
     ]);
 
-    // 未知身份的结果不渲染任何行（分组阶段即被过滤）
+    // Results for unknown identities render no rows at all (filtered out during grouping)
     expect(screen.getByText('没有找到「git」的结果')).toBeInTheDocument();
     expect(screen.queryByTestId('quick-search-item')).not.toBeInTheDocument();
     expect(switchIdentity).not.toHaveBeenCalled();
@@ -305,7 +306,7 @@ describe('components/QuickSearch', () => {
   it('renders cached favicons in results when the flag is on', async () => {
     useAppStore.setState({
       featureFlags: { ...DEFAULT_FEATURE_FLAGS, fetch_favicons: true },
-      // 预置缓存 → useFavicons 的批量读无 pending，不发 IPC
+      // Primes the cache, so useFavicons' batched read has nothing pending and sends no IPC
       faviconCache: { 'github.com': { mime_type: 'image/png', data: 'AAA' } },
     });
     const { searchCredentials } = setup();
@@ -323,7 +324,7 @@ describe('components/QuickSearch', () => {
       makeCred({ name: 'GitHub Login', username: 'git-alice' }),
     ]);
 
-    // 大小写不敏感（对齐 SQLite LIKE 的 ASCII 行为）：Git / git 片段各自命中
+    // Case-insensitive (matching SQLite LIKE's ASCII behavior): the Git / git fragments each hit
     const hits = screen.getAllByTestId('highlight-hit').map((el) => el.textContent);
     expect(hits).toEqual(['Git', 'git']);
   });
@@ -333,7 +334,7 @@ describe('components/QuickSearch', () => {
     fireEvent.click(screen.getByTestId('quick-search-trigger'));
     await searchFor(
       searchCredentials,
-      // 命中来自后端其他字段（如 url），标题/用户名不含查询词
+      // The hit comes from another backend field (such as url); the title/username do not contain the query term
       [makeCred({ name: 'GitHub', username: null, url: 'https://gitlab.com' })],
       'gitlab',
     );

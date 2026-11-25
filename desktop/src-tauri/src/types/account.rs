@@ -1,8 +1,10 @@
-//! 账号域 wire 类型：注册、passkey、SRP、设备列表与生物识别。
+//! Account-domain wire types: registration, passkey, SRP, device list and
+//! biometrics.
 
 use serde::{Deserialize, Serialize};
 
-/// account_register 请求（公开注册，无需认证）。
+/// account_register request (public registration, no authentication
+/// required).
 #[derive(Debug, Deserialize)]
 pub struct AccountRegisterRequest {
     pub username: String,
@@ -18,9 +20,10 @@ pub struct AccountRegistrationResponse {
     pub display_name: Option<String>,
 }
 
-/// account_passkey_create_options 请求。响应是裸 WebAuthn creation
-/// options JSON（服务器未类型化的 json! 对象），命令层原样透传
-/// `serde_json::Value`（= 前端 AccountPasskeyCreationOptions）。
+/// account_passkey_create_options request. The response is the raw WebAuthn
+/// creation options JSON (the server's untyped `json!` object); the command
+/// layer passes `serde_json::Value` through unchanged (= the frontend's
+/// AccountPasskeyCreationOptions).
 #[derive(Debug, Deserialize)]
 pub struct AccountPasskeyCreateOptionsRequest {
     pub rp_id: String,
@@ -35,8 +38,8 @@ pub struct AccountPasskeyCreateOptionsRequest {
 
 #[derive(Debug, Deserialize)]
 pub struct AccountPasskeyRegisterRequest {
-    /// 认证器 attestation 响应（{credentialId, attestationObject}，均
-    /// base64url 串），服务器按不透明 Value 接收。
+    /// Authenticator attestation response ({credentialId, attestationObject},
+    /// both base64url strings); the server accepts it as an opaque Value.
     pub attestation_response: serde_json::Value,
     pub client_data_json: String,
     pub origin: String,
@@ -92,8 +95,9 @@ pub struct AccountSrpVerifyRequest {
 #[derive(Debug, Clone, Serialize)]
 pub struct AccountSrpVerifyResponse {
     pub server_proof: String,
-    /// 15 分钟账号登录令牌：命令层除透传外，还会写入
-    /// `account_token_store`（Bearer 门禁命令的解析源）。
+    /// 15-minute account login token: besides passing it through, the
+    /// command layer also writes it to `account_token_store` (the resolution
+    /// source for bearer-gated commands).
     pub token: String,
     pub expires_in_secs: u64,
 }
@@ -108,8 +112,9 @@ pub struct AccountVerifyRecoveryCodeRequest {
     pub code: String,
 }
 
-/// verify_recovery_code 响应（= 前端内联 `{ success: boolean }`；core 侧
-/// 同形 wire 类型只 Deserialize，不进命令返回位）。
+/// verify_recovery_code response (= the frontend's inline
+/// `{ success: boolean }`; the core-side same-shape wire type is only
+/// Deserialize and never sits in a command return position).
 #[derive(Debug, Clone, Serialize)]
 pub struct AccountVerifyRecoveryCodeResponse {
     pub success: bool,
@@ -119,7 +124,7 @@ pub struct AccountVerifyRecoveryCodeResponse {
 pub struct AccountAuthorizeDeviceRequest {
     /// sync_devices.id
     pub device_id: String,
-    /// base64，32 字节 X25519
+    /// base64, 32-byte X25519
     pub public_key: String,
 }
 
@@ -152,7 +157,8 @@ pub struct AccountDevicesList {
     pub devices: Vec<AccountDeviceInfo>,
 }
 
-/// sessions 端点的 passkey 断言证据（字段全为 base64url 编码）。
+/// Passkey assertion evidence for the sessions endpoint (all fields
+/// base64url-encoded).
 #[derive(Debug, Deserialize)]
 pub struct AccountPasskeyAssertion {
     pub credential_id: String,
@@ -162,8 +168,9 @@ pub struct AccountPasskeyAssertion {
     pub signature: String,
 }
 
-/// sessions 端点证据：SRP 15 分钟令牌或 passkey 断言，恰好一种（服务器
-/// 两者同给/都缺 = 422）。serde 默认忽略未知字段，两种形状都收。
+/// Evidence for the sessions endpoint: an SRP 15-minute token or a passkey
+/// assertion, exactly one (the server returns 422 for both / neither).
+/// serde ignores unknown fields by default, so both shapes are accepted.
 #[derive(Debug, Default, Deserialize)]
 pub struct AccountSessionEvidence {
     #[serde(default)]
@@ -178,79 +185,92 @@ pub struct AccountSessionInfo {
     pub expires_in_secs: u64,
 }
 
-/// 向导式 SRP 凭证注册（口令进、wire 值不出）：salt/verifier 由 core
-/// 推导，前端只交设备名与口令。
+/// Guided SRP credential registration (password in, no wire values out):
+/// salt/verifier are derived by core; the frontend submits only the device
+/// name and the password.
 #[derive(Debug, Deserialize)]
 pub struct AccountSrpRegisterWithPasswordRequest {
     pub device_name: String,
     pub password: String,
 }
 
-/// 向导式 SRP 登录请求：challenge/verify 两跳由 core 编排，M2 核验
-/// 在 core 完成。
+/// Guided SRP login request: the challenge/verify two hops are orchestrated
+/// by core, and M2 verification is completed in core.
 #[derive(Debug, Deserialize)]
 pub struct AccountSrpLoginRequest {
     pub device_name: String,
     pub password: String,
 }
 
-/// `account_srp_login` 响应。**不含令牌**：15 分钟令牌由命令层直写
-/// `account_token_store`（Bearer 解析源），不随响应下发渲染层；指纹
-/// 供诊断/会话绑定展示。
+/// `account_srp_login` response. **No token included**: the 15-minute token
+/// is written directly by the command layer to `account_token_store` (the
+/// bearer resolution source) and is not sent to the render layer with the
+/// response; the fingerprint is for diagnostics / session-binding display.
 #[derive(Debug, Clone, Serialize)]
 pub struct AccountSrpLoginResponse {
     pub expires_in_secs: u64,
     pub session_key_fingerprint: String,
 }
 
-/// `account_exchange_session` 响应。**不含会话令牌**：24h 会话由命令层
-/// 直写 keyring 覆盖 15 分钟短期令牌，渲染层只见有效期。
+/// `account_exchange_session` response. **No session token included**: the
+/// command layer writes the 24h session straight to the keyring, replacing
+/// the 15-minute short-lived token; the render layer only sees the validity
+/// period.
 #[derive(Debug, Clone, Serialize)]
 pub struct AccountSessionExchangeResponse {
     pub expires_in_secs: u64,
 }
 
-/// `account_sign_out` 响应：本机令牌必清（否则返回错误）；服务器侧吊销
-/// 是尽力而为——令牌已过期/已不存在时照样算退出成功（false 仅说明
-/// 服务器那边无可吊销项），本地状态永不因远端 4xx 卡死。
+/// `account_sign_out` response: the local token is always cleared (otherwise
+/// an error is returned); server-side revocation is best-effort — sign-out
+/// still counts as success when the token is expired / no longer exists
+/// (`false` only means the server had nothing to revoke), and local state is
+/// never blocked on a remote 4xx.
 #[derive(Debug, Clone, Serialize)]
 pub struct AccountSignOutResponse {
     pub revoked_on_server: bool,
 }
 
-/// biometric unlock 状态查询响应。`available` = OS 认证栈 + keyring 均
-/// 可达（fail-closed：任一不可用即 false，前端隐藏指纹入口）；
-/// `enabled` = 本 vault 的 keyring 托管条目存在——单一真相源，
-/// workspace settings 不存开关（vault 文件拷机后 keyring 无条目，
-/// 功能自然回到未启用）。
+/// Response for a biometric unlock status query. `available` = both the OS
+/// authentication stack and the keyring are reachable (fail-closed: either
+/// unavailable yields false, and the frontend hides the fingerprint entry);
+/// `enabled` = the keyring custody entry for this vault exists — the single
+/// source of truth; workspace settings stores no switch (after copying the
+/// vault files to another machine the keyring has no entry, so the feature
+/// naturally reverts to disabled).
 #[derive(Debug, Clone, Serialize)]
 pub struct BiometricStatusResponse {
     pub available: bool,
     pub enabled: bool,
-    /// 平台名（"touch-id" / "windows-hello" / "linux-polkit" / "unsupported"）
+    /// Platform name ("touch-id" / "windows-hello" / "linux-polkit" / "unsupported")
     pub platform: String,
-    /// 包裹档位（biometric_wrap 模块三档，设计文档 §1）：
-    /// "hardware-bound"（本 vault 的包裹 blob 存在且解链走硬件）/
-    /// "os-gate"（门禁层密码托管）/ "unsupported"（平台无硬件绑定层）
+    /// Wrap tier (the biometric_wrap module's three tiers, design doc §1):
+    /// "hardware-bound" (this vault's wrapper blob exists and unwrapping
+    /// goes through hardware) / "os-gate" (gate-layer password custody) /
+    /// "unsupported" (the platform has no hardware-bound layer)
     pub wrap_tier: String,
 }
 
-/// 启用 biometric unlock：主密码经 OS 认证弹框确认后托管（硬件绑定档
-/// 走密钥包裹 blob，门禁档走 keyring 密码托管——分流见 biometric_enable）
+/// Enable biometric unlock: the master password is put into custody after
+/// being confirmed by the OS authentication prompt (the hardware-bound tier
+/// uses the key-wrapping blob, the gate tier uses keyring password custody —
+/// see biometric_enable for the split)
 #[derive(Debug, Deserialize)]
 pub struct BiometricEnableRequest {
     pub master_password: String,
 }
 
-/// biometric 解锁：参数 db_path 在前端勾选自定义库路径时传入
-/// （默认 None = 本会话路径或默认路径）
+/// Biometric unlock: db_path is passed when the frontend checks a custom
+/// vault path (default None = this session's path or the default path)
 #[derive(Debug, Deserialize)]
 pub struct BiometricUnlockRequest {
     pub db_path: Option<String>,
 }
 
-/// Secure Enclave spike 探针单步输出（`biometric_wrap_spike` 命令返回；
-/// 设计文档 §5.2）。真机跑完把 `detail` 里的 OSStatus 贴回设计文档。
+/// Single-step output of the Secure Enclave spike probe (returned by the
+/// `biometric_wrap_spike` command; design doc §5.2). After running it on
+/// real hardware, paste the OSStatus from `detail` back into the design
+/// doc.
 #[derive(Debug, Clone, Serialize)]
 pub struct BiometricSpikeStep {
     pub name: String,

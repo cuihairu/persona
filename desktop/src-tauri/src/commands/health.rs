@@ -1,7 +1,8 @@
 use super::*;
 
-/// 可选请求字段 → core 扫描配置；缺省字段回落 core 默认值。
-/// 独立成纯函数以便无需运行中的服务即可测试。
+/// Optional request fields -> core scan configuration; fields left
+/// unspecified fall back to the core defaults.
+/// Kept as a pure function so it can be tested without a running service.
 pub(crate) fn build_health_scan_config(
     request: &HealthScanRequest,
 ) -> persona_core::HealthScanConfig {
@@ -30,8 +31,9 @@ pub async fn health_scan(
     let request = request.unwrap_or_default();
     let config = build_health_scan_config(&request);
 
-    // check_breaches → HIBP k-anonymity checker；构造失败（罕见）降级为
-    // 离线扫描而非报错，网络失败在 scan_health_with 内部也只告警。
+    // check_breaches -> the HIBP k-anonymity checker; if construction fails
+    // (rare), degrade to an offline-only scan instead of erroring, and network
+    // failures inside scan_health_with only raise a warning.
     let checker: Option<std::sync::Arc<dyn persona_core::BreachChecker>> =
         if request.check_breaches.unwrap_or(false) {
             match persona_core::HibpBreachChecker::new() {

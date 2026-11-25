@@ -1,6 +1,6 @@
-/** 健康与审计域：审计日志/查询/统计、健康报告与扫描请求。 */
+/** Health and audit domain: audit log/query/statistics, health report and scan requests. */
 
-/** 审计日志条目（只读视图，不含敏感负载） */
+/** Audit log entry (read-only view, no sensitive payloads) */
 export interface AuditLogEntry {
   id: string;
   user_id?: string;
@@ -16,7 +16,7 @@ export interface AuditLogEntry {
   timestamp: string;
 }
 
-/** 审计查询过滤（None 字段 = 不过滤） */
+/** Audit query filter (a None field = do not filter on it) */
 export interface AuditQueryRequest {
   user_id?: string;
   identity_id?: string;
@@ -35,12 +35,12 @@ export interface AuditStatistics {
 }
 
 // -------------------------------------------------------------------------
-// Watchtower 健康扫描（报告只含元数据，永不含密文）
+// Watchtower health scan (the report carries metadata only, never ciphertext)
 // -------------------------------------------------------------------------
 
 export type HealthSeverity = 'low' | 'medium' | 'high';
 
-/** 问题类型（serde tag = "type"，snake_case 变体名） */
+/** Issue kind (serde tag = "type", snake_case variant names) */
 export interface HealthIssueKindPayload {
   type:
     | 'weak_password'
@@ -50,15 +50,15 @@ export interface HealthIssueKindPayload {
     | 'expiring_soon'
     | 'stale_unchanged'
     | 'two_factor_available';
-  /** weak_password：zxcvbn 分数 */
+  /** weak_password: zxcvbn score */
   score?: number;
-  /** reused_password：共用同一明文密码的凭据数 */
+  /** reused_password: number of credentials sharing the same plaintext password */
   group_size?: number;
-  /** breached_password：在泄露库中出现的次数 */
+  /** breached_password: number of appearances in the breach corpus */
   count?: number;
-  /** expiring_soon / stale_unchanged：距过期/未更新天数 */
+  /** expiring_soon / stale_unchanged: days until expiry / since last update */
   days?: number;
-  /** two_factor_available：命中 2FA 目录的站点（归一化域名） */
+  /** two_factor_available: site matching the 2FA directory (normalized domain) */
   site?: string;
 }
 
@@ -68,13 +68,13 @@ export interface HealthIssue {
   credential_type: string;
   severity: HealthSeverity;
   detail: string;
-  /** serde(flatten) 的问题类型负载 */
+  /** serde(flatten)-flattened issue kind payload */
   type: HealthIssueKindPayload['type'];
   score?: number;
   group_size?: number;
   count?: number;
   days?: number;
-  /** two_factor_available：命中 2FA 目录的站点（归一化域名） */
+  /** two_factor_available: site matching the 2FA directory (normalized domain) */
   site?: string;
 }
 
@@ -82,17 +82,17 @@ export interface HealthReport {
   scanned_at: string;
   total_credentials: number;
   issues: HealthIssue[];
-  /** 严重度 → 数量（"high"/"medium"/"low"） */
+  /** Severity → count ("high"/"medium"/"low") */
   counts: Record<string, number>;
 }
 
 export interface HealthScanRequest {
-  /** zxcvbn 分数阈值（0-4），低于该值判弱；缺省用 core 默认值 */
+  /** zxcvbn score threshold (0-4); below it the password is judged weak. Defaults to the core value when absent */
   min_password_score?: number;
-  /** 过期警告窗口（天） */
+  /** Expiry warning window (days) */
   expiry_warning_days?: number;
-  /** 超过该天数未更新判陈旧 */
+  /** Stale when not updated for more than this many days */
   stale_after_days?: number;
-  /** 查询 HIBP 泄露库（k-anonymity，仅发送哈希前 5 字符） */
+  /** Query the HIBP breach corpus (k-anonymity; only the first 5 hash characters are sent) */
   check_breaches?: boolean;
 }

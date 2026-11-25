@@ -13,7 +13,7 @@ import {
   selectType,
 } from './shared';
 
-// jsdom 未注入 TextEncoder（浏览器环境原生可用），Raw 分支提交需要
+// jsdom does not inject TextEncoder (native in a browser environment); the Raw branch submission needs it
 if (typeof globalThis.TextEncoder === 'undefined') {
   (globalThis as any).TextEncoder = jest.requireActual('util').TextEncoder;
 }

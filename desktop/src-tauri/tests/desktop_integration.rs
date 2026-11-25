@@ -1,14 +1,19 @@
-//! 集成测试：独立进程里同时跑 mock runtime 与真 Unix socket IO。
+//! Integration test: the mock runtime and real Unix socket IO running
+//! together, inside a separate process.
 //!
-//! bin 单测进程内这两者互相干扰（mock runtime 会拖垮后续 socket/duplex
-//! IO 的唤醒，见 `passkey_bridge::tests` 中 FakeSink 的注释），所以
-//! `TauriApprovalSink` 的 emit 路径此前只能用 FakeSink 绕过。lib 化后
-//! 这些测试在独立进程里直驱真实 sink 与审批服务端。
+//! Inside the bin's unit test process these two interfere with each other
+//! (the mock runtime wrecks the wakeup of subsequent socket/duplex IO — see
+//! the FakeSink comment in `passkey_bridge::tests`), so `TauriApprovalSink`'s
+//! emit path previously could only be bypassed with FakeSink. Now that the
+//! code is a lib, these tests drive the real sink and the approval server
+//! directly from a separate process.
 //!
-//! Unix 专属：被测的审批通道就是 Unix domain socket（生产侧
-//! `run_passkey_approval_server_with` / `TauriApprovalSink` 也一并
-//! `#[cfg(unix)]` 门禁，Windows 用命名管道另一套），故整个测试 target
-//! 在非 Unix 下按空文件编译（Windows 交叉 check 的 E0432/E0433 由此）。
+//! Unix-only: the approval channel under test is a Unix domain socket (the
+//! production side, `run_passkey_approval_server_with` /
+//! `TauriApprovalSink`, is likewise gated behind `#[cfg(unix)]`, Windows
+//! having a separate named-pipe implementation), so the whole test target
+//! compiles as an empty file on non-Unix platforms (hence the
+//! E0432/E0433 in the Windows cross check).
 #![cfg(unix)]
 
 use std::sync::{Arc, Mutex as StdMutex};
@@ -25,7 +30,7 @@ use persona_desktop::passkey_bridge::{
 use persona_desktop::token_store::InMemoryTokenStore;
 use persona_desktop::types::{AppState, InitRequest};
 
-/// mock app + 空 AppState，与 lib 内 command_layer_tests 的 mock_app 一致。
+/// Mock app + empty AppState, matching the mock_app in the lib's command_layer_tests.
 fn mock_app() -> tauri::App<tauri::test::MockRuntime> {
     let app = tauri::test::mock_app();
     app.manage(AppState {
@@ -56,8 +61,9 @@ fn mock_app() -> tauri::App<tauri::test::MockRuntime> {
 
 use std::collections::HashMap;
 
-/// 本文件的测试共享进程 env（PERSONA_AGENT_STATE_DIR 决定 socket 路径），
-/// 用同一把进程级锁串行化持 env 的测试。
+/// The tests in this file share the process env (PERSONA_AGENT_STATE_DIR
+/// determines the socket path); a single process-wide lock serializes the
+/// tests that hold env.
 fn env_lock() -> std::sync::MutexGuard<'static, ()> {
     static LOCK: std::sync::OnceLock<StdMutex<()>> = std::sync::OnceLock::new();
     LOCK.get_or_init(|| StdMutex::new(()))
@@ -65,7 +71,7 @@ fn env_lock() -> std::sync::MutexGuard<'static, ()> {
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
-/// 把 agent state dir 重定向到 sandbox 目录，Drop 时恢复。
+/// Redirect the agent state dir to a sandbox directory; restored on Drop.
 struct StateDirGuard {
     prev: Option<String>,
 }
@@ -87,7 +93,7 @@ impl Drop for StateDirGuard {
     }
 }
 
-/// 轮询等待 socket 文件出现（server task 异步 bind）。
+/// Poll until the socket file appears (the server task binds asynchronously).
 async fn wait_for_socket(timeout: Duration) -> std::path::PathBuf {
     let path = approval_socket_path();
     let deadline = tokio::time::Instant::now() + timeout;
@@ -100,7 +106,7 @@ async fn wait_for_socket(timeout: Duration) -> std::path::PathBuf {
     panic!("approval socket never appeared at {}", path.display());
 }
 
-/// `persona://passkey-approval` 事件捕获器。
+/// Event capturer for `persona://passkey-approval`.
 #[derive(Clone, Default)]
 struct EmittedEvents(Arc<StdMutex<Vec<String>>>);
 
@@ -127,12 +133,14 @@ impl EmittedEvents {
     }
 }
 
-/// 生产 sink 全链路：解锁保险库 → 真 socket 收 bridge 请求 →
-/// TauriApprovalSink 真实 emit → 前端命令应答 allow → 客户端收到
-/// {"approved":true}。
+/// Production sink end to end: unlock the vault -> real socket receives the
+/// bridge request -> TauriApprovalSink emits for real -> the frontend command
+/// answers allow -> the client receives {"approved":true}.
 #[tokio::test(flavor = "multi_thread")]
-// env 是进程全局，锁必须持到测试结束（bind 后改 env 不影响已监听的
-// socket，竞争窗口只在启动前，跨 await 持锁是刻意的）。
+// env is process-global, so the lock must be held until the test ends (after
+// bind, changing env does not affect an already-listening socket; the race
+// window is only before startup, and holding the lock across await is
+// deliberate).
 #[allow(clippy::await_holding_lock)]
 async fn tauri_sink_emits_and_resolves_over_real_socket() {
     let _env = env_lock();
@@ -142,7 +150,8 @@ async fn tauri_sink_emits_and_resolves_over_real_socket() {
     let app = mock_app();
     let handle = app.handle().clone();
 
-    // 解锁的保险库：passkey_assert 走 GUI 审批而非直接 locked。
+    // Unlocked vault: passkey_assert goes through GUI approval rather than
+    // answering locked straight away.
     let dir = tempfile::tempdir().unwrap();
     let db_path = dir.path().join("it.db");
     std::mem::forget(dir);
@@ -174,7 +183,7 @@ async fn tauri_sink_emits_and_resolves_over_real_socket() {
     ));
     let socket_path = wait_for_socket(Duration::from_secs(5)).await;
 
-    // bridge 侧：连接、发请求、等应答。
+    // Bridge side: connect, send the request, wait for the answer.
     let mut client = tokio::net::UnixStream::connect(&socket_path).await.unwrap();
     client
         .write_all(
@@ -193,7 +202,8 @@ async fn tauri_sink_emits_and_resolves_over_real_socket() {
     assert_eq!(payload["origin"], "https://github.com");
     let request_id = payload["request_id"].as_str().unwrap().to_string();
 
-    // 前端命令应答 allow（与生产 modal 点确认同一路径）。
+    // The frontend command answers allow (the same path as tapping confirm in
+    // the production modal).
     let resp = commands::passkey_approval_respond(
         PasskeyApprovalRespondRequest {
             request_id,
@@ -217,9 +227,10 @@ async fn tauri_sink_emits_and_resolves_over_real_socket() {
     server.abort();
 }
 
-/// 锁定保险库：服务端不弹 GUI，直接回 locked —— 真实 emit 路径下复验。
+/// Locked vault: the server does not pop the GUI and answers locked
+/// directly — re-verified on the real emit path.
 #[tokio::test(flavor = "multi_thread")]
-// 同上：env 全局，跨 await 持锁是刻意的。
+// Same as above: env is global, and holding the lock across await is deliberate.
 #[allow(clippy::await_holding_lock)]
 async fn tauri_sink_locked_session_answers_directly_without_emit() {
     let _env = env_lock();
@@ -272,14 +283,16 @@ async fn tauri_sink_locked_session_answers_directly_without_emit() {
     server.abort();
 }
 
-/// show_main_window：无主窗口时安全空跑（mock runtime 没建过 "main" 窗）。
+/// show_main_window: a safe no-op when there is no main window (the mock
+/// runtime never built a "main" window).
 #[test]
 fn show_main_window_without_window_is_a_no_op() {
     let app = tauri::test::mock_app();
     persona_desktop::show_main_window(app.handle());
 }
 
-/// show_main_window：有 "main" 窗时走 unminimize/show/focus 全臂。
+/// show_main_window: with a "main" window present, the full
+/// unminimize/show/focus arm runs.
 #[test]
 fn show_main_window_focuses_existing_main_window() {
     let app = tauri::test::mock_app();
@@ -290,18 +303,20 @@ fn show_main_window_focuses_existing_main_window() {
     )
     .build()
     .expect("mock runtime can build windows");
-    assert!(window.is_visible().unwrap_or(false) || true); // mock 窗口可见性语义宽松
+    assert!(window.is_visible().unwrap_or(false) || true); // mock visibility semantics are loose
 
     persona_desktop::show_main_window(app.handle());
 
-    // 窗口仍在（不会被关闭或重建）。
+    // The window still exists (it is neither closed nor rebuilt).
     assert!(app.get_webview_window("main").is_some());
 }
 
-/// build() 整链：mock context 跑完整装配 —— AppState manage、托盘 + 菜单
-/// 构建、全部命令注册。等价于生产 main() 的装配段，事件循环本身除外。
-/// passkey 审批服务端默认关闭：装配后 socket 不应出现（spawn 由
-/// init_service 按 workspace 开关门禁，见 commands::maybe_start_passkey_server）。
+/// The full build() chain: a mock context runs the complete assembly —
+/// AppState manage, tray + menu construction, and all command registration.
+/// Equivalent to the assembly section of production main(), minus the event
+/// loop itself. The passkey approval server is off by default: no socket may
+/// appear after assembly (the spawn is gated by the workspace toggle inside
+/// init_service; see commands::maybe_start_passkey_server).
 #[test]
 fn build_assembles_full_app_with_tray() {
     let _env = env_lock();
@@ -312,18 +327,20 @@ fn build_assembles_full_app_with_tray() {
         tauri::test::noop_assets(),
     ));
 
-    // setup 闭包延迟到第一次事件循环迭代才执行（Builder::build 不跑它），
-    // 这里手动驱动一次触发托盘构建（仅 mock runtime，单次调用，不涉及
-    // 文档警告的循环 busy-loop 场景）。
+    // The setup closure only runs at the first event loop iteration
+    // (Builder::build does not run it), so drive one iteration manually to
+    // trigger tray construction (mock runtime only, a single call — not the
+    // looping busy-loop scenario the docs warn about).
     #[allow(deprecated)]
     {
         app.run_iteration(|_handle, _event| {});
     }
 
-    // manage 生效：命令层读得到 AppState。
+    // manage took effect: the command layer can read AppState.
     assert!(app.try_state::<AppState>().is_some());
 
-    // 默认 feature flags 全关：审批服务端不应被装配段启动。
+    // Default feature flags are all off: the approval server must not be
+    // started by the assembly section.
     let socket = state_dir
         .path()
         .join(persona_desktop::passkey_bridge::APPROVAL_SOCKET_NAME);
@@ -333,8 +350,9 @@ fn build_assembles_full_app_with_tray() {
         "passkey approval socket must not listen until the workspace flag is on"
     );
 
-    // 托盘按显示会话分流：有 display 构建（mock tray 走完整 API 面），
-    // 无 display（CI/容器）走 headless 分支不建托盘。
+    // The tray branches on the display session: with a display, build it (the mock tray
+    // exercises the full API surface); without one (CI/container) the headless branch
+    // skips tray construction.
     let has_display =
         std::env::var_os("DISPLAY").is_some() || std::env::var_os("WAYLAND_DISPLAY").is_some();
     if has_display {
@@ -349,9 +367,10 @@ fn build_assembles_full_app_with_tray() {
     app.cleanup_before_exit();
 }
 
-/// 自定义字段（1Password 对齐）命令层走查：真 PersonaService（解锁态）+
-/// mock runtime State 直驱命令——set 时空 id 由后端生成、get 回读一致、
-/// 空表移除、非法 UUID 与未知类型分类报错。
+/// Custom field (1Password-aligned) command-layer walkthrough: a real PersonaService
+/// (unlocked) + mock runtime State driving the commands directly — set with an empty id
+/// generates it in the backend, get reads back consistently, an empty table removes,
+/// and malformed UUIDs plus unknown types report classified errors.
 #[tokio::test]
 async fn custom_fields_commands_roundtrip_through_real_service() {
     use persona_desktop::commands;
@@ -404,7 +423,7 @@ async fn custom_fields_commands_roundtrip_through_real_service() {
             section: None,
         };
 
-    // set：新行 id 空串 → 后端生成；get 回读同表
+    // set: a new row with an empty id -> generated by the backend; get reads the same table back
     let set_resp = commands::set_credential_custom_fields(
         cred.id.to_string(),
         vec![
@@ -428,7 +447,7 @@ async fn custom_fields_commands_roundtrip_through_real_service() {
     assert!(get_resp.success);
     assert_eq!(get_resp.data.unwrap(), stored);
 
-    // 空表 = 移除
+    // An empty table = removal
     let clear = commands::set_credential_custom_fields(
         cred.id.to_string(),
         vec![],
@@ -443,7 +462,7 @@ async fn custom_fields_commands_roundtrip_through_real_service() {
             .unwrap();
     assert!(get_empty.data.unwrap().is_empty());
 
-    // 非法 UUID 分类报错
+    // Malformed UUID: classified error
     let bad =
         commands::get_credential_custom_fields("not-a-uuid".to_string(), app.state::<AppState>())
             .await
@@ -451,7 +470,7 @@ async fn custom_fields_commands_roundtrip_through_real_service() {
     assert!(!bad.success);
     assert!(bad.error.unwrap().contains("Invalid UUID"));
 
-    // 未知类型分类报错（不落库）
+    // Unknown type: classified error (nothing persisted)
     let unknown = commands::set_credential_custom_fields(
         cred.id.to_string(),
         vec![field_input("", "K", "V", "bogus")],

@@ -6,9 +6,10 @@ import type { SyncDeviceStatus, SyncDeviceView, SyncNowReport, SyncStatusReport 
 import SyncConflictsModal from '../SyncConflictsModal';
 import DataScopeConsentModal from '../DataScopeConsentModal';
 
-/** E2EE sync 设备区块：状态行（joined / corrupted 三态）+ 加入/离开 +
- *  设备列表（授权/吊销）。加入后需在另一台已授权设备上完成授权
- *  （pending 提示）——本机 group key 信封由对方密封上传，本机无从自封。 */
+/** E2EE sync devices section: status row (joined / corrupted, three states) + join/leave +
+ *  device list (authorize/revoke). After joining, authorization must be completed on
+ *  another authorized device (pending hint) — this device's group key envelope is
+ *  sealed and uploaded by the peer; this device cannot seal it itself. */
 const SyncDevicesSection: React.FC = () => {
   const { t } = useTranslation();
   const [status, setStatus] = useState<SyncDeviceStatus | null>(null);
@@ -16,14 +17,16 @@ const SyncDevicesSection: React.FC = () => {
   const [deviceName, setDeviceName] = useState('');
   const [busy, setBusy] = useState(false);
   const [loadFailed, setLoadFailed] = useState(false);
-  // 最近一轮同步报告（conflicts > 0 时亮冲突入口）+ 裁决弹窗开关
+  // Latest sync report (lights up the conflicts entry when conflicts > 0) + arbitration modal toggle
   const [lastReport, setLastReport] = useState<SyncNowReport | null>(null);
   const [conflictsOpen, setConflictsOpen] = useState(false);
-  // 同步水位快照（组版本号/落后 N/待推 N/最近同步时间；只读，查询失败不亮行）
+  // Sync watermark snapshot (group version / N behind / N pending push / last sync time;
+  // read-only, the row stays hidden if the query fails)
   const [syncStatus, setSyncStatus] = useState<SyncStatusReport | null>(null);
-  // 隐私红线：加入 E2EE 同步前先过数据范围披露，确认才执行 sync_join
+  // Privacy red line: join E2EE sync only after the data-scope disclosure is confirmed; only then run sync_join
   const [consentOpen, setConsentOpen] = useState(false);
-  // 本机备注行内编辑（S4：备注只允许设备本人写，服务端按令牌归属锁定）
+  // Inline editing of this device's remark (S4: only the device itself may write its remark;
+  // the server locks this by token ownership)
   const [editingRemark, setEditingRemark] = useState(false);
   const [remarkDraft, setRemarkDraft] = useState('');
 
@@ -50,7 +53,7 @@ const SyncDevicesSection: React.FC = () => {
         setLoadFailed(false);
       }
     } catch {
-      // 列表拉取失败保持旧值（首次 = 空列表），不打断状态行展示
+      // On list fetch failure keep the old value (empty list on first load); don't disrupt the status row
     }
   };
 
@@ -58,7 +61,7 @@ const SyncDevicesSection: React.FC = () => {
     void refreshStatus();
   }, []);
 
-  // joined 才拉列表与水位快照（未加入时命令会报「未加入」）
+  // Only fetch the list and watermark snapshot when joined (the command reports "not joined" otherwise)
   useEffect(() => {
     if (!status?.joined) return;
     void refreshDevices();
@@ -68,7 +71,7 @@ const SyncDevicesSection: React.FC = () => {
         if (resp.success && resp.data) setSyncStatus(resp.data);
       })
       .catch(() => {
-        // 水位查询失败（服务器不可达/旧版 server 无路由）保持隐藏，不谎报
+        // Watermark query failure (server unreachable / old server without the route) keeps the row hidden, no false reporting
       });
   }, [status?.joined]);
 
@@ -80,7 +83,7 @@ const SyncDevicesSection: React.FC = () => {
     setConsentOpen(true);
   };
 
-  /** 披露确认后的实际加入（原 join 主体；与披露解耦以便确认才调后端） */
+  /** The actual join after disclosure confirmation (the former join body; decoupled from disclosure so the backend is called only on confirm) */
   const confirmJoin = async (): Promise<void> => {
     setConsentOpen(false);
     setBusy(true);
@@ -105,7 +108,7 @@ const SyncDevicesSection: React.FC = () => {
     }
   };
 
-  /** 立即同步：跑一轮周期；conflicts > 0 时自动打开裁决弹窗 */
+  /** Sync now: run one cycle; open the arbitration modal automatically when conflicts > 0 */
   const syncNow = async (): Promise<void> => {
     setBusy(true);
     try {
@@ -118,7 +121,7 @@ const SyncDevicesSection: React.FC = () => {
             pushed: resp.data.pushed,
           }),
         );
-        // 周期跑完水位已变，重取快照（失败静默，保留旧值）
+        // The cycle moved the watermark; re-fetch the snapshot (fail silently, keep the old value)
         personaAPI
           .syncStatus()
           .then((r) => {
@@ -127,10 +130,10 @@ const SyncDevicesSection: React.FC = () => {
           .catch(() => {});
         if (resp.data.conflicts > 0) setConflictsOpen(true);
       } else if (resp.error_code === 'SYNC_SERVER_UNREACHABLE') {
-        // CLOUD_DRIVE_SYNC §9.4：服务器侧不可达
+        // CLOUD_DRIVE_SYNC §9.4: server side unreachable
         toast.error(t('settings.syncDevices.serverUnreachable'));
       } else if (resp.error_code === 'SYNC_CLOUD_FOLDER_UNAVAILABLE') {
-        // CLOUD_DRIVE_SYNC §9.4：云盘目录不可用（与服务器不可达修法不同）
+        // CLOUD_DRIVE_SYNC §9.4: cloud drive folder unavailable (remedied differently from an unreachable server)
         toast.error(t('settings.syncDevices.cloudFolderUnavailable'));
       } else {
         toast.error(resp.error || t('settings.syncDevices.syncFailed'));
@@ -142,8 +145,8 @@ const SyncDevicesSection: React.FC = () => {
     }
   };
 
-  /** group key 轮换（阶段 3d）：换信封 + 全量重包。诚实边界的确认文案
-   *  先于任何调用（与 leave/revoke 同 window.confirm 模式）。 */
+  /** group key rotation (phase 3d): new envelopes + full rewrap. The honest-boundary
+   *  confirmation prompt comes before any call (same window.confirm pattern as leave/revoke). */
   const rotate = async (): Promise<void> => {
     if (!window.confirm(t('settings.syncDevices.rotateConfirm'))) return;
     setBusy(true);
@@ -159,8 +162,8 @@ const SyncDevicesSection: React.FC = () => {
         );
         await refreshDevices();
       } else if (resp.error_code === 'CONCURRENT_CONFLICT') {
-        // 并发轮换被 epoch 乐观锁拦下（另一台设备已抢先）——本地状态
-        // 无损（未写信封未重包），提示重试即可
+        // Concurrent rotation stopped by the epoch optimistic lock (another device got there
+        // first) — local state is intact (no envelopes written, no rewrap), just prompt a retry
         toast.error(t('settings.syncDevices.rotateConcurrentConflict'));
       } else {
         toast.error(resp.error || t('settings.syncDevices.rotateFailed'));
@@ -226,7 +229,7 @@ const SyncDevicesSection: React.FC = () => {
     }
   };
 
-  /** 保存本机备注：成功后用服务端规整值（trim）回填行，退出编辑态 */
+  /** Save this device's remark: backfill the row with the server-normalized value (trimmed) on success and leave edit mode */
   const saveRemark = async (): Promise<void> => {
     setBusy(true);
     try {

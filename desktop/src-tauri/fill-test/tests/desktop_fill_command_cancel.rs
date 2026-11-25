@@ -1,30 +1,42 @@
-//! 桌面填充的**真实命令层**取消时序套件（第五轮收口）。第四轮的取消时序
-//! 用例（desktop_fill.rs win_tests）直测注入引擎层 `execute_fill`，重查闭
-//! 包是测试自己注入的——命令层（`desktop_fill_credential`）自建的
-//! `slot_recheck_for` 闭包从未被真命令路径执行过。本套件补上这一层：
-//! **端到端驱动真命令**（mock runtime `State<AppState>` + 真服务解密 +
-//! 真实跨进程靶窗），取消由宿主进程的**暂停钩子**确定性插桩——
+//! **Real command-layer** cancellation timing suite for desktop fill (closed
+//! out in round five). The round-four cancellation timing case (desktop_fill.rs
+//! win_tests) tested the injection engine layer `execute_fill` directly, with the
+//! recheck closure injected by the test itself — the `slot_recheck_for` closure
+//! built by the command layer (`desktop_fill_credential`) had never been executed
+//! by the real command path. This suite covers that layer: **it drives the real
+//! command end to end** (mock runtime `State<AppState>` + real service decryption
+//! + a real cross-process target window), with cancellation instrumented
+//! deterministically via the host process's **pause hook** —
 //!
-//! 1. 注入线程在 username 的跨进程 `SendMessageW` 上阻塞；
-//! 2. 宿主在 username 写入完成的消息处理里停住（`HOOK_PAUSED`），
-//!    此刻注入流程被物理挂起——旧实现（绑定比较后锁释放、无字段级重查）
-//!    与新实现（逐字段写入前重查）在此分岔；
-//! 3. 测试侧在 `HOOK_PAUSED` 与 `hook-go` 之间改动
-//!    `AppState.fill_target`（清槽 / 换新快照）——时序严格落在第一字段
-//!    写入完成之后、密码写入之前，不靠轮询碰运气；
-//! 4. 放行后：新实现必须中止剩余写入并如实报
-//!    `FILL_TARGET_DISCARDED` / `FILL_TARGET_CHANGED`（部分完成）；
-//!    **旧实现则会把密码写进框里并报成功**——因此这两个用例在旧实现上
-//!    必红（真机红跑见 docs/evidence/openclaw-2026-11-06-desktop-fill/
-//!    run7-red-cmdcancel-old-impl/）。
+//! 1. the injection thread blocks on the cross-process `SendMessageW` for
+//!    username;
+//! 2. the host stops inside the message handling that completed the username
+//!    write (`HOOK_PAUSED`), at which point the injection flow is physically
+//!    suspended — this is where the old implementation (release the lock after
+//!    the binding comparison, no field-level recheck) and the new one (recheck
+//!    before each field write) diverge;
+//! 3. the test side mutates `AppState.fill_target` between `HOOK_PAUSED` and
+//!    `hook-go` (clear the slot / swap in a new snapshot) — the timing lands
+//!    strictly after the first field write completes and before the password
+//!    write, without depending on lucky polling;
+//! 4. after release: the new implementation must abort the remaining writes and
+//!    honestly report `FILL_TARGET_DISCARDED` / `FILL_TARGET_CHANGED` (partial
+//!    completion); **the old implementation would write the password into the
+//!    box and report success** — so both cases must fail on the old
+//!    implementation (see the red run on real hardware in
+//!    docs/evidence/openclaw-2026-11-06-desktop-fill/
+//!    run7-red-cmdcancel-old-impl/).
 //!
-//! 密码残留断言用靶进程**同进程**读回（READBACK 长度前缀协议）：Windows
-//! 跨进程 `WM_GETTEXT` 读 ES_PASSWORD 恒返回空（平台限制，见 xproc 套件头
-//! 注释），长度前缀保证「username 非空 + password 空」的单字段残留不会被
-//! 吞成双空。
+//! The password-residue assertion uses the target process's **same-process**
+//! readback (the READBACK length-prefixed protocol): cross-process
+//! `WM_GETTEXT` on ES_PASSWORD always returns empty on Windows (a platform
+//! limitation, see the xproc suite's header comment), and the length prefix
+//! ensures a single-field residue of "username non-empty + password empty" is
+//! not swallowed into double empty.
 //!
-//! 运行条件：Windows + `--features fill-test-host` + 交互式桌面会话
-//! （SSH 会话不可用，理由同 xproc 套件）：
+//! Run requirements: Windows + `--features fill-test-host` + an interactive
+//! desktop session (SSH sessions do not work, for the same reason as the xproc
+//! suite):
 //!   cargo test -p persona-fill-test --test desktop_fill_command_cancel
 
 #![cfg(all(target_os = "windows", feature = "fill-test-host"))]
@@ -55,8 +67,10 @@ const USERNAME: &str = "alice@example.com";
 const PASSWORD: &str = "s3cret-Пароль⚡";
 
 // ---------------------------------------------------------------------------
-// mock runtime + 真服务夹具（与包内 command_layer_tests 同构；集成测试在
-// persona-fill-test crate 里，无法复用包内私有 fixture，按同一形状重建）
+// mock runtime + real-service fixture (same shape as the in-package
+// command_layer_tests; the integration tests live in the persona-fill-test
+// crate and cannot reuse the package's private fixtures, so they are rebuilt
+// with the same shape)
 // ---------------------------------------------------------------------------
 
 fn mock_app() -> tauri::App<tauri::test::MockRuntime> {
@@ -71,11 +85,11 @@ fn mock_app() -> tauri::App<tauri::test::MockRuntime> {
         ssh_approvals: Arc::new(Mutex::new(HashMap::new())),
         passkey_approvals: Arc::new(Mutex::new(HashMap::new())),
         sync_emitter: tokio::sync::Mutex::new(None),
-        // CI/headless 没有 secret service——测试一律走内存 fake
+        // CI/headless has no secret service — tests always use the in-memory fake
         token_store: Arc::new(InMemoryTokenStore::default()),
         biometric_provider: Arc::new(persona_core::MockBiometricProvider::default()),
         biometric_store: Arc::new(InMemoryTokenStore::default()),
-        // 默认门禁档桩（= CI/headless 的生产装配）
+        // Default gate-tier stub (= the production wiring on CI/headless)
         biometric_wrapper: Arc::new(persona_desktop::biometric::GateOnlyKeyWrapper),
         biometric_wrap_store: Arc::new(InMemoryTokenStore::default()),
         device_store: Arc::new(InMemoryTokenStore::default()),
@@ -84,7 +98,7 @@ fn mock_app() -> tauri::App<tauri::test::MockRuntime> {
         quick_access: std::sync::Mutex::new(
             persona_desktop::quick_access::QuickAccessRuntime::default(),
         ),
-        // 桌面填充注入目标槽：命令层取消时序套件直接读写这个槽位
+        // Desktop fill injection target slot: the command-layer cancellation timing suite reads and writes this slot directly
         fill_target: std::sync::Mutex::new(None),
         pairing_sessions: Arc::new(Mutex::new(HashMap::new())),
         sync_group_store: Arc::new(InMemoryTokenStore::default()),
@@ -110,9 +124,11 @@ async fn init_service_ok(app: &tauri::App<tauri::test::MockRuntime>, password: &
     assert!(resp.success, "init failed: {:?}", resp.error);
 }
 
-/// 已初始化服务 + 一条 Password 凭据（username/password 恒为
-/// USERNAME / PASSWORD），返回 app + 凭据 id。取消时序用例的插桩线程
-/// 通过 `slot_addr_of` 拿槽位地址，不需要跨线程持有 App。
+/// Initialized service + one Password credential (username/password are always
+/// USERNAME / PASSWORD), returning the app and the credential id. The
+/// instrumentation thread of the cancellation timing cases gets the slot
+/// address via `slot_addr_of`, so it does not need to hold the App across
+/// threads.
 async fn app_with_password_credential() -> (tauri::App<tauri::test::MockRuntime>, String) {
     let app = mock_app();
     init_service_ok(&app, "correct-horse").await;
@@ -160,12 +176,15 @@ async fn app_with_password_credential() -> (tauri::App<tauri::test::MockRuntime>
 }
 
 // ---------------------------------------------------------------------------
-// 靶进程驱动（与 desktop_fill_cross_process.rs 同构；HostProcess 的 stdin
-// 用 Arc<Mutex<>> 包裹：取消插桩线程要和主线程共享它发 hook-go）
+// Target-process driver (same shape as desktop_fill_cross_process.rs; the
+// HostProcess stdin is wrapped in Arc<Mutex<>>: the cancellation
+// instrumentation thread must share it with the main thread to send hook-go)
 // ---------------------------------------------------------------------------
 
-/// stdout 行的双订阅：同一行同时进主通道与取消插桩通道（HOST_PAUSED 只
-/// 由插桩线程消费，其余行留给主线程的应答循环跳过）
+/// Double subscription of stdout lines: each line goes to both the main channel
+/// and the cancellation instrumentation channel (HOST_PAUSED is consumed only by
+/// the instrumentation thread; the remaining lines are left for the main thread's
+/// reply loop to skip)
 fn forward_both(line: Result<String, std::io::Error>, txs: &[&std::sync::mpsc::Sender<String>]) {
     let Ok(line) = line else { return };
     for tx in txs {
@@ -177,7 +196,7 @@ struct HostProcess {
     child: Child,
     stdin: Arc<Mutex<std::process::ChildStdin>>,
     lines: Receiver<String>,
-    /// 取消插桩线程专用的行通道（HOOK_PAUSED 消费方）
+    /// Line channel dedicated to the cancellation instrumentation thread (the HOOK_PAUSED consumer)
     hook_lines: Receiver<String>,
 }
 
@@ -220,8 +239,9 @@ impl HostProcess {
         host
     }
 
-    /// 取出取消插桩线程专用的行通道（HOOK_PAUSED 消费方）；主线程之后
-    /// 只再用 `lines`（应答循环）
+    /// Take out the line channel dedicated to the cancellation instrumentation
+    /// thread (the HOOK_PAUSED consumer); afterwards the main thread only uses
+    /// `lines` (the reply loop)
     fn take_hook_lines(&mut self) -> Receiver<String> {
         std::mem::replace(&mut self.hook_lines, channel().1)
     }
@@ -243,7 +263,7 @@ impl HostProcess {
         stdin.flush().expect("flush host stdin");
     }
 
-    /// 挂暂停钩子（等 PAUSE_ARMED）
+    /// Arm the pause hook (waits for PAUSE_ARMED)
     fn arm_pause_hook(&self) {
         self.send("arm-pause-hook");
         let deadline = Instant::now() + Duration::from_secs(10);
@@ -265,9 +285,11 @@ impl HostProcess {
         let _ = self.child.wait();
     }
 
-    /// 靶进程**同进程**读回两个 Edit 的文本（长度前缀协议帧 → 解码）。
-    /// 密码残留断言的唯一可靠通道（Windows 跨进程 WM_GETTEXT 读
-    /// ES_PASSWORD 恒返回空；长度前缀保住单字段残留信息）。
+    /// Read back the text of the two Edit controls **in the target process**
+    /// (length-prefixed protocol frame -> decoded). The only reliable channel for
+    /// the password-residue assertion (cross-process WM_GETTEXT on ES_PASSWORD
+    /// always returns empty on Windows; the length prefix preserves the
+    /// single-field residue information).
     fn readback(&self) -> (String, String) {
         self.send("readback");
         let deadline = Instant::now() + Duration::from_secs(10);
@@ -292,7 +314,7 @@ impl HostProcess {
     }
 }
 
-/// 按标题查找顶层窗口（轮询等待宿主窗口就绪）
+/// Find a top-level window by title (polls until the host window is ready)
 fn find_window_by_title(title: &str) -> isize {
     use windows::core::{HSTRING, PCWSTR};
     use windows::Win32::UI::WindowsAndMessaging::FindWindowW;
@@ -311,8 +333,9 @@ fn find_window_by_title(title: &str) -> isize {
     }
 }
 
-/// 真实指纹快照（与 xproc 套件同源：类名/进程路径用同一批 helper 查询；
-/// snapshot_id 现造——命令层按 id 做确认绑定）
+/// A real fingerprint snapshot (same source as the xproc suite: the class name /
+/// process path are queried with the same helpers; the snapshot_id is made up on
+/// the spot — the command layer binds confirmation by id)
 fn snapshot_for(hwnd: isize, title: &str, pid: u32, snapshot_id: &str) -> FillTarget {
     FillTarget {
         hwnd,
@@ -324,12 +347,15 @@ fn snapshot_for(hwnd: isize, title: &str, pid: u32, snapshot_id: &str) -> FillTa
     }
 }
 
-/// 槽位指针的跨线程传递：`App<MockRuntime>` 内含 mock runtime 的
-/// `Receiver<Message>`（!Send/!Sync），整个 App 无法跨线程——但命令必须
-/// 在创建 mock_app 的主线程上跑。插桩线程只需要 `AppState.fill_target`
-/// 这一个 `Mutex<Option<FillTarget>>`（Sync），主线程把它的地址装进
-/// AtomicIsize 交给插桩线程；指向的 Mutex 由 App 的 state map 持有，
-/// 寿命覆盖插桩线程（mutator join 早于 app 离开作用域）。仅测试插桩用。
+/// Cross-thread hand-off of the slot pointer: `App<MockRuntime>` contains the
+/// mock runtime's `Receiver<Message>` (!Send/!Sync), so the whole App cannot
+/// cross threads — yet the command must run on the main thread that created
+/// mock_app. The instrumentation thread only needs the single
+/// `Mutex<Option<FillTarget>>` of `AppState.fill_target` (Sync); the main thread
+/// packs its address into an AtomicIsize and hands it to the instrumentation
+/// thread; the Mutex it points at is held by the App's state map, so it outlives
+/// the instrumentation thread (the mutator is joined before the app leaves
+/// scope). For test instrumentation only.
 type SlotAddr = Arc<std::sync::atomic::AtomicIsize>;
 
 fn slot_addr_of(app: &tauri::App<tauri::test::MockRuntime>) -> SlotAddr {
@@ -339,8 +365,10 @@ fn slot_addr_of(app: &tauri::App<tauri::test::MockRuntime>) -> SlotAddr {
     ))
 }
 
-/// 取消插桩线程：等 `HOOK_PAUSED`（此刻 username 已真实落值、注入线程被
-/// 挂起），执行测试给定的槽位改动，然后发 `hook-go` 放行注入流程。
+/// Cancellation instrumentation thread: waits for `HOOK_PAUSED` (at which point
+/// username has really landed and the injection thread is suspended), performs the
+/// slot mutation given by the test, then sends `hook-go` to release the
+/// injection flow.
 fn spawn_slot_mutator(
     hook_lines: Receiver<String>,
     stdin: Arc<Mutex<std::process::ChildStdin>>,
@@ -370,10 +398,12 @@ fn spawn_slot_mutator(
 }
 
 // ---------------------------------------------------------------------------
-// 绑定门（无需靶进程：拒绝发生在任何注入之前）
+// Binding gate (no target process needed: the rejection happens before any
+// injection)
 // ---------------------------------------------------------------------------
 
-/// 确认面硬门经真命令：`confirmed=false` 一律拒绝，不存在静默注入路径。
+/// The confirmation-plane hard gate through the real command:
+/// `confirmed=false` is always rejected; there is no silent injection path.
 #[tokio::test]
 async fn command_layer_rejects_unconfirmed_fill() {
     let app = mock_app();
@@ -396,12 +426,14 @@ async fn command_layer_rejects_unconfirmed_fill() {
     );
 }
 
-/// 确认必须携带捕获时的 snapshot_id：缺 id 的请求在解密完成后按协议错
-/// 拒绝（`FILL_TARGET_SNAPSHOT_REQUIRED`），绝不落到「此刻槽位里的目标」。
+/// Confirmation must carry the snapshot_id captured at the time: a request
+/// missing the id is rejected as a protocol error after decryption completes
+/// (`FILL_TARGET_SNAPSHOT_REQUIRED`) and never falls back to "whatever target
+/// happens to be in the slot right now".
 #[tokio::test]
 async fn command_layer_requires_snapshot_id() {
     let (app, cred_id) = app_with_password_credential().await;
-    let hwnd = 0isize; // 绑定拒绝先于任何指纹验证，占位目标即可
+    let hwnd = 0isize; // Binding rejection precedes any fingerprint verification, so a placeholder target is fine
     let slot_target = snapshot_for(hwnd, "unused", std::process::id(), "captured-A");
     {
         let state = app.state::<AppState>();
@@ -417,8 +449,10 @@ async fn command_layer_requires_snapshot_id() {
     );
 }
 
-/// 槽位已空（浮窗收起清槽）：携旧 snapshot_id 的在途请求在解密完成后的
-/// 锁内比对被拒（`FILL_TARGET_DISCARDED`）——注入根本不会启动。
+/// The slot is already empty (the popover collapsed and cleared the slot): an
+/// in-flight request carrying a stale snapshot_id is rejected by the
+/// in-lock comparison after decryption completes (`FILL_TARGET_DISCARDED`) —
+/// the injection never even starts.
 #[tokio::test]
 async fn command_layer_rejects_inflight_request_after_slot_clear() {
     let (app, cred_id) = app_with_password_credential().await;
@@ -435,13 +469,17 @@ async fn command_layer_rejects_inflight_request_after_slot_clear() {
 }
 
 // ---------------------------------------------------------------------------
-// 取消时序（真命令 + 真跨进程靶窗 + 暂停钩子确定性插桩）
+// Cancellation timing (real command + real cross-process target window +
+// deterministic pause-hook instrumentation)
 // ---------------------------------------------------------------------------
 
-/// **清槽**落在第一字段写入之后：命令层必须中止剩余写入并如实报
-/// `FILL_TARGET_DISCARDED`（部分完成 username=true / password=false），
-/// 密码框零残留。**旧实现（绑定比较后锁释放、无字段级重查）下此用例
-/// 必红**：密码会被写进框里且命令报成功。
+/// **Slot clear** landing after the first field write: the command layer must
+/// abort the remaining writes and honestly report `FILL_TARGET_DISCARDED`
+/// (partial completion username=true / password=false), with the password box
+/// left with zero residue. **This case must fail under the old implementation
+/// (release the lock after the binding comparison, no field-level recheck)**:
+/// the password would be written into the box and the command would report
+/// success.
 #[tokio::test]
 async fn command_layer_mid_fill_slot_clear_aborts_remaining_write() {
     let title = "persona cmd cancel clear";
@@ -458,7 +496,8 @@ async fn command_layer_mid_fill_slot_clear_aborts_remaining_write() {
     host.arm_pause_hook();
     let hook_lines = host.take_hook_lines();
 
-    // 插桩线程：HOOK_PAUSED（username 已落值、注入线程挂起）时清槽再放行
+    // Instrumentation thread: at HOOK_PAUSED (username has landed, injection thread
+    // suspended) clear the slot, then release
     let mutator = spawn_slot_mutator(
         hook_lines,
         Arc::clone(&host.stdin),
@@ -496,8 +535,10 @@ async fn command_layer_mid_fill_slot_clear_aborts_remaining_write() {
         "rejection must report partial completion honestly: {msg}"
     );
 
-    // 决定性零残留断言：username 已写入（插桩点在它之后），密码一个字
-    // 都不能落——靶进程同进程读回（长度前缀协议保住单字段残留）
+    // Decisive zero-residue assertion: username has been written (the instrumentation
+    // point is after it) and not a single character of the password may land —
+    // read back in the target process (the length-prefixed protocol preserves the
+    // single-field residue)
     let (host_user, host_pwd) = host.readback();
     assert_eq!(host_user, USERNAME, "username write must have landed");
     assert_eq!(
@@ -507,9 +548,11 @@ async fn command_layer_mid_fill_slot_clear_aborts_remaining_write() {
     host.quit();
 }
 
-/// **换目标**落在第一字段写入之后（确认 A 后浮窗重新捕获了 B）：命令层
-/// 必须以 `FILL_TARGET_CHANGED` 中止剩余写入，绝不把剩余字段写进新目标。
-/// **旧实现下必红**（密码照写、命令报成功）。
+/// **Target swap** landing after the first field write (after confirming A the
+/// popover re-captured B): the command layer must abort the remaining writes
+/// with `FILL_TARGET_CHANGED` and must never write the remaining fields into the
+/// new target. **This case must fail under the old implementation** (the
+/// password is still written and the command reports success).
 #[tokio::test]
 async fn command_layer_mid_fill_target_swap_aborts_remaining_write() {
     let title = "persona cmd cancel swap";
@@ -526,7 +569,8 @@ async fn command_layer_mid_fill_target_swap_aborts_remaining_write() {
     host.arm_pause_hook();
     let hook_lines = host.take_hook_lines();
 
-    // 插桩线程：HOOK_PAUSED 时把槽位换成新一轮捕获的 B（不同 snapshot_id）
+    // Instrumentation thread: at HOOK_PAUSED swap the slot for a freshly captured
+    // B (different snapshot_id)
     let mutator = spawn_slot_mutator(
         hook_lines,
         Arc::clone(&host.stdin),
@@ -566,8 +610,9 @@ async fn command_layer_mid_fill_target_swap_aborts_remaining_write() {
         "rejection must report partial completion honestly: {msg}"
     );
 
-    // 靶进程同进程读回：username 已落值，密码不落（不注入 B 的语义在
-    // 单进程靶窗上表现为「密码框零残留」）
+    // Readback in the target process: username has landed, the password does not
+    // land (the semantics of "do not inject B" show up on the single-process
+    // target window as "the password box has zero residue")
     let (host_user, host_pwd) = host.readback();
     assert_eq!(host_user, USERNAME, "username write must have landed");
     assert_eq!(

@@ -24,9 +24,11 @@ export default tseslint.config(
         { argsIgnorePattern: '^_', varsIgnorePattern: '^_', ignoreRestSiblings: true },
       ],
       '@typescript-eslint/no-explicit-any': 'off',
-      // 与原 .eslintrc.cjs 一致的规则面：react-hooks v7 recommended 新增的
-      // 静态审查（effect 内 setState / 不可变性 / ref 用法）对存量组件是
-      // 重构级改动，单独一轮做，不在依赖升级批里夹带行为变更。
+      // Rule set aligned with the former .eslintrc.cjs: the new static checks
+      // in react-hooks v7 recommended (setState inside effects / immutability /
+      // ref usage) are refactor-level changes for existing components, so they
+      // get their own pass rather than sneaking behavior changes into a
+      // dependency bump batch.
       'react-hooks/set-state-in-effect': 'off',
       'react-hooks/immutability': 'off',
       'react-hooks/refs': 'off',
@@ -35,7 +37,7 @@ export default tseslint.config(
     },
   },
   {
-    // Node 侧 CJS 配置文件（jest.config*.cjs）：require/module 是合法全局
+    // Node-side CJS config files (jest.config*.cjs): require/module are legal globals here
     files: ['**/*.cjs'],
     languageOptions: {
       sourceType: 'commonjs',

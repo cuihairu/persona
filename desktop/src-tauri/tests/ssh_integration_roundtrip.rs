@@ -1,14 +1,19 @@
-//! 一键启用/停用的真实落盘往返：不 mock 任何一层，直接调 command 层，
-//! 把 HOME 指向临时目录，真写 ~/.ssh/config、真回读，断言「写入动作」与
-//! 「状态字段」始终一致。
+//! A real on-disk round trip for one-click enable/disable: nothing is mocked,
+//! the command layer is called directly, HOME points at a temp directory, and
+//! ~/.ssh/config is really written and really read back, asserting that the
+//! "write action" and the "status fields" always agree.
 //!
-//! 为什么是独立 integration test 而不是进程内单测：HOME 是进程级全局
-//! 环境变量，同二进制里并行跑其它读 home 的测试会被串味；独立 test 进程
-//! 各自持有自己的 HOME，互不干扰（同 command_layer_tests 的取参注入思路）。
+//! Why a standalone integration test rather than in-process unit tests: HOME
+//! is a process-wide global environment variable, so other tests reading home
+//! that run in parallel inside the same binary would cross-contaminate;
+//! separate test processes each own their own HOME and stay out of each
+//! other's way (same argument-injection idea as command_layer_tests).
 //!
-//! 为什么需要它：UI 侧「一键启用后开关状态联动」的缺陷根因是信任写入响应
-//! 的快照而不回读真状态。回读链路必须被钉死在真实文件系统上——纯函数单测
-//! （upsert/remove）过不了这一关，mock 的 invoke 也一样。
+//! Why it is needed: the root cause of the UI-side "toggle state not linked
+//! after one-click enable" defect was trusting the write response snapshot
+//! instead of reading the real state back. The read-back path has to be pinned
+//! to the real filesystem — pure-function unit tests (upsert/remove) cannot
+//! clear this bar, nor can a mocked invoke.
 #![cfg(unix)]
 
 use std::path::PathBuf;
@@ -18,7 +23,8 @@ use persona_desktop::commands;
 use persona_desktop::ssh_integration as si;
 use persona_desktop::types::ApiResponse;
 
-/// 测试间串行化：HOME 全局共享，并行会互相覆盖对方的 config。
+/// Serialize between tests: HOME is shared globally, and parallel tests would
+/// overwrite each other's config
 fn home_lock() -> MutexGuard<'static, ()> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     LOCK.get_or_init(|| Mutex::new(()))
@@ -26,8 +32,9 @@ fn home_lock() -> MutexGuard<'static, ()> {
         .unwrap_or_else(|e| e.into_inner())
 }
 
-/// 指向临时 HOME 的守卫：建 `.ssh/` 目录，改 HOME 与 XDG_RUNTIME_DIR，
-/// drop 时（仍在锁内）回收临时目录。
+/// Guard pointing HOME at a temp directory: creates the `.ssh/` directory,
+/// changes HOME and XDG_RUNTIME_DIR, and reclaims the temp directory on drop
+/// (still inside the lock).
 struct FakeHome {
     _dir: tempfile::TempDir,
 }
@@ -37,7 +44,8 @@ impl FakeHome {
         let dir = tempfile::tempdir().expect("tempdir");
         std::fs::create_dir_all(dir.path().join(".ssh")).expect("mkdir .ssh");
         std::env::set_var("HOME", dir.path());
-        // socket 路径来自 XDG_RUNTIME_DIR，指向临时目录免得在真机上 mkdir
+        // The socket path comes from XDG_RUNTIME_DIR; point it at the temp
+        // directory so nothing gets mkdir'ed on the real machine
         std::env::set_var("XDG_RUNTIME_DIR", dir.path().join("run"));
         Self { _dir: dir }
     }
@@ -55,7 +63,8 @@ impl FakeHome {
     }
 }
 
-/// command 层返回体解包：失败直接 panic（测试里等价于断言失败）。
+/// Unwrap the command layer's response body: on failure, panic (equivalent to
+/// an assertion failure inside a test).
 fn unwrap_status(
     resp: Result<ApiResponse<si::SshIntegrationStatus>, String>,
 ) -> si::SshIntegrationStatus {
@@ -68,10 +77,10 @@ fn unwrap_status(
 fn enable_then_disable_round_trips_through_the_real_config_file() {
     let _lock = home_lock();
     let home = FakeHome::new();
-    // 用户原有配置：停用后必须原样保留
+    // The user's pre-existing config: must be preserved verbatim after disable
     home.write_config("Host github.com\n  User git\n");
 
-    // --- 一键启用 ---
+    // --- one-click enable ---
     let after_enable = unwrap_status(commands::ssh_agent_integration_enable());
     assert!(after_enable.enabled, "enable 后回读仍是未启用");
     assert_eq!(
@@ -80,7 +89,7 @@ fn enable_then_disable_round_trips_through_the_real_config_file() {
         "enable 后 IdentityAgent 未指向当前 socket",
     );
     assert!(after_enable.anomaly.is_none(), "enable 后不应报配置异常");
-    // 落盘内容 = 锚点块 + 用户原配置
+    // On-disk content = anchor block + the user's original config
     let on_disk = home.read_config();
     assert!(
         on_disk.contains("IdentityAgent "),
@@ -88,7 +97,7 @@ fn enable_then_disable_round_trips_through_the_real_config_file() {
     );
     assert!(on_disk.contains("Host github.com"), "盘上丢了用户原配置");
 
-    // 幂等：再点一次启用，块不重复
+    // Idempotent: enabling again must not duplicate the block
     commands::ssh_agent_integration_enable().expect("second enable");
     let twice = home.read_config();
     assert_eq!(
@@ -96,10 +105,10 @@ fn enable_then_disable_round_trips_through_the_real_config_file() {
         1,
         "重复启用产生了多个锚点块",
     );
-    // 幂等写后回读仍一致
+    // Read back after the idempotent write: still consistent
     assert!(unwrap_status(commands::ssh_agent_integration_enable()).enabled);
 
-    // --- 一键停用 ---
+    // --- one-click disable ---
     let after_disable = unwrap_status(commands::ssh_agent_integration_disable());
     assert!(!after_disable.enabled, "停用后回读仍是已启用");
     assert!(
@@ -116,7 +125,8 @@ fn enable_then_disable_round_trips_through_the_real_config_file() {
         "停用误伤用户原配置",
     );
 
-    // 停用后再次状态查询（前端回读点）同样报未启用——两侧一致
+    // A status query after disabling (the frontend's read-back point) also
+    // reports not-enabled — the two sides agree
     let status_resp = commands::ssh_agent_integration_status();
     assert!(status_resp.success);
     let status = status_resp.data.expect("status data");
@@ -130,13 +140,15 @@ fn enable_reports_anomaly_until_re_enabled_after_foreign_override() {
     let home = FakeHome::new();
 
     unwrap_status(commands::ssh_agent_integration_enable());
-    // 外部把锚点块改指到别处（等价于用户手改 config）
+    // Something external repoints the anchor block elsewhere (equivalent to a
+    // user hand-editing the config)
     let hijacked = home
         .read_config()
         .replace(&si::identity_agent_value(), "/tmp/foreign-agent.sock");
     home.write_config(&hijacked);
 
-    // 回读如实报「配置异常」而不是谎报已启用
+    // The read-back reports "config anomaly" honestly rather than lying about
+    // being enabled
     let hijacked_status = commands::ssh_agent_integration_status();
     let hijacked_status = hijacked_status.data.expect("status data");
     assert!(!hijacked_status.enabled, "指向别处时不应报已启用");
@@ -146,7 +158,7 @@ fn enable_reports_anomaly_until_re_enabled_after_foreign_override() {
         "异常字段未如实带上实际指向值",
     );
 
-    // 重新一键启用 = 修复路径，回到一致
+    // One-click enable again = the repair path, back to consistency
     let repaired = unwrap_status(commands::ssh_agent_integration_enable());
     assert!(repaired.enabled, "重新启用后仍未生效");
     assert!(repaired.anomaly.is_none());
@@ -158,8 +170,10 @@ fn enable_refuses_to_overwrite_an_unreadable_config() {
     let home = FakeHome::new();
     let path = home.config_path();
     home.write_config("Host github.com\n  User git\n");
-    // 让 config 路径读不出真内容：用目录顶替（读目录得到 EISDIR，既不是
-    // NotFound 也不是可读文件）。不依赖 chmod——root 下权限位不生效。
+    // Make the config path unreadable as real content: substitute a directory
+    // (reading a directory yields EISDIR, which is neither NotFound nor a
+    // readable file). Does not rely on chmod — permission bits are ignored
+    // as root.
     std::fs::remove_file(&path).expect("rm config");
     std::fs::create_dir(&path).expect("mkdir config-as-dir");
 
@@ -168,6 +182,6 @@ fn enable_refuses_to_overwrite_an_unreadable_config() {
         result.is_err(),
         "读不出 config 时应当拒写（否则空串 upsert 会覆盖用户配置）",
     );
-    // 拒写生效：目录原样保留，没被 rename 掉
+    // The write refusal took effect: the directory is left intact, not renamed away
     assert!(path.is_dir(), "拒写路径上仍动了用户的 config 位置");
 }

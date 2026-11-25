@@ -6,8 +6,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Persona - Digital Identity Manager</title>
     <script>
-      // FOUC 防护：React 挂载前按持久化偏好/系统主题给 <html> 挂 .dark
-      // （算法与 src/utils/theme.ts 保持一致：无值/越界按 system 处理）
+      // FOUC prevention: apply .dark to <html> before React mounts, following the persisted
+      // preference / system theme (same algorithm as src/utils/theme.ts: a missing or
+      // out-of-range value is treated as system)
       (function () {
         var pref;
         try {

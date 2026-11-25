@@ -1,14 +1,16 @@
-//! Windows：Windows Hello（UserConsentVerifier）。
+//! Windows: Windows Hello (UserConsentVerifier).
 //!
-//! `CheckAvailabilityAsync` / `RequestVerificationAsync` 是 WinRT
-//! IAsyncOperation（windows 0.61 里由 windows-future 承载，直接用返回值，
-//! 无需 import）——线程内 `get()` 本身阻塞直到完成，直接当作
-//! ceremony 闭包跑在专用线程上。提示文案经 `RequestVerificationAsync`
-//! 的 message 参数交给系统展示。Credential Manager 里的托管密码不绑
-//! Hello——验证与取回的串联在应用层（biometric_unlock 命令：ceremony
-//! 通过才读 keyring）。
+//! `CheckAvailabilityAsync` / `RequestVerificationAsync` are WinRT
+//! IAsyncOperations (in windows 0.61 they are carried by windows-future; use the
+//! return value directly, no import needed) — calling `get()` on the thread
+//! blocks until completion, so use it directly as a ceremony closure running on
+//! a dedicated thread. The prompt text is handed to the system via the message
+//! parameter of `RequestVerificationAsync`. Passwords managed in Credential
+//! Manager are not bound to Hello — the chaining of verification and retrieval
+//! happens at the app layer (biometric_unlock command: keyring is only read
+//! after the ceremony passes).
 //!
-//! 仅经 nightly CI 编译验证（本仓库无 Windows 实机）。
+//! Only compile-verified via nightly CI (no Windows hardware in this repo).
 
 use windows::core::HSTRING;
 use windows::Security::Credentials::UI::{

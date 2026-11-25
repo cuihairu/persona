@@ -14,7 +14,7 @@ const mockStatus = personaAPI.syncGroupStatus as jest.Mock;
 const mockDevices = personaAPI.syncListDevices as jest.Mock;
 const mockSettings = personaAPI.getWorkspaceSettings as jest.Mock;
 
-/** 三路状态源按档位编排：high=单设备无备份无账号；medium=有账号。 */
+/** Orchestrates the three status sources per level: high = a single device with no backup and no account; medium = an account is present. */
 function mockSources(level: 'high' | 'medium' | 'none', failure = false): void {
   if (failure) {
     mockStatus.mockRejectedValue(new Error('backend down'));
@@ -35,8 +35,8 @@ function mockSources(level: 'high' | 'medium' | 'none', failure = false): void {
 
 beforeEach(() => {
   jest.clearAllMocks();
-  // jsdom 没有 scrollIntoView；自救动作验证「滚到正确的节」——
-  // 组件按 data-testid 全局查询目标节，测试树里植入替身
+  // jsdom has no scrollIntoView; the self-rescue actions are verified by "scrolled to the right section" —
+  // the component looks the target section up globally by data-testid, so stand-ins are planted in the test tree
   Element.prototype.scrollIntoView = jest.fn();
 });
 

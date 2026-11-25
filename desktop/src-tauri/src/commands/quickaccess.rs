@@ -1,11 +1,14 @@
 use super::*;
 
-/// 解锁成功后按 DB 真值重放 Quick Access 全局热键（开关 + 绑定）。
+/// After a successful unlock, replay the Quick Access global hotkey
+/// (toggle + binding) according to the DB's real values.
 ///
-/// 每次解锁都重放而不是"与上次一致就跳过"：绑定可能被另一端改过
-/// （CLI 手改 settings JSON / 换了台机器同步来的 vault），重放的代价是
-/// 一次 unregister_all + 一次 register，换来的是任何改法都在下次解锁
-/// 收敛。**读 settings 失败只 warn**——全局热键是增强功能，绝不阻断解锁。
+/// Replay on every unlock rather than "skip when identical to the last time":
+/// the binding may have been changed on the other side (settings JSON edited
+/// by hand via the CLI / a vault synced from another machine); replaying costs
+/// one unregister_all plus one register, and buys the guarantee that any
+/// change converges at the next unlock. **A failed settings read only warns** —
+/// the global hotkey is an enhancement and must never block the unlock.
 pub(crate) async fn apply_quick_access<R: tauri::Runtime>(
     state: &State<'_, AppState>,
     app: &tauri::AppHandle<R>,
@@ -29,12 +32,16 @@ pub(crate) async fn apply_quick_access<R: tauri::Runtime>(
     }
 }
 
-/// 读 Quick Access 状态面（**免解锁**：绑定与开关在 workspace settings 里，
-/// 锁定后浮窗/设置页仍要如实显示"热键到底生效没有"）。
+/// Read the Quick Access status surface (**no unlock required**: the binding
+/// and the toggle live in workspace settings, so the popover / settings page
+/// must still report truthfully "whether the hotkey actually took effect"
+/// while locked).
 ///
-/// 运行态取自 `AppState.quick_access`（真实抢注结果），配置侧取自 DB——
-/// 两者不一致正是要暴露给人看的事：抢注失败时 configured 有值而 registered
-/// 为空，UI 据此显示"未生效 + 原因"。
+/// The runtime side comes from `AppState.quick_access` (the real grab
+/// outcome), the configured side from the DB — a mismatch between the two is
+/// exactly what should be exposed: when the grab fails, configured has a value
+/// while registered is empty, and the UI shows "not in effect + reason"
+/// accordingly.
 #[command]
 pub async fn quick_access_status(
     state: State<'_, AppState>,
@@ -51,16 +58,21 @@ pub async fn quick_access_status(
     Ok(ApiResponse::success(runtime.snapshot(&ws.settings)))
 }
 
-/// 设置 Quick Access 开关与绑定：解锁门禁 → 校验语法 → 落库 → 重注册。
+/// Set the Quick Access toggle and binding: unlock gate -> syntax validation
+/// -> persist -> re-register.
 ///
-/// 写入要过解锁门禁（同 `set_locale` / `set_feature_flags` / `set_password_expiry`）：
-/// 读（status）免解锁是给锁屏/设置页看"热键到底生效没有"用的，改配置
-/// 不该在锁定态发生。
+/// Writing requires the unlock gate (as with `set_locale` /
+/// `set_feature_flags` / `set_password_expiry`): reads (status) being unlocked-free
+/// exists so the lock screen / settings page can see "whether the hotkey
+/// actually took effect"; a config change should not happen while locked.
 ///
-/// 落库在前是刻意的：重注册成功但落库失败会留下"内存里热键变了、DB 里
-/// 没变"的漂移（下次解锁又被 DB 拉回去，用户以为改绑失败）。抢注失败
-/// **不算命令失败**——绑定已持久化，返回体里带 `error` 让设置页如实显示
-/// （Wayland 无 portal / 被别的应用占用是常态，不是错误流）。
+/// Persisting first is deliberate: a successful re-registration paired with a
+/// failed write would leave a "hotkey changed in memory but not in the DB"
+/// drift (the next unlock pulls it back from the DB, and the user assumes the
+/// rebind failed). A failed grab does **not count as a command failure** — the
+/// binding is already persisted; the response carries an `error` so the
+/// settings page can display it truthfully (no portal on Wayland / taken by
+/// another app is the normal case, not an error flow).
 #[command]
 pub async fn quick_access_set<R: tauri::Runtime>(
     app: tauri::AppHandle<R>,
@@ -79,7 +91,8 @@ pub async fn quick_access_set<R: tauri::Runtime>(
         return Ok(ApiResponse::error("Service is locked".to_string()));
     }
 
-    // 语法校验先行：非法串不落库（否则下次解锁还在反复失败）
+    // Validate syntax first: an invalid string must not be persisted (otherwise
+    // it keeps failing at every subsequent unlock)
     let normalized = match accelerator.as_deref() {
         Some(raw) if !raw.trim().is_empty() => {
             let normalized = crate::quick_access::normalize_accelerator(raw);
@@ -88,7 +101,8 @@ pub async fn quick_access_set<R: tauri::Runtime>(
             }
             Some(normalized)
         }
-        // 空串 = 恢复平台默认绑定（存 None，不把默认值钉进 DB）
+        // Empty string = restore the platform default binding (store None; do
+        // not pin the default value into the DB)
         _ => None,
     };
 
@@ -111,7 +125,8 @@ pub async fn quick_access_set<R: tauri::Runtime>(
     Ok(ApiResponse::success(status))
 }
 
-/// 从托盘菜单/设置页直接拉起浮窗（不依赖全局热键——热键被占用时它仍是入口）
+/// Open the popover directly from the tray menu / settings page (does not rely
+/// on the global hotkey — when the hotkey is taken this remains the entry point)
 #[command]
 pub async fn quick_access_open<R: tauri::Runtime>(
     app: tauri::AppHandle<R>,
@@ -120,7 +135,8 @@ pub async fn quick_access_open<R: tauri::Runtime>(
     Ok(ApiResponse::success(true))
 }
 
-/// 读生成器热键状态面（免解锁，语义同 [`quick_access_status`]）
+/// Read the generator hotkey status surface (no unlock needed, same semantics as
+/// [`quick_access_status`])
 #[command]
 pub async fn generator_status(
     state: State<'_, AppState>,
@@ -139,8 +155,9 @@ pub async fn generator_status(
     ))
 }
 
-/// 设置生成器热键开关与绑定（语义同 [`quick_access_set`]：解锁门禁 →
-/// 语法校验 → 落库 → 重注册，抢注失败不算命令失败）
+/// Set the generator hotkey toggle and binding (same semantics as
+/// [`quick_access_set`]: unlock gate -> syntax validation -> persist ->
+/// re-register; a failed grab is not a command failure)
 #[command]
 pub async fn generator_set<R: tauri::Runtime>(
     app: tauri::AppHandle<R>,
@@ -159,7 +176,8 @@ pub async fn generator_set<R: tauri::Runtime>(
         return Ok(ApiResponse::error("Service is locked".to_string()));
     }
 
-    // 语法校验先行：非法串不落库（否则下次解锁还在反复失败）
+    // Validate syntax first: an invalid string must not be persisted (otherwise
+    // it keeps failing at every subsequent unlock)
     let normalized = match accelerator.as_deref() {
         Some(raw) if !raw.trim().is_empty() => {
             let normalized = crate::quick_access::normalize_accelerator(raw);
@@ -168,7 +186,8 @@ pub async fn generator_set<R: tauri::Runtime>(
             }
             Some(normalized)
         }
-        // 空串 = 恢复平台默认绑定（存 None，不把默认值钉进 DB）
+        // Empty string = restore the platform default binding (store None; do
+        // not pin the default value into the DB)
         _ => None,
     };
 
@@ -191,7 +210,8 @@ pub async fn generator_set<R: tauri::Runtime>(
     Ok(ApiResponse::success(status))
 }
 
-/// 从托盘菜单直接拉起生成器浮窗（语义同 [`quick_access_open`]）
+/// Open the generator popover directly from the tray menu (same semantics as
+/// [`quick_access_open`])
 #[command]
 pub async fn generator_open<R: tauri::Runtime>(
     app: tauri::AppHandle<R>,
@@ -200,15 +220,18 @@ pub async fn generator_open<R: tauri::Runtime>(
     Ok(ApiResponse::success(true))
 }
 
-/// 浮窗里"在 Persona 中打开"：定向通知主窗口切身份 + 选中条目，并把主
-/// 窗口拉到前台。两个窗口各有独立 JS store，跨窗跳转只能走事件（载荷
-/// 见 `quick_access::OpenCredentialPayload`）
+/// The popover's "Open in Persona": sends a targeted notification to the main
+/// window to switch identity + select the entry, and brings the main window to
+/// the front. The two windows each have an independent JS store, so a
+/// cross-window jump can only go through events (payload in
+/// `quick_access::OpenCredentialPayload`)
 #[command]
 pub async fn quick_access_open_credential<R: tauri::Runtime>(
     request: QuickAccessOpenCredentialRequest,
     app: tauri::AppHandle<R>,
 ) -> std::result::Result<ApiResponse<bool>, String> {
-    // UUID 形态先过一遍：主窗口拿到非法 id 只会静默不选中，白跑一趟
+    // Check the UUID shape first: with an invalid id the main window would only
+    // silently fail to select anything, wasting the round trip
     if Uuid::from_str(&request.identity_id).is_err()
         || Uuid::from_str(&request.credential_id).is_err()
     {
@@ -226,19 +249,25 @@ pub async fn quick_access_open_credential<R: tauri::Runtime>(
     }
 }
 
-/// 查询桌面填充注入目标状态（#12）。前端据此决定浮窗填充动作是否可用
-///（未捕获/已失效时点了也只会报错，提前暴露状态更诚实）。
-/// 就绪态与真实状态一致（安全评审 P2 收紧）：Windows 上对槽位做指纹
-/// 重验证，已失效目标（窗口关闭/复用/进程更换）即时清槽并报 not ready。
+/// Query the desktop-fill injection target status (#12). The frontend uses this
+/// to decide whether the popover's fill action is available (clicking it when
+/// nothing is captured or the target is stale would only produce an error;
+/// exposing the state earlier is more honest).
+/// The ready state must match the real state (security review P2 tightening):
+/// on Windows the slot is re-verified by fingerprint, and a stale target
+/// (window closed / reused / different process) clears the slot immediately and
+/// reports not ready.
 #[command]
 pub async fn fill_target_status(
     state: State<'_, AppState>,
 ) -> std::result::Result<ApiResponse<crate::desktop_fill::FillTargetStatus>, String> {
     let supported = crate::desktop_fill::fill_supported();
     let mut guard = state.fill_target.lock().unwrap_or_else(|p| p.into_inner());
-    // 注入路径就绪 = 快照存在且当前指纹（hwnd 存活 + pid + 类名 + 可执行
-    // 文件 + 标题前缀）仍然一致；失效即刻丢弃。非 Windows 平台无指纹
-    // 校验能力，槽位本应为空，防御性视为失效。
+    // Injection path ready = a snapshot exists and the current fingerprint
+    // (hwnd alive + pid + class name + executable file + title prefix) still
+    // matches; a stale one is discarded immediately. Non-Windows platforms have
+    // no fingerprint verification capability, so the slot should be empty and
+    // is defensively treated as stale.
     let still_valid = match guard.as_ref() {
         Some(t) => {
             #[cfg(target_os = "windows")]
@@ -273,23 +302,35 @@ pub async fn fill_target_status(
     ))
 }
 
-/// 桌面应用内填充注入（#12）：把凭据的用户名/密码注入到检索浮窗唤起前
-/// 持有前台的目标窗口。范围（诚实边界，见 desktop_fill 模块注释）：
-/// - 仅 Windows（其余平台 `fill_supported()` = false，如实报错）；
-/// - 仅经典 Win32 EDIT 控件宿主（自绘/浏览器宿主不适用，浏览器归扩展）；
-/// - 仅 Password 类型凭据（用户名 + 密码两个字段）；
-/// - 仅注入带 `ES_PASSWORD` 样式且可见/启用/非只读的密码框——没有合格
-///   密码框即拒绝，普通框永不充当密码框（安全评审 P1 收紧）；
-/// - **必须先经用户确认**：浮窗展示目标应用名（可执行文件名）与窗口标题，
-///   用户显式确认后前端才带 `confirmed = true` 调用本命令；`confirmed`
-///   缺失/为 false 一律拒绝——不存在静默注入路径。
-/// - **确认绑定具体快照（P1 收紧）**：前端确认时带回捕获生成的
-///   `snapshot_id`；解密（在途窗口）完成后锁内按 id 与当前槽位比对——
-///   槽位已空（浮窗收起清槽）如实报 `FILL_TARGET_DISCARDED`，槽位已被
-///   重新捕获替换（确认 A 后又捕获了 B）如实报 `FILL_TARGET_CHANGED`，
-///   在途请求绝不转投新目标。
-/// 敏感面与 reveal_credential_secret 同级：走 `get_credential_data` 解密
-/// 路径（自带审计与 re-auth 门禁）。
+/// Desktop in-app fill injection (#12): inject the credential's username/password
+/// into the target window that held the foreground before the search popover
+/// was summoned. Scope (honesty boundaries; see the desktop_fill module
+/// comments):
+/// - Windows only (other platforms: `fill_supported()` = false, reported
+///   honestly);
+/// - only classic Win32 EDIT control hosts (self-drawn/browser hosts do not
+///   apply; browsers belong to the extension);
+/// - only Password-type credentials (the username + password two fields);
+/// - only inject into password boxes with the `ES_PASSWORD` style that are
+///   visible/enabled/not read-only — with no qualifying password box it
+///   refuses, and a plain box never impersonates a password box (security
+///   review P1 tightening);
+/// - **must first go through user confirmation**: the popover shows the target
+///   app name (executable file name) and window title, and only after the user
+///   explicitly confirms does the frontend call this command with
+///   `confirmed = true`; a missing/false `confirmed` is always rejected — no
+///   silent injection path exists.
+/// - **confirmation binds to a specific snapshot (P1 tightening)**: on confirm
+///   the frontend returns the `snapshot_id` generated at capture time; after
+///   decryption (the in-flight window) completes, the id is compared against
+///   the current slot under the lock — an empty slot (the popover collapsed and
+///   cleared it) reports `FILL_TARGET_DISCARDED` truthfully, and a slot
+///   replaced by a re-capture (B captured after confirming A) reports
+///   `FILL_TARGET_CHANGED` truthfully; an in-flight request is never
+///   redirected to a new target.
+/// The sensitive surface is on par with reveal_credential_secret: it goes
+/// through the `get_credential_data` decryption path (with its built-in audit
+/// and re-auth gate).
 #[command]
 pub async fn desktop_fill_credential(
     credential_id: String,
@@ -297,15 +338,17 @@ pub async fn desktop_fill_credential(
     snapshot_id: Option<String>,
     state: State<'_, AppState>,
 ) -> std::result::Result<ApiResponse<crate::desktop_fill::DesktopFillResult>, String> {
-    // 平台诚实性：非 Windows 不假装有功能
+    // Platform honesty: do not pretend the feature exists on non-Windows
     if !crate::desktop_fill::fill_supported() {
         return Ok(ApiResponse::error(
             "Desktop fill injection is only implemented on Windows".to_string(),
         ));
     }
-    // 用户确认面（安全评审 P1）：目标应用名已在浮窗展示并由用户显式确认，
-    // 后端只放行显式确认的调用。确认不是授权边界本身（目标指纹才是），
-    // 但它是"不可静默直写"的硬门。
+    // User confirmation surface (security review P1): the target app name was
+    // already shown in the popover and explicitly confirmed by the user, so the
+    // backend only admits explicitly confirmed calls. Confirmation is not the
+    // authorization boundary itself (the target fingerprint is), but it is the
+    // hard gate that forbids silent direct writes.
     if !confirmed {
         return Ok(ApiResponse::error(
             "Desktop fill requires explicit user confirmation of the target app".to_string(),
@@ -319,7 +362,8 @@ pub async fn desktop_fill_credential(
     let Some(service) = service_guard.as_ref() else {
         return Ok(ApiResponse::error("Service not initialized".to_string()));
     };
-    // 用户名走元数据（低敏），密码走解密路径（与 reveal 同一审计面）
+    // Username goes through metadata (low sensitivity), the password through the
+    // decryption path (the same audit surface as reveal)
     let credential = match service.get_credential(&uuid).await {
         Ok(Some(c)) => c,
         Ok(None) => return Ok(ApiResponse::error("Credential not found".to_string())),
@@ -346,14 +390,21 @@ pub async fn desktop_fill_credential(
     };
     let username = credential.username.unwrap_or_default();
 
-    // 确认绑定具体快照（P1 收紧）：解密是在途窗口——期间浮窗可能被重新
-    // 唤起捕获了别的目标，也可能已收起清槽。持锁按请求携带的 snapshot_id
-    // 绑定后克隆（注入是慢 FFI 调用，锁外执行；注入目标因此就是被确认的
-    // 那份快照，指纹重验证 + 逐控件重验证都锚定它，而非「此刻槽位里的目标」）。
-    // 绑定之后注入仍在锁外——第四轮取消边界收口：注入循环内每个字段写入
-    // 前经 `slot_recheck_for` 重查槽位（与绑定比较同一语义），清槽/换目标
-    // 即中止剩余写入并如实报部分完成（`FILL_TARGET_DISCARDED` /
-    // `FILL_TARGET_CHANGED`），不把凭据的任何字段写进非确认目标。
+    // Confirmation binds to a specific snapshot (P1 tightening): decryption is
+    // an in-flight window — during it the popover may be re-summoned and capture
+    // a different target, or may have collapsed and cleared the slot. Under the
+    // lock, bind to the snapshot carried by the request and then clone (the
+    // injection is a slow FFI call, executed outside the lock; the injection
+    // target is therefore exactly the confirmed snapshot, and both the
+    // fingerprint re-verification and the per-control re-verification anchor to
+    // it, not to "whatever is in the slot right now").
+    // The injection itself remains outside the lock — this closes the fourth
+    // round's cancellation boundary: before each field write inside the injection
+    // loop, `slot_recheck_for` re-checks the slot (the same semantics as the
+    // bind comparison); a cleared slot / changed target aborts the remaining
+    // writes and reports partial completion honestly (`FILL_TARGET_DISCARDED` /
+    // `FILL_TARGET_CHANGED`), never writing any credential field into a
+    // non-confirmed target.
     let target = {
         let guard = state.fill_target.lock().unwrap_or_else(|p| p.into_inner());
         match crate::desktop_fill::bind_confirmed_snapshot(guard.as_ref(), snapshot_id.as_deref()) {
@@ -391,9 +442,10 @@ pub async fn desktop_fill_credential(
     ) {
         Ok(result) => result,
         Err(crate::desktop_fill::FillError::Rejected(msg)) if msg == "CAPTURED_TARGET_INVALID" => {
-            // 失效目标即刻丢弃，避免下一次再撞同一堵墙——但只丢弃仍是
-            // 本请求确认的那份快照：槽位若已被新一轮捕获（别的目标），
-            // 不能替用户清掉它
+            // Discard the stale target immediately so the next attempt does not
+            // hit the same wall — but only discard the snapshot this request
+            // confirmed: if the slot has already been re-captured (a different
+            // target), do not clear it on the user's behalf
             let mut guard = state.fill_target.lock().unwrap_or_else(|p| p.into_inner());
             if guard.as_ref().map(|t| t.snapshot_id.as_str()) == Some(target.snapshot_id.as_str()) {
                 *guard = None;
@@ -431,7 +483,8 @@ pub async fn desktop_fill_credential(
                     ));
                 }
                 crate::desktop_fill::ConfirmBindRejection::SnapshotRequired => {
-                    // 不可达：重查闭包恒携带快照 id；防御性按协议错处理
+                    // Unreachable: the re-check closure always carries the snapshot id;
+                    // handled defensively as a protocol error
                     return Ok(ApiResponse::error_maybe_coded(
                         Some("FILL_TARGET_SNAPSHOT_REQUIRED".to_string()),
                         "Desktop fill confirmation must carry the snapshot id it confirmed"

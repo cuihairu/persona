@@ -1,20 +1,30 @@
-//! test-only crate（见 Cargo.toml 头注释；库代码只有 READBACK 帧编解码——
-//! 平台无关纯函数，宿主 bin 与跨进程套件共用，单元测试两平台都能跑）。
+//! Test-only crate (see the header comment in Cargo.toml; the library code is
+//! just READBACK frame encoding/decoding — platform-independent pure functions
+//! shared by the host bin and the cross-process suite, with unit tests runnable
+//! on both platforms).
 //!
-//! # READBACK 帧协议（靶进程 `fill-test-host` 的 `readback` 命令打回格式）
+//! # READBACK frame protocol (the format the target process `fill-test-host`
+//! sends back for the `readback` command)
 //!
-//! **历史缺陷（第四轮收口）**：帧曾是「`READBACK` + 两个空格分隔的 UTF-16
-//! hex 字段」。空字段编码为空 token，空格分隔解析把连续空格折叠——
-//! 「username 空 + password 非空」的帧只有 2 段，被当成协议残帧一律按
-//! 双空处理：单字段残留（最需要检出的形态）无法被检出，「零残留」断言
-//! 不成立（红先行：回归测试在旧语义上失败入档，见 run4-red 日志）。
+//! **Historical defect (closed out in round four)**: the frame used to be
+//! "`READBACK` + two space-separated UTF-16 hex fields". An empty field encoded
+//! to an empty token, and whitespace-separated parsing collapsed consecutive
+//! spaces — a frame with "empty username + non-empty password" had only 2
+//! segments, so it was treated as a malformed frame and always handled as double
+//! empty: a single-field residue (the very shape most in need of detection) could
+//! not be detected, and the "zero residue" assertion did not hold (red first: the
+//! regression test failing under the old semantics was recorded, see the
+//! run4-red log).
 //!
-//! **现协议（长度前缀）**：`READBACK <unit-count>:<hex> <unit-count>:<hex>`，
-//! hex 为每 UTF-16 单元 4 位小写；空字段编码为 `0:`（无 hex 位），段数
-//! 不随字段内容变化，空字段信息被长度前缀保住；字段数不对/前缀非法一律
-//! 报协议错，绝不静默吞成双空。
+//! **Current protocol (length-prefixed)**:
+//! `READBACK <unit-count>:<hex> <unit-count>:<hex>`, where hex is 4 lowercase
+//! digits per UTF-16 unit; an empty field encodes as `0:` (no hex digits), the
+//! segment count does not vary with field content, and the empty-field
+//! information is preserved by the length prefix; a wrong field count or invalid
+//! prefix always reports a protocol error, never silently swallowed as double
+//! empty.
 
-/// 把 username/password 的 UTF-16 hex 文本编码为 READBACK 帧。
+/// Encode the username/password UTF-16 hex text into a READBACK frame.
 pub fn encode_readback_frame(user_hex: &str, pwd_hex: &str) -> String {
     format!(
         "READBACK {}:{} {}:{}",
@@ -25,12 +35,14 @@ pub fn encode_readback_frame(user_hex: &str, pwd_hex: &str) -> String {
     )
 }
 
-/// 解析 READBACK 帧 → (username, password)。
+/// Parse a READBACK frame -> (username, password).
 ///
-/// 帧载荷恒为两个 `unit-count:hex` 字段（空字段 = `0:`，无 hex 位）——
-/// 段数不随字段内容变化，空字段信息被长度前缀保住；字段数不对/前缀
-/// 非法一律报协议错（不再静默吞成双空——那会把「单字段残留」误判成
-/// 「零残留」）。
+/// The frame payload is always two `unit-count:hex` fields (an empty field is
+/// `0:`, with no hex digits) — the segment count does not vary with field
+/// content, so the empty-field information is preserved by the length prefix; a
+/// wrong field count or an invalid prefix always reports a protocol error (no
+/// longer silently swallowed as double empty — that would misjudge a
+/// "single-field residue" as "zero residue").
 pub fn parse_readback_frame(line: &str) -> Result<(String, String), String> {
     let malformed = || format!("malformed READBACK frame: {line:?}");
     let Some(payload) = line.strip_prefix("READBACK") else {
@@ -53,7 +65,7 @@ pub fn parse_readback_frame(line: &str) -> Result<(String, String), String> {
     Ok((decode_field(parts[0])?, decode_field(parts[1])?))
 }
 
-/// UTF-16 hex（每单元 4 位小写十六进制）→ String
+/// UTF-16 hex (4 lowercase hex digits per unit) -> String
 pub fn decode_utf16_hex(hex: &str) -> String {
     let units: Vec<u16> = (0..hex.len() / 4)
         .map(|i| u16::from_str_radix(&hex[4 * i..4 * i + 4], 16).expect("hex unit"))
@@ -61,8 +73,8 @@ pub fn decode_utf16_hex(hex: &str) -> String {
     String::from_utf16_lossy(&units)
 }
 
-/// String → UTF-16 hex（每单元 4 位小写十六进制），与
-/// `fill-test-host` 的 `control_text_hex` 同一编码。
+/// String -> UTF-16 hex (4 lowercase hex digits per unit), using the same
+/// encoding as `fill-test-host`'s `control_text_hex`.
 pub fn encode_utf16_hex(value: &str) -> String {
     value.encode_utf16().map(|u| format!("{u:04x}")).collect()
 }
@@ -71,7 +83,7 @@ pub fn encode_utf16_hex(value: &str) -> String {
 mod readback_frame_tests {
     use super::{decode_utf16_hex, encode_readback_frame, encode_utf16_hex, parse_readback_frame};
 
-    /// 双框非空：最常见形态（回归保护）
+    /// Both fields non-empty: the most common shape (regression protection)
     #[test]
     fn both_fields_non_empty_parse_through() {
         let line = encode_readback_frame(
@@ -83,10 +95,13 @@ mod readback_frame_tests {
         assert_eq!(p, "s3cret-Пароль⚡");
     }
 
-    /// **回归（第四轮收口）**：username 空 + password 非空——单字段残留
-    /// 是「零残留」证明最需要检出的形态。旧空格分隔协议把空字段编码为
-    /// 空 token，连续空格折叠后整帧只剩 2 段、非空字段被吞成双空；长度
-    /// 前缀协议下空字段 = `0:`，解析必须如实返回 ("", "pw")。
+    /// **Regression (closed out in round four)**: empty username + non-empty
+    /// password — a single-field residue is the shape most in need of detection
+    /// for the "zero residue" proof. The old space-separated protocol encoded an
+    /// empty field as an empty token, and after collapsing consecutive spaces the
+    /// whole frame had only 2 segments with the non-empty field swallowed into
+    /// double empty; under the length-prefixed protocol an empty field is `0:`,
+    /// so parsing must return ("", "pw") faithfully.
     #[test]
     fn empty_username_non_empty_password_must_be_detected() {
         let line = encode_readback_frame("", &encode_utf16_hex("pw"));
@@ -98,8 +113,9 @@ mod readback_frame_tests {
         );
     }
 
-    /// **回归（第四轮收口）**：username 非空 + password 空——同理必须
-    /// 检出 username 残留（旧协议 2 段 → 双空）。
+    /// **Regression (closed out in round four)**: non-empty username + empty
+    /// password — by the same argument a username residue must be detected (the
+    /// old protocol gave 2 segments -> double empty).
     #[test]
     fn non_empty_username_empty_password_must_be_detected() {
         let line = encode_readback_frame(&encode_utf16_hex("alice"), "");
@@ -111,8 +127,9 @@ mod readback_frame_tests {
         assert_eq!(p, "", "empty password must stay empty");
     }
 
-    /// 长度前缀协议不变量：帧段数恒定（恒为 3 段：READBACK + 2 个
-    /// `count:hex` 字段），字段内容（含空）不改变结构
+    /// Length-prefixed protocol invariant: the frame segment count is constant
+    /// (always 3 segments: READBACK + 2 `count:hex` fields), and the field
+    /// content (including empty) does not change the structure
     #[test]
     fn length_prefixed_protocol_preserves_empty_fields() {
         let line = encode_readback_frame("", &encode_utf16_hex("pw"));
@@ -127,9 +144,10 @@ mod readback_frame_tests {
         assert_eq!(p, "pw");
     }
 
-    /// 双空帧（竞态用例的预期结局）：`READBACK 0: 0:` 是合法协议帧，
-    /// 解析为双空；**裸 `READBACK`（旧残帧形态）必须报协议错**——不再
-    /// 静默按双空处理
+    /// Double-empty frame (the expected outcome for the race case):
+    /// `READBACK 0: 0:` is a legal protocol frame that parses to double empty;
+    /// **a bare `READBACK` (the old truncated-frame shape) must report a
+    /// protocol error** — no longer silently handled as double empty
     #[test]
     fn both_empty_frame_parses_to_double_empty_and_bare_frame_is_an_error() {
         let (u, p) = parse_readback_frame(&encode_readback_frame("", "")).expect("frame");
@@ -140,7 +158,8 @@ mod readback_frame_tests {
         assert!(parse_readback_frame("READBACK 1:00 1:0").is_err());
     }
 
-    /// hex 编解码 round-trip（含非 BMP 字符，两单元组成一个码点）
+    /// hex encode/decode round-trip (including non-BMP characters, where two units
+    /// form one code point)
     #[test]
     fn utf16_hex_roundtrip() {
         for value in ["", "alice", "s3cret-Пароль⚡", "\u{1F512}\u{10FFFF}"] {

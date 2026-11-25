@@ -37,7 +37,7 @@ const identity = (id: string, name: string): Identity =>
     updated_at: '2026-01-01T00:00:00Z',
   }) as unknown as Identity;
 
-/** 挂载 hook 并返回它收到的 open-credential 回调 */
+/** Mounts the hook and returns the open-credential callback it received */
 const mount = async () => {
   const Probe = () => {
     useQuickAccessBridge();
@@ -56,7 +56,7 @@ beforeEach(() => {
   useAppStore.setState({
     identities: [identity('i1', 'Personal'), identity('i2', 'Work')],
     currentIdentity: identity('i1', 'Personal'),
-    // 上一个用例写入的跳转目标必须复位，否则"忽略未知身份"会读到残留
+    // The jump target written by a previous case must be reset, otherwise "ignore an unknown identity" would read a leftover
     pendingCredentialSelection: null,
     error: null,
   });
@@ -111,11 +111,11 @@ describe('hooks/useQuickAccessBridge', () => {
     const handler = await mount();
     await handler({ payload: { identity_id: 'i2', credential_id: 'c9' } });
 
-    // 落库失败不阻断跳转（主界面按内存态继续切）
+    // A persistence failure does not block the jump (the main UI keeps switching on its in-memory state)
     await waitFor(() => {
       expect(useAppStore.getState().currentIdentity?.id).toBe('i2');
     });
-    // 但失败必须可见：workspace 活动身份仍指旧身份，静默成功会误导调用方
+    // But the failure must be visible: the workspace's active identity still points at the old one, so a silent success would mislead the caller
     expect(toastError).toHaveBeenCalledWith('db busy');
     expect(useAppStore.getState().error).toBe('db busy');
   });

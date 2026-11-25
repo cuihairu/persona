@@ -53,7 +53,7 @@ describe('components/QuickAccessSection', () => {
     await waitFor(() => {
       expect(screen.getByTestId('quick-access-status')).toHaveTextContent('未生效');
     });
-    // 原因原样透出（英文是 OS/插件原文，不翻译成"未知错误"）
+    // The reason is surfaced verbatim (the English text is the OS/plugin original, not translated into a generic "unknown error")
     expect(screen.getByTestId('quick-access-status')).toHaveTextContent(
       'Another process has already registered this shortcut',
     );
@@ -63,7 +63,7 @@ describe('components/QuickAccessSection', () => {
     mockStatus.mockResolvedValue({ success: true, data: status({}) });
     render(<QuickAccessSection />);
 
-    // 首次 render（status 还没回来）按钮禁用，避免用未加载的状态去改配置
+    // First render (status has not come back yet): the button is disabled, so the config is not mutated with an unloaded status
     expect(screen.getByTestId('quick-access-toggle')).toBeDisabled();
     await waitFor(() => {
       expect(screen.getByTestId('quick-access-toggle')).not.toBeDisabled();
@@ -77,7 +77,7 @@ describe('components/QuickAccessSection', () => {
       data: status({ enabled: false, registered_accelerator: null }),
     });
     render(<QuickAccessSection />);
-    // 等状态真的落到 state（mock 被调用 ≠ setState 已生效，控件此时仍禁用）
+    // Wait for the status to actually land in state (the mock being called is not the same as setState having taken effect; the control is still disabled at that point)
     await waitFor(() => expect(screen.getByTestId('quick-access-toggle')).not.toBeDisabled());
 
     fireEvent.click(screen.getByTestId('quick-access-toggle'));
@@ -97,7 +97,7 @@ describe('components/QuickAccessSection', () => {
       data: status({ configured_accelerator: 'Control+Alt+K', registered_accelerator: 'Control+Alt+K' }),
     });
     render(<QuickAccessSection />);
-    // 等状态真的落到 state（mock 被调用 ≠ setState 已生效，控件此时仍禁用）
+    // Wait for the status to actually land in state (the mock being called is not the same as setState having taken effect; the control is still disabled at that point)
     await waitFor(() => expect(screen.getByTestId('quick-access-toggle')).not.toBeDisabled());
 
     fireEvent.change(screen.getByTestId('quick-access-hotkey'), {
@@ -120,7 +120,7 @@ describe('components/QuickAccessSection', () => {
       data: status({ configured_accelerator: 'Control+Shift+Space' }),
     });
     render(<QuickAccessSection />);
-    // 等状态真的落到 state（mock 被调用 ≠ setState 已生效，控件此时仍禁用）
+    // Wait for the status to actually land in state (the mock being called is not the same as setState having taken effect; the control is still disabled at that point)
     await waitFor(() => expect(screen.getByTestId('quick-access-toggle')).not.toBeDisabled());
 
     fireEvent.click(screen.getByTestId('quick-access-reset'));
@@ -134,7 +134,7 @@ describe('components/QuickAccessSection', () => {
     mockStatus.mockResolvedValue({ success: true, data: status({}) });
     mockSet.mockResolvedValue({ success: false, error: 'invalid accelerator: empty token' });
     render(<QuickAccessSection />);
-    // 等状态真的落到 state（mock 被调用 ≠ setState 已生效，控件此时仍禁用）
+    // Wait for the status to actually land in state (the mock being called is not the same as setState having taken effect; the control is still disabled at that point)
     await waitFor(() => expect(screen.getByTestId('quick-access-toggle')).not.toBeDisabled());
 
     fireEvent.change(screen.getByTestId('quick-access-hotkey'), { target: { value: 'Ctrl+' } });
@@ -152,13 +152,13 @@ describe('components/QuickAccessSection', () => {
       data: status({ configured_accelerator: 'Control+Alt+K', registered_accelerator: null, error: 'taken' }),
     });
     render(<QuickAccessSection />);
-    // 等状态真的落到 state（mock 被调用 ≠ setState 已生效，控件此时仍禁用）
+    // Wait for the status to actually land in state (the mock being called is not the same as setState having taken effect; the control is still disabled at that point)
     await waitFor(() => expect(screen.getByTestId('quick-access-toggle')).not.toBeDisabled());
 
     fireEvent.change(screen.getByTestId('quick-access-hotkey'), { target: { value: 'Control+Alt+K' } });
     fireEvent.click(screen.getByTestId('quick-access-save'));
 
-    // 抢注失败不是命令失败：状态面更新 + 未生效提示，不弹错误 toast 文案
+    // A failed registration grab is not a command failure: the status surface updates with an inactive hint, and no error toast copy is shown
     await waitFor(() => {
       expect(screen.getByTestId('quick-access-status')).toHaveTextContent('未生效');
     });
@@ -172,7 +172,7 @@ describe('components/QuickAccessSection', () => {
     });
     mockOpen.mockResolvedValue({ success: true, data: true });
     render(<QuickAccessSection />);
-    // 等状态真的落到 state（mock 被调用 ≠ setState 已生效，控件此时仍禁用）
+    // Wait for the status to actually land in state (the mock being called is not the same as setState having taken effect; the control is still disabled at that point)
     await waitFor(() => expect(screen.getByTestId('quick-access-toggle')).not.toBeDisabled());
 
     fireEvent.click(screen.getByTestId('quick-access-open'));

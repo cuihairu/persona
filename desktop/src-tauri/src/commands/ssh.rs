@@ -42,15 +42,21 @@ pub async fn start_ssh_agent<R: tauri::Runtime>(
         app,
         state.ssh_approvals.clone(),
     ));
-    // biometric provider 与解锁屏/init_service 注入的是同一份：SSH key 的
-    // require_biometric 策略走 OS 认证弹框（Agent::new 默认拒绝，注入才放行）
+    // The biometric provider is the same one injected into the unlock screen/
+    // init_service: SSH keys whose require_biometric policy is set go through
+    // the OS authentication dialog (Agent::new denies by default; the injection
+    // is what allows it)
     let biometric = state.biometric_provider.clone();
-    // 显式传参取代 set_var：多线程进程里写进程级 env 与并发 getenv 是数据
-    // 竞争（Rust 2024 起 set_var 为 unsafe），且主密码一旦进 env 就终身
-    // 驻留。override 只活在 agent 任务栈上，主密码在密钥加载后被消费。
-    // 稳定 socket 路径：写进 ~/.ssh/config 的 IdentityAgent 必须跨重启不
-    // 变；daemon 缺省路径带 pid，只留给一次性 CLI 场景。外部已指定（测试
-    // guard 预占 bind 失败路径/自定义部署）则尊重不覆盖。
+    // Explicit parameters instead of set_var: writing process-level env in a
+    // multithreaded process races with concurrent getenv (set_var is unsafe
+    // as of Rust 2024), and once the master password enters env it stays there
+    // forever. The override only lives on the agent task's stack; the master
+    // password is consumed after key loading.
+    // Stable socket path: the IdentityAgent written into ~/.ssh/config must
+    // survive restarts unchanged; the daemon default path embeds a pid and is
+    // reserved for one-shot CLI scenarios. If set externally (test guards that
+    // reserve the bind-failure path / custom deployments), respect it rather
+    // than overwriting.
     let injected_socket_path = std::env::var_os("PERSONA_AGENT_SOCKET_PATH")
         .filter(|v| !v.is_empty())
         .map(std::path::PathBuf::from);
@@ -62,12 +68,15 @@ pub async fn start_ssh_agent<R: tauri::Runtime>(
             .or_else(|| Some(crate::ssh_integration::agent_stable_socket())),
         require_confirm: Some(true),
     };
-    // 启动失败不得静默：agent 任务把 run_agent_with_hooks 的错误存进共享槽位，
-    // 就绪轮询读它回传 UI（旧实现只 eprintln，UI 恒报"运行中"假绿）。
+    // Startup failure must not be silent: the agent task stores the
+    // run_agent_with_hooks error into a shared slot, and the readiness poll
+    // reads it to report back to the UI (the old implementation only eprintln'd,
+    // so the UI always showed a false-green "running").
     let startup_error = Arc::new(std::sync::Mutex::new(None::<String>));
     let startup_error_task = Arc::clone(&startup_error);
-    // tauri 全局运行时而非调用方的 tokio 上下文：mock_app（测试）的
-    // reactor 上 socket IO 永不唤醒，agent 必须活在健康的多线程运行时里。
+    // The tauri global runtime instead of the caller's tokio context: on
+    // mock_app's (test) reactor, socket IO never wakes up, so the agent must
+    // live on a healthy multithreaded runtime.
     let handle = tauri::async_runtime::spawn(async move {
         if let Err(err) = persona_ssh_agent::run_agent_with_hooks_and_env(
             Some(handler as Arc<dyn persona_ssh_agent::ApprovalHandler>),
@@ -84,9 +93,11 @@ pub async fn start_ssh_agent<R: tauri::Runtime>(
     });
     *handle_guard = Some(handle);
 
-    // 就绪轮询：state 目录的 socket 记录文件出现 = daemon 完成 bind（写文件
-    // 紧随 bind 成功之后）。上限 3s；任务提前退出立即判失败。旧实现的
-    // 固定 400ms + running_hint=true 在慢启动与启动失败两态都撒谎。
+    // Readiness poll: the socket record file appearing in the state dir = the
+    // daemon finished bind (the file is written right after a successful bind).
+    // 3s cap; an early task exit is an immediate failure. The old
+    // implementation's fixed 400ms + running_hint=true lied in both the
+    // slow-start and startup-failure cases.
     let sock_file = agent_state_dir().join("ssh-agent.sock");
     let deadline = std::time::Instant::now() + Duration::from_secs(3);
     let mut ready = false;
@@ -143,19 +154,21 @@ pub async fn stop_ssh_agent(
     Ok(ApiResponse::success(true))
 }
 
-/// 停止 SSH agent 的实际逻辑（`stop_ssh_agent` 命令与
-/// `set_feature_flags` 关开关联动共用）。
+/// The actual logic for stopping the SSH agent (shared by the
+/// `stop_ssh_agent` command and the `set_feature_flags` toggle interplay).
 pub(crate) async fn stop_ssh_agent_internal(state: &State<'_, AppState>) {
     if let Some(handle) = state.agent_handle.lock().await.take() {
         handle.abort();
     }
-    // 丢弃所有未应答审批：sender 被 drop 后 agent 侧收到断连 → 拒签
+    // Drop all unanswered approvals: once the sender is dropped the agent side
+    // sees a disconnect -> refuses to sign
     if let Ok(mut map) = state.ssh_approvals.lock() {
         map.clear();
     }
     std::env::remove_var("PERSONA_AGENT_REQUIRE_CONFIRM");
-    // PERSONA_AGENT_SOCKET_PATH 不在这里清：测试 guard 预设的值由其 Drop
-    // 恢复；未预设时的注入值由 agent task 尾部回收。
+    // PERSONA_AGENT_SOCKET_PATH is not cleared here: a value preset by a test
+    // guard is restored by its Drop; the injected value when nothing was preset
+    // is reclaimed at the tail of the agent task.
     cleanup_agent_state_files();
 }
 
@@ -169,14 +182,17 @@ pub struct SshApprovalRespondRequest {
     pub allow: bool,
 }
 
-/// 集成状态三态检测：已启用（锚点块指向当前 socket）/ 未启用（无块）/
-/// 配置异常（块存在但指向别处，重新启用即修复）。用户块外的配置一律只读。
+/// Three-state integration status detection: enabled (the anchor block points
+/// at the current socket) / not enabled (no block) / config anomaly (the block
+/// exists but points elsewhere; re-enabling fixes it). Anything outside the
+/// user's managed block is strictly read-only.
 #[command(rename_all = "snake_case")]
 pub fn ssh_agent_integration_status() -> ApiResponse<crate::ssh_integration::SshIntegrationStatus> {
     use crate::ssh_integration as si;
 
     let config_path = si::ssh_config_path();
-    // 读失败如实上报（权限/IO/非 UTF-8），绝不静默当空文件
+    // Report read failures honestly (permissions/IO/non-UTF-8); never silently
+    // treat them as an empty file
     let (config, read_error) = match std::fs::read_to_string(&config_path) {
         Ok(c) => (c, None),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => (String::new(), None),
@@ -185,7 +201,8 @@ pub fn ssh_agent_integration_status() -> ApiResponse<crate::ssh_integration::Ssh
     let value = si::identity_agent_value();
     let managed = si::managed_block_identity_agent(&config);
     let enabled = managed.as_deref() == Some(value.as_str());
-    // anomaly 存实际指向值（非句子）：前端按 locale 渲染提示文案
+    // anomaly stores the actual pointed-to value (not a sentence): the frontend
+    // renders the hint text per locale
     let anomaly = managed.as_ref().filter(|v| *v != value.as_str()).cloned();
     ApiResponse::success(si::SshIntegrationStatus {
         enabled,
@@ -200,8 +217,10 @@ pub fn ssh_agent_integration_status() -> ApiResponse<crate::ssh_integration::Ssh
     })
 }
 
-/// ~/.ssh/config 的 agent 面分析：Include 展开 + 环境变量 + socket 连通探测。
-/// 只读不动配置；损坏/无权限落 read_error 字段如实显示，不崩。
+/// Agent-side analysis of ~/.ssh/config: Include expansion + environment
+/// variables + socket reachability probing.
+/// Read-only, does not touch the config; a corrupted/permission-denied file
+/// lands in the read_error field and is displayed as-is, without crashing.
 #[command(rename_all = "snake_case")]
 pub fn ssh_agent_config_analysis() -> ApiResponse<crate::ssh_integration::SshConfigAgentAnalysis> {
     use crate::ssh_integration as si;
@@ -213,15 +232,18 @@ pub fn ssh_agent_config_analysis() -> ApiResponse<crate::ssh_integration::SshCon
     ApiResponse::success(si::analyze_config(&config_path, ssh_auth_sock))
 }
 
-/// 一键启用：幂等 upsert 锚点块（损坏块收敛重写），原子写回。
-/// 纯文件操作不解锁；agent 是否运行不影响写入（socket 路径是常量）。
+/// One-click enable: idempotently upsert the anchor block (a corrupted block
+/// is normalized by rewriting), written back atomically.
+/// A pure file operation requiring no unlock; whether the agent is running
+/// does not affect the write (the socket path is a constant).
 #[command(rename_all = "snake_case")]
 pub fn ssh_agent_integration_enable(
 ) -> std::result::Result<ApiResponse<crate::ssh_integration::SshIntegrationStatus>, String> {
     use crate::ssh_integration as si;
 
     let config_path = si::ssh_config_path();
-    // 读失败（权限/IO）时拒绝写：空串 upsert 会把用户 config 整个覆盖掉
+    // Refuse to write on a read failure (permissions/IO): upserting an empty
+    // string would overwrite the user's entire config
     let config = match std::fs::read_to_string(&config_path) {
         Ok(c) => c,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
@@ -238,7 +260,8 @@ pub fn ssh_agent_integration_enable(
     Ok(ssh_agent_integration_status())
 }
 
-/// 一键停用：整块移除锚点块（只动块内），用户其余配置不碰。
+/// One-click disable: remove the anchor block as a whole (only touching inside
+/// the block), leaving the rest of the user's config alone.
 #[command(rename_all = "snake_case")]
 pub fn ssh_agent_integration_disable(
 ) -> std::result::Result<ApiResponse<crate::ssh_integration::SshIntegrationStatus>, String> {
@@ -260,8 +283,9 @@ pub fn ssh_agent_integration_disable(
     Ok(ssh_agent_integration_status())
 }
 
-/// 导入前预览（不解锁也能给指纹：OpenSSH 容器的公钥半边是明文）。
-/// 键序沿 SshAgentStatus/SshKeySummary 的 snake_case 契约。
+/// Pre-import preview (a fingerprint is available without unlocking: the
+/// public half of an OpenSSH container is plaintext).
+/// Key order follows the snake_case contract of SshAgentStatus/SshKeySummary.
 #[derive(Serialize)]
 pub struct SshKeyInspectDto {
     pub file_name: String,
@@ -273,7 +297,7 @@ pub struct SshKeyInspectDto {
     pub encrypted: bool,
 }
 
-/// 入库结果。
+/// Import result.
 #[derive(Serialize)]
 pub struct SshKeyImportedDto {
     pub credential_id: String,
@@ -291,8 +315,9 @@ pub struct ImportSshKeyRequest {
     pub passphrase: Option<String>,
 }
 
-/// 读文件并解析私钥容器（格式自动识别：OpenSSH/PKCS#8/PKCS#1/SEC1），
-/// 返回导入确认所需字段（不入库）。
+/// Read a file and parse the private key container (format auto-detected:
+/// OpenSSH/PKCS#8/PKCS#1/SEC1), returning the fields needed for import
+/// confirmation (without importing into the vault).
 #[command(rename_all = "snake_case")]
 pub async fn inspect_ssh_key_file(
     path: String,
@@ -320,7 +345,7 @@ pub async fn inspect_ssh_key_file(
             }))
         }
         Err(e) => {
-            // ssh_import 直接返回 PersonaError（非 anyhow 包装），先归一
+            // ssh_import returns PersonaError directly (not wrapped in anyhow); normalize first
             let err: anyhow::Error = e.into();
             let (code, msg) = map_persona_error(&err);
             match code {
@@ -331,8 +356,9 @@ pub async fn inspect_ssh_key_file(
     }
 }
 
-/// 导入私钥文件入库为 SshKey 条目（格式自动识别）：解锁（如受保护）→
-/// 私钥以明文 OpenSSH PEM 存 `SshKeyData.private_key`，封存由 per-item key 负责。
+/// Import a private key file into the vault as an SshKey entry (format
+/// auto-detected): unlock if protected -> the private key is stored as plaintext
+/// OpenSSH PEM in `SshKeyData.private_key`; sealing is the per-item key's job.
 #[command(rename_all = "snake_case")]
 pub async fn import_ssh_key(
     request: ImportSshKeyRequest,
@@ -364,7 +390,8 @@ pub async fn import_ssh_key(
     match service_guard.as_ref() {
         Some(service) => match Uuid::from_str(&request.identity_id) {
             Ok(identity_uuid) => {
-                // 条目名回退：--name > 钥匙 comment > 文件名 > 兜底
+                // Item name fallback: --name > key comment > file name > last
+                // resort
                 let file_name = Path::new(&request.path)
                     .file_name()
                     .map(|s| s.to_string_lossy().to_string());
@@ -409,7 +436,8 @@ pub async fn import_ssh_key(
     }
 }
 
-/// 页面内生成结果：与导入 DTO 同形（前端复用同一成功态展示）。
+/// Result of an in-page generation: same shape as the import DTO (the
+/// frontend reuses the same success-state view).
 #[derive(Serialize)]
 pub struct SshKeyGeneratedDto {
     pub credential_id: String,
@@ -422,23 +450,26 @@ pub struct SshKeyGeneratedDto {
 #[derive(serde::Deserialize)]
 pub struct GenerateSshKeyRequest {
     pub identity_id: String,
-    /// `ed25519`（默认口径）/ `rsa`（4096）/ `ecdsa`（NIST P-256）
+    /// `ed25519` (default) / `rsa` (4096) / `ecdsa` (NIST P-256)
     pub key_type: String,
-    /// 写入钥匙与公钥行的 comment
+    /// Comment written into the key and the public key line
     pub comment: Option<String>,
-    /// 条目名；空缺时回退 comment > "SSH Key (generated)"
+    /// Item name; falls back to comment > "SSH Key (generated)" when empty
     pub name: Option<String>,
 }
 
-/// 页面内生成 SSH 密钥对并入库：私钥明文 PEM 存 `SshKeyData.private_key`，
-/// 封存由 per-item key 负责（与导入通道同构）。
-/// 生成（RSA 4096 可能数十秒）在拿 service 锁之前完成，不阻塞其它命令。
+/// Generate an SSH key pair in-page and store it: the plaintext PEM private
+/// key goes into `SshKeyData.private_key`, with sealing handled by the
+/// per-item key (isomorphic to the import channel).
+/// Generation (RSA 4096 can take tens of seconds) finishes before taking the
+/// service lock, so it does not block other commands.
 #[command(rename_all = "snake_case")]
 pub async fn generate_ssh_key(
     request: GenerateSshKeyRequest,
     state: State<'_, AppState>,
 ) -> std::result::Result<ApiResponse<SshKeyGeneratedDto>, String> {
-    // 未知类型在这里就地报错（不给 service 锁，也不碰 workspace）
+    // An unknown type errors right here (no service lock, and the workspace
+    // is not touched)
     let generated = match persona_core::crypto::ssh_generate::generate_ssh_keypair(
         &request.key_type,
         request.comment.as_deref().unwrap_or_default(),
@@ -455,7 +486,8 @@ pub async fn generate_ssh_key(
     match service_guard.as_ref() {
         Some(service) => match Uuid::from_str(&request.identity_id) {
             Ok(identity_uuid) => {
-                // 条目名回退与导入通道一致：显式名 > comment > 兜底
+                // Same item-name fallback as the import channel: explicit
+                // name > comment > last resort
                 let name = request
                     .name
                     .filter(|n| !n.trim().is_empty())
@@ -579,8 +611,10 @@ pub async fn get_ssh_keys(
         };
         for credential in creds {
             if credential.credential_type == CredentialType::SshKey {
-                // 指纹/算法/公钥行从凭据数据现算；单钥取数失败（门禁、
-                // 数据损坏）只影响本行的展示列，不炸整个列表
+                // Fingerprint / algorithm / public key line are computed on
+                // the fly from the credential data; a fetch failure for one
+                // key (gate, corrupted data) only affects this row's display
+                // columns, not the whole list
                 let key_info = {
                     let service_guard = state.service.lock().await;
                     match service_guard.as_ref() {

@@ -1,13 +1,13 @@
-/** 侧栏偏好：整栏收起 + 各分组折叠，随主题偏好一样落 localStorage */
+/** Sidebar preferences: full-column collapse plus per-group folding, persisted to localStorage just like the theme preference */
 export const SIDEBAR_PREFS_STORAGE_KEY = 'persona-sidebar-prefs';
 
-/** 可折叠的分组 key（与 sidebarNav 的四个分组标题一一对应） */
+/** Collapsible group keys (one-to-one with the four group headings in sidebarNav) */
 export type SidebarGroupKey = 'categories' | 'vaults' | 'tags' | 'tools';
 
 export interface SidebarPrefs {
-  /** 整栏收成图标条 */
+  /** Collapse the whole column into an icon strip */
   collapsed: boolean;
-  /** 折叠的分组 key 列表 */
+  /** List of collapsed group keys */
   collapsedGroups: SidebarGroupKey[];
 }
 
@@ -28,22 +28,22 @@ const sanitize = (raw: unknown): SidebarPrefs => {
   };
 };
 
-/** 读取持久化偏好：无值/越界/环境无 localStorage 一律回退默认展开 */
+/** Reads the persisted preferences: missing value, out-of-range value, or an environment without localStorage all fall back to the default expanded state */
 export const readSidebarPrefs = (): SidebarPrefs => {
   try {
     const raw = localStorage.getItem(SIDEBAR_PREFS_STORAGE_KEY);
     if (raw !== null) return sanitize(JSON.parse(raw));
   } catch {
-    // jsdom、隐私模式、坏 JSON：静默走默认
+    // jsdom, private mode, bad JSON: silently use the default
   }
   return { ...DEFAULT_SIDEBAR_PREFS };
 };
 
-/** 整份偏好写回（读改写都经这里，避免两个 key 漂移） */
+/** Writes the whole preference object back (all read-modify-write flows go through here so the two keys never drift) */
 export const writeSidebarPrefs = (prefs: SidebarPrefs): void => {
   try {
     localStorage.setItem(SIDEBAR_PREFS_STORAGE_KEY, JSON.stringify(prefs));
   } catch {
-    // 环境无存储或写满：偏好不落盘不致命
+    // No storage in the environment or quota full: losing the preference is not fatal
   }
 };

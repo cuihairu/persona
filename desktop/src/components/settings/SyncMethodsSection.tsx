@@ -3,21 +3,22 @@ import toast from 'react-hot-toast';
 import { useTranslation } from 'react-i18next';
 import { personaAPI } from '@/utils/api';
 
-/** 同步方式区块：两个独立开关（跨设备同步默认开 / 账号同步默认关）。
+/** Sync methods section: two independent toggles (cross-device sync on by default / account sync off by default).
  *
- * 语义红线（2026-11-23 用户令「设置页需要对应的设置选项，同步的方式哪些开启」）：
- * - 与 `settings.sync.enabled`（审计事件上报）是**两套独立语义，绝不合并**。
- * - 开关只控设置页入口可用性，**不删 keyring、不触发网络**——关闭 ≠ 离开
- *   同步组、组密钥仍在钥匙串。
- * - 派生态（实际是否入组）是运行时 keyring 事实，只读展示；读取失败静默。
- * - 关闭不乐观翻转：保存成功由服务端真相回填，失败保持真实状态。
+ * Semantic red line (2026-11-23 user directive "the settings page needs the matching options for which sync methods are on"):
+ * - Independent of `settings.sync.enabled` (audit event reporting) — **two independent semantics, never merged**.
+ * - The toggles only control settings-page entry availability, **never delete the keyring and never trigger
+ *   network** — off ≠ leaving the sync group; the group key stays in the keychain.
+ * - The derived state (actually joined or not) is a runtime keyring fact, shown read-only; read failures are silent.
+ * - No optimistic flip on disable: a successful save is backfilled from server truth; on failure the real state stays.
  */
 const SyncMethodsSection: React.FC = () => {
   const { t } = useTranslation();
-  // 偏好来自服务端真相（旧 JSON 缺键由后端 serde 回退默认：跨设备开、账号关）
+  // Preferences come from server truth (a missing key in old JSON falls back to the backend serde defaults:
+  // cross-device on, account off)
   const [crossDevice, setCrossDevice] = useState<boolean | null>(null);
   const [account, setAccount] = useState<boolean | null>(null);
-  // 派生态（只读、免解锁）：keyring 事实
+  // Derived state (read-only, no unlock needed): keyring facts
   const [crossJoined, setCrossJoined] = useState<boolean | null>(null);
   const [accountJoined, setAccountJoined] = useState<boolean | null>(null);
   const [saving, setSaving] = useState(false);
@@ -32,16 +33,16 @@ const SyncMethodsSection: React.FC = () => {
         setCrossDevice(sm ? sm.cross_device_sync : true);
         setAccount(sm ? sm.account_sync : false);
       } catch {
-        // 读取失败静默：开关保持禁用态，不打断设置页（同 SyncDevicesSection 口径）
+        // Read failures are silent: toggles stay disabled, the settings page is not disrupted (same policy as SyncDevicesSection)
       }
     };
     const loadCrossJoined = async (): Promise<void> => {
       try {
-        // 跨设备派生态 = keyring 组密钥条目（sync_group_status）
+        // Cross-device derived state = the keyring group key entry (sync_group_status)
         const resp = await personaAPI.syncGroupStatus();
         if (!cancelled && resp.success) setCrossJoined(Boolean(resp.data));
       } catch {
-        // 免解锁只读；失败静默（派生态未展示，不影响偏好开关）
+        // Read-only without unlock; failures are silent (the derived state just isn't shown, the preference toggles are unaffected)
       }
     };
     const loadAccountJoined = async (): Promise<void> => {
@@ -49,7 +50,7 @@ const SyncMethodsSection: React.FC = () => {
         const resp = await personaAPI.syncDeviceStatus();
         if (!cancelled && resp.success) setAccountJoined(Boolean(resp.data?.joined));
       } catch {
-        // 同上
+        // Same as above
       }
     };
     void loadPreferences();
@@ -60,7 +61,7 @@ const SyncMethodsSection: React.FC = () => {
     };
   }, []);
 
-  /** 窄写偏好；成功回填服务端真相，失败保持真实状态（不乐观翻转）。 */
+  /** Narrow preference write; backfill server truth on success, keep the real state on failure (no optimistic flip). */
   const save = async (nextCross: boolean, nextAccount: boolean) => {
     setSaving(true);
     try {
@@ -83,7 +84,7 @@ const SyncMethodsSection: React.FC = () => {
   const toggleCrossDevice = () => {
     if (crossDevice === null) return;
     const next = !crossDevice;
-    // 关闭但仍在组内：如实告知——只停用入口，不离开同步组、不删组密钥。
+    // Disabling while still in the group: say it honestly — this only disables the entry, it doesn't leave the sync group or delete the group key.
     if (!next && crossJoined) {
       const ok = window.confirm(
         `${t('settings.syncMode.disableConfirmTitle')}\n\n${t('settings.syncMode.disableConfirmBody')}`,

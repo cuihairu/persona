@@ -1,41 +1,49 @@
-//! SSH / passkey 审批事件负载（`persona://*-approval` wire 报文）。
+//! SSH / passkey approval event payloads (`persona://*-approval` wire messages).
 
 use serde::Serialize;
 
-/// `persona://ssh-approval` 事件负载：一条待审批的 SSH 签名请求
+/// `persona://ssh-approval` event payload: one SSH signing request awaiting
+/// approval
 #[derive(Debug, Clone, Serialize)]
 pub struct SshApprovalRequest {
     pub request_id: String,
-    /// 凭据 UUID（非敏感）
+    /// Credential UUID (not sensitive)
     pub key_id: String,
-    /// 公钥指纹（SHA256 前 8 字节，用于人工核对）
+    /// Public key fingerprint (first 8 bytes of SHA256, for manual
+    /// verification)
     pub fingerprint: String,
-    /// 操作名（当前恒为 "sign"）
+    /// Operation name (currently always "sign")
     pub operation: String,
-    /// 目标主机（未知时为 null）
+    /// Target host (null when unknown)
     pub peer: Option<String>,
-    /// 触发原因（策略说明）
+    /// Triggering reason (policy explanation)
     pub reason: String,
 }
 
-/// `persona://passkey-approval` 事件负载：一条待审批的 bridge passkey 请求。
-/// 只含 origin/rp/账号等元数据 —— clientDataJSON 永不出 bridge 进程。
+/// `persona://passkey-approval` event payload: one bridge passkey request
+/// awaiting approval.
+/// Contains only metadata such as origin/rp/account — clientDataJSON never
+/// leaves the bridge process.
 #[derive(Debug, Clone, Serialize)]
 pub struct PasskeyApprovalRequest {
     pub request_id: String,
-    /// 沿用 bridge wire 的操作名："passkey_create" | "passkey_assert"
+    /// Operation name taken over from the bridge wire:
+    /// "passkey_create" | "passkey_assert"
     pub operation: String,
-    /// 人工核对的 relying party（assert 时为 None：rp 存在 vault item 上）
+    /// Relying party for manual verification (None for assert: the rp lives
+    /// on the vault item)
     pub rp_id: Option<String>,
-    /// 发起请求的完整页面 origin
+    /// Full page origin that initiated the request
     pub origin: String,
-    /// create 时的账号名（assert 时在存储 item 上，桌面无从得知）
+    /// Account name at create time (for assert it is on the stored item,
+    /// which the desktop has no way to know)
     pub user_name: Option<String>,
-    /// assert 时对应 vault item 的 UUID
+    /// UUID of the vault item the assert corresponds to
     pub item_id: Option<String>,
 }
 
-// ---- 账号体系（M2：persona-server /api/v1/accounts/* 的 tauri 代理层
-//      契约。字段名/形状与 desktop/src/utils/api.ts 的 account seam 及
-//      server/src/api/accounts.rs 一一对应；命令侧见 commands.rs 的
-//      account_* 族）----
+// ---- Account system (M2: the tauri proxy-layer contract for
+//      persona-server /api/v1/accounts/*. Field names/shapes correspond
+//      one-to-one with the account seam in desktop/src/utils/api.ts and
+//      server/src/api/accounts.rs; the command side is the account_* family
+//      in commands.rs)----

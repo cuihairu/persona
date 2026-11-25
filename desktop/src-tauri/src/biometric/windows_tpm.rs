@@ -1,49 +1,60 @@
-//! Windows：Microsoft Passport Key Storage Provider（TPM 硬件包裹）——
-//! `docs/biometric-unlock-design.md` §6 首选路线。
+//! Windows: Microsoft Passport Key Storage Provider (TPM-backed hardware
+//! wrapping) — the preferred route of `docs/biometric-unlock-design.md` §6.
 //!
-//! **spike 门控**：仅在环境变量 `PERSONA_BIOMETRIC_TPM_SPIKE=1` 时由
-//! [`super::key_wrapper`] 装配（`biometric_tpm_spike` 命令在真机上逐项
-//! 探测并回报 HRESULT）。生产 unlock 主链路默认不含本模块——Passport KSP
-//! 的实际行为（UI policy 是否真在每次私钥使用时弹 Hello、finalize 静默
-//! 语义、删指纹后的表现）只能真机验证，未验证前不切换默认行为。
+//! **Spike-gated**: this module is wired in by [`super::key_wrapper`] only when
+//! the `PERSONA_BIOMETRIC_TPM_SPIKE=1` env var is set (the `biometric_tpm_spike`
+//! command probes each item on real hardware and reports HRESULTs). The
+//! production unlock path does not include this module by default — the actual
+//! behavior of Passport KSP (whether the UI policy really prompts Hello on every
+//! private-key use, silent finalize semantics, behavior after a fingerprint is
+//! deleted) can only be verified on real hardware, and the default is not
+//! switched until then.
 //!
-//! 机制：NCrypt 打开 `MS_KEY_STORAGE_PROVIDER`（Passport KSP，密钥私钥
-//! 由 TPM 保护、不可导出），在其下建一把 2048 位 RSA 用户密钥，三个属性
-//! 钉死：
-//! - `NCRYPT_KEY_USAGE_PROPERTY = NCRYPT_ALLOW_DECRYPT_FLAG`——只开私钥的
-//!   「解密」方向（即包裹/解包裹），不授予签名权；
-//! - `NCRYPT_UI_POLICY_PROPERTY = NCRYPT_UI_PROTECT_KEY_FLAG`，**带
-//!   `NCRYPT_PERSIST_FLAG` 落盘**——私钥每次使用都须经 Windows Hello 用户
-//!   验证才由 TPM 放行。不持久化的话该 policy 只在本进程有效，重启后
-//!   解包裹不再弹 Hello（静默的安全降级，必须钉住）；
-//! - `NCRYPT_LENGTH_PROPERTY = 2048`。
+//! Mechanism: NCrypt opens `MS_KEY_STORAGE_PROVIDER` (Passport KSP, where the
+//! key material is TPM-protected and non-exportable), creates a 2048-bit RSA
+//! user key under it, with three properties pinned:
+//! - `NCRYPT_KEY_USAGE_PROPERTY = NCRYPT_ALLOW_DECRYPT_FLAG` — only the
+//!   "decrypt" direction of the private key (i.e. wrap/unwrap) is enabled; no
+//!   signing rights;
+//! - `NCRYPT_UI_POLICY_PROPERTY = NCRYPT_UI_PROTECT_KEY_FLAG`, **persisted with
+//!   `NCRYPT_PERSIST_FLAG`** — every use of the private key must pass a Windows
+//!   Hello user verification before the TPM releases it. Without persistence the
+//!   policy only lives in this process, and after a restart unwrapping no longer
+//!   prompts Hello (a silent security downgrade; must be pinned);
+//! - `NCRYPT_LENGTH_PROPERTY = 2048`.
 //!
-//! 包裹 = `NCryptEncrypt`（RSA 公钥方向，**无提示**）；解包裹 =
-//! `NCryptDecrypt`（私钥方向，**Hello 在此刻弹**）。与 macOS 路线 B'
-//! 同属设计文档 §1 的 `HardwareBound` 档：秘密真值在硬件私钥里，keyring
-//! 里只剩打不开的密文。
+//! Wrap = `NCryptEncrypt` (RSA public-key direction, **no prompt**); unwrap =
+//! `NCryptDecrypt` (private-key direction, **Hello prompts here**). Like the
+//! macOS route B', this is the `HardwareBound` tier from design doc §1: the
+//! secret lives inside the hardware private key, and the keyring only holds
+//! ciphertext that cannot be opened.
 //!
-//! ## 与 macOS B' 的能力差（诚实边界，勿在文档里含糊）
+//! ## Capability gap vs macOS B' (honest boundary, do not blur in docs)
 //!
-//! **注册集漂移（T2）在 Windows 侧拿不到平台级强制**：Apple 的
-//! `biometryCurrentSet` 会在换指纹后让旧 SE 密钥永久失效；Windows 没有
-//! 对应 API——`NCRYPT_UI_PROTECT_KEY_FLAG` 强制的是「每次使用都要用户
-//! 验证」，验证者换成一个新指纹**不会**让旧密钥失效。因此
-//! [`TpmKeyWrapper::enrollment_fingerprint`] 只能返回固定占位（与 macOS
-//! 的占位同形，但 macOS 是「平台已强制、这里只是第二道防线」，Windows
-//! 是「平台压根不管、这里也没有第二道」）。
+//! **Enrollment-set drift (T2) has no platform-level enforcement on Windows**:
+//! Apple's `biometryCurrentSet` permanently invalidates old SE keys after a
+//! fingerprint change; Windows has no equivalent API — `NCRYPT_UI_PROTECT_KEY_FLAG`
+//! enforces "user verification on every use", and the verifier being a new
+//! fingerprint does **not** invalidate the old key. Therefore
+//! [`TpmKeyWrapper::enrollment_fingerprint`] can only return a fixed placeholder
+//! (same shape as the macOS placeholder, but on macOS "the platform already
+//! enforces it and this is just a second line of defense" whereas on Windows
+//! "the platform does nothing and there is no second line").
 //!
-//! 残余风险：拿到本机登录态的攻击者若能完成一次 Windows Hello 验证
-//! （已注册过任一指纹/PIN），就能解开旧包裹——换指纹这个「反胁迫」性质
-//! 在 Windows 上不成立。缓解是主密码兜底 + 包裹 blob 本身在 keyring 里
-//! 只是密文（同用户进程读走也打不开，除非它能让 Hello 通过）。
+//! Residual risk: an attacker with local login state who can complete one
+//! Windows Hello verification (any fingerprint/PIN already enrolled) can unwrap
+//! old blobs — the anti-coercion property of "change fingerprint" does not hold
+//! on Windows. Mitigation is the master password fallback plus the fact that the
+//! wrap blob in the keyring is only ciphertext (a same-user process reading it
+//! cannot open it unless it can pass Hello).
 //!
-//! ## 验证状态
+//! ## Verification status
 //!
-//! **编译**由 Linux 交叉 check 把关（`x86_64-pc-windows-msvc` + 空
-//! `CC`/`llvm-ar` 桩，见设计文档 §5.3 同款手法）与 `desktop-build` 的
-//! Windows job；**运行时**行为以真机 spike 输出为准（§6.1 探针未跑过，
-//! 结论待回填）。本仓库无 Windows 实机。
+//! **Compilation** is gated by the Linux cross-check (`x86_64-pc-windows-msvc`
+//! with empty `CC`/`llvm-ar` stubs, same technique as design doc §5.3) and the
+//! Windows job of `desktop-build`; **runtime** behavior is judged by real-hardware
+//! spike output (the §6.1 probes have not been run, conclusions pending
+//! backfill). This repo has no Windows hardware.
 
 use windows::core::{w, HRESULT, PCWSTR};
 use windows::Win32::Foundation::{
@@ -64,32 +75,39 @@ use persona_core::{
     BiometricKeyWrapper, BiometricWrapCapability, BiometricWrapError, WrapPlatform,
 };
 
-/// KSP 内的密钥名（用户级；同名密钥在本机用户档案下唯一）
+/// Key name inside the KSP (user-level; a key with the same name is unique under
+/// the local user profile)
 const KEY_NAME: PCWSTR = w!("persona.vault-wrap.v1");
 
-/// 2048 位 RSA + PKCS#1 v1.5：明文上限 245 字节，vault 主密钥 32 字节
-/// 远在其下；不升到 3072/4096 是为了 TPM 侧延迟（解包裹是用户可感知路径）
+/// 2048-bit RSA + PKCS#1 v1.5: the plaintext limit is 245 bytes, and the 32-byte
+/// vault master key is far below it; we do not go up to 3072/4096 because of TPM
+/// side latency (unwrap is a user-perceivable path)
 const KEY_BITS: u32 = 2048;
 
-/// NCrypt 句柄的 RAII 包装（provider 与 key 两种句柄共用同一释放函数）
+/// RAII wrapper for NCrypt handles (provider and key handles share the same
+/// release function)
 struct OwnedHandle(NCRYPT_HANDLE);
 
 impl Drop for OwnedHandle {
     fn drop(&mut self) {
-        // drop 里无处上抛：释放失败只能放弃（句柄表泄漏一个条目，与进程
-        // 生命周期同长，可接受）；不 panic——析构路径 panic 会变 abort
-        // SAFETY: 句柄来自成功的 NCrypt 调用，本 RAII 恰好释放一次
+        // Nowhere to propagate from drop: a failed release is simply dropped
+        // (one leaked entry in the handle table, same lifetime as the process,
+        // acceptable); no panic — panicking on a destructor path would abort
+        // SAFETY: the handle came from a successful NCrypt call, and this RAII
+        // releases it exactly once
         let _ = unsafe { NCryptFreeObject(self.0) };
     }
 }
 
-/// NCrypt 错误 → 包裹层错误。用户在 Hello 弹框点取消走 `UserCancelled`
-/// （静默回解锁屏），其余一律 `Platform` 原文带 HRESULT（宿主据此自动
-/// 删 blob 回主密码，见设计文档 §3.4）。
+/// NCrypt error → wrap-layer error. If the user hits cancel in the Hello dialog
+/// it maps to `UserCancelled` (silently back to the unlock screen); everything
+/// else becomes `Platform` verbatim with the HRESULT (the host uses that to
+/// automatically delete the blob and fall back to the master password, see
+/// design doc §3.4).
 fn map_ncrypt_err(err: windows::core::Error, step: &str) -> BiometricWrapError {
     let code = err.code();
-    // Passport KSP 走 WinRT 层时取消是 NTE_USER_CANCELLED，走 smart-card 层
-    // 时是 SCARD_W_CANCELLED_BY_USER——两个都收
+    // For Passport KSP the cancellation is NTE_USER_CANCELLED via the WinRT layer
+    // and SCARD_W_CANCELLED_BY_USER via the smart-card layer — accept both
     if code == NTE_USER_CANCELLED || code == SCARD_W_CANCELLED_BY_USER {
         return BiometricWrapError::UserCancelled;
     }
@@ -100,19 +118,23 @@ fn map_ncrypt_err(err: windows::core::Error, step: &str) -> BiometricWrapError {
     ))
 }
 
-/// 打开 Passport KSP
+/// Open the Passport KSP
 fn open_provider() -> Result<OwnedHandle, BiometricWrapError> {
     let mut provider = NCRYPT_PROV_HANDLE(0);
-    // SAFETY: out 指针由本函数持有；provider 名是框架常量
+    // SAFETY: the out pointer is owned by this function; the provider name is a
+    // framework constant
     unsafe { NCryptOpenStorageProvider(&mut provider, MS_KEY_STORAGE_PROVIDER, 0) }
         .map_err(|e| map_ncrypt_err(e, "NCryptOpenStorageProvider (MSKSP)"))?;
     Ok(OwnedHandle(NCRYPT_HANDLE(provider.0)))
 }
 
-/// KSP 是否支持 RSA 私钥解密方向（包裹层唯一需要的算法能力）
+/// Whether the KSP supports the RSA private-key decrypt direction (the only
+/// algorithm capability the wrap layer needs)
 fn provider_supports_rsa(provider: &OwnedHandle) -> bool {
-    // NCryptIsAlgSupported 以失败码表达「不支持」，这里只要布尔
-    // SAFETY: provider 句柄有效；算法标识是框架常量
+    // NCryptIsAlgSupported expresses "not supported" with a failure code; here
+    // we only want a boolean
+    // SAFETY: the provider handle is valid; the algorithm identifier is a
+    // framework constant
     unsafe {
         NCryptIsAlgSupported(
             NCRYPT_PROV_HANDLE(provider.0 .0),
@@ -123,17 +145,20 @@ fn provider_supports_rsa(provider: &OwnedHandle) -> bool {
     .is_ok()
 }
 
-/// 「密钥不存在」的两种 HRESULT：MSKSP 通常回 `NTE_BAD_KEYSET`，部分系统
-/// 版本/后端回 `ERROR_NOT_FOUND`(1168)。两者都是「没有」而非「坏了」——
-/// 只有这两种才允许自动重建密钥，其余错误一律上抛（不掩盖真实故障）。
+/// The two HRESULTs meaning "key does not exist": MSKSP usually returns
+/// `NTE_BAD_KEYSET`, while some system versions/backends return
+/// `ERROR_NOT_FOUND`(1168). Both mean "missing" rather than "broken" — only
+/// these two permit automatic key re-creation; all other errors are propagated
+/// (do not mask a real failure).
 fn is_key_absent(code: HRESULT) -> bool {
     code == NTE_BAD_KEYSET || code == HRESULT::from_win32(ERROR_NOT_FOUND.0)
 }
 
-/// 打开已存在的包裹密钥；不存在返回 `Ok(None)`
+/// Open an existing wrap key; returns `Ok(None)` if absent
 fn open_key(provider: &OwnedHandle) -> Result<Option<OwnedHandle>, BiometricWrapError> {
     let mut key = NCRYPT_KEY_HANDLE(0);
-    // SAFETY: provider 句柄有效；out 指针由本函数持有；密钥名是常量
+    // SAFETY: the provider handle is valid; the out pointer is owned by this
+    // function; the key name is a constant
     match unsafe {
         NCryptOpenKey(
             NCRYPT_PROV_HANDLE(provider.0 .0),
@@ -155,20 +180,23 @@ fn set_u32_property(
     value: u32,
     flags: NCRYPT_FLAGS,
 ) -> Result<(), BiometricWrapError> {
-    // SAFETY: 句柄有效；value 是本函数栈上的 4 字节，NCryptSetProperty
-    // 同步读取不保存指针
+    // SAFETY: the handle is valid; value is 4 bytes on this function's stack,
+    // read synchronously by NCryptSetProperty and not stored by pointer
     unsafe { NCryptSetProperty(NCRYPT_HANDLE(key.0 .0), name, &value.to_ne_bytes(), flags) }
         .map_err(|e| map_ncrypt_err(e, "NCryptSetProperty"))
 }
 
-/// 建包裹密钥：RSA-2048 / 仅解密用途 / 每次使用须 Hello（policy 持久化）
+/// Create the wrap key: RSA-2048 / decrypt-only usage / Hello on every use
+/// (policy persisted)
 ///
-/// `NCRYPT_OVERWRITE_KEY_FLAG`：重建时覆盖同名残留（用户清过 Passport
-/// 密钥、或上次 enable 在 finalize 前失败留下的半态），避免重建永久卡在
-/// 「打开得到一个坏密钥」。
+/// `NCRYPT_OVERWRITE_KEY_FLAG`: on rebuild, overwrite a same-name leftover
+/// (the user cleared Passport keys, or a previous enable failed before finalize
+/// and left a half-state), so rebuilding does not get permanently stuck on
+/// "opening yields a bad key".
 fn create_key(provider: &OwnedHandle) -> Result<OwnedHandle, BiometricWrapError> {
     let mut key = NCRYPT_KEY_HANDLE(0);
-    // SAFETY: provider 句柄有效；out 指针由本函数持有；算法名/密钥名是常量
+    // SAFETY: the provider handle is valid; the out pointer is owned by this
+    // function; the algorithm/key names are constants
     unsafe {
         NCryptCreatePersistedKey(
             NCRYPT_PROV_HANDLE(provider.0 .0),
@@ -189,7 +217,8 @@ fn create_key(provider: &OwnedHandle) -> Result<OwnedHandle, BiometricWrapError>
         NCRYPT_ALLOW_DECRYPT_FLAG,
         NCRYPT_FLAGS(0),
     )?;
-    // policy 必须带 NCRYPT_PERSIST_FLAG 才随密钥落盘（见模块头）
+    // the policy needs NCRYPT_PERSIST_FLAG to be written to disk with the key
+    // (see the module header)
     set_u32_property(
         &key,
         NCRYPT_UI_POLICY_PROPERTY,
@@ -197,15 +226,17 @@ fn create_key(provider: &OwnedHandle) -> Result<OwnedHandle, BiometricWrapError>
         NCRYPT_PERSIST_FLAG,
     )?;
 
-    // 静默 finalize：enable 路径上一步（commands.rs 的 biometric_enable
-    // 第 2 步）已经走过 Hello ceremony，建钥过程不再弹第二次框
-    // SAFETY: 句柄有效；finalize 后句柄仍然合法
+    // Silent finalize: the previous step on the enable path (step 2 of
+    // biometric_enable in commands.rs) already went through the Hello ceremony,
+    // so key creation does not pop a second dialog
+    // SAFETY: the handle is valid; the handle remains legal after finalize
     unsafe { NCryptFinalizeKey(NCRYPT_KEY_HANDLE(key.0 .0), NCRYPT_SILENT_FLAG) }
         .map_err(|e| map_ncrypt_err(e, "NCryptFinalizeKey"))?;
     Ok(key)
 }
 
-/// 找到或建出包裹密钥（仅 enable/包裹路径用——解包裹走 open_key_only）
+/// Find or create the wrap key (used only on the enable/wrap path — unwrap goes
+/// through open_key_only)
 fn generate_or_find_key() -> Result<OwnedHandle, BiometricWrapError> {
     let provider = open_provider()?;
     if let Some(key) = open_key(&provider)? {
@@ -214,22 +245,26 @@ fn generate_or_find_key() -> Result<OwnedHandle, BiometricWrapError> {
     create_key(&provider)
 }
 
-/// 解包裹路径专用：**只**打开，不存在即 `WrapInvalid`。
+/// Exclusive to the unwrap path: **only** opens, and returns `WrapInvalid` if
+/// absent.
 ///
-/// 与 macOS B' 的差异是刻意的：那边解包裹也走 generate_or_find，密钥
-/// 不存在时会先建一把新密钥再在 ECIES 上失败——留下一个没人用的孤儿
-/// 密钥，还把「blob 来自别的机器 / 用户清过 Passport 密钥」这个真实
-/// 故障伪装成一次解密错误。宿主对 `WrapInvalid` 的处置是删 blob 回主密码
-/// （设计文档 §3.4），语义正好。
+/// The difference from macOS B' is deliberate: over there unwrap also goes
+/// through generate_or_find, so a missing key first creates a new key and then
+/// fails on ECIES — leaving an orphan key nobody uses, and disguising the real
+/// failure ("the blob came from another machine / the user cleared the Passport
+/// keys") as a decryption error. The host's handling of `WrapInvalid` is to
+/// delete the blob and fall back to the master password (design doc §3.4),
+/// which is exactly the right semantics.
 fn open_key_only() -> Result<OwnedHandle, BiometricWrapError> {
     let provider = open_provider()?;
     open_key(&provider)?.ok_or(BiometricWrapError::WrapInvalid)
 }
 
-/// RSA 公钥方向包裹（无用户交互）
+/// RSA public-key direction wrap (no user interaction)
 fn rsa_wrap(key: &OwnedHandle, plaintext: &[u8]) -> Result<Vec<u8>, BiometricWrapError> {
     let mut len = 0u32;
-    // SAFETY: 句柄有效；定长查询按 NCrypt 约定传 pboutput=None 拿长度
+    // SAFETY: the handle is valid; per the NCrypt convention, a size query
+    // passes pboutput=None to get the length
     unsafe {
         NCryptEncrypt(
             NCRYPT_KEY_HANDLE(key.0 .0),
@@ -242,7 +277,7 @@ fn rsa_wrap(key: &OwnedHandle, plaintext: &[u8]) -> Result<Vec<u8>, BiometricWra
     }
     .map_err(|e| map_ncrypt_err(e, "NCryptEncrypt (size)"))?;
     let mut out = vec![0u8; len as usize];
-    // SAFETY: out 恰好是上一步报告的长度
+    // SAFETY: out is exactly the length reported by the previous step
     unsafe {
         NCryptEncrypt(
             NCRYPT_KEY_HANDLE(key.0 .0),
@@ -258,10 +293,11 @@ fn rsa_wrap(key: &OwnedHandle, plaintext: &[u8]) -> Result<Vec<u8>, BiometricWra
     Ok(out)
 }
 
-/// RSA 私钥方向解包裹（Windows Hello 在此刻由 TPM/KSP 弹出）
+/// RSA private-key direction unwrap (Windows Hello is prompted here by the
+/// TPM/KSP)
 fn rsa_unwrap(key: &OwnedHandle, payload: &[u8]) -> Result<Zeroizing<Vec<u8>>, BiometricWrapError> {
     let mut len = 0u32;
-    // SAFETY: 句柄有效；定长查询传 pboutput=None
+    // SAFETY: the handle is valid; a size query passes pboutput=None
     unsafe {
         NCryptDecrypt(
             NCRYPT_KEY_HANDLE(key.0 .0),
@@ -273,9 +309,10 @@ fn rsa_unwrap(key: &OwnedHandle, payload: &[u8]) -> Result<Zeroizing<Vec<u8>>, B
         )
     }
     .map_err(|e| map_ncrypt_err(e, "NCryptDecrypt (size)"))?;
-    // 明文缓冲区全程 Zeroizing：解出的就是 vault 主密钥
+    // The plaintext buffer stays Zeroizing throughout: what is decrypted is the
+    // vault master key itself
     let mut plain = Zeroizing::new(vec![0u8; len as usize]);
-    // SAFETY: 缓冲区恰好是上一步报告的长度
+    // SAFETY: the buffer is exactly the length reported by the previous step
     unsafe {
         NCryptDecrypt(
             NCRYPT_KEY_HANDLE(key.0 .0),
@@ -291,20 +328,23 @@ fn rsa_unwrap(key: &OwnedHandle, payload: &[u8]) -> Result<Zeroizing<Vec<u8>>, B
     Ok(plain)
 }
 
-/// 删除 KSP 里的包裹密钥（幂等：不存在也算成功）
+/// Delete the wrap key in the KSP (idempotent: absence also counts as success)
 fn delete_tpm_key() -> Result<(), BiometricWrapError> {
     let provider = open_provider()?;
     match open_key(&provider)? {
         Some(key) => {
             let handle = NCRYPT_KEY_HANDLE(key.0 .0);
-            // SAFETY: 句柄来自 NCryptOpenKey
+            // SAFETY: the handle comes from NCryptOpenKey
             let result = unsafe { NCryptDeleteKey(handle, 0) }
                 .map_err(|e| map_ncrypt_err(e, "NCryptDeleteKey"));
-            // `NCryptDeleteKey` 自己会处置句柄（成功后必然已释放，失败时
-            // MSDN 未承诺句柄是否仍归调用方所有）。这里**一律**放弃 RAII
-            // 释放权：猜错方向的代价是不对称的——多释放一次是 UB（句柄表
-            // 损坏，可能变成对别处的 wild pointer），少释放一次只是泄漏一
-            // 个句柄，且只发生在删除失败这条本就要上抛的路径上。
+            // `NCryptDeleteKey` disposes of the handle itself (after success it is
+            // certainly freed; on failure MSDN does not promise whether the
+            // handle still belongs to the caller). Here we **always** drop the
+            // RAII release right: the cost of guessing the wrong direction is
+            // asymmetric — releasing twice is UB (handle-table corruption,
+            // possibly turning into a wild pointer elsewhere), whereas skipping
+            // one release merely leaks a handle, and only on the delete-failure
+            // path that we are going to propagate anyway.
             std::mem::forget(key);
             result
         }
@@ -316,7 +356,7 @@ pub fn spike_enabled() -> bool {
     std::env::var_os("PERSONA_BIOMETRIC_TPM_SPIKE").is_some_and(|v| v == "1")
 }
 
-/// spike 门控的装配入口（`biometric::key_wrapper` 调用）
+/// Spike-gated assembly entry point (called by `biometric::key_wrapper`)
 pub fn spike_wrapper_if_enabled() -> Option<TpmKeyWrapper> {
     if spike_enabled() {
         Some(TpmKeyWrapper)
@@ -325,13 +365,14 @@ pub fn spike_wrapper_if_enabled() -> Option<TpmKeyWrapper> {
     }
 }
 
-/// Windows Hello availability（门禁层探测；包裹层的用户验证实际由 KSP
-/// 自己做，这里只做「本机装了 Hello」的前置判断）
+/// Windows Hello availability (gate-layer probe; the wrap layer's user
+/// verification is actually performed by the KSP itself, this only makes the
+/// "Hello is installed on this machine" pre-check)
 fn hello_available() -> bool {
     super::windows_hello::available()
 }
 
-/// Microsoft Passport KSP 的硬件包裹器
+/// Hardware wrap wrapper for Microsoft Passport KSP
 pub struct TpmKeyWrapper;
 
 impl BiometricKeyWrapper for TpmKeyWrapper {
@@ -340,8 +381,9 @@ impl BiometricKeyWrapper for TpmKeyWrapper {
     }
 
     fn is_available(&self) -> bool {
-        // 三者缺一即不可用（fail-closed）：KSP 打不开、算法不支持、
-        // 本机没有可用的 Windows Hello
+        // Missing any one of the three makes it unavailable (fail-closed):
+        // KSP won't open, algorithm unsupported, or no usable Windows Hello
+        // on this machine
         match open_provider() {
             Ok(provider) => provider_supports_rsa(&provider) && hello_available(),
             Err(_) => false,
@@ -353,10 +395,12 @@ impl BiometricKeyWrapper for TpmKeyWrapper {
     }
 
     fn enrollment_fingerprint(&self) -> Result<[u8; 32], BiometricWrapError> {
-        // 平台层没有「生物注册集指纹」这回事（见模块头「与 macOS B' 的
-        // 能力差」）：换指纹不会让旧包裹失效，core 的第二道比对在这里
-        // 只能是占位。返回全零——不伪造注册集状态，宁可让这一道失效也
-        // 不谎报一个会随环境漂移的值。
+        // The platform layer has no notion of a "biometric enrollment-set
+        // fingerprint" (see the module header, "capability gap vs macOS B'"):
+        // changing a fingerprint does not invalidate old wraps, so the core's
+        // second comparison can only be a placeholder here. Returning all zeros
+        // — we do not fabricate enrollment-set state; better to let this check
+        // fail than to report a value that drifts with the environment.
         Ok([0u8; 32])
     }
 
@@ -374,8 +418,9 @@ impl BiometricKeyWrapper for TpmKeyWrapper {
         payload: &[u8],
         prompt: &str,
     ) -> Result<Zeroizing<[u8; 32]>, BiometricWrapError> {
-        // 弹框文案由 KSP 的 UI policy 机制管（NCrypt 层不接受调用方文案），
-        // Rust 侧仅审计
+        // Dialog wording is governed by the KSP's UI policy mechanism (the
+        // NCrypt layer does not accept caller-provided text); the Rust side is
+        // audit-only
         let _ = prompt;
         let key = open_key_only()?;
         let plain = rsa_unwrap(&key, payload)?;
@@ -392,25 +437,27 @@ impl BiometricKeyWrapper for TpmKeyWrapper {
 }
 
 // ---------------------------------------------------------------------------
-// spike 探针（`biometric_tpm_spike` 命令消费）
+// spike probes (consumed by the `biometric_tpm_spike` command)
 // ---------------------------------------------------------------------------
 
-/// spike 专用探针输出：逐步骤的 HRESULT/结论，真机上跑完贴回设计文档 §6.1
+/// Spike-specific probe output: per-step HRESULTs/verdicts, to be pasted back
+/// into design doc §6.1 after running on real hardware
 pub struct SpikeStep {
     pub name: &'static str,
     pub ok: bool,
     pub detail: String,
 }
 
-/// 跑 spike 全部探针（对应设计文档 §6.1 的表）。
+/// Run all spike probes (corresponds to the table in design doc §6.1).
 ///
-/// 「删一条指纹后解包裹」与「重启后再跑一次看密钥还在不在」是两个**手动**
-/// 对照：本函数跑完做掉操作再跑一次，探针 5b 必须失败、探针 6 必须 still
-/// found 才算通过。
+/// "Unwrap after deleting one fingerprint" and "run once more after a restart
+/// to check the key is still there" are two **manual** controls: after this
+/// function completes, perform the operation and run it again — probe 5b must
+/// fail and probe 6 must still report found to count as a pass.
 pub fn run_spike() -> Vec<SpikeStep> {
     let mut steps = Vec::new();
 
-    // 1. KSP 能否打开
+    // 1. Can the KSP be opened
     let provider = match open_provider() {
         Ok(p) => {
             steps.push(SpikeStep {
@@ -430,7 +477,7 @@ pub fn run_spike() -> Vec<SpikeStep> {
         }
     };
 
-    // 2. 算法能力
+    // 2. Algorithm capability
     let rsa_ok = provider_supports_rsa(&provider);
     steps.push(SpikeStep {
         name: "2. NCryptIsAlgSupported (RSA, NCRYPT_ALLOW_DECRYPT_FLAG)",
@@ -445,7 +492,7 @@ pub fn run_spike() -> Vec<SpikeStep> {
         return steps;
     }
 
-    // 3. Windows Hello 前置条件
+    // 3. Windows Hello prerequisites
     let hello = hello_available();
     steps.push(SpikeStep {
         name: "3. Windows Hello availability (UserConsentVerifier)",
@@ -457,7 +504,7 @@ pub fn run_spike() -> Vec<SpikeStep> {
         },
     });
 
-    // 4. 建钥（含 UI policy 持久化）+ 建后可查
+    // 4. Key creation (including UI policy persistence) + check right after
     let key = match generate_or_find_key() {
         Ok(k) => {
             steps.push(SpikeStep {
@@ -494,7 +541,8 @@ pub fn run_spike() -> Vec<SpikeStep> {
         },
     });
 
-    // 5. roundtrip：包裹（公钥方向，应无提示）→ 解包裹（私钥方向，应弹 Hello）
+    // 5. roundtrip: wrap (public-key direction, must not prompt) -> unwrap
+    // (private-key direction, must prompt Hello)
     let probe = b"persona-spike-probe";
     let ciphertext = match rsa_wrap(&key, probe) {
         Ok(c) => {
@@ -534,8 +582,9 @@ pub fn run_spike() -> Vec<SpikeStep> {
         },
     });
 
-    // 6. 持久性：本进程能重开既有密钥；完整的「重启后」验证 = 结束本进程
-    //    后再跑一次 spike，本步仍 found
+    // 6. Persistence: this process can re-open the existing key; full "after
+    // restart" verification = terminate this process and run the spike again,
+    // this step still reports found
     steps.push(match open_key(&provider) {
         Ok(Some(_)) => SpikeStep {
             name: "6. NCryptOpenKey (persistence probe)",
@@ -556,7 +605,8 @@ pub fn run_spike() -> Vec<SpikeStep> {
         },
     });
 
-    // 7. 删除幂等：连删两次都必须成功（禁用/失效自愈共用这条路径）
+    // 7. Delete idempotency: deleting twice in a row must both succeed (the
+    // disable/invalidate self-heal paths share this route)
     let first = delete_tpm_key();
     let second = delete_tpm_key();
     let ok = first.is_ok() && second.is_ok();
@@ -581,12 +631,15 @@ pub fn run_spike() -> Vec<SpikeStep> {
 mod tests {
     use super::*;
 
-    /// 真机/CI 探针入口：`cargo test --lib spike_probes_print_report
-    /// -- --ignored --nocapture`。GitHub runner 的 Windows VM 通常没有
-    /// 已注册的 Windows Hello / vTPM 认证态，各步会如实失败并把 HRESULT
-    /// 打进日志（desktop-build windows job 跑它就是为了记录这份真实输出，
-    /// 回填设计文档 §6.1）；探针 7 自带删除，不在 runner 上留持久密钥。
-    /// 断言只保证"能出报告"，ok 位的人工判读在 spike 输出侧。
+    /// Real-hardware/CI probe entry point: `cargo test --lib
+    /// spike_probes_print_report -- --ignored --nocapture`. A GitHub runner's
+    /// Windows VM usually has no enrolled Windows Hello / vTPM authentication
+    /// state, so each step will honestly fail and log its HRESULT (the
+    /// desktop-build windows job runs it precisely to record this real output
+    /// and backfill design doc §6.1); probe 7 performs the deletion itself, so
+    /// no persistent key is left on the runner.
+    /// The assertion only guarantees "a report is produced"; manual judgement of
+    /// the ok field happens on the spike output side.
     #[test]
     #[ignore = "需要真实 Windows 环境（Windows Hello / Passport KSP）；desktop-build windows job 按计划跑"]
     fn spike_probes_print_report() {

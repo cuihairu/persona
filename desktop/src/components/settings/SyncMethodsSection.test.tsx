@@ -23,13 +23,13 @@ const SERVER_TRUTH = {
 
 function mockReady(): void {
   mockSettings.mockResolvedValue(SERVER_TRUTH);
-  // 派生态：跨设备已入组、账号未入组
+  // Derived states: cross-device joined, account not joined
   mockGroup.mockResolvedValue({ success: true, data: true });
   mockDevice.mockResolvedValue({ success: true, data: { joined: false } });
   mockSet.mockResolvedValue(SERVER_TRUTH);
 }
 
-/** 偏好尚未加载时开关禁用；等它变可用（不点死按钮）。 */
+/** Toggles are disabled while preferences haven't loaded; wait for them to become available (never click a dead button). */
 async function waitForCrossToggle(): Promise<void> {
   await waitFor(() => {
     expect(screen.getByTestId('sync-method-cross-device-toggle')).toHaveAttribute(
@@ -71,7 +71,7 @@ describe('components/settings/SyncMethodsSection', () => {
 
     expect(confirmSpy).toHaveBeenCalledTimes(1);
     expect(mockSet).not.toHaveBeenCalled();
-    // 取消：不乐观翻转，开关保持开启（服务端真相未变）
+    // Cancel: no optimistic flip, the toggle stays on (server truth unchanged)
     expect(screen.getByTestId('sync-method-cross-device-toggle')).toHaveAttribute(
       'aria-checked',
       'true',
@@ -105,7 +105,7 @@ describe('components/settings/SyncMethodsSection', () => {
 
   it('toggles account sync without confirmation and leaves cross-device untouched', async () => {
     mockReady();
-    // 回填用服务端真相（保存回应把新偏好原样带回）
+    // Backfill with server truth (the save response echoes the new preferences back verbatim)
     mockSet.mockResolvedValue({
       success: true,
       data: { sync_methods: { cross_device_sync: true, account_sync: true } },
@@ -120,7 +120,7 @@ describe('components/settings/SyncMethodsSection', () => {
       expect(mockSet).toHaveBeenCalledWith(true, true);
     });
     expect(screen.getByTestId('sync-method-account-toggle')).toHaveAttribute('aria-checked', 'true');
-    // 跨设备开关语义未被账号开关联动
+    // The cross-device toggle's semantics are not coupled to the account toggle
     expect(screen.getByTestId('sync-method-cross-device-toggle')).toHaveAttribute(
       'aria-checked',
       'true',

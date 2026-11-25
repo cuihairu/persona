@@ -5,9 +5,9 @@ import { useEscapeToClose } from '@/hooks/useEscapeToClose';
 
 export interface TravelPassphraseModalProps {
   isOpen: boolean;
-  /** 'set' = enter 前设定 travel 口令（双录）；'enter' = exit 时输既有口令（单录） */
+  /** 'set' = set the travel passphrase before enter (double entry); 'enter' = type the existing passphrase on exit (single entry) */
   mode: 'set' | 'enter';
-  /** 标题下的一句话说明（已标记身份数等上下文由调用方拼好传入） */
+  /** One-line note under the title (context such as the number of marked identities is composed by the caller) */
   description?: string;
   error?: string | null;
   isBusy?: boolean;
@@ -16,8 +16,10 @@ export interface TravelPassphraseModalProps {
 }
 
 /**
- * 旅行模式口令弹窗。travel 口令与主密码相互独立：enter 设定（双录）、
- * exit 验证（单录）。错口令/校验失败留在弹窗内原地重试（error 驱动错误条）。
+ * Travel mode passphrase dialog. The travel passphrase is independent of the
+ * master password: enter sets it (double entry), exit verifies it (single entry).
+ * A wrong passphrase or a failed check is retried in place inside the dialog
+ * (the error bar is driven by `error`).
  */
 const TravelPassphraseModal: React.FC<TravelPassphraseModalProps> = ({
   isOpen,
@@ -68,7 +70,7 @@ const TravelPassphraseModal: React.FC<TravelPassphraseModalProps> = ({
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
       data-testid="travel-passphrase-modal"
       onMouseDown={(e) => {
-        // 点空白 = 取消，与 Esc/关闭按钮同口径
+        // Clicking the backdrop = cancel, same rule as Esc / the close button
         if (e.target === e.currentTarget) onClose();
       }}
     >

@@ -135,7 +135,7 @@ describe('components/settings/SyncTransportSection', () => {
     await waitFor(() => {
       expect(mockOpen).toHaveBeenCalled();
     });
-    // 取消：不写配置、不翻转（仍 server）
+    // Cancel: no config write, no flip (still server)
     expect(mockSet).not.toHaveBeenCalled();
     expect(screen.getByTestId('sync-transport-cloud')).toHaveAttribute('aria-checked', 'false');
   });
@@ -148,7 +148,7 @@ describe('components/settings/SyncTransportSection', () => {
       expect(screen.getByTestId('sync-transport-cloud')).toHaveAttribute('aria-checked', 'true');
     });
 
-    // 切 server：写入失败 → 服务端真相未变，界面保持 cloud（不乐观翻转）
+    // Switch to server: write fails → server truth unchanged, UI keeps cloud (no optimistic flip)
     fireEvent.click(screen.getByTestId('sync-transport-server'));
 
     await waitFor(() => {

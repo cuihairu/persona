@@ -1,5 +1,5 @@
-// CreateCredentialModal 测试共享件：模块级 mock、默认钉值、fixture 与定位工具
-// 各测试文件自带 jest.mock 工厂指向这里的实例（单实例保证 beforeEach 重钉全局生效）
+// Shared helpers for the CreateCredentialModal tests: module-level mocks, pinned defaults, fixtures and locating utilities
+// Each test file brings its own jest.mock factory pointing at the instances here (the single instance guarantees that re-pinning in beforeEach takes effect globally)
 import { fireEvent, screen } from '@testing-library/react';
 import type { Identity } from '@/types';
 
@@ -9,7 +9,7 @@ export const generatePassword = jest.fn();
 export const updateCredential = jest.fn();
 export const updateCredentialData = jest.fn();
 
-// 钱包表单直连 personaAPI 的纯计算命令（生成/校验助记词，不触库）
+// Pure computation commands that the wallet form calls on personaAPI directly (generate/validate a mnemonic; no DB access)
 export const walletValidateMnemonic = jest.fn().mockResolvedValue({
   success: true,
   data: { valid: true, word_count: 2, error: null },
@@ -19,7 +19,7 @@ export const walletGenerateMnemonic = jest.fn().mockResolvedValue({
   data: 'abandon ability able about above absent absorb abstract absurd abuse access accident',
 });
 
-// 自定义字段整表读写（编辑表单增删改 UI）；默认成功空表，各用例覆写
+// Whole-table read/write of custom fields (the add/remove/edit UI of the edit form); defaults to a successful empty table, each case overrides it
 export const getCredentialCustomFields = jest
   .fn()
   .mockResolvedValue({ success: true, data: [] });
@@ -28,8 +28,8 @@ export const setCredentialCustomFields = jest
   .mockResolvedValue({ success: true, data: [] });
 
 
-// modal 接 useReauth 处理 payload 保存的 REAUTH_REQUIRED；
-// 默认"取消"语义（resolve false → 不自动重试），REAUTH 用例断言编排
+// The modal wires useReauth to handle REAUTH_REQUIRED for the payload save;
+// the default is the "cancel" semantics (resolves false → no automatic retry); the REAUTH cases assert the orchestration
 export const mockReauth = {
   isOpen: false,
   error: null as string | null,
@@ -39,14 +39,14 @@ export const mockReauth = {
   cancel: jest.fn(),
 };
 
-/** 每个用例前复位并重钉默认值（clearAllMocks 不清 mockResolvedValue，防用例间串味）。 */
+/** Resets and re-pins the defaults before each case (clearAllMocks does not clear mockResolvedValue, preventing bleed between cases). */
 export const pinDefaultMocks = (): void => {
   jest.clearAllMocks();
   createCredential.mockResolvedValue({ id: 'c-1' });
   generatePassword.mockResolvedValue('');
   updateCredential.mockResolvedValue({ id: 'c-9' });
   updateCredentialData.mockResolvedValue({ success: true, data: { id: 'c-9' } });
-  // 重钉默认（clearAllMocks 不清 mockResolvedValue，防用例间串味）
+  // Re-pin the defaults (clearAllMocks does not clear mockResolvedValue, preventing bleed between cases)
   getCredentialCustomFields.mockResolvedValue({ success: true, data: [] });
   setCredentialCustomFields.mockResolvedValue({ success: true, data: [] });
   mockUsePersonaService.mockReturnValue({
@@ -72,7 +72,7 @@ export const identity = {
   is_active: true,
 } as unknown as Identity;
 
-/** 组件 label 未绑定 htmlFor，select 一律按值定位（Type 恒为表单里第一个 combobox）。 */
+/** The component labels do not bind htmlFor, so selects are located by value (Type is always the first combobox in the form). */
 export const getSelect = (value: string): HTMLSelectElement =>
   screen
     .getAllByRole('combobox')

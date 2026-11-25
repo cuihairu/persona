@@ -1,11 +1,14 @@
-//! SSH agent 集成端到端走查（用户走查要求的证据链）：
-//! 临时 HOME 隔离（不碰真实 ~/.ssh/config）→ 驱动真实命令层
-//! enable/disable → 真 OpenSSH `ssh -G` 验证 identityagent 解析指向
-//! persona 稳定 socket → 停用后用户其余配置逐字节还原。
+//! End-to-end walkthrough of the SSH agent integration (the evidence chain the
+//! user walkthrough requires): isolated temp HOME (the real ~/.ssh/config is
+//! never touched) -> drive the real command layer enable/disable -> real
+//! OpenSSH `ssh -G` verifies identityagent resolves to the persona stable
+//! socket -> after disabling, the rest of the user's config is restored
+//! byte for byte.
 //!
-//! 独立测试进程：HOME/XDG_RUNTIME_DIR 只影响本进程（tests/ 目录每个
-//! 文件是独立二进制），与 lib 单测互不污染。无 ssh 二进制或
-//! OpenSSH < 8.3（IdentityAgent 不支持）的环境自动跳过。
+//! Separate test process: HOME/XDG_RUNTIME_DIR only affect this process (each
+//! file under tests/ is its own binary), so the lib unit tests stay clean.
+//! Environments without an ssh binary, or with OpenSSH < 8.3 (no IdentityAgent
+//! support), are skipped automatically.
 #![cfg(unix)]
 
 use std::process::Command;
@@ -22,7 +25,7 @@ Host bastion.example.com
   ServerAliveInterval 60
 ";
 
-/// `ssh -V`（stderr）解析 OpenSSH 主/次版本；IdentityAgent 需 8.3+。
+/// Parse the OpenSSH major/minor version from `ssh -V` (stderr); IdentityAgent needs 8.3+.
 fn openssh_version() -> Option<(u32, u32)> {
     let out = Command::new("ssh").arg("-V").output().ok()?;
     let text = String::from_utf8_lossy(&out.stderr);
@@ -35,9 +38,10 @@ fn openssh_version() -> Option<(u32, u32)> {
     Some((major, minor))
 }
 
-/// 跑 `ssh -G <host>`，返回 stdout。注意：OpenSSH 定位 ~/.ssh/config 走
-/// passwd home 而非 $HOME 环境变量，必须用 -F 显式指向被测 config；
-/// HOME/XDG_RUNTIME_DIR 仅供命令层的 dirs 探测。
+/// Run `ssh -G <host>` and return stdout. Note: OpenSSH locates ~/.ssh/config
+/// via the passwd home rather than the $HOME environment variable, so -F must
+/// point explicitly at the config under test; HOME/XDG_RUNTIME_DIR are only
+/// for the command layer's dirs probing.
 fn ssh_g(host: &str, config: &std::path::Path) -> String {
     let out = Command::new("ssh")
         .args([
@@ -74,12 +78,12 @@ fn ssh_agent_integration_walkthrough_enable_ssh_g_disable_restores_user_config()
     let home = tempfile::tempdir().expect("temp home");
     let runtime = tempfile::tempdir().expect("temp XDG_RUNTIME_DIR");
 
-    // 进程级 HOME/XDG_RUNTIME_DIR：ssh_config_path()/agent_stable_socket()
-    // 都从 env 读取，且只影响本测试进程（独立二进制）
+    // Process-level HOME/XDG_RUNTIME_DIR: ssh_config_path()/agent_stable_socket()
+    // both read them from env, and only this test process is affected (separate binary)
     std::env::set_var("HOME", home.path());
     std::env::set_var("XDG_RUNTIME_DIR", runtime.path());
 
-    // 0700/0600：ssh 对过松权限的 config 会告警甚至忽略
+    // 0700/0600: ssh warns about, and may even ignore, a config with permissions that are too loose
     let ssh_dir = home.path().join(".ssh");
     std::fs::create_dir_all(&ssh_dir).unwrap();
     #[cfg(unix)]
@@ -94,7 +98,7 @@ fn ssh_agent_integration_walkthrough_enable_ssh_g_disable_restores_user_config()
     let socket_str = socket.display().to_string();
     println!("WALKTHROUGH socket = {socket_str}");
 
-    // ── 基线：未启用，ssh -G 不解析到 persona socket ──
+    // -- Baseline: not enabled, ssh -G does not resolve to the persona socket --
     let baseline = ssh_g("github.com", &config_path);
     println!(
         "WALKTHROUGH baseline identityagent: {}",
@@ -105,7 +109,7 @@ fn ssh_agent_integration_walkthrough_enable_ssh_g_disable_restores_user_config()
         "基线不应已指向 persona socket"
     );
 
-    // ── 分析基线：无 agent 条目 → 生效值未知，状态灯=未启用 ──
+    // -- Analysis baseline: no agent entry -> effective value unknown, status light = not enabled --
     let baseline_analysis = persona_desktop::commands::ssh_agent_config_analysis()
         .data
         .expect("config analysis 返回");
@@ -122,7 +126,7 @@ fn ssh_agent_integration_walkthrough_enable_ssh_g_disable_restores_user_config()
     assert!(baseline_analysis.entries.is_empty());
     assert_eq!(baseline_analysis.identity_agent_effective, None);
 
-    // ── 启用（真实命令层：锚点块幂等写入）──
+    // -- Enable (real command layer: anchor block written idempotently) --
     let enabled = persona_desktop::commands::ssh_agent_integration_enable()
         .expect("enable command")
         .data
@@ -137,12 +141,12 @@ fn ssh_agent_integration_walkthrough_enable_ssh_g_disable_restores_user_config()
     let on_disk = std::fs::read_to_string(&config_path).unwrap();
     assert!(on_disk.contains(persona_desktop::ssh_integration::BLOCK_BEGIN));
     assert!(on_disk.contains(&format!("IdentityAgent {socket_str}")));
-    // 用户其余配置原样保留
+    // The rest of the user's config is preserved verbatim
     assert!(on_disk.contains("IdentitiesOnly yes"));
     assert!(on_disk.contains("ProxyJump github.com"));
     println!("WALKTHROUGH config after enable:\n{on_disk}");
 
-    // ── 核心：真 OpenSSH 把该 host 的 identityagent 解析到 persona 稳定 socket ──
+    // -- Core: real OpenSSH resolves this host's identityagent to the persona stable socket --
     let resolved = ssh_g("github.com", &config_path);
     println!("WALKTHROUGH full ssh -G stdout:\n{resolved}");
     let line = identityagent_line(&resolved);
@@ -153,7 +157,7 @@ fn ssh_agent_integration_walkthrough_enable_ssh_g_disable_restores_user_config()
         "ssh -G 应解析到 persona 稳定 socket"
     );
 
-    // ── 分析翻转（开）：生效值=锚点块值，状态灯=已启用 ──
+    // -- Analysis flips (on): effective value = anchor block value, status light = enabled --
     let on_analysis = persona_desktop::commands::ssh_agent_config_analysis()
         .data
         .expect("config analysis 返回");
@@ -167,13 +171,13 @@ fn ssh_agent_integration_walkthrough_enable_ssh_g_disable_restores_user_config()
         on_analysis.identity_agent_effective.as_deref(),
         Some(socket_str.as_str())
     );
-    // 锚点块条目不混进用户条目列表（用户 seed 配置本无 agent 条目）
+    // Anchor block entries do not leak into the user's entry list (the seed config has none)
     assert!(on_analysis.entries.is_empty());
-    // 临时 XDG_RUNTIME_DIR 里没有 agent 进程 → 灯如实显示未运行/无人监听
+    // The temp XDG_RUNTIME_DIR has no agent process -> the light honestly shows not running / no listener
     assert!(!on_analysis.persona_socket_alive);
     assert_eq!(on_analysis.socket_alive, Some(false));
 
-    // ── 停用（锚点块整块移除）──
+    // -- Disable (the anchor block is removed in one piece) --
     let disabled = persona_desktop::commands::ssh_agent_integration_disable()
         .expect("disable command")
         .data
@@ -181,7 +185,7 @@ fn ssh_agent_integration_walkthrough_enable_ssh_g_disable_restores_user_config()
     assert!(!disabled.enabled);
     assert_eq!(disabled.identity_agent, None);
 
-    // 用户配置逐字节还原（停用只动锚点块的硬证据）
+    // The user's config is restored byte for byte (hard evidence that disabling only touches the anchor block)
     let restored = std::fs::read_to_string(&config_path).unwrap();
     assert_eq!(restored, SEED_CONFIG, "停用后用户配置应逐字节还原");
 
@@ -195,7 +199,7 @@ fn ssh_agent_integration_walkthrough_enable_ssh_g_disable_restores_user_config()
         "停用后不应再解析到 persona socket"
     );
 
-    // ── 分析翻回（关）：块已移除，生效值回到未知 ──
+    // -- Analysis flips back (off): the block is gone, effective value returns to unknown --
     let off_analysis = persona_desktop::commands::ssh_agent_config_analysis()
         .data
         .expect("config analysis 返回");

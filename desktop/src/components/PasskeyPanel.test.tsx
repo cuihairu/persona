@@ -9,15 +9,15 @@ const mockIdentities: Identity[] = [
   { id: 'id-1', name: 'Personal', identity_type: 'Personal', tags: [], created_at: '', updated_at: '', is_active: true, travel_marked: false },
   { id: 'id-2', name: 'Work', identity_type: 'Work', tags: [], created_at: '', updated_at: '', is_active: true, travel_marked: false },
 ];
-/** 个别用例（空身份短路）需要替换；beforeEach 恢复默认 */
+/** A few cases (the empty-identities short circuit) need a replacement; beforeEach restores the default */
 let identitiesFixture: Identity[] = mockIdentities;
 
 jest.mock('@/hooks/usePersonaService', () => ({
   usePersonaService: () => ({ identities: identitiesFixture }),
 }));
 
-// reauth 弹窗由 useReauth 驱动；这里 mock 掉以聚焦面板自身的
-// REAUTH_REQUIRED → requestReauth → 重试一次 编排（ReauthModal 交互属既有组件）
+// The reauth modal is driven by useReauth; it is mocked out here so the panel's own
+// REAUTH_REQUIRED -> requestReauth -> retry-once choreography stays in focus (ReauthModal interaction is that component's concern)
 const mockRequestReauth = jest.fn();
 jest.mock('@/hooks/useReauth', () => ({
   useReauth: () => ({
@@ -126,7 +126,7 @@ describe('components/PasskeyPanel', () => {
 
     expect(screen.getByTestId('passkey-detail-rp')).toHaveTextContent('github.com');
     expect(screen.getByTestId('passkey-detail-user')).toHaveTextContent('alice');
-    // b64 "abcd" → hex 61626364（与 CLI show 的展示格式一致）
+    // b64 "abcd" -> hex 61626364 (matching the display format of the CLI show command)
     expect(screen.getByTestId('passkey-detail-credential-id')).toHaveTextContent('61626364');
     const modal = screen.getByTestId('passkey-detail-modal');
     expect(within(modal).getByText('Personal')).toBeInTheDocument();
@@ -261,7 +261,7 @@ describe('components/PasskeyPanel', () => {
       expect(screen.queryByTestId('passkey-detail-modal')).toBeNull(),
     );
     expect(mockDelete).toHaveBeenCalledWith('pk-1');
-    // 刷新：列表再次加载
+    // Refresh: the list loads again
     await waitFor(() => expect(mockList).toHaveBeenCalledTimes(4));
     confirmSpy.mockRestore();
   });
@@ -308,7 +308,7 @@ describe('components/PasskeyPanel', () => {
     render(<PasskeyPanel />);
     await openDetail();
 
-    // atob 失败 → 原样展示（catch 分支）
+    // atob failure -> the value is shown verbatim (catch branch)
     expect(screen.getByTestId('passkey-detail-credential-id')).toHaveTextContent('@@@@');
   });
 
@@ -394,16 +394,16 @@ describe('components/PasskeyPanel', () => {
     jest.useFakeTimers();
     try {
       fireEvent.click(screen.getByTestId('passkey-export-button'));
-      await act(async () => {}); // flush 导出 promise
+      await act(async () => {}); // flush the export promise
 
       expect(screen.getByTestId('passkey-export-value')).toHaveTextContent('00000001');
       expect(screen.getByTestId('passkey-export-countdown')).toHaveTextContent('30 秒后隐藏');
 
-      // 显示期间可复制
+      // It can be copied while displayed
       fireEvent.click(screen.getByRole('button', { name: '复制私钥' }));
       expect(copyWithAutoClear).toHaveBeenCalledWith('00000001');
 
-      // 逐秒推进：每次 act 让 React 提交后 effect 才重设下一秒的 timer
+      // Advance one second at a time: only after each act commits does the effect reset the timer for the next second
       for (let i = 0; i < 29; i++) {
         act(() => {
           jest.advanceTimersByTime(1_000);
@@ -411,7 +411,7 @@ describe('components/PasskeyPanel', () => {
       }
       expect(screen.getByTestId('passkey-export-countdown')).toHaveTextContent('1 秒后隐藏');
 
-      // 归零：导出值清除，倒计时消失
+      // At zero: the exported value is cleared and the countdown disappears
       act(() => {
         jest.advanceTimersByTime(1_000);
       });

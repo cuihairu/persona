@@ -5,22 +5,25 @@ import type { FaviconEntry } from '@/stores/appStore';
 import { getFaviconCacheKey } from '@/components/credentialDisplay';
 
 /**
- * 模块级并发去重：同 host 的批量读进行中时不重复发 IPC。
- * jest 内用 __resetFaviconInFlight 重置（模块状态在测试文件间不共享，
- * 同文件内用例会残留）。
+ * Module-level in-flight dedup: no duplicate IPC while a batched read for the
+ * same host is already running. Jest resets it via __resetFaviconInFlight
+ * (module state is not shared across test files, and cases within one file
+ * would otherwise leak into each other).
  */
 const inFlight = new Map<string, Promise<void>>();
 
-/** 测试专用：清空并发去重表（仅测试文件使用） */
+/** Test-only: clear the in-flight dedup table (used only by test files) */
 export const __resetFaviconInFlight = () => {
   inFlight.clear();
 };
 
 /**
- * favicon 批量预取（纯缓存读，绝不触发抓取——唯一外联入口是详情面板
- * "Fetch icon" 按钮）：flag 开时对既不在缓存也不在负缓存的 host 批量
- * getFavicons，命中的并入缓存、缺席的落负缓存（失败不落，依赖变化
- * 自然重试）。返回 faviconFor(url)：flag 关恒 null。
+ * Batched favicon prefetch (pure cache reads, never triggers a fetch — the only
+ * outbound path is the detail pane's "Fetch icon" button): when the flag is on,
+ * batch getFavicons for hosts that are in neither the cache nor the negative
+ * cache; hits merge into the cache and absences fall into the negative cache
+ * (failures do not land there, so a dependency change retries naturally).
+ * Returns faviconFor(url): always null when the flag is off.
  */
 export const useFavicons = (urls: (string | null | undefined)[]) => {
   const flagEnabled = useAppStore((s) => s.featureFlags.fetch_favicons);
@@ -29,7 +32,7 @@ export const useFavicons = (urls: (string | null | undefined)[]) => {
   const setFaviconEntries = useAppStore((s) => s.setFaviconEntries);
   const setFaviconMisses = useAppStore((s) => s.setFaviconMisses);
 
-  // urls 数组每次渲染都是新引用——依赖 join 后的稳定字符串
+  // The urls array is a fresh reference every render — depend on the stable string after join
   const urlsKey = urls.join('\n');
   const hosts = useMemo(
     () =>
@@ -67,7 +70,7 @@ export const useFavicons = (urls: (string | null | undefined)[]) => {
           if (missed.length > 0) setFaviconMisses(missed);
         }
       } catch {
-        // 请求失败不标 miss：保持"未决"状态，缓存/开关变化时自然重试
+        // A failed request is not marked as a miss: keep the "pending" state so a cache/flag change retries naturally
       } finally {
         for (const h of pending) inFlight.delete(h);
       }

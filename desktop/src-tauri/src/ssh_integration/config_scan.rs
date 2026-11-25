@@ -1,18 +1,22 @@
 // ---------------------------------------------------------------------------
-// config 解析与 agent 面分析（Include 展开、作用域追踪、socket 探测）
+// config parsing and agent-surface analysis (Include expansion, scope
+// tracking, socket probing)
 //
-// 只读：识别 agent 相关配置（IdentityAgent/ForwardAgent/AddKeysToAgent/
-// ProxyAgent——最后一个非 OpenSSH 标准键，出现即在列表里如实展示）在哪些
-// 文件哪些行哪些 Host/Match 作用域里；结合环境 SSH_AUTH_SOCK 与 Unix
-// socket 连通探测给出「agent 是否开启/配置在哪/socket 路径」。任何失败
-// 都进 read_error / warnings 字段如实显示，不让前端猜。
+// Read-only: identifies where agent-related configuration
+// (IdentityAgent/ForwardAgent/AddKeysToAgent/
+// ProxyAgent — the last one is not a standard OpenSSH key; when it appears it
+// is shown in the list as-is) sits in which files, on which lines, and in
+// which Host/Match scopes; combining the environment's SSH_AUTH_SOCK with Unix
+// socket reachability probing it answers "is the agent on / where is it
+// configured / what is the socket path". Any failure lands in the read_error /
+// warnings fields and is displayed as-is, so the frontend never has to guess.
 // ---------------------------------------------------------------------------
 
 use std::path::{Path, PathBuf};
 
 use super::SshConfigEntry;
 
-/// 分析关注的 agent 相关关键字（小写比对）。
+/// Agent-related keywords of interest for the analysis (compared lowercased).
 const AGENT_KEYWORDS: [&str; 4] = [
     "identityagent",
     "forwardagent",
@@ -21,20 +25,23 @@ const AGENT_KEYWORDS: [&str; 4] = [
 ];
 const INCLUDE_MAX_DEPTH: usize = 5;
 
-/// 解析单行 → (keyword, value)。`Key Value` 与 `Key=Value` 两形态；
-/// 注释/空行 → None。值去成对引号（不成对原样保留）。
+/// Parse a single line -> (keyword, value). Both `Key Value` and `Key=Value`
+/// forms; comments/empty lines -> None. Values have paired quotes stripped
+/// (unpaired ones are kept as-is).
 pub(super) fn parse_ssh_line(line: &str) -> Option<(String, String)> {
     let t = line.trim();
     if t.is_empty() || t.starts_with('#') {
         return None;
     }
     let (keyword, value) = match t.split_once('=') {
-        // `Key=Value`：= 前不得有空白（`Host a = b` 之类按空白拆）
+        // `Key=Value`: no whitespace allowed before the = (things like `Host a = b`
+        // are split on whitespace)
         Some((k, v)) if !k.trim().is_empty() && !k.contains(char::is_whitespace) => (k, v),
         _ => t.split_once(char::is_whitespace)?,
     };
     let value = value.trim();
-    // `Key = value` 形态：空白拆分后值以 = 开头（ssh_config 允许 = 作分隔符）
+    // `Key = value` form: after whitespace splitting the value starts with =
+    // (ssh_config allows = as a separator)
     let value = value.strip_prefix('=').map(str::trim).unwrap_or(value);
     let value = match value.strip_prefix('"') {
         Some(rest) if rest.ends_with('"') => &rest[..rest.len() - 1],
@@ -43,7 +50,8 @@ pub(super) fn parse_ssh_line(line: &str) -> Option<(String, String)> {
     Some((keyword.trim().to_string(), value.to_string()))
 }
 
-/// 值拆 token：空白分隔，双引号内保留空白（OpenSSH Include 语义）。
+/// Split a value into tokens: whitespace-separated, whitespace preserved inside
+/// double quotes (OpenSSH Include semantics).
 fn split_tokens(value: &str) -> Vec<String> {
     let mut out = Vec::new();
     let mut cur = String::new();
@@ -65,7 +73,8 @@ fn split_tokens(value: &str) -> Vec<String> {
     out
 }
 
-/// 段内 glob 匹配（`*` 任意串、`?` 单字符；经典回溯）。
+/// Glob matching within a segment (`*` = any run, `?` = single char; the
+/// classic backtracking approach).
 pub(super) fn glob_match(pat: &[u8], name: &[u8]) -> bool {
     let (mut p, mut n) = (0usize, 0usize);
     let (mut star_p, mut star_n) = (None::<usize>, 0usize);
@@ -91,7 +100,8 @@ pub(super) fn glob_match(pat: &[u8], name: &[u8]) -> bool {
     p == pat.len()
 }
 
-/// 展开含 `*`/`?` 的路径（逐段走文件系统；字面段直接拼）。返回现存文件。
+/// Expand a path containing `*`/`?` (walking the filesystem segment by
+/// segment; literal segments are joined directly). Returns existing files.
 fn expand_glob(pattern: &Path) -> Vec<PathBuf> {
     let mut current: Vec<PathBuf> = vec![PathBuf::new()];
     for comp in pattern.components() {
@@ -121,8 +131,9 @@ fn expand_glob(pattern: &Path) -> Vec<PathBuf> {
     current.into_iter().filter(|p| p.is_file()).collect()
 }
 
-/// Include token → 实际路径候选：`~` 展开；相对路径相对 `~/.ssh`
-/// （OpenSSH 语义）；支持 glob。无匹配给警告。
+/// Include token -> actual path candidates: `~` expansion; relative paths
+/// resolve against `~/.ssh` (OpenSSH semantics); globs supported. Warns when
+/// nothing matches.
 fn expand_include_token(token: &str, warnings: &mut Vec<String>) -> Vec<PathBuf> {
     let home = match dirs::home_dir() {
         Some(h) => h,
@@ -145,8 +156,10 @@ fn expand_include_token(token: &str, warnings: &mut Vec<String>) -> Vec<PathBuf>
     matched
 }
 
-/// 深度优先展开 Include 并收集 agent 相关条目。`skip_span` 只对主 config
-/// 生效（persona 锚点块行号区间——块状态单独看，不混进用户条目列表）。
+/// Expand Includes depth-first and collect agent-related entries. `skip_span`
+/// only applies to the main config (the persona anchor block's line-number
+/// range — block state is examined separately and does not leak into the user
+/// entry list).
 pub(super) fn collect_agent_entries(
     path: &Path,
     depth: usize,
@@ -217,7 +230,8 @@ pub(super) fn collect_agent_entries(
     }
 }
 
-/// Unix socket 连通探测：能连上 = 有进程在听。Windows 走命名管道打开。
+/// Unix socket reachability probe: connecting = some process is listening. On
+/// Windows it goes through named-pipe open.
 #[cfg(unix)]
 pub(super) fn socket_probe(path: &Path) -> bool {
     use std::os::unix::net::UnixStream;
@@ -239,8 +253,8 @@ pub(super) fn socket_probe(path: &Path) -> bool {
         .is_ok()
 }
 
-/// 从 `ssh -V` stderr 提取（展示标签, 主/次版本）。样本：
-/// `OpenSSH_10.2p1 Ubuntu-…` / `OpenSSH_9.6p1, OpenSSL …` / `OpenSSH_8.3`。
+/// Extract (display label, major/minor version) from `ssh -V` stderr. Samples:
+/// `OpenSSH_10.2p1 Ubuntu-…` / `OpenSSH_9.6p1, OpenSSL …` / `OpenSSH_8.3`.
 pub(super) fn parse_ssh_version(stderr: &str) -> Option<(String, (u32, u32))> {
     let rest = stderr.split("OpenSSH_").nth(1)?;
     let token = rest.split(|c: char| c.is_whitespace() || c == ',').next()?;
@@ -255,8 +269,9 @@ pub(super) fn parse_ssh_version(stderr: &str) -> Option<(String, (u32, u32))> {
     Some((format!("OpenSSH_{token}"), (major, minor)))
 }
 
-/// `ssh -V` 探测（版本号走 stderr，ssh 的约定）。未装 OpenSSH / 解析
-/// 失败 → None，前端如实显示「未探测到」，不猜。
+/// `ssh -V` probe (the version goes to stderr, per ssh convention). When
+/// OpenSSH is not installed / parsing fails -> None; the frontend displays
+/// "not detected" as-is, without guessing.
 pub fn probe_ssh_version() -> Option<String> {
     let out = std::process::Command::new("ssh").arg("-V").output().ok()?;
     let text = String::from_utf8_lossy(&out.stderr);

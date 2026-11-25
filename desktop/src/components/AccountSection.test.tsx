@@ -42,7 +42,7 @@ const boundSettings = {
 
 const ok = <T,>(data: T) => ({ success: true, data });
 
-/** 注册向导全绿：四步编排 + 绑定写入都成功 */
+/** Full-green register wizard: the four-step orchestration and the binding write all succeed */
 const seedRegisterFlow = () => {
   mockRegister.mockResolvedValue(
     ok({ account_id: 'acct-1', username: 'alice@example.com' })
@@ -82,7 +82,7 @@ describe('components/AccountSection', () => {
       expect(screen.getByTestId('data-scope-modal')).toBeInTheDocument()
     );
 
-    // 取消 = 不放行
+    // Cancel = no pass-through
     fireEvent.click(screen.getByTestId('data-scope-cancel'));
     expect(screen.queryByTestId('data-scope-modal')).not.toBeInTheDocument();
     expect(mockRegister).not.toHaveBeenCalled();
@@ -91,8 +91,8 @@ describe('components/AccountSection', () => {
     expect(mockExchange).not.toHaveBeenCalled();
     expect(mockSetBinding).not.toHaveBeenCalled();
 
-    // 再提交 + Esc 语义（点确认按钮之外路径）同样由 modal 内部处理；
-    // 这里验证确认后放行
+    // Re-submit and the Esc semantics (paths other than clicking confirm) are handled
+    // inside the modal too; here we verify that confirming passes through
     fireEvent.click(screen.getByTestId('account-register-submit'));
     await waitFor(() =>
       expect(screen.getByTestId('data-scope-modal')).toBeInTheDocument()
@@ -138,7 +138,7 @@ describe('components/AccountSection', () => {
     });
     fireEvent.click(screen.getByTestId('account-register-submit'));
 
-    // 隐私红线：提交先到披露面，确认前零编排调用
+    // Privacy red line: submit goes to the disclosure surface first; zero orchestration calls before confirmation
     await waitFor(() =>
       expect(screen.getByTestId('data-scope-modal')).toHaveAttribute(
         'data-scope',
@@ -156,7 +156,7 @@ describe('components/AccountSection', () => {
         device_name: 'laptop',
       })
     );
-    // 编排顺序：注册 → 凭证 → 登录 → 兑换
+    // Orchestration order: register → credentials → login → exchange
     expect(mockRegister).toHaveBeenCalledWith({ username: 'alice@example.com' });
     expect(mockSrpRegister).toHaveBeenCalledWith('acct-1', {
       device_name: 'laptop',
@@ -167,7 +167,7 @@ describe('components/AccountSection', () => {
       password: 'pw',
     });
     expect(mockExchange).toHaveBeenCalledWith('acct-1');
-    // 绑定落位后切到已绑定视图
+    // Switch to the bound view once the binding lands
     await waitFor(() =>
       expect(screen.getByTestId('account-bound')).toBeInTheDocument()
     );
@@ -220,20 +220,20 @@ describe('components/AccountSection', () => {
       expect(screen.getByTestId('account-wizard')).toBeInTheDocument()
     );
 
-    // 切到登录模式
+    // Switch to login mode
     fireEvent.click(screen.getAllByRole('tab')[1]);
     await waitFor(() =>
       expect(screen.getByTestId('account-login-form')).toBeInTheDocument()
     );
 
-    // 三字段任一为空 → 提交直接报不完整，不弹披露面
+    // Any of the three fields empty → submit reports incomplete directly, no disclosure modal
     fireEvent.click(screen.getByTestId('account-login-submit'));
     await waitFor(() =>
       expect(screen.getByTestId('account-error')).toHaveTextContent('请填写完整表单')
     );
     expect(screen.queryByTestId('data-scope-modal')).not.toBeInTheDocument();
 
-    // 补齐字段 → 披露面 → 确认 → 登录 + 兑换 + 绑定（username 位用 account_id）
+    // Fill in the fields → disclosure → confirm → login + exchange + binding (username slot uses account_id)
     fireEvent.change(screen.getByTestId('account-id-input'), {
       target: { value: 'acct-9' },
     });
@@ -293,14 +293,14 @@ describe('components/AccountSection', () => {
     );
     fireEvent.click(screen.getByTestId('data-scope-confirm'));
 
-    // SRP 登录被拒 → 错误显示，兑换与绑定都不发生
+    // SRP login rejected → error shown, neither exchange nor binding happens
     await waitFor(() =>
       expect(screen.getByTestId('account-error')).toHaveTextContent('bad credentials')
     );
     expect(mockExchange).not.toHaveBeenCalled();
     expect(mockSetBinding).not.toHaveBeenCalled();
 
-    // SRP 通过但兑换失败 → 同样中止，不写绑定
+    // SRP passes but the exchange fails → abort the same way, no binding write
     mockSrpLogin.mockResolvedValue(
       ok({ expires_in_secs: 900, session_key_fingerprint: 'ab12' })
     );
@@ -338,7 +338,7 @@ describe('components/AccountSection', () => {
       target: { value: 'laptop' },
     });
 
-    // 注册接口拒绝 → 第一步就报错，后续编排不走
+    // Register endpoint rejects → error on the first step, the rest of the orchestration never runs
     fireEvent.click(screen.getByTestId('account-register-submit'));
     await waitFor(() =>
       expect(screen.getByTestId('data-scope-modal')).toBeInTheDocument()
@@ -350,7 +350,7 @@ describe('components/AccountSection', () => {
     expect(mockSrpRegister).not.toHaveBeenCalled();
     expect(mockSetBinding).not.toHaveBeenCalled();
 
-    // 编排全过但绑定写入失败 → 报错且不切已绑定视图
+    // Orchestration passes but the binding write fails → error and no switch to the bound view
     mockRegister.mockResolvedValue(
       ok({ account_id: 'acct-1', username: 'alice' })
     );
@@ -399,7 +399,7 @@ describe('components/AccountSection', () => {
     expect(screen.getByText('AAAA-BBBB')).toBeInTheDocument();
     expect(screen.getByText('CCCC-DDDD')).toBeInTheDocument();
 
-    // 接口失败 → 错误显示，列表保持上次成功结果
+    // Endpoint failure → error shown, the list keeps the last successful result
     mockGenerateRecovery.mockResolvedValue({ success: false, error: 'HTTP 429' });
     fireEvent.click(screen.getByTestId('account-recovery-button'));
     await waitFor(() =>
@@ -424,7 +424,7 @@ describe('components/AccountSection', () => {
     );
     expect(screen.queryByTestId('account-devices-list')).not.toBeInTheDocument();
 
-    // 拉取成功后吊销失败 → 错误显示，列表保持
+    // Fetch succeeds then revoke fails → error shown, list kept
     mockListDevices.mockResolvedValue(
       ok({
         devices: [
@@ -461,7 +461,7 @@ describe('components/AccountSection', () => {
       expect(screen.getByTestId('account-bound')).toBeInTheDocument()
     );
 
-    // 吊销令牌失败 → 报错，不解绑
+    // Token revocation fails → error, no unbinding
     fireEvent.click(screen.getByTestId('account-sign-out'));
     await waitFor(() =>
       expect(screen.getByTestId('account-error')).toHaveTextContent('HTTP 500')
@@ -469,7 +469,7 @@ describe('components/AccountSection', () => {
     expect(mockSetBinding).not.toHaveBeenCalled();
     expect(screen.getByTestId('account-bound')).toBeInTheDocument();
 
-    // 吊销成功但解绑写入失败 → 报错，仍停留在已绑定视图
+    // Revocation succeeds but the unbinding write fails → error, still on the bound view
     mockSignOut.mockResolvedValue(ok({ revoked_on_server: true }));
     mockSetBinding.mockResolvedValue({ success: false, error: 'HTTP 409' });
     fireEvent.click(screen.getByTestId('account-sign-out'));
@@ -510,7 +510,7 @@ describe('components/AccountSection', () => {
       'alice@example.com'
     );
 
-    // 重新登录：只走 SRP + 兑换，不动绑定
+    // Re-login: SRP + exchange only, binding untouched
     fireEvent.change(screen.getByTestId('account-relogin-password'), {
       target: { value: 'pw' },
     });
@@ -518,7 +518,7 @@ describe('components/AccountSection', () => {
     await waitFor(() => expect(mockExchange).toHaveBeenCalledWith('acct-1'));
     expect(mockSetBinding).not.toHaveBeenCalled();
 
-    // 设备管理：拉列表 + 吊销
+    // Device management: fetch the list + revoke
     fireEvent.click(screen.getByTestId('account-devices-button'));
     await waitFor(() =>
       expect(screen.getByTestId('account-devices-list')).toBeInTheDocument()
@@ -528,7 +528,7 @@ describe('components/AccountSection', () => {
       expect(mockRevokeDevice).toHaveBeenCalledWith('acct-1', 'dev-1')
     );
 
-    // 退出：吊销令牌 + 解绑
+    // Sign-out: revoke the token + unbind
     fireEvent.click(screen.getByTestId('account-sign-out'));
     await waitFor(() =>
       expect(mockSignOut).toHaveBeenCalledWith('acct-1')

@@ -4,8 +4,8 @@ import { DocumentDuplicateIcon, EyeIcon, EyeSlashIcon } from '@heroicons/react/2
 import { clsx } from 'clsx';
 import type { CustomField } from '@/types';
 
-/** 自定义字段区（原条件 JSX 块平移）：concealed 行打码/揭示由父级持有；
- *  加载中/空表整节隐藏的判定与原文一致，经 fragment 原样返回。 */
+/** Custom fields section (the former conditional JSX block moved as-is): masking/revealing of concealed rows is owned by the parent;
+ *  the loading/empty hide-the-whole-section rule matches the original code and is returned unchanged via the fragment. */
 const CustomFieldsSection: React.FC<{
   customFields: CustomField[] | null;
   customFieldsError: string | null;
@@ -21,8 +21,8 @@ const CustomFieldsSection: React.FC<{
 }) => {
   const { t } = useTranslation();
 
-// 自定义字段（1Password 对齐）：per-item key 密封的整表，读失败如实显示；
-// 加载中/空表整节隐藏（不闪空标题）
+// Custom fields (1Password parity): the whole table is sealed with the per-item key; a read failure is displayed as-is;
+// while loading or when the table is empty the whole section is hidden (no flashing empty title)
   return (
     <>
     {((customFields !== null && customFields.length > 0) || customFieldsError) && (

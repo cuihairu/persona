@@ -1,15 +1,18 @@
-//! Windows 真会话集成测试：靶窗是真实 Win32 窗口（同一桌面会话），
-//! 跑的是"捕获 → 枚举 → 分类 → 逐控件重验证 → 注入 → 读回"整条真链，
-//! 不是 mock。
+//! Windows real-session integration tests: the target window is a real Win32
+//! window (same desktop session), and what runs is the whole real
+//! "capture → enumerate → classify → per-control revalidation → inject → read
+//! back" chain, not mocks.
 
 use super::classify_fields;
 use super::win::test_window::TestTargetWindow;
 use super::win::{enumerate_edit_fields, read_field_text, revalidate_field, validate_target};
 use super::{execute_fill, FieldState, FillError, FillTarget};
 
-/// 用户名/密码框识别 + execute_fill 全链（指纹验证 → 枚举 → 分类 →
-/// 逐控件重验证 → WM_SETTEXT）注入 + WM_GETTEXT 读回一致。
-/// 这是桌面填充的真机验收核心断言（openclaw Windows Server 2022 跑）。
+/// Username/password field recognition + the full execute_fill chain
+/// (fingerprint validation → enumeration → classification → per-control
+/// revalidation → WM_SETTEXT) injection + WM_GETTEXT read-back consistency.
+/// This is the core real-machine acceptance assertion for desktop fill (run on
+/// openclaw Windows Server 2022).
 #[test]
 fn settext_injection_roundtrip_on_real_window() {
     let target =
@@ -25,7 +28,8 @@ fn settext_injection_roundtrip_on_real_window() {
     assert_eq!(classified.username_hwnd, Some(target.username));
     assert_eq!(classified.password_hwnd, target.password);
 
-    // 全链注入：self_pid 伪造成别的进程（快照 pid 是真实测试进程 pid）
+    // Full-chain injection: self_pid faked as a different process (the
+    // snapshot pid is the real test process pid)
     let snapshot = target.snapshot("persona fill test - login");
     let fake_self_pid = std::process::id().wrapping_add(1).max(1);
     let (user_filled, pwd_filled, title) = execute_fill(
@@ -43,12 +47,15 @@ fn settext_injection_roundtrip_on_real_window() {
     target.destroy();
 }
 
-/// 取消边界（第四轮收口）：**清槽落在第一字段写入之后**。重查闭包按
-/// 调用序计数：第 1 次（username 写入前）放行；第 2 次（password 写入
-/// 前）先断言 username 已真实落值（证明清槽钩子确实落在第一字段写入
-/// 之后），再清槽并让重查拒绝。注入必须中止剩余写入并以
-/// [`FillError::Aborted`] 如实报部分完成（username=true、password=false），
-/// 密码框零残留。
+/// Cancellation boundary (fourth-round closure): **the slot clear lands after
+/// the first field write**. The recheck closure counts by call order: the 1st
+/// call (before the username write) passes; the 2nd call (before the password
+/// write) first asserts that the username really received its value (proving
+/// the slot-clear hook indeed fired after the first field write), then clears
+/// the slot and makes the recheck reject. Injection must abort the remaining
+/// writes and report partial completion honestly via
+/// [`FillError::Aborted`] (username=true, password=false),
+/// with zero residue in the password field.
 #[test]
 fn slot_cleared_after_first_write_aborts_remaining_write() {
     use std::sync::Mutex;
@@ -63,7 +70,8 @@ fn slot_cleared_after_first_write_aborts_remaining_write() {
         let n = call.get() + 1;
         call.set(n);
         if n == 2 {
-            // 此刻第一字段写入已完成——清槽钩子落在第一字段写入之后
+            // At this moment the first field write has completed — the
+            // slot-clear hook lands after the first field write
             assert_eq!(
                 read_field_text(username_hwnd),
                 "alice@example.com",
@@ -98,9 +106,12 @@ fn slot_cleared_after_first_write_aborts_remaining_write() {
     target.destroy();
 }
 
-/// 取消边界（第四轮收口）：**槽位在第一字段写入后被新一轮捕获替换**
-///（确认 A 后浮窗捕获了 B）。与清槽用例同一时序控制：第 2 次重查时槽
-/// 位已换成新 id，注入必须以 `TargetChanged` 中止剩余写入，密码不落。
+/// Cancellation boundary (fourth-round closure): **the slot is replaced by a
+/// newer capture after the first field write**
+/// (the floating window captured B after A was confirmed). Same timing control
+/// as the slot-clear case: by the 2nd recheck the slot
+/// already holds the new id, so injection must abort the remaining writes with
+/// `TargetChanged`, leaving the password unwritten.
 #[test]
 fn slot_replaced_after_first_write_aborts_remaining_write() {
     use std::sync::Mutex;
@@ -119,7 +130,8 @@ fn slot_replaced_after_first_write_aborts_remaining_write() {
                 "alice@example.com",
                 "swap hook must fire after the first field write landed"
             );
-            // 模拟重新捕获：槽位换成新快照（不同 id）
+            // Simulate a re-capture: the slot is replaced by a new snapshot
+            // (different id)
             let mut replacement = snapshot.clone();
             replacement.snapshot_id = "re-captured-target-B".to_string();
             *slot.lock().unwrap_or_else(|p| p.into_inner()) = Some(replacement);
@@ -153,8 +165,9 @@ fn slot_replaced_after_first_write_aborts_remaining_write() {
     target.destroy();
 }
 
-/// 无任何 ES_PASSWORD 框 → 拒绝注入（历史"第二个框"启发式已移除：
-/// 普通框可能是攻击者伪装的明文收集器）。
+/// No ES_PASSWORD field at all → injection refused (the historical
+/// "second field" heuristic has been removed:
+/// a plain field might be a plaintext harvester faked by an attacker).
 #[test]
 fn plain_only_window_is_rejected_no_password_guessing() {
     let target = TestTargetWindow::create("persona fill test - plain", false).expect("create");
@@ -176,18 +189,19 @@ fn plain_only_window_is_rejected_no_password_guessing() {
         err.contains("ES_PASSWORD"),
         "error must mention ES_PASSWORD: {err}"
     );
-    // 两个普通框都必须原样为空（没写进去任何东西）
+    // Both plain fields must remain empty as they were (nothing written in)
     assert_eq!(read_field_text(target.username), "");
     assert_eq!(read_field_text(target.password), "");
     target.destroy();
 }
 
-/// 分类守卫（纯函数）：不可见/禁用/只读的密码框不合格；只有不可见
-/// 密码框时整体拒绝。
+/// Classification guards (pure function): invisible/disabled/read-only password
+/// fields are ineligible; when only invisible password fields exist, reject
+/// outright.
 #[test]
 fn classification_guards_ineligible_fields() {
     use super::FieldState as F;
-    // 只读密码框：不合格 → 无合格密码框 → 拒绝
+    // Read-only password field: ineligible → no eligible password field → reject
     let ro = vec![F {
         hwnd: 1,
         is_password: true,
@@ -196,7 +210,7 @@ fn classification_guards_ineligible_fields() {
         read_only: true,
     }];
     assert!(classify_fields(&ro).is_none());
-    // 隐藏密码框：拒绝
+    // Hidden password field: reject
     let hidden = vec![F {
         hwnd: 2,
         is_password: true,
@@ -205,7 +219,7 @@ fn classification_guards_ineligible_fields() {
         read_only: false,
     }];
     assert!(classify_fields(&hidden).is_none());
-    // 禁用密码框：拒绝
+    // Disabled password field: reject
     let disabled = vec![F {
         hwnd: 3,
         is_password: true,
@@ -214,7 +228,8 @@ fn classification_guards_ineligible_fields() {
         read_only: false,
     }];
     assert!(classify_fields(&disabled).is_none());
-    // 隐藏密码框 + 可见用户名框：仍然拒绝（不能只填用户名进可疑窗口）
+    // Hidden password field + visible username field: still reject (never fill
+    // only the username into a suspicious window)
     let mixed = vec![
         F {
             hwnd: 4,
@@ -232,7 +247,8 @@ fn classification_guards_ineligible_fields() {
         },
     ];
     assert!(classify_fields(&mixed).is_none());
-    // 合格密码框 + 隐藏用户名框：填密码，用户名如实报未填
+    // Eligible password field + hidden username field: fill the password, and
+    // report the username as unfilled honestly
     let pwd_only = vec![
         F {
             hwnd: 6,
@@ -252,12 +268,13 @@ fn classification_guards_ineligible_fields() {
     let c = classify_fields(&pwd_only).unwrap();
     assert_eq!(c.username_hwnd, None);
     assert_eq!(c.password_hwnd, 7);
-    // 空目标
+    // Empty target
     assert!(classify_fields(&[]).is_none());
 }
 
-/// 逐控件写入前重验证：死句柄拒绝、只读/禁用/隐藏拒绝、密码框丢失
-/// ES_PASSWORD 样式拒绝（hwnd 复用字段角色对调的场景）。
+/// Per-control pre-write revalidation: dead handles are rejected,
+/// read-only/disabled/hidden are rejected, and a password field that lost its
+/// ES_PASSWORD style is rejected (the hwnd-reuse role-swap scenario).
 #[test]
 fn revalidate_field_rejects_gone_and_role_swapped_fields() {
     let target = TestTargetWindow::create("persona fill test - revalidate", true).expect("create");
@@ -268,20 +285,22 @@ fn revalidate_field_rejects_gone_and_role_swapped_fields() {
             Some(&mut pid),
         );
     }
-    // 好路径
+    // Happy path
     revalidate_field(target.password, target.top, pid, true).expect("eligible password field");
     revalidate_field(target.username, target.top, pid, false).expect("eligible username field");
-    // 死句柄
+    // Dead handle
     assert!(revalidate_field(0xDEAD_BEEFisize, target.top, pid, true).is_err());
     target.destroy();
-    // 销毁后全部拒绝
+    // After destruction, everything is rejected
     assert!(revalidate_field(target.password, target.top, pid, true).is_err());
     assert!(revalidate_field(target.username, target.top, pid, false).is_err());
 }
 
-/// 目标重验证（真 hwnd 走 validate_snapshot）：pid 不符拒绝、标题前缀
-/// 不符拒绝、空标题不再恒真、死句柄拒绝、销毁后拒绝；validate_target
-/// 对本进程窗口（pid == self_pid）恒拒绝。
+/// Target revalidation (real hwnd through validate_snapshot): mismatched pid is
+/// rejected, mismatched title prefix is rejected, an empty title is no longer
+/// always-true, dead handles are rejected, and so is everything after
+/// destruction; validate_target always rejects windows of our own process
+/// (pid == self_pid).
 #[test]
 fn target_validation_guards_hwnd_reuse() {
     use super::win::validate_snapshot;
@@ -306,7 +325,7 @@ fn target_validation_guards_hwnd_reuse() {
         "fingerprint helpers must work in-test"
     );
 
-    // 指纹全对（self_pid 伪造成别的进程）→ 放行
+    // Fingerprint fully matching (self_pid faked as a different process) → pass
     assert!(
         validate_snapshot(
             target.top,
@@ -319,7 +338,7 @@ fn target_validation_guards_hwnd_reuse() {
         "matching snapshot must pass"
     );
 
-    // 标题前缀不一致 → 拒绝（模拟 hwnd 复用到别的窗口）
+    // Title prefix mismatch → reject (simulates hwnd reuse into another window)
     assert!(
         !validate_snapshot(
             target.top,
@@ -332,13 +351,14 @@ fn target_validation_guards_hwnd_reuse() {
         "stale title must be rejected"
     );
 
-    // 空快照标题 + 非空当前标题 → 拒绝（堵 starts_with("") 恒真的洞）
+    // Empty snapshot title + non-empty current title → reject (closes the
+    // starts_with("")-always-true hole)
     assert!(
         !validate_snapshot(target.top, "", real_pid, &class, &exe, fake_other_pid),
         "empty snapshot title must not match a titled window"
     );
 
-    // 快照 pid 乱填（=0）与真实 pid 不符 → 拒绝
+    // Snapshot pid filled with garbage (=0) mismatches the real pid → reject
     assert!(
         !validate_snapshot(
             target.top,
@@ -351,7 +371,7 @@ fn target_validation_guards_hwnd_reuse() {
         "mismatched pid must be rejected"
     );
 
-    // 类名不符 → 拒绝
+    // Class name mismatch → reject
     assert!(
         !validate_snapshot(
             target.top,
@@ -364,7 +384,8 @@ fn target_validation_guards_hwnd_reuse() {
         "mismatched class must be rejected"
     );
 
-    // 可执行文件路径不符 → 拒绝（同标题同 pid 的伪装进程场景）
+    // Executable path mismatch → reject (the impersonating-process scenario
+    // with the same title and pid)
     assert!(
         !validate_snapshot(
             target.top,
@@ -377,7 +398,7 @@ fn target_validation_guards_hwnd_reuse() {
         "mismatched exe path must be rejected"
     );
 
-    // 死句柄 → 拒绝
+    // Dead handle → reject
     assert!(!validate_snapshot(
         0xDEAD_BEEFisize,
         "",
@@ -387,7 +408,8 @@ fn target_validation_guards_hwnd_reuse() {
         fake_other_pid
     ));
 
-    // validate_target 层：本进程窗口（pid == self_pid）恒拒绝
+    // validate_target layer: windows of our own process (pid == self_pid) are
+    // always rejected
     let own = FillTarget {
         hwnd: target.top,
         title: "persona fill test - validate".to_string(),
@@ -415,21 +437,25 @@ fn target_validation_guards_hwnd_reuse() {
     );
 }
 
-/// 剪贴板备份/恢复闭环：粘贴期间密文在场、结束后原内容恢复；
-/// 闭包 panic 不绕过恢复。
+/// Clipboard backup/restore closed loop: the ciphertext is present during the
+/// paste and the original content is restored afterwards;
+/// a closure panic does not bypass the restore.
 #[test]
 fn clipboard_backup_restore_roundtrip() {
     let _guard = clipboard_test_lock();
     use super::win::{seed_clipboard, with_clipboard_paste};
-    // 预置"原有内容"（直接写，不走备份/恢复语义）。值带每次运行的
-    // 唯一后缀：机器的 RDP/剪贴板同步链路（rdpclip 等）可能把**上一
-    // 轮**运行写过的固定字面量在剪贴板被清空后回灌（run4-red 实测
-    // 复现）——固定值会跟陈旧内容撞车，唯一值让回灌内容必然对不上。
+    // Seed "previous content" (written directly, bypassing the backup/restore
+    // semantics). The value carries a unique suffix per run: the machine's
+    // RDP/clipboard sync chain (rdpclip etc.) may re-inject a **fixed literal
+    // written by a previous run** after the clipboard has been cleared
+    // (reproduced on run4-red) — a fixed value would collide with stale
+    // content, while a unique value can never match re-injected content.
     let prev = format!("PREV-{}", uuid::Uuid::new_v4());
     seed_clipboard(&prev).expect("seed clipboard");
     assert_eq!(read_clipboard_text(), prev);
 
-    // 粘贴假密文：断言闭包期间读到的是密文、结束后恢复 prev
+    // Paste fake ciphertext: assert that what is read during the closure is the
+    // ciphertext, and that prev is restored afterwards
     let seen = std::cell::RefCell::new(String::new());
     let (_, warn) = with_clipboard_paste("TOP-SECRET", || {
         *seen.borrow_mut() = read_clipboard_text();
@@ -447,10 +473,11 @@ fn clipboard_backup_restore_roundtrip() {
     );
     assert!(warn.is_none(), "restore should not warn: {warn:?}");
 
-    // 无原有内容时：结束后密文被清掉（写空串），不残留。断空必须
-    // **读一次**：retry-until-non-empty 的旧读法会给外部剪贴板同步
-    // 进程留出整整 1 秒把陈旧内容灌回来（见上），把"读不到"放大成
-    // "读到垃圾"。
+    // With no previous content: the ciphertext is cleared at the end (an empty
+    // string is written) and nothing remains. The empty assertion must
+    // **read once**: the old retry-until-non-empty approach gives external
+    // clipboard sync processes a full second to push stale content back in
+    // (see above), magnifying "read nothing" into "read garbage".
     seed_clipboard("").expect("clear clipboard");
     let (_, _) = with_clipboard_paste("GHOST", || ()).expect("paste roundtrip 2");
     assert_eq!(
@@ -459,7 +486,8 @@ fn clipboard_backup_restore_roundtrip() {
         "no prior content must leave no residue"
     );
 
-    // 闭包 panic：恢复仍要发生，panic 在恢复之后传播
+    // Closure panic: the restore still happens, and the panic propagates after
+    // it
     let prev_panic = format!("PREV-PANIC-{}", uuid::Uuid::new_v4());
     seed_clipboard(&prev_panic).expect("seed clipboard 2");
     let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -476,8 +504,10 @@ fn clipboard_backup_restore_roundtrip() {
     );
 }
 
-/// 原剪贴板是非文本内容（文件/位图/自定义格式）时：恢复不了原文、
-/// 结束覆写为空串——必须返回告警，不许静默销毁用户剪贴板。
+/// When the original clipboard holds non-text content (files/bitmap/custom
+/// format): the original cannot be restored and an empty string is written at
+/// the end — a warning must be returned; silently destroying the user's
+/// clipboard is not allowed.
 #[test]
 fn clipboard_paste_warns_when_non_text_content_is_cleared() {
     let _guard = clipboard_test_lock();
@@ -491,17 +521,20 @@ fn clipboard_paste_warns_when_non_text_content_is_cleared() {
         warn.to_lowercase().contains("non-text"),
         "warning must explain the non-text wipe: {warn}"
     );
-    // tracing::warn 必须真实落日志（不只返回值）
+    // tracing::warn must actually land in the log (not just the return value)
     assert!(
         logged
             .iter()
             .any(|w| w.contains("previous non-text clipboard content")),
         "non-text wipe must be logged via tracing::warn: {logged:?}"
     );
-    // 密文不残留（覆写为空串），并顺手把剪贴板清回空态。期望空的
-    // 读必须用 expect_maybe_empty：retry-until-non-empty 会给 rdpclip
-    // 等外部同步进程留出把上一条用例的 PREV-* 灌回来的窗口
-    // （openclaw 实测：本断言读到 roundtrip 用例的 PREV-PANIC 值）。
+    // No ciphertext residue (overwritten with an empty string), and the
+    // clipboard is cleared back to the empty state on the way out. The
+    // empty expectation must use expect_maybe_empty: retry-until-non-empty
+    // would give external sync processes like rdpclip a window to push the
+    // previous case's PREV-* back in
+    // (verified on openclaw: this assertion read the roundtrip case's
+    // PREV-PANIC value).
     assert_eq!(
         read_clipboard_text_expect_maybe_empty(),
         "",
@@ -510,9 +543,11 @@ fn clipboard_paste_warns_when_non_text_content_is_cleared() {
     super::win::seed_clipboard("").ok();
 }
 
-/// 覆写失败（set 失败）分支：恢复路径的告警不能被吞——Err 原样上抛，
-/// 同时 `tracing::warn!("...swallowed by paste failure...")` 必须落日志。
-/// 注入失败的写入函数确定性触发（不必与真实剪贴板时序赛跑）。
+/// Overwrite-failure (set failure) branch: the warning on the restore path must
+/// not be swallowed — the Err propagates as-is, and
+/// `tracing::warn!("...swallowed by paste failure...")` must land in the log.
+/// Triggered deterministically via an injected failing writer function (no need
+/// to race the real clipboard timing).
 #[test]
 fn clipboard_paste_warns_when_restore_warning_is_swallowed_by_paste_failure() {
     let _guard = clipboard_test_lock();
@@ -538,16 +573,22 @@ fn clipboard_paste_warns_when_restore_warning_is_swallowed_by_paste_failure() {
     );
 }
 
-/// 闭包 panic 分支：恢复完成后 `tracing::warn!("...on panic path...")`
-/// 必须落日志，panic 在恢复之后原样重抛。注入的写入函数**只让恢复
-/// 失败**（第一次调用=明文覆写成功，之后=写回备份失败），确定性覆盖
-/// 「panic + 恢复失败」的组合分支——若覆写就失败，闭包根本不会执行，
-/// panic 分支无从触发（openclaw 实测：全 Err 写入函数让本用例恒红）。
+/// Closure-panic branch: after the restore completes,
+/// `tracing::warn!("...on panic path...")`
+/// must land in the log, and the panic is re-raised as-is after the restore.
+/// The injected writer function **only fails the restore**
+/// (first call = plaintext overwrite succeeds, afterwards = writing the backup
+/// back fails), deterministically covering
+/// the "panic + restore failure" combined branch — if the overwrite failed
+/// instead, the closure would never run at all and
+/// the panic branch could not be triggered (verified on openclaw: an
+/// all-Err writer function made this case fail red every time).
 #[test]
 fn clipboard_paste_warns_on_panic_path_when_restore_fails() {
     let _guard = clipboard_test_lock();
     use super::win::with_clipboard_paste_with_writer;
-    // 第 1 次写（明文覆写）成功，第 2 次写（恢复备份）起确定性失败
+    // The 1st write (plaintext overwrite) succeeds; from the 2nd write
+    // (restoring the backup) on it fails deterministically
     let calls = std::cell::Cell::new(0usize);
     let (_, warns) = capture_warns(|| {
         let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -576,14 +617,18 @@ fn clipboard_paste_warns_on_panic_path_when_restore_fails() {
         }),
         "panic-path restore warning must be logged via tracing::warn: {warns:?}"
     );
-    // 恢复是注入失败的：明文 PANIC-SECRET 还留在真剪贴板上——测试
-    // 自己清掉，别把它留给后面用例或外部剪贴板同步进程。
+    // The restore was made to fail by injection: the plaintext PANIC-SECRET is
+    // still left on the real clipboard — the test
+    // clears it itself; never leave it for later cases or external clipboard
+    // sync processes.
     super::win::seed_clipboard("").ok();
 }
 
-/// tracing 告警捕获（thread-local dispatcher，测试体内落 warn）：
-/// 返回 (测试体返回值, 捕获到的 warn 文案)——断言各失败分支的
-/// `tracing::warn!` 真实输出，不只看返回值。
+/// tracing warning capture (thread-local dispatcher, warns emitted inside the
+/// test body):
+/// returns (the test body's return value, the captured warn texts) — asserting
+/// the actual `tracing::warn!` output of each failure branch, not just the
+/// return values.
 fn capture_warns<T>(f: impl FnOnce() -> T) -> (T, Vec<String>) {
     use std::sync::{Arc, Mutex};
     struct WarnCapture(Arc<Mutex<Vec<String>>>);
@@ -622,20 +667,26 @@ fn capture_warns<T>(f: impl FnOnce() -> T) -> (T, Vec<String>) {
     (out, warns)
 }
 
-/// 剪贴板是进程全局的：同二进制内多个剪贴板用例并行会互相踩——
-/// 用进程内互斥串行化（Linux 侧不编译本模块，无此依赖）。
+/// The clipboard is process-global: multiple clipboard cases running in
+/// parallel inside the same binary would trample each other —
+/// serialize them with an in-process mutex (the Linux side does not compile this
+/// module, so it has no such dependency).
 fn clipboard_test_lock() -> std::sync::MutexGuard<'static, ()> {
     use std::sync::Mutex;
     static LOCK: Mutex<()> = Mutex::new(());
     LOCK.lock().unwrap_or_else(|p| p.into_inner())
 }
 
-/// 本机常有剪贴板监听进程短暂持有剪贴板（OpenClipboard 瞬时失败时
-/// `read_clipboard_text_once` 静默返回空串）；读回断言先小间隔重试，
-/// 把瞬时竞争与真实空剪贴板区分开（重试耗尽仍为空按空处理）。
-/// **只用于期望非空的断言**——期望为空的断言用
-/// [`read_clipboard_text_expect_maybe_empty`]，retry-until-non-empty
-/// 会给外部剪贴板同步进程留时间灌回陈旧内容。
+/// Clipboard listener processes on this machine often hold the clipboard
+/// briefly (when OpenClipboard fails transiently
+/// `read_clipboard_text_once` silently returns an empty string); read-back
+/// assertions first retry at short intervals,
+/// distinguishing transient contention from a genuinely empty clipboard (still
+/// empty after the retries are exhausted is treated as empty).
+/// **Only for assertions expecting non-empty** — assertions expecting empty use
+/// [`read_clipboard_text_expect_maybe_empty`], since retry-until-non-empty
+/// would give external clipboard sync processes time to push stale content
+/// back in.
 fn read_clipboard_text() -> String {
     for _ in 0..20 {
         let text = read_clipboard_text_once();
@@ -647,9 +698,11 @@ fn read_clipboard_text() -> String {
     String::new()
 }
 
-/// 期望为空的读回：只在 OpenClipboard 失败（监听进程短暂持锁）时
-/// 重试，剪贴板一旦打开立即按当时内容返回——不给外部同步进程留
-/// 灌回陈旧内容的窗口。
+/// Read-back where empty is expected: retry only when OpenClipboard fails
+/// (a listener process briefly holds the lock), and as soon as the clipboard is
+/// open, return whatever it currently holds — no window is given for external
+/// sync processes
+/// to push stale content back in.
 fn read_clipboard_text_expect_maybe_empty() -> String {
     for _ in 0..20 {
         match read_clipboard_text_once_state() {

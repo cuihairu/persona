@@ -47,7 +47,7 @@ const sampleRequest: PasskeyApprovalRequest = {
   item_id: 'item-uuid',
 };
 
-/** jsdom 的 document.hidden 是 getter，需要 defineProperty 覆盖 */
+/** jsdom's document.hidden is a getter, so it needs a defineProperty override */
 const setHidden = (hidden: boolean) => {
   Object.defineProperty(document, 'hidden', { value: hidden, configurable: true });
 };
@@ -138,8 +138,8 @@ describe('hooks/usePasskeyApprovals', () => {
       (capturedHandler as ListenHandler)({ payload: sampleRequest });
     });
 
-    // 后端拒绝了应答：请求必须留在队列里（可重试）而不是静默消失，
-    // 否则 Allow 丢失后浏览器请求会挂到 120s 超时
+    // The backend rejected the response: the request must stay queued (retryable) instead of vanishing,
+    // otherwise losing the Allow would leave the browser request hanging until the 120s timeout
     (personaAPI.passkeyApprovalRespond as jest.Mock).mockResolvedValueOnce({
       success: false,
       data: undefined,

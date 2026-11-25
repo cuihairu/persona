@@ -68,7 +68,7 @@ describe('hooks/usePersonaService', () => {
       updated_at: '2023-01-01T00:00:00Z',
     }) as any;
 
-  /** 每个 action 测试的公共前置：mount 时的 status 轮询 mock 成已解锁。 */
+  /** Shared setup for every action test: the status poll on mount is mocked as unlocked. */
 
   const mockUnlockedOnMount = () => {
     jest.spyOn(personaAPI, 'isServiceUnlocked').mockResolvedValue({
@@ -87,12 +87,12 @@ describe('hooks/usePersonaService', () => {
       resolveActivateA = r;
     });
     const setActive = jest.spyOn(personaAPI, 'setActiveIdentity');
-    setActive.mockImplementationOnce(() => slowActivateA as any); // A 慢
+    setActive.mockImplementationOnce(() => slowActivateA as any); // A is slow
     setActive.mockResolvedValueOnce({
       success: true,
       data: true,
       error: undefined,
-    } as any); // B 快
+    } as any); // B is fast
     jest.spyOn(personaAPI, 'getCredentialsForIdentity').mockResolvedValue({
       success: true,
       data: [],
@@ -109,7 +109,7 @@ describe('hooks/usePersonaService', () => {
     });
     expect(useAppStore.getState().currentIdentity?.id).toBe('id-b');
 
-    // A 的 activate 后到：switchSeq 守卫丢弃，不得把 currentIdentity 拉回 A
+    // A's activate arrives late: the switchSeq guard drops it, so currentIdentity must not be pulled back to A
     await act(async () => {
       resolveActivateA({ success: true, data: true, error: undefined });
       await pA;
@@ -135,11 +135,11 @@ describe('hooks/usePersonaService', () => {
     await act(async () => {
       await result.current.switchIdentity(identity, { silent: true });
     });
-    // 搜索跳转是手段不是用户动作，切换 toast 属噪声
+    // A search jump is a means, not a user action, so the switch toast would be noise
     expect(toastSuccess).not.toHaveBeenCalled();
     expect(useAppStore.getState().currentIdentity?.id).toBe('i-silent');
 
-    // 不传 silent 保持原行为
+    // Omitting silent preserves the original behavior
     await act(async () => {
       await result.current.switchIdentity(identity);
     });
@@ -148,13 +148,13 @@ describe('hooks/usePersonaService', () => {
 
   it('switchIdentity keeps the original identity and reports errors when the active write fails', async () => {
     mockUnlockedOnMount();
-    // 原身份不得被成功的切换覆盖：后端拒绝时界面必须停在原地
+    // The original identity must not be clobbered by a successful-looking switch: when the backend rejects, the UI has to stay put
     useAppStore.setState({ currentIdentity: makeIdentity('i-keep') });
 
     const setActive = jest.spyOn(personaAPI, 'setActiveIdentity');
     const loadCreds = jest.spyOn(personaAPI, 'getCredentialsForIdentity');
 
-    // success:false 臂：置错 + 报错 + 不弹成功，且不拉取目标身份凭据
+    // success:false arm: set the error, raise it, skip the success toast, and do not fetch the target identity's credentials
     setActive.mockResolvedValueOnce({ success: false, data: undefined, error: 'db busy' });
     const { result } = renderHook(() => usePersonaService());
     let ok: boolean | undefined;
@@ -168,7 +168,7 @@ describe('hooks/usePersonaService', () => {
     expect(toastSuccess).not.toHaveBeenCalled();
     expect(loadCreds).not.toHaveBeenCalled();
 
-    // 抛异常臂：同样保留原身份并透出底层错误
+    // Throwing arm: likewise keep the original identity and surface the underlying error
     setActive.mockRejectedValueOnce(new Error('ipc down'));
     await act(async () => {
       ok = await result.current.switchIdentity(makeIdentity('i-new', 'New'));
@@ -182,7 +182,7 @@ describe('hooks/usePersonaService', () => {
   it('switchIdentity silent still surfaces the failure (silent only mutes the success toast)', async () => {
     mockUnlockedOnMount();
     useAppStore.setState({ currentIdentity: makeIdentity('i-keep') });
-    // 无后端消息：走本地化兜底，静默成功在此是身份上下文可信性问题
+    // No message from the backend: fall back to the localized string—silently succeeding here would be a trust issue in the identity context
     jest.spyOn(personaAPI, 'setActiveIdentity').mockResolvedValueOnce({
       success: false,
       data: undefined,
@@ -320,8 +320,8 @@ describe('hooks/usePersonaService', () => {
       data: [created],
       error: undefined,
     });
-    // setActiveIdentity 抛异常 → 创建流程不受影响，但激活失败必须可见
-    // （workspace 活动身份仍指旧身份，静默成功会误导用户已全局切换）
+    // setActiveIdentity throws -> the create flow is unaffected, but the activation failure must be visible
+    // (the workspace's active identity still points at the old one, so a silent success would mislead the user into thinking the switch is global)
     jest.spyOn(personaAPI, 'setActiveIdentity').mockRejectedValueOnce(new Error('busy'));
 
     const { result } = renderHook(() => usePersonaService());
@@ -331,7 +331,7 @@ describe('hooks/usePersonaService', () => {
     expect(toastSuccess).toHaveBeenCalledWith('身份创建成功');
     expect(toastError).toHaveBeenCalledWith('身份已创建，但设为当前身份失败');
 
-    // 失败臂
+    // Failure arm
     jest.spyOn(personaAPI, 'createIdentity').mockResolvedValueOnce({
       success: false,
       data: undefined,
@@ -368,7 +368,7 @@ describe('hooks/usePersonaService', () => {
     expect(useAppStore.getState().currentIdentity?.name).toBe('Renamed');
     expect(toastSuccess).toHaveBeenCalledWith('身份已更新');
 
-    // 失败臂返回 null
+    // The failure arm returns null
     jest.spyOn(personaAPI, 'updateIdentity').mockResolvedValueOnce({
       success: false,
       data: undefined,
@@ -414,7 +414,7 @@ describe('hooks/usePersonaService', () => {
     useAppStore.setState({ currentIdentity: current });
     const del = jest.spyOn(personaAPI, 'deleteIdentity');
 
-    // 非 current：不清 session
+    // Not current: the session is not cleared
     del.mockResolvedValueOnce({ success: true, data: true, error: undefined });
     jest.spyOn(personaAPI, 'getIdentities').mockResolvedValue({
       success: true,
@@ -427,7 +427,7 @@ describe('hooks/usePersonaService', () => {
     });
     expect(useAppStore.getState().currentIdentity?.id).toBe('id-keep');
 
-    // 失败臂
+    // Failure arm
     del.mockResolvedValueOnce({ success: false, data: undefined, error: 'locked' });
     let ok: boolean | undefined;
     await act(async () => {
@@ -436,7 +436,7 @@ describe('hooks/usePersonaService', () => {
     expect(ok).toBe(false);
     expect(toastError).toHaveBeenCalledWith('locked');
 
-    // 异常臂
+    // Exception arm
     del.mockRejectedValueOnce(new Error('x'));
     await act(async () => {
       ok = await result.current.deleteIdentity('id-gone');

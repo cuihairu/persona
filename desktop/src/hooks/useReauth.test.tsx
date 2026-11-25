@@ -54,7 +54,7 @@ describe('hooks/useReauth', () => {
     expect(result.current.error).toBe('Invalid master password');
     expect(result.current.isVerifying).toBe(false);
 
-    // 挂起的 promise 仍未决 → cancel 走失败路径
+    // The suspended promise is still pending, so cancel takes the failure path
     act(() => {
       result.current.cancel();
     });

@@ -1,11 +1,11 @@
 import type { ThemePreference } from '@/types';
 
-/** 主题偏好持久化 key（全仓首个 localStorage 用例，读写一律 try/catch） */
+/** Storage key for the theme preference (the repo's first localStorage use; every read/write is wrapped in try/catch) */
 export const THEME_STORAGE_KEY = 'persona-theme';
 
 const VALID: ThemePreference[] = ['system', 'light', 'dark'];
 
-/** 读取持久化偏好：无值/越界/环境无 localStorage 一律回退 'system' */
+/** Reads the persisted preference: missing value, out-of-range value, or an environment without localStorage all fall back to 'system' */
 export const readStoredTheme = (): ThemePreference => {
   try {
     const raw = localStorage.getItem(THEME_STORAGE_KEY);
@@ -13,16 +13,16 @@ export const readStoredTheme = (): ThemePreference => {
       return raw as ThemePreference;
     }
   } catch {
-    // jsdom、隐私模式等无存储环境：静默走默认
+    // Storage-less environments such as jsdom or private mode: silently use the default
   }
   return 'system';
 };
 
-/** 偏好 + 系统暗色 → 实际是否暗色 */
+/** Preference + system dark → whether dark actually applies */
 export const resolveTheme = (pref: ThemePreference, systemDark: boolean): boolean =>
   pref === 'dark' || (pref === 'system' && systemDark);
 
-/** 系统当前是否暗色；jsdom 未实现 matchMedia 时按 false */
+/** Whether the system currently prefers dark; false when jsdom lacks matchMedia */
 export const systemPrefersDark = (): boolean => {
   try {
     return (
@@ -34,7 +34,7 @@ export const systemPrefersDark = (): boolean => {
   }
 };
 
-/** 把解析结果落到 <html> class（幂等，可重复调用） */
+/** Applies the resolved result to the <html> class (idempotent, safe to call repeatedly) */
 export const applyThemeClass = (isDark: boolean): void => {
   document.documentElement.classList.toggle('dark', isDark);
 };

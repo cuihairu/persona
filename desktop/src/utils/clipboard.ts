@@ -71,7 +71,7 @@ export const copyWithAutoClear = async (
   return true;
 };
 
-/** 复制 + 结果 toast（30s 自动清除）。CredentialList 行内按钮与全局 ⌘E 共用 */
+/** Copy + result toast (auto-cleared after 30s). Shared by the inline buttons in CredentialList and the global ⌘E */
 export const copyToClipboardWithToast = async (text: string, label: string): Promise<void> => {
   const ok = await copyWithAutoClear(text, 30_000);
   if (ok) {

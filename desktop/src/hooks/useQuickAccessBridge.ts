@@ -6,19 +6,23 @@ import { useAppStore } from '@/stores/appStore';
 import { personaAPI } from '@/utils/api';
 import type { QuickAccessOpenCredential } from '@/types';
 
-/** 浮窗 → 主窗口跳转事件（quick_access.rs OPEN_CREDENTIAL_EVENT） */
+/** Floating window -> main window navigation event (quick_access.rs OPEN_CREDENTIAL_EVENT) */
 const OPEN_CREDENTIAL_EVENT = 'persona://quick-access-open-credential';
 
 /**
- * Quick Access 浮窗的跨窗跳转接收端（只挂主窗口）。
+ * Receiver for the Quick Access floating window's cross-window navigation
+ * (mounted only in the main window).
  *
- * 两个窗口各有独立 JS store，浮窗没法直接改主窗口的选中态，只能让 Rust
- * 定向 emit 到主窗口（浮窗那边同时把主窗口拉到前台）。收到后：
- * 写 pendingCredentialSelection（跨身份时顺带 switchIdentity，由
- * CredentialList 消费注入），语义与 QuickSearch 的应用内跳转完全一致。
+ * The two windows have independent JS stores, so the floating window cannot
+ * mutate the main window's selection directly; it can only have Rust emit
+ * targeted to the main window (while pulling the main window to the
+ * foreground). On receipt: write pendingCredentialSelection (switching
+ * identity along the way when it crosses identities, injected by
+ * CredentialList) — semantically identical to QuickSearch's in-app navigation.
  *
- * 身份不在本地列表里（另一台机器同步过来的、或已被删）时**只报错不跳**：
- * 静默 switch 到不存在的身份只会把主界面带进空态。
+ * If the identity is not in the local list (synced from another machine, or
+ * already deleted) **report the error and do not jump**: silently switching to
+ * a nonexistent identity only drags the main UI into an empty state.
  */
 export const useQuickAccessBridge = () => {
   const { t } = useTranslation();
@@ -43,9 +47,11 @@ export const useQuickAccessBridge = () => {
         try {
           await personaAPI.setActiveIdentity(target.id);
         } catch (err) {
-          // 落库失败不阻断跳转（主界面按内存态继续切），但失败必须可见：
-          // workspace 活动身份仍指向原身份，CLI/浏览器会按旧身份工作——
-          // 静默成功等于让调用方以为全局已切换（switchIdentity 同口径）
+          // A failed persist does not block the navigation (the main UI keeps
+          // switching on its in-memory state), but the failure must be visible: the
+          // workspace active identity still points at the old one, so the CLI and
+          // browser keep operating on it — a silent success would tell the caller
+          // the global switch already happened (same rule as switchIdentity)
           const errorMessage = err instanceof Error ? err.message : t('svc.switchFailed');
           useAppStore.getState().setError(errorMessage);
           toast.error(errorMessage);
@@ -57,8 +63,9 @@ export const useQuickAccessBridge = () => {
       const pending = listen<QuickAccessOpenCredential>(OPEN_CREDENTIAL_EVENT, (event) => {
         void apply(event.payload);
       });
-      // 第二个 handler 吃掉 rejection：非 Tauri 环境（jsdom/浏览器直开）
-      // listen 会直接 reject，悬空 rejection 会污染无关用例的输出
+      // The second handler swallows the rejection: in non-Tauri environments
+      // (jsdom / opened directly in a browser) listen rejects outright, and a
+      // dangling rejection pollutes the output of unrelated cases
       pending.then(
         (fn) => {
           if (cancelled) fn();
@@ -67,7 +74,7 @@ export const useQuickAccessBridge = () => {
         () => {},
       );
     } catch {
-      // 非 Tauri 环境（jest/jsdom）无 listen：主窗口单窗口场景不受影响
+      // Non-Tauri environments (jest/jsdom) have no listen: the main window's single-window case is unaffected
     }
 
     return () => {

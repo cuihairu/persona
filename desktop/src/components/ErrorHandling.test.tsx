@@ -13,7 +13,7 @@ jest.mock('@tauri-apps/api/core', () => ({
   invoke: (cmd: string, args?: unknown) => mockInvoke(cmd, args),
 }));
 
-/** 渲染时抛错的哑组件（React 需要 key 提示重渲染边界）。 */
+/** A dumb component that throws while rendering (React needs a key to mark the remount boundary). */
 const Bomb = ({ message }: { message: string }) => {
   throw new Error(message);
 };
@@ -55,7 +55,7 @@ describe('components/ErrorHandling', () => {
     });
     expect(result.current.error).toBe('string error');
 
-    // 非 Error 且非 string（如 number）→ 默认文案，无 context 前缀
+    // Neither an Error nor a string (e.g. a number) → default text, no context prefix
     act(() => {
       result.current.handleError(42);
     });
@@ -104,7 +104,7 @@ describe('components/ErrorHandling', () => {
       </ErrorBoundary>,
     );
 
-    // jsdom 对 location.reload 仅报 "Not implemented" 不抛出：点击即执行 handleReload
+    // jsdom only reports "Not implemented" for location.reload without throwing: the click runs handleReload
     expect(() =>
       fireEvent.click(screen.getByRole('button', { name: '重新加载应用' }))
     ).not.toThrow();
@@ -123,9 +123,9 @@ describe('components/ErrorHandling', () => {
     );
 
     expect(screen.getByText('出错了')).toBeInTheDocument();
-    expect(screen.getByText('kaboom')).toBeInTheDocument(); // dev 模式错误详情
+    expect(screen.getByText('kaboom')).toBeInTheDocument(); // dev mode error details
 
-    // Try Again 清除错误态：恢复渲染同一棵子树（不再抛错的实现）
+    // Try Again clears the error state: the same subtree is rendered again (an implementation that no longer throws)
     fireEvent.click(screen.getByRole('button', { name: '重试' }));
     expect(screen.getByText('出错了')).toBeInTheDocument();
 
@@ -141,8 +141,8 @@ describe('components/ErrorHandling', () => {
         <Bomb message="x" />
       </ErrorBoundary>,
     );
-    // jsdom 的 window.location 不可 stub（LegacyUnforgeable），
-    // 这里只验证恢复动作入口存在；reload 本身是单行调用。
+    // jsdom's window.location cannot be stubbed (LegacyUnforgeable),
+    // so only assert that the recovery entry point exists; reload itself is a one-line call.
     expect(screen.getByRole('button', { name: '重新加载应用' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '重试' })).toBeInTheDocument();
 
@@ -183,7 +183,7 @@ describe('components/ErrorHandling', () => {
       </ErrorBoundary>,
     );
 
-    // 上报失败被静默吞掉，fallback UI 正常渲染
+    // The failed report is silently swallowed and the fallback UI renders as usual
     expect(screen.getByText('出错了')).toBeInTheDocument();
     await act(async () => {});
     expect(screen.getByText('出错了')).toBeInTheDocument();

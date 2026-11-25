@@ -1,16 +1,19 @@
 use super::*;
-// `CloudGroupKeyStore` 的设备管理方法（register/put/group_keys/bootstrap）
-// 是 `GroupKeyStore` trait 方法——必须把 trait 带进作用域。
+// The device-management methods on `CloudGroupKeyStore` (register/put/group_keys/bootstrap)
+// are `GroupKeyStore` trait methods — the trait must be in scope.
 use base64::Engine as _;
 use persona_core::sync::remote::GroupKeyStore as _;
 
-/// 读当前 vault 的同步服务器配置段（vault 打不开/行不存在一律 None——
-/// attach 是尽力而为的旁路，不能阻塞解锁主链路）。
+/// Read the sync-server config section of the current vault (a vault that
+/// cannot be opened or a missing row yields None — attach is a best-effort
+/// side path and must not block the unlock main path).
 ///
-/// 顺带做 legacy 一次性迁移：keyring 批次前 DB 里存的是明文 token，
-/// 读到非空值时搬进 keyring、DB 窄写为空串。keyring 写失败则保留
-/// 明文不销毁数据（下次 attach 重试迁移），上报因读不到 keyring 自然
-/// fail-closed。
+/// Also performs a one-off legacy migration: before the keyring change the DB
+/// stored the token in plaintext; a non-empty value is moved into the keyring
+/// and the DB is narrow-written with an empty string. If the keyring write
+/// fails the plaintext is kept rather than destroying data (the next attach
+/// retries the migration), and reporting naturally falls back to fail-closed
+/// because the keyring cannot be read.
 pub(crate) async fn read_sync_config(
     state: &State<'_, AppState>,
     db_path: &str,
@@ -40,16 +43,20 @@ pub(crate) async fn read_sync_config(
     Some(sync)
 }
 
-/// 按当前 vault settings 的 sync 段构造/替换 AppState 槽位中的上报器，
-/// 并把它注入（或从）当前 service 摘除。未启用/配置不完整时一律摘除
-/// （`set_event_emitter(None)`），与 CLI 宿主的 env 决策语义一致。
+/// Build or replace the reporter in the AppState slot from the sync section of
+/// the current vault settings, and inject it into (or detach it from) the
+/// current service. When sync is disabled or the config is incomplete it is
+/// always detached (`set_event_emitter(None)`), matching the env-based
+/// decision semantics of the CLI host.
 ///
-/// token 真值从 OS keyring 读（vault JSON 恒空串）：读不到/为空/出错
-/// 一律不启用（fail-closed）——enabled、url 非空、keyring 有 token 三者
-/// 齐备才挂。
+/// The real token is read from the OS keyring (the vault JSON always holds an
+/// empty string): unreadable/empty/errored all keep reporting disabled
+/// (fail-closed) — it is only attached when all three hold: enabled, a
+/// non-empty url, and a token in the keyring.
 ///
-/// 锁顺序固定 sync_emitter → service；旧 emitter 在槽位替换后、锁外
-/// stop（flush 可能走网络，不持有锁等待）。
+/// Lock order is fixed at sync_emitter -> service; the old emitter is stopped
+/// after the slot is replaced, outside the lock (flush may hit the network, so
+/// it must not be awaited while holding the lock).
 pub(crate) async fn attach_sync_emitter(state: &State<'_, AppState>) {
     let db_path = {
         let guard = state.db_path.lock().await;
@@ -114,16 +121,21 @@ pub(crate) async fn attach_sync_emitter(state: &State<'_, AppState>) {
     }
 }
 
-/// 窄写同步服务器配置（`settings.sync` 段），返回更新后的全量 settings
-/// 作为服务端真相。要求已解锁（照 `set_feature_flags` 门禁）；保存成功
-/// 后立即重挂上报器（停旧换新），无需重新解锁。
+/// Narrow-write the sync server config (the `settings.sync` section) and
+/// return the updated full settings as the source of truth for the server.
+/// Requires unlocked state (same gate as `set_feature_flags`); on save
+/// success the reporter is immediately re-attached (stop old, start new)
+/// without re-unlocking.
 ///
-/// token 真值存 OS keyring（经 `AppState.token_store`），vault JSON 的
-/// `server_token` 恒写空串：`server_token` 传空串 = **保留 keyring 里的
-/// 既有令牌**（避免把令牌常驻前端内存）；非空 = 覆盖写入 keyring，
-/// keyring 不可用时拒绝保存（fail-closed，绝不落明文）。`enabled=false`
-/// 时尽力清除 keyring 令牌（失败仅 warn，不阻塞关闭）。`enabled` 且
-/// `server_url` 空白时报错。
+/// The real token lives in the OS keyring (via `AppState.token_store`); the
+/// vault JSON's `server_token` is always written as an empty string: an empty
+/// `server_token` means **keep the existing token in the keyring** (so the
+/// token is not held resident in frontend memory); a non-empty value
+/// overwrites the keyring, and an unavailable keyring rejects the save
+/// (fail-closed, never falls back to plaintext). When `enabled=false` the
+/// keyring token is removed on a best-effort basis (failure only warns and
+/// does not block disable). Errors when `enabled` is set and `server_url` is
+/// blank.
 #[command(rename_all = "snake_case")]
 pub async fn set_sync_config(
     enabled: bool,
@@ -157,7 +169,8 @@ pub async fn set_sync_config(
     let repo = WorkspaceRepository::new(db.clone());
     let mut ws = workspace_or_return!(db, workspace_path);
 
-    // token 编排先于 DB 写：keyring 失败直接拒绝保存，不留半套配置
+    // Token handling precedes the DB write: a keyring failure rejects the
+    // save outright so no half-configured state is left behind.
     let trimmed_token = server_token.trim();
     if enabled {
         if !trimmed_token.is_empty() {
@@ -168,8 +181,9 @@ pub async fn set_sync_config(
                 )));
             }
         } else if let Some(old) = ws.settings.sync.as_ref() {
-            // 空串 = 保留旧值。legacy vault 的 DB 里可能还有 keyring 批次
-            // 之前的明文 token——先搬进 keyring 再清 DB，否则真值会丢
+            // Empty string = keep the old value. A legacy vault's DB may still
+            // hold a plaintext token from before the keyring change — move it
+            // into the keyring before clearing the DB, or the real value is lost.
             if !old.server_token.is_empty() {
                 if let Err(error) = state.token_store.set(&db_path, &old.server_token) {
                     return Ok(ApiResponse::error(format!(
@@ -183,9 +197,11 @@ pub async fn set_sync_config(
         tracing::warn!(%error, "failed to remove sync token from OS keyring; it stays available for a later re-enable");
     }
 
-    // vault JSON 恒存空串占位——真值只在 OS keyring。云盘字段（Phase 2）
-    // 是独立传输配置，本命令不改它们：读旧值原样保留，避免「改服务器
-    // 配置」把云盘传输选择悄悄清零。
+    // The vault JSON always stores an empty-string placeholder — the real
+    // value only lives in the OS keyring. The cloud-drive fields (Phase 2)
+    // are separate transport configuration and are not touched by this
+    // command: the old values are read back and preserved as-is so that
+    // "change server config" does not silently wipe the cloud transport choice.
     let (old_cloud_dir, old_transport) = ws
         .settings
         .sync
@@ -207,15 +223,19 @@ pub async fn set_sync_config(
     Ok(ApiResponse::success(settings))
 }
 
-/// 窄写同步方式开关（`settings.sync_methods` 段），返回更新后的全量
-/// settings 作为服务端真相。要求已解锁（照 `set_sync_config` 门禁）。
+/// Narrow-write the sync method toggles (the `settings.sync_methods`
+/// section) and return the updated full settings as the source of truth for
+/// the server. Requires unlocked state (same gate as `set_sync_config`).
 ///
-/// **只写偏好开关**——绝不删 keyring、绝不触发网络：关闭跨设备同步 =
-/// 停用设置页入口，不离开同步组（组密钥仍在 keyring
-/// `persona-sync-group`，数据仍在组内）。桌面端暂无离开同步组的入口
-/// （`sync_group_store` 只有 get/set，无删除命令），要停用需在另一台
-/// 已授权设备上吊销本机（`sync_revoke`）。与
-/// `SyncConfig.enabled`（审计事件上报）是两套独立语义，绝不合并。
+/// **Writes the preference toggles only** — never deletes keyring entries,
+/// never touches the network: turning off cross-device sync disables the
+/// settings-page entry point but does not leave the sync group (the group key
+/// stays in the keyring under `persona-sync-group`, and the data stays in the
+/// group). The desktop app has no leave-sync-group entry yet (`sync_group_store`
+/// only has get/set, no delete command); to stop participating, another
+/// authorized device must revoke this one (`sync_revoke`). This is a separate
+/// semantics from `SyncConfig.enabled` (audit event reporting); never merge
+/// the two.
 #[command(rename_all = "snake_case")]
 pub async fn set_sync_methods(
     cross_device_sync: bool,
@@ -250,14 +270,18 @@ pub async fn set_sync_methods(
     Ok(ApiResponse::success(updated.settings))
 }
 
-/// 窄写同步传输选择（`settings.sync.sync_transport` + `cloud_drive_dir`），
-/// 返回更新后的全量 settings。要求已解锁（照 `set_sync_methods` 门禁）。
+/// Narrow-write the sync transport choice (`settings.sync.sync_transport` +
+/// `cloud_drive_dir`) and return the updated full settings. Requires unlocked
+/// state (same gate as `set_sync_methods`).
 ///
-/// **只写传输偏好**——绝不碰 keyring、绝不触发网络/云盘 I/O；云盘目录
-/// 只在 `transport=cloud` 时需要非空（fail-closed：不给目录不落配置，
-/// 前端在设置页选目录）。`transport=server` 时 `cloud_drive_dir` 可保留
-/// 上次值（切回 cloud 不丢），也可由前端传空清掉——本命令保留传空时的
-/// 旧值，避免「切到 server」悄悄丢目录。
+/// **Writes the transport preference only** — never touches the keyring,
+/// never triggers network or cloud-drive I/O; the cloud-drive folder is only
+/// required to be non-empty when `transport=cloud` (fail-closed: no folder
+/// given means no config is written; the frontend picks the folder in the
+/// settings page). With `transport=server`, `cloud_drive_dir` may keep the
+/// previous value (so switching back to cloud does not lose it) or be cleared
+/// by passing empty — this command keeps the old value when empty is passed,
+/// avoiding silently losing the folder on "switch to server".
 #[command(rename_all = "snake_case")]
 pub async fn set_sync_transport(
     sync_transport: String,
@@ -305,7 +329,8 @@ pub async fn set_sync_transport(
         enabled,
         server_url,
         server_token: String::new(),
-        // 传空串（前端切到 server / 未动）保留旧目录，防丢配置
+        // An empty string (frontend switched to server / untouched) keeps the
+        // old folder to avoid losing the config
         cloud_drive_dir: dir.map(String::from).or(old_dir),
         sync_transport: transport,
     });
@@ -314,10 +339,11 @@ pub async fn set_sync_transport(
     Ok(ApiResponse::success(updated.settings))
 }
 
-/// 只读：OS keyring 里是否存有 sync token（免解锁——设置页用它决定
-/// placeholder 提示）。只泄露"是否配置过"这一位元数据（与
-/// `get_workspace_settings` 暴露 `sync.enabled` 同级）；真值永不离开
-/// keyring、不经 IPC。
+/// Read-only: whether a sync token is stored in the OS keyring (no unlock
+/// needed — the settings page uses it to choose the placeholder hint). Only
+/// leaks the single bit of "was configured" metadata (same level as
+/// `get_workspace_settings` exposing `sync.enabled`); the real token never
+/// leaves the keyring and never travels over IPC.
 #[command]
 pub async fn sync_token_present(
     state: State<'_, AppState>,
@@ -341,10 +367,11 @@ pub async fn sync_token_present(
     Ok(ApiResponse::success(present))
 }
 
-/// 本机设备身份（keyring → DeviceIdentity）的三态。
+/// The three states of the local device identity (keyring -> DeviceIdentity).
 pub(crate) enum LocalDevice {
     NotJoined,
-    /// 记录存在但解析失败——不猜、不带病运行，UI 引导重新 join。
+    /// The record exists but fails to parse — do not guess and do not run in
+    /// a degraded state; the UI steers the user to re-join.
     Corrupted,
     Joined(persona_core::sync::device::DeviceIdentity),
 }
@@ -354,8 +381,9 @@ pub(crate) async fn require_db_path(state: &State<'_, AppState>) -> Option<Strin
     guard.clone()
 }
 
-/// 门禁：已解锁。`None` = 通过；`Some(消息)` = 未初始化/已锁定（调用方
-/// 转 `ApiResponse::error`——各 sync 命令的 data 类型不同，在此收口消息）。
+/// Gate: must be unlocked. `None` = pass; `Some(message)` = not initialized
+/// or locked (the caller converts it to `ApiResponse::error` — the data types
+/// of the sync commands differ, so the messages are consolidated here).
 pub(crate) async fn require_unlocked(state: &State<'_, AppState>) -> Option<String> {
     let guard = state.service.lock().await;
     match guard.as_ref() {
@@ -372,19 +400,20 @@ pub(crate) async fn local_device(state: &State<'_, AppState>, db_path: &str) -> 
             Err(_) => LocalDevice::Corrupted,
         },
         Ok(None) => LocalDevice::NotJoined,
-        Err(_) => LocalDevice::NotJoined, // keyring 读失败视同未加入（join 会再报具体错误）
+        Err(_) => LocalDevice::NotJoined, // A keyring read failure counts as not joined (join reports the specific error)
     }
 }
 
-/// settings.sync.server_url + keyring sync token（sync_now 与管理命令
-/// 共用的环境取用；任一缺失/环境失败返回用户可读消息）。
+/// settings.sync.server_url + keyring sync token (shared environment lookup for
+/// sync_now and the admin commands; a missing value or environment failure
+/// returns a user-readable message).
 pub(crate) async fn sync_server_creds_for(
     state: &State<'_, AppState>,
 ) -> std::result::Result<(String, String), String> {
     let db_path = require_db_path(state)
         .await
         .ok_or_else(|| "Database path unavailable. Initialize the service first.".to_string())?;
-    // fresh vault 的 sync 段是 None——与 URL 空白同义：未配置服务器
+    // A fresh vault's sync section is None — equivalent to a blank URL: no server configured
     let sync_config = match read_sync_config(state, &db_path).await {
         Some(config) => config,
         None => return Err("Sync server URL is not configured".to_string()),
@@ -402,7 +431,8 @@ pub(crate) async fn sync_server_creds_for(
     Ok((server_url, token))
 }
 
-/// settings.sync.server_url + keyring sync token 齐备时构造管理客户端。
+/// Build the admin client when both settings.sync.server_url and the keyring
+/// sync token are present.
 pub(crate) async fn sync_admin_api_for(
     state: &State<'_, AppState>,
 ) -> std::result::Result<persona_core::sync::remote::SyncAdminApi, String> {
@@ -411,8 +441,9 @@ pub(crate) async fn sync_admin_api_for(
         .map_err(|e| format!("Invalid sync server configuration: {e}"))
 }
 
-/// 只读：本 vault 是否已加入 E2EE 同步（纯本地 keyring，免解锁）。
-/// `corrupted = true` 表示有条目但解析失败——引导用户重新 join。
+/// Read-only: whether this vault has joined E2EE sync (purely local keyring,
+/// no unlock needed). `corrupted = true` means an entry exists but failed to
+/// parse — steer the user to re-join.
 #[command]
 pub async fn sync_device_status(
     state: State<'_, AppState>,
@@ -448,10 +479,11 @@ pub async fn sync_device_status(
     Ok(ApiResponse::success(status))
 }
 
-/// 加入 E2EE 同步：生成本机设备密钥对 → 按当前传输登记（服务器 API /
-/// 云盘 `registry.json`）→ keyring 落身份。keyring 写失败时尽力撤销刚
-/// 写的登记（不留半态，fail-closed）。门禁：已解锁；device_name
-/// 1..=128 字节。
+/// Join E2EE sync: generate the local device key pair -> register via the
+/// current transport (server API / cloud-drive `registry.json`) -> persist the
+/// identity to the keyring. On a keyring write failure, best-effort revoke the
+/// registration just written (leave no half-state; fail-closed). Gate: must be
+/// unlocked; device_name 1..=128 bytes.
 #[command]
 pub async fn sync_join(
     device_name: String,
@@ -484,8 +516,10 @@ pub async fn sync_join(
     }
     let (transport, cloud_dir) = sync_transport_config(&state).await;
     match transport {
-        // 云盘登记：device_id 本地生成（没有服务器分配这一步）；登记表
-        // 写 keyring 失败时回滚登记（删登记条目，信封还没写不必管）。
+        // Cloud-drive registration: device_id is generated locally (no
+        // server-assigned step); if the keyring write fails, roll back the
+        // registration (delete the registry entry; the envelope has not been
+        // written yet, so it needs no cleanup).
         persona_core::SyncTransport::Cloud => {
             let dir = match cloud_dir {
                 Some(dir) if !dir.trim().is_empty() => dir,
@@ -520,8 +554,10 @@ pub async fn sync_join(
                     "Cannot store device identity in OS keyring: {e}"
                 )));
             }
-            // 空组自举（首台设备自封信封 = 已授权）；非空组 = 等授权。
-            // 查询失败按「等授权」保守处理（fail-closed 同服务器口径）。
+            // Empty-group bootstrap (the first device seals its own envelope =
+            // authorized); a non-empty group = waiting for authorization. A
+            // failed query is conservatively treated as "waiting for
+            // authorization" (fail-closed, same as the server path).
             let pending = match store
                 .bootstrap_group_if_empty(identity.device_id, identity.key_pair.public_bytes())
                 .await
@@ -570,10 +606,14 @@ pub async fn sync_join(
                     "Cannot store device identity in OS keyring: {e}"
                 )));
             }
-            // pending = group-keys 尚无本机信封；查询失败按「等授权」保守处理
-            // （fail-closed：授权状态宁可显示未授权）。空组时本机自举：全新服务器
-            // 上没有既有设备可代为授权，首台设备生成 group key 自封信封上传——
-            // 否则第一台设备永远停在待授权（无人能授权它）。
+            // pending = group-keys has no envelope for this device yet; a failed
+            // query is conservatively treated as "waiting for authorization"
+            // (fail-closed: better to show unauthorized than to misreport). On an
+            // empty group this device bootstraps itself: a brand-new server has no
+            // existing device to authorize on its behalf, so the first device
+            // generates the group key, seals its own envelope, and uploads it —
+            // otherwise the first device would wait for authorization forever
+            // (nobody can authorize it).
             let pending = match api
                 .bootstrap_group_if_empty(device_id, identity.key_pair.public_bytes())
                 .await
@@ -590,12 +630,17 @@ pub async fn sync_join(
     }
 }
 
-/// 离开同步：尽力吊销服务器侧记录（不可达/未配置仅 warn——本地清理优先，
-/// 残留可由其他设备 revoke），然后无条件清 keyring 身份。私钥随条目删除
-/// 不可恢复；已同步进本库的数据仍可用（主库密文归主密码体系）。
+/// Leave sync: best-effort revoke the server-side record (unreachable/
+/// unconfigured only warns — local cleanup takes priority and leftovers can be
+/// revoked by another device), then unconditionally clear the keyring identity.
+/// The private key is deleted with the entry and cannot be recovered; data
+/// already synced into this vault remains usable (the main vault's ciphertext
+/// belongs to the master-password system).
 ///
-/// 云盘传输：尽力从 `registry.json` 移除自己 + 删本机信封文件；失败不
-/// 阻塞（本地清理优先，残留登记可由其他设备 revoke 同语义收编）。
+/// Cloud-drive transport: best-effort remove self from `registry.json` and
+/// delete the local envelope file; failure does not block (local cleanup takes
+/// priority, and leftover registrations can be revoked by another device with
+/// the same semantics).
 #[command]
 pub async fn sync_leave(
     state: State<'_, AppState>,
@@ -634,8 +679,9 @@ pub async fn sync_leave(
             persona_core::SyncTransport::Server => {
                 if let Ok(api) = sync_admin_api_for(&state).await {
                     if let Err(e) = api.delete_device(identity.device_id).await {
-                        // 服务器吊销失败不阻塞离开：本地清理优先，残留记录
-                        // 由其他设备 revoke（或管理员清理）
+                        // A failed server-side revoke does not block leaving: local cleanup
+                        // takes priority, and the leftover record can be revoked by another
+                        // device (or cleaned up by an admin)
                         tracing::warn!(%e, device_id = %identity.device_id, "server-side device revoke failed during leave; the record may remain");
                     }
                 } else {
@@ -659,10 +705,12 @@ pub async fn sync_leave(
     Ok(ApiResponse::success(true))
 }
 
-/// 列出同步组全部设备（含授权状态与本机标记）。要求已加入、已解锁。
+/// List all devices in the sync group (with authorization status and a
+/// this-device flag). Requires having joined and being unlocked.
 ///
-/// 云盘传输：读 `registry.json` + `env-<device>.bin` 存在性（未授权 =
-/// 登记了但信封未上传）。列表失败/登记表缺失 = 如实报错。
+/// Cloud-drive transport: reads `registry.json` plus `env-<device>.bin`
+/// existence (unauthorized = registered but the envelope was never uploaded).
+/// A failed listing / missing registry = report the error honestly.
 #[command]
 pub async fn sync_list_devices(
     state: State<'_, AppState>,
@@ -760,9 +808,10 @@ pub async fn sync_list_devices(
     }
 }
 
-/// 设置本设备的自由备注（S4）：服务端按令牌归属锁定设备行，无跨设备
-/// 路径——写谁的名字由令牌决定。空串/纯空白 = 清除。返回服务端规整
-/// （trim）后的备注。
+/// Set the free-form remark for this device (S4): the server pins the device
+/// row to the token's owner, so there is no cross-device path — whose remark
+/// is written is decided by the token. Empty string / whitespace only = clear.
+/// Returns the remark as normalized (trimmed) by the server.
 #[command]
 pub async fn sync_set_device_remark(
     remark: String,
@@ -789,8 +838,10 @@ pub async fn sync_set_device_remark(
     };
     let (transport, cloud_dir) = sync_transport_config(&state).await;
     match transport {
-        // 云盘备注：登记表是合作信任面（无服务器令牌锁定），命令层强制
-        // 只写本机设备条目——写别人的备注无意义且会互相覆盖。
+        // Cloud-drive remarks: the registry is a cooperative trust surface (no
+        // server-side token pinning), so the command layer forces writes to the
+        // local device's entry only — writing someone else's remark is
+        // meaningless and would overwrite each other.
         persona_core::SyncTransport::Cloud => {
             let dir = match cloud_dir {
                 Some(dir) if !dir.trim().is_empty() => dir,
@@ -824,12 +875,15 @@ pub async fn sync_set_device_remark(
     }
 }
 
-/// 为目标设备授权：拆本机信封得 group key → 用目标公钥封新信封上传。
-/// 本机未授权（信封拆不开）fail-closed——未授权设备无法授权他人；
-/// 目标必须是已登记的其他设备。
+/// Authorize the target device: open the local envelope to obtain the group key
+/// -> seal a new envelope with the target's public key and upload it.
+/// An unauthorized local device (envelope cannot be opened) fails closed — an
+/// unauthorized device cannot authorize others; the target must be another
+/// registered device.
 ///
-/// 云盘传输：读 `registry.json` 拿目标公钥（X25519），写
-/// `env-<target>.bin`（登记表里没目标 = 报错，与服务器 404 同语义）。
+/// Cloud-drive transport: read `registry.json` for the target public key
+/// (X25519) and write `env-<target>.bin` (target absent from the registry =
+/// error, same semantics as a server 404).
 #[command]
 pub async fn sync_authorize(
     target_device_id: String,
@@ -876,7 +930,8 @@ pub async fn sync_authorize(
                 }
             };
             let store = persona_core::sync::remote::CloudGroupKeyStore::new(&dir);
-            // 拆本机信封得 group key（fail-closed：未授权无法授权他人）
+            // Open the local envelope to obtain the group key (fail-closed:
+            // unauthorized cannot authorize others)
             let keys = match store.group_keys().await {
                 Ok(keys) => keys,
                 Err(e) => {
@@ -960,7 +1015,8 @@ pub async fn sync_authorize(
                     )))
                 }
             };
-            // 本机信封拆不开 = 本机未授权（fail-closed），无法授权他人
+            // The local envelope cannot be opened = local device is unauthorized
+            // (fail-closed); it cannot authorize others
             let group_key_bytes = match keys.iter().find(|k| k.device_id == identity.device_id) {
                 Some(own) => {
                     match persona_core::sync::envelope::open_group_key(
@@ -1010,9 +1066,11 @@ pub async fn sync_authorize(
     }
 }
 
-/// 吊销设备（删登记+信封，幂等；服务器侧删行 / 云盘删登记条目+文件）。
-/// 吊销自己请走 sync_leave。已知的 group key 不可追溯撤销（DR-3 诚实
-/// 边界）——提示文案归前端。
+/// Revoke a device (delete registration + envelope; idempotent; on the server
+/// side the row is deleted, on the cloud drive the registry entry and files).
+/// To revoke yourself, use sync_leave. A known group key cannot be revoked
+/// retroactively (the DR-3 honesty boundary) — the wording is the frontend's
+/// business.
 #[command]
 pub async fn sync_revoke(
     target_device_id: String,
@@ -1060,7 +1118,8 @@ pub async fn sync_revoke(
             };
             let store = persona_core::sync::remote::CloudGroupKeyStore::new(&dir);
             match store.remove_device(target_id).await {
-                // 幂等：登记表里没有 = 已吊销（或从未登记），返回成功
+                // Idempotent: absent from the registry = already revoked (or never
+                // registered), return success
                 Ok(_) => Ok(ApiResponse::success(true)),
                 Err(e) => Ok(ApiResponse::error(format!("Failed to revoke device: {e}"))),
             }
@@ -1078,19 +1137,25 @@ pub async fn sync_revoke(
     }
 }
 
-/// sync 命令族共用的门禁 + 会话装配（sync_now / sync_conflicts_list /
-/// sync_conflict_resolve 同序，阶段 3c 起抽公共 helper）：解锁检查 →
-/// db_path → 本机设备身份 → 服务器凭据 → 打开数据库并 migrate → travel
-/// 闸采样 → 拆本机信封装配会话。任一步失败返回 `Err(用户可读消息)`，
-/// 命令体在边界转 `Ok(ApiResponse::error(...))`（不逃逸）。
+/// Shared gate + session assembly for the sync command family (sync_now /
+/// sync_conflicts_list / sync_conflict_resolve share the same order; factored
+/// into a common helper since phase 3c): unlock check -> db_path -> local
+/// device identity -> server credentials -> open database and migrate ->
+/// travel-gate sampling -> open the local envelope to assemble the session.
+/// Any failed step returns `Err(user-readable message)`; the command body
+/// converts it at the boundary to `Ok(ApiResponse::error(...))` (it never
+/// escapes).
 ///
-/// master 密钥不在此取——它是挂 service guard 的借用，须留在命令体内
-/// 与后续 service 调用同锁段；这里只在 travel 采样时短暂持锁（采样值
-/// Copy，与会话生命周期无关）。
+/// The master key is not fetched here — it is a borrow tied to the service
+/// guard and must stay in the command body in the same lock section as the
+/// subsequent service calls; the lock is only briefly held here for the travel
+/// sampling (the sampled value is Copy and independent of the session
+/// lifetime).
 ///
-/// 传输路由（Phase 2 云盘双轨）：`settings.sync.sync_transport` 决定
-/// 装配哪条传输——`Server` = HTTP（既有路径零改动），`Cloud` =
-/// `open_cloud`（云盘目录即传输，不需要服务器凭据）。
+/// Transport routing (Phase 2 cloud-drive dual track): `settings.sync.sync_transport`
+/// decides which transport to assemble — `Server` = HTTP (the existing path is
+/// unchanged), `Cloud` =
+/// `open_cloud` (the cloud-drive folder is the transport; no server credentials needed).
 pub(crate) async fn open_sync_session(
     state: &State<'_, AppState>,
 ) -> std::result::Result<HostSyncSession, String> {
@@ -1106,8 +1171,9 @@ pub(crate) async fn open_sync_session(
     }
 }
 
-/// `settings.sync` 的传输选择（transport + cloud dir）。读不到配置段
-/// （fresh vault）= 默认 Server / 无云盘目录。
+/// The transport choice from `settings.sync` (transport + cloud dir). A
+/// config section that cannot be read (fresh vault) = default Server / no
+/// cloud-drive folder.
 pub(crate) async fn sync_transport_config(
     state: &State<'_, AppState>,
 ) -> (persona_core::SyncTransport, Option<String>) {
@@ -1120,9 +1186,10 @@ pub(crate) async fn sync_transport_config(
     }
 }
 
-/// 会话装配共用尾部：解锁门禁 → db_path → 设备身份 → 开库 migrate →
-/// travel 闸采样。两种传输的差异只剩最后一步「拿 remote + key_store」，
-/// 由调用方 [`HostSyncSession`] 各自提供。
+/// Shared tail of session assembly: unlock gate -> db_path -> device identity
+/// -> open DB and migrate -> travel-gate sampling. The only difference between
+/// the two transports is the last step ("get remote + key_store"), which the
+/// caller [`HostSyncSession`] supplies per variant.
 async fn open_session_common(
     state: &State<'_, AppState>,
 ) -> std::result::Result<
@@ -1165,9 +1232,11 @@ async fn open_session_common(
     Ok((db_path, identity, db, Box::new(move || travel_active)))
 }
 
-/// 两种传输装配出的会话的宿主侧枚举。`SyncSession<R>` 按传输是不同
-/// 具体类型，而 sync_now/status/冲突裁决四个命令对传输不关心——转发
-/// 这些方法，rotate（需服务器管理面）单独走 [`Self::into_server`]。
+/// Host-side enum over the sessions assembled by either transport.
+/// `SyncSession<R>` is a different concrete type per transport, while the four
+/// commands sync_now/status/conflict-resolve do not care about the transport —
+/// forward these methods, and route rotate (which needs the server admin plane)
+/// separately via [`Self::into_server`].
 pub(crate) enum HostSyncSession {
     Server(persona_core::sync::runtime::SyncSession<persona_core::sync::remote::HttpSyncRemote>),
     Cloud(persona_core::sync::runtime::SyncSession<persona_core::sync::remote::CloudDriveRemote>),
@@ -1194,8 +1263,9 @@ impl HostSyncSession {
             .map_err(|e| format!("Sync session failed: {e}"))
     }
 
-    /// 服务器会话（rotate 专用：需要 HTTP 管理面）。云盘会话在这里
-    /// 取不出——调用方应先查传输选择再决定是否走 rotate。
+    /// The server session (rotate-only: it needs the HTTP admin plane). A
+    /// cloud-drive session cannot be produced here — the caller should check the
+    /// transport choice before deciding whether to attempt rotate.
     fn into_server(
         self,
     ) -> std::result::Result<
@@ -1208,8 +1278,10 @@ impl HostSyncSession {
         }
     }
 
-    /// 会话实际走哪条传输。失败原因分类用（[`sync_failure`]）：会话打开
-    /// 失败时取不到会话，故用配置读到的传输；周期内失败用会话自身。
+    /// Which transport the session actually uses. Used for classifying failure
+    /// reasons ([`sync_failure`]): when opening the session fails there is no
+    /// session to ask, so the transport read from configuration is used;
+    /// failures inside the cycle use the session itself.
     fn transport(&self) -> persona_core::SyncTransport {
         match self {
             Self::Server(_) => persona_core::SyncTransport::Server,
@@ -1265,8 +1337,9 @@ impl HostSyncSession {
         }
     }
 
-    /// 捕获缝（传输无关：两边的 `OplogCapture<R>` 都实现 `SyncCapture`
-    /// trait 对象，service 槽位只收 trait 对象）。
+    /// The capture seam (transport-agnostic: both sides' `OplogCapture<R>`
+    /// implement the `SyncCapture` trait object, and the service slot only
+    /// accepts a trait object).
     fn capture(&self) -> std::sync::Arc<dyn persona_core::sync::capture::SyncCapture> {
         match self {
             Self::Server(session) => session.capture(),
@@ -1275,15 +1348,19 @@ impl HostSyncSession {
     }
 }
 
-/// 同步周期失败的结构化原因（CLOUD_DRIVE_SYNC §9.4）：UI 须把「云盘目录
-/// 不可用」与「服务器不可达」区分展示——两者修法不同（改指一个存在的云盘
-/// 目录 / 查 OS 云代理分发 vs 查服务器 URL 与令牌）。判别是结构性的：同步
-/// 路径里 [`persona_core::PersonaError::Io`] 是唯一传输层 I/O 失败变体
-/// （云盘=目录读写、服务器=HTTP 请求），宿主又已读传输选择——两维定位。
-/// 检查的是该变体的稳定 Display 前缀（`#[error("IO operation failed: …")]`），
-/// 不解析任意文本。
+/// The structured cause of a failed sync cycle (CLOUD_DRIVE_SYNC §9.4): the UI
+/// must present "cloud folder unavailable" and "server unreachable" distinctly —
+/// the two have different fixes (point at an existing cloud folder / check OS
+/// cloud proxy distribution vs. check the server URL and token). The
+/// discrimination is structural: on the sync path
+/// [`persona_core::PersonaError::Io`] is the only transport-layer I/O failure
+/// variant (cloud = folder read/write, server = HTTP request), and the host has
+/// already read the transport choice — two axes to locate it. What is checked is
+/// that variant's stable Display prefix (`#[error("IO operation failed: …")]`),
+/// not arbitrary text parsing.
 pub(crate) struct SyncFailure {
-    /// 机器可读错误码（写入 `ApiResponse.error_code`），None=无专用码。
+    /// Machine-readable error code (written into `ApiResponse.error_code`);
+    /// None = no dedicated code.
     pub code: Option<&'static str>,
     pub message: String,
 }
@@ -1294,9 +1371,10 @@ impl std::fmt::Display for SyncFailure {
     }
 }
 
-/// 由传输选择 + 错误消息构造 [`SyncFailure`]。`PersonaError::Io` 的稳定
-/// 显示前缀把「传输层 I/O 失败」从密码学/数据库/校验等其他失败中筛出，
-/// 传输选择再决定归类到哪一侧。
+/// Build a [`SyncFailure`] from the transport choice + error message. The
+/// stable display prefix of `PersonaError::Io` filters "transport-layer I/O
+/// failure" out from other failures such as crypto/database/validation, and
+/// the transport choice then decides which side it is attributed to.
 pub(crate) fn sync_failure(transport: persona_core::SyncTransport, message: String) -> SyncFailure {
     let code = message
         .contains("IO operation failed")
@@ -1307,11 +1385,13 @@ pub(crate) fn sync_failure(transport: persona_core::SyncTransport, message: Stri
     SyncFailure { code, message }
 }
 
-/// 一轮同步周期的宿主编排主体（`sync_now` 命令与云盘 watcher 共用）：
-/// 装配会话（按当前传输）→ 存量灌入 → pull/materialize/push → 把捕获缝
-/// 挂上 service。协议/密码学/编排全在 core `SyncSession`；这里只做宿主
-/// 编排。返回 `Err(SyncFailure)` 不转 ApiResponse——命令体在边界转，
-/// watcher 记录日志。
+/// The host orchestration body of one sync cycle (shared by the `sync_now`
+/// command and the cloud-drive watcher): assemble the session (per the current
+/// transport) -> backfill existing data -> pull/materialize/push -> attach the
+/// capture seam to the service. Protocol/cryptography/orchestration all live in
+/// core `SyncSession`; this only does host orchestration. Returns
+/// `Err(SyncFailure)` without converting to ApiResponse — the command body
+/// converts at the boundary, and the watcher just logs it.
 pub(crate) async fn sync_cycle_once(
     state: &State<'_, AppState>,
 ) -> std::result::Result<SyncNowReport, SyncFailure> {
@@ -1342,11 +1422,14 @@ pub(crate) async fn sync_cycle_once(
     Ok(SyncNowReport::from(report))
 }
 
-/// 立即同步（E2EE sync 阶段 3b 的宿主入口）：拆本机信封装配会话 →
-/// 存量灌入 → pull/materialize/push 周期 → 把捕获缝挂上 service（此后
-/// 本地写自动入 oplog）。协议/密码学/编排全在 core `SyncSession`；这里
-/// 只做宿主编排——门禁走 `open_sync_session`，master 借出与捕获缝挂载
-/// 在本命令的锁段内。
+/// Sync now (the host entry point of E2EE sync phase 3b): open the local
+/// envelope to assemble the session -> backfill existing data -> the
+/// pull/materialize/push cycle -> attach the capture seam to the service
+/// (after which local writes land in the oplog automatically).
+/// Protocol/cryptography/orchestration all live in core `SyncSession`; this
+/// only does host orchestration — the gate runs via `open_sync_session`, and the
+/// master borrow plus capture-seam attachment stay inside this command's lock
+/// section.
 #[command]
 pub async fn sync_now(
     state: State<'_, AppState>,
@@ -1360,10 +1443,12 @@ pub async fn sync_now(
     }
 }
 
-/// 同步状态快照（sync-group-mode §二.5.5）：组最新版本号 / 本机已同步水位 /
-/// 落后 N 条 / 待推 N 条 / 最近同步时间。只读，不跑任何周期——「立即同步」
-/// 仍是 sync_now。门禁与 sync_now 同（需解锁且已入组；head 查询走服务器，
-/// 服务器不可达时如实报错，不谎报「已最新」）。
+/// Sync status snapshot (sync-group-mode §2.5.5): group latest version /
+/// local synced watermark / N entries behind / N entries pending push / last
+/// sync time. Read-only and runs no cycle — "sync now" is still sync_now.
+/// Same gate as sync_now (unlocked and joined; the head query goes to the
+/// server, and when the server is unreachable the error is reported honestly
+/// rather than falsely claiming "already up to date").
 #[command]
 pub async fn sync_status(
     state: State<'_, AppState>,
@@ -1378,12 +1463,15 @@ pub async fn sync_status(
     }
 }
 
-/// group key 轮换（E2EE sync 阶段 3d）：换信封 + 全量重包——吊销设备
-/// 真正闭环的安全操作。核心流程在 core `SyncSession::rotate_group_key`；
-/// 这里只做宿主编排。诚实边界（前端确认弹窗须如实提示，见 core 文档）：
-/// 轮换前各保留设备应先「立即同步」；未裁决冲突副本随重包清出裁决视图；
-/// 并发轮换以 epoch 乐观锁互斥（2026-09-24）——后到者得
-/// CONCURRENT_CONFLICT 错误码，重读状态后可重试。
+/// Group key rotation (E2EE sync phase 3d): swap envelopes + full re-wrap —
+/// the safety operation that actually closes the loop for device revocation.
+/// The core flow lives in core `SyncSession::rotate_group_key`; this only does
+/// host orchestration. Honesty boundaries (the frontend confirm dialog must
+/// state them; see the core docs): devices that are kept should "sync now"
+/// before rotation; unresolved conflict replicas leave the resolution view along
+/// with the re-wrap; concurrent rotations are mutually excluded by an epoch
+/// optimistic lock (2026-09-24) — the later one gets the CONCURRENT_CONFLICT
+/// error code and can retry after re-reading the status.
 #[command]
 pub async fn sync_rotate(
     state: State<'_, AppState>,
@@ -1392,8 +1480,10 @@ pub async fn sync_rotate(
         Ok(session) => session,
         Err(message) => return Ok(ApiResponse::error(message)),
     };
-    // 云盘传输没有管理面可换全部信封（轮换 = 换信封 + 全量重包，服务器
-    // 由 epoch 乐观锁互斥）——诚实报错，登记于 CLOUD_DRIVE_SYNC §9。
+    // The cloud-drive transport has no admin plane to swap all envelopes
+    // (rotation = envelope swap + full re-wrap, which the server arbitrates with
+    // the epoch optimistic lock) — report this honestly; registered under
+    // CLOUD_DRIVE_SYNC §9.
     let session = match session.into_server() {
         Ok(session) => session,
         Err(message) => return Ok(ApiResponse::error(message)),
@@ -1412,8 +1502,10 @@ pub async fn sync_rotate(
     match session.rotate_group_key(master, &admin).await {
         Ok(report) => Ok(ApiResponse::success(SyncRotateReport::from(report))),
         Err(e) => {
-            // 并发轮换 409 经 PersonaError::ConcurrentConflict 翻出
-            // CONCURRENT_CONFLICT 码（前端可识别分流），其余无专用码
+            // A concurrent-rotation 409 surfaces via
+            // PersonaError::ConcurrentConflict as the CONCURRENT_CONFLICT code
+            // (so the frontend can branch on it); everything else has no
+            // dedicated code
             let (code, msg) = map_persona_error(&e);
             match code {
                 Some(code) => Ok(ApiResponse::error_with_code(
@@ -1428,9 +1520,10 @@ pub async fn sync_rotate(
     }
 }
 
-/// 冲突裁决列表（E2EE sync 阶段 3c）：全部待裁决条目（主位 + 副本的
-/// 解密快照）。只读，不改任何状态；损坏副本的条目整条跳过（留驻
-/// oplog，不阻塞其余展示）。
+/// Conflict resolution list (E2EE sync phase 3c): all entries awaiting
+/// resolution (the primary copy plus a decrypted snapshot of each replica).
+/// Read-only, changes no state; entries whose replica is corrupted are skipped
+/// entirely (they stay in the oplog without blocking the rest of the display).
 #[command]
 pub async fn sync_conflicts_list(
     state: State<'_, AppState>,
@@ -1439,8 +1532,9 @@ pub async fn sync_conflicts_list(
         Ok(session) => session,
         Err(message) => return Ok(ApiResponse::error(message)),
     };
-    // 不借 master：list 的解密走 group key（会话装配时拆信封得），只
-    // 要求解锁门禁；与 resolve（需 master 重包 item key）不同。
+    // No master borrow: list's decryption goes through the group key (obtained
+    // by opening the envelope during session assembly) and only the unlock gate
+    // is required; differs from resolve (which needs master to re-wrap the item key).
 
     match session.list_conflicts().await {
         Ok(entries) => Ok(ApiResponse::success(
@@ -1452,10 +1546,12 @@ pub async fn sync_conflicts_list(
     }
 }
 
-/// 冲突裁决（E2EE sync 阶段 3c）：采纳一个副本——先按副本内容写主库
-/// （put 复用其 payload 字节 / delete 删行），再以本机新 lamport 重新
-/// 入账，其余版本淘汰出裁决视图。重复采纳已裁决的 op_id 返回错误
-/// （NotFound，已在视图外）。
+/// Resolve a conflict (E2EE sync phase 3c): adopt one replica — write it into
+/// the main vault per the replica content (put reuses its payload bytes /
+/// delete removes the row), then re-book it with a fresh local lamport, and
+/// the remaining versions are evicted from the resolution view. Adopting an
+/// already-resolved op_id again returns an error
+/// (NotFound; it is already outside the view).
 #[command]
 pub async fn sync_conflict_resolve(
     item_id: String,
@@ -1485,7 +1581,7 @@ pub async fn sync_conflict_resolve(
     }
 }
 
-/// 组密钥 hex 编解码（32 字节 ↔ 64 字符；keyring 值格式）。
+/// Group key hex encoding/decoding (32 bytes <-> 64 chars; the keyring value format).
 pub(crate) fn group_key_to_hex(key: &[u8; 32]) -> String {
     key.iter().map(|b| format!("{b:02x}")).collect()
 }
@@ -1504,8 +1600,10 @@ pub(crate) fn group_key_from_hex(value: &str) -> Option<[u8; 32]> {
     Some(out)
 }
 
-/// 本 vault 是否已加入同步组（keyring 组密钥条目；读失败 fail-closed
-/// 视为未加入——host 出码会生成新组密钥，guest 加入不受影响）。
+/// Whether this vault has joined the sync group (the keyring group-key
+/// entry; a read failure fails closed and is treated as not joined — the
+/// host pairing code generates a new group key, and a guest joining is
+/// unaffected).
 pub(crate) fn sync_group_joined(state: &State<'_, AppState>, db_path: &str) -> bool {
     state
         .sync_group_store
@@ -1515,7 +1613,8 @@ pub(crate) fn sync_group_joined(state: &State<'_, AppState>, db_path: &str) -> b
         .is_some()
 }
 
-/// 同步组状态（只读，免解锁——同 sync_device_status 口径）。
+/// Sync group status (read-only, no unlock needed — same convention as
+/// sync_device_status).
 #[command]
 pub async fn sync_group_status(
     state: State<'_, AppState>,
@@ -1531,8 +1630,10 @@ pub async fn sync_group_status(
     Ok(ApiResponse::success(sync_group_joined(&state, &db_path)))
 }
 
-/// host 出码：新建配对会话与中转信箱，返回动态密码与邀请串。
-/// 组密钥：本机已在组 = 复用；首次 = 随机生成（poll 完成时落 keyring）。
+/// Host code generation: create a pairing session and relay mailbox, return the
+/// dynamic code and invite string.
+/// Group key: if this device is already in the group, reuse it; on first use,
+/// generate one randomly (persisted to the keyring when the poll completes).
 #[command]
 pub async fn sync_group_pairing_create(
     state: State<'_, AppState>,
@@ -1608,8 +1709,10 @@ pub async fn sync_group_pairing_create(
     }))
 }
 
-/// host 等待 guest 加入：阻塞驱动握手直到完成（90s 窗口，期间可取消
-/// ——cancel 删中转信箱后本命令即报错返回）。完成时组密钥落 keyring。
+/// Host waits for the guest to join: blocks driving the handshake until
+/// completion (a 90s window, cancellable during that time — once cancel deletes
+/// the relay mailbox this command errors out). On completion the group key is
+/// persisted to the keyring.
 #[command]
 pub async fn sync_group_pairing_poll(
     session_id: String,
@@ -1683,7 +1786,8 @@ pub async fn sync_group_pairing_poll(
             }))
         }
         Err(e) => {
-            // 未等到 guest（90s 超时）或中转故障：会话放回可重试（TTL 内）
+            // Guest not seen (90s timeout) or relay failure: put the session back
+            // for retry (within the TTL)
             state
                 .pairing_sessions
                 .lock()
@@ -1701,8 +1805,10 @@ pub async fn sync_group_pairing_poll(
     }
 }
 
-/// 取消配对/加入会话（两角色通用）：移除本地会话并尽力清理中转信箱。
-/// 幂等：会话不存在也返回成功（页面残留状态可重复点）。
+/// Cancel a pairing/join session (works for both roles): remove the local
+/// session and best-effort clean up the relay mailbox.
+/// Idempotent: succeeds even when the session does not exist (a stale page can
+/// be clicked again).
 #[command]
 pub async fn sync_group_pairing_cancel(
     session_id: String,
@@ -1720,7 +1826,8 @@ pub async fn sync_group_pairing_cancel(
         });
     if let Some(relay_url) = relay_url {
         if let Ok(relay) = persona_core::sync::pairing::relay::PairingRelayClient::new(&relay_url) {
-            // 信箱清理尽力而为：中转不可达时本地已清，TTL 到期自然回收
+            // Mailbox cleanup is best-effort: if the relay is unreachable the local
+            // side is already clean, and the TTL will reclaim it naturally
             if let Err(e) = relay.delete_session(&session_id).await {
                 tracing::warn!(%e, "pairing relay mailbox cleanup failed; TTL will reclaim it");
             }
@@ -1729,8 +1836,10 @@ pub async fn sync_group_pairing_cancel(
     Ok(ApiResponse::success(true))
 }
 
-/// guest 输码第一步：解码邀请串、起配并把 client_public 投给 host，
-/// 等回 host 应答后返回短指纹（UI 与 host 端比对，一致才 confirm）。
+/// Guest step 1 of entering the code: decode the invite string, start pairing,
+/// send client_public to the host, and wait for the host's reply before
+/// returning the short fingerprint (the UI compares it against the host side;
+/// only on a match is confirm called).
 #[command]
 pub async fn sync_group_join_begin(
     invite_link: String,
@@ -1775,8 +1884,10 @@ pub async fn sync_group_join_begin(
     }))
 }
 
-/// guest 第二步：指纹比对通过后确认入组——投 M1、收组密钥交接、解出
-/// 组密钥落 keyring。失败时本地会话作废（需重新输码起配）。
+/// Guest step 2: after the fingerprint matches, confirm joining — send M1,
+/// receive the group-key handover, and decode the group key into the keyring.
+/// On failure the local session is discarded (the code must be re-entered to
+/// restart pairing).
 #[command]
 pub async fn sync_group_join_confirm(
     session_id: String,
@@ -1824,7 +1935,8 @@ pub async fn sync_group_join_confirm(
         Err(e) => return Ok(ApiResponse::error(format!("{e}"))),
     };
     if let Err(e) = relay.join_confirm(&mut guest, &session_id).await {
-        // M1 已投出或交接超时：会话状态不再可靠，作废（重新输码起配）
+        // M1 already sent or the handover timed out: the session state is no longer
+        // reliable, discard it (re-enter the code to restart pairing)
         return Ok(ApiResponse::error(format!("{e}")));
     }
     let group_key = match guest.group_key() {
@@ -1846,8 +1958,10 @@ pub async fn sync_group_join_confirm(
     Ok(ApiResponse::success(true))
 }
 
-/// guest 取消加入（指纹比对不通过/放弃）：本地会话移除 + 中转信箱清理。
-/// 即 pairing_cancel 的 guest 侧别名，语义同幂等。
+/// Guest cancels joining (fingerprint mismatch / given up): remove the local
+/// session + clean up the relay mailbox.
+/// This is the guest-side alias of pairing_cancel, with the same idempotent
+/// semantics.
 #[command]
 pub async fn sync_group_join_cancel(
     session_id: String,
@@ -1860,7 +1974,8 @@ pub async fn sync_group_join_cancel(
 mod sync_failure_tests {
     use super::sync_failure;
 
-    /// 传输层 I/O 失败按传输选择归类到对应一侧（CLOUD_DRIVE_SYNC §9.4）
+    /// Transport-layer I/O failures are attributed to the side chosen by the
+    /// transport (CLOUD_DRIVE_SYNC §9.4)
     #[test]
     fn transport_io_failure_classifies_by_side() {
         let server = sync_failure(
@@ -1878,8 +1993,9 @@ mod sync_failure_tests {
         assert_eq!(cloud.code, Some("SYNC_CLOUD_FOLDER_UNAVAILABLE"));
     }
 
-    /// 门禁类失败（锁定/未入组/目录未配置/服务未初始化）不归类：UI 保持
-    /// 通用提示，不误报「服务器不可达」
+    /// Gate-type failures (locked / not joined / folder not configured /
+    /// service not initialized) get no classification: the UI keeps a generic
+    /// message and does not falsely claim "server unreachable"
     #[test]
     fn non_transport_failures_have_no_code() {
         for message in [
@@ -1897,7 +2013,7 @@ mod sync_failure_tests {
         }
     }
 
-    /// 消息原文保留给日志与通用提示（Display 只打印消息）
+    /// The original message is kept for logging and generic display (Display prints only the message)
     #[test]
     fn failure_message_survives() {
         let failure = sync_failure(

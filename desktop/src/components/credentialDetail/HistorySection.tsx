@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { ChevronDownIcon, ChevronUpIcon, ClockIcon } from '@heroicons/react/24/outline';
 import type { CredentialHistoryEntry } from '@/types';
 
-/** 变更历史区（原 JSX 块平移）：懒加载时间线与版本恢复入口由父级驱动。 */
+/** Change history section (the former JSX block moved as-is): the lazy-loaded timeline and the version restore entry are driven by the parent. */
 const HistorySection: React.FC<{
   isHistoryOpen: boolean;
   setIsHistoryOpen: React.Dispatch<React.SetStateAction<boolean>>;
@@ -19,7 +19,7 @@ const HistorySection: React.FC<{
 }) => {
   const { t } = useTranslation();
 
-// Item history（1Password 对齐）：懒加载的变更时间线
+// Item history (1Password parity): the lazily loaded change timeline
   return (
     <div className="border-t pt-3">
       <button

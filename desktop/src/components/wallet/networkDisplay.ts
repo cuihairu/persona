@@ -1,4 +1,4 @@
-/** 网络徽标的字形与配色；纯函数便于卡片与未来列表复用 */
+/** Glyph and colors for the network badge; a pure function so cards and future lists can reuse it */
 export const getNetworkIcon = (network: string): string => {
   switch (network.toLowerCase()) {
     case 'bitcoin':

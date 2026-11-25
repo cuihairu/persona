@@ -1,13 +1,13 @@
-/** 钱包域：地址簿、交易构造/签名、生成/导入导出。 */
+/** Wallet domain: address book, transaction construction/signing, generation/import-export. */
 
-/** 待签交易请求（由 wallet_create_transaction 返回） */
+/** Transaction awaiting signature (returned by wallet_create_transaction) */
 export interface WalletTransaction {
   id: string;
   wallet_id: string;
   network: string;
   from_address: string;
   to_address: string;
-  /** 最小单位字符串（wei / satoshi / lamport） */
+  /** String in the smallest unit (wei / satoshi / lamport) */
   amount: string;
   fee: string;
   gas_price?: string;
@@ -24,7 +24,7 @@ export interface WalletSignature {
   [key: string]: unknown;
 }
 
-/** 已签名交易（由 wallet_sign_transaction 返回） */
+/** Signed transaction (returned by wallet_sign_transaction) */
 export interface WalletSignedTransaction {
   id: string;
   request: WalletTransaction;
@@ -50,7 +50,7 @@ export interface CreateTransactionRequest {
 export interface SignTransactionRequest {
   transaction_id: string;
   password: string;
-  /** 确认弹窗展示地址投毒告警后用户仍二次确认（后端缺 ack 即拒签） */
+  /** Explicit second confirmation after the dialog showed the address-poisoning warning (the backend refuses to sign without the ack) */
   confirm_poisoning_check?: boolean;
 }
 

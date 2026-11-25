@@ -22,12 +22,12 @@ jest.mock('@/utils/api', () => ({
   },
 }));
 
-// 恢复成功后的收尾（清内存 + 重探解锁态）在 hook 里；本文件只关心它被调用
+// The post-restore-success finalization (clear memory + re-probe unlock state) lives in the hook; this file only cares that it was called
 jest.mock('@/hooks/usePersonaService', () => ({
   usePersonaService: jest.fn(),
 }));
 
-// 原生保存/打开对话框只在用户点击时触发；jsdom 下哑掉
+// Native save/open dialogs only fire on user clicks; stubbed out under jsdom
 jest.mock('@tauri-apps/plugin-dialog', () => ({
   open: jest.fn(),
   save: jest.fn(),
@@ -188,7 +188,7 @@ describe('components/BackupSection', () => {
     await waitFor(() => {
       expect(screen.getByTestId('backup-evidence')).toHaveTextContent('上次导出');
     });
-    // 成功后口令输入清空（不在 state 留密）
+    // Passphrase inputs cleared after success (no secret left in state)
     expect((screen.getByTestId('backup-passphrase') as HTMLInputElement).value).toBe('');
     expect((screen.getByTestId('backup-passphrase-confirm') as HTMLInputElement).value).toBe('');
   });
@@ -228,7 +228,7 @@ describe('components/BackupSection', () => {
     expect(screen.queryByTestId('backup-error')).not.toBeInTheDocument();
   });
 
-  /** 通过打开对话框选中备份文件（默认 /tmp/backup.enc） */
+  /** Picks a backup file through the open dialog (defaults to /tmp/backup.enc) */
   async function pickRestoreFile(path = '/tmp/backup.enc'): Promise<void> {
     mockOpen.mockResolvedValue(path);
     fireEvent.click(screen.getByTestId('backup-restore-pick'));
@@ -257,11 +257,11 @@ describe('components/BackupSection', () => {
       expect(mockRestore).toHaveBeenCalledWith('/tmp/backup.enc', 'backup-pass');
     });
     expect(window.confirm).toHaveBeenCalled();
-    // 换库段成功：清旧库内存 + 重探解锁态（App 随即切解锁屏）
+    // Vault-swap stage succeeded: clear the old vault's memory + re-probe unlock state (App then switches to the unlock screen)
     await waitFor(() => {
       expect(mockFinalizeVaultRestore).toHaveBeenCalledTimes(1);
     });
-    // 成功后口令清空（不在 state 留密）
+    // Passphrase cleared after success (no secret left in state)
     expect((screen.getByTestId('backup-restore-passphrase') as HTMLInputElement).value).toBe('');
     expect(screen.queryByTestId('backup-restore-error')).not.toBeInTheDocument();
     confirmSpy.mockRestore();
@@ -331,7 +331,7 @@ describe('components/BackupSection', () => {
         'Backup restore failed; the current vault was not touched: bad passphrase',
       );
     });
-    // staged 复验失败 = 库与会话都没动：输入保留、收尾不跑
+    // Staged re-validation failed = vault and session both untouched: inputs preserved, finalization skipped
     expect((screen.getByTestId('backup-restore-passphrase') as HTMLInputElement).value).toBe(
       'wrong-pass',
     );
@@ -339,7 +339,7 @@ describe('components/BackupSection', () => {
     confirmSpy.mockRestore();
   });
 
-  /** 点「刷新服务器版本」并等列表渲染出给定条目 */
+  /** Clicks the server-version refresh and waits for the list to render the given items */
   async function loadServerVersions(items: BackupVersionView[]): Promise<void> {
     mockListServer.mockResolvedValue({ success: true, data: items });
     fireEvent.click(screen.getByTestId('backup-server-refresh'));
@@ -366,7 +366,7 @@ describe('components/BackupSection', () => {
       await waitFor(() => {
         expect(screen.getByTestId('backup-evidence')).toHaveTextContent('上次导出');
       });
-      // 成功后口令输入清空（不在 state 留密）
+      // Passphrase inputs cleared after success (no secret left in state)
       expect((screen.getByTestId('backup-passphrase') as HTMLInputElement).value).toBe('');
       expect((screen.getByTestId('backup-passphrase-confirm') as HTMLInputElement).value).toBe('');
     });
@@ -438,7 +438,7 @@ describe('components/BackupSection', () => {
       render(<BackupSection />);
       await loadServerVersions([version()]);
 
-      // 无口令 → 先拒（不弹确认、不发请求）
+      // No passphrase → reject first (no confirmation dialog, no request sent)
       fireEvent.click(screen.getByTestId('backup-server-restore'));
       await waitFor(() => {
         expect(screen.getByTestId('backup-server-error')).toHaveTextContent('请输入备份口令');
@@ -454,7 +454,7 @@ describe('components/BackupSection', () => {
         expect(mockRestoreServer).toHaveBeenCalledWith('bk-1', 'server-pass');
       });
       expect(confirmSpy).toHaveBeenCalled();
-      // 换库段成功：清旧库内存 + 重探解锁态
+      // Vault-swap stage succeeded: clear the old vault's memory + re-probe unlock state
       await waitFor(() => expect(mockFinalizeVaultRestore).toHaveBeenCalledTimes(1));
       expect((screen.getByTestId('backup-server-passphrase') as HTMLInputElement).value).toBe('');
       confirmSpy.mockRestore();
@@ -493,7 +493,7 @@ describe('components/BackupSection', () => {
       await waitFor(() => {
         expect(screen.getByTestId('backup-server-error')).toHaveTextContent('was not touched');
       });
-      // staged 复验失败 = 库与会话都没动：口令保留、收尾不跑
+      // Staged re-validation failed = vault and session both untouched: passphrase preserved, finalization skipped
       expect((screen.getByTestId('backup-server-passphrase') as HTMLInputElement).value).toBe(
         'wrong-pass',
       );

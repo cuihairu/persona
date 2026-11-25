@@ -44,7 +44,7 @@ describe('components/ChangeMasterPasswordModal', () => {
   it('blocks submission while any field is empty', () => {
     renderModal();
 
-    // 提交按钮在任一字段为空时禁用
+    // The submit button is disabled while any field is empty
     expect(screen.getByRole('button', { name: '修改密码' })).toBeDisabled();
 
     fill('old', 'new', '');
@@ -112,7 +112,7 @@ describe('components/ChangeMasterPasswordModal', () => {
     });
     expect(onDone).not.toHaveBeenCalled();
 
-    // 失败后按钮恢复可用（isSubmitting 复位）
+    // After failure the button becomes usable again (isSubmitting reset)
     expect(screen.getByRole('button', { name: '修改密码' })).toBeEnabled();
   });
 
@@ -126,7 +126,7 @@ describe('components/ChangeMasterPasswordModal', () => {
     fill('old-pw', 'new-pw', 'new-pw');
     fireEvent.click(screen.getByRole('button', { name: '修改密码' }));
 
-    // 错误码驱动专用文案（引导先退出旅行模式），而不是透传后端原文
+    // The error code drives dedicated copy (guides toward exiting travel mode) instead of passing the backend text through
     await waitFor(() => {
       expect(screen.getByTestId('change-password-error')).toHaveTextContent(
         '旅行模式进行中',
@@ -134,7 +134,7 @@ describe('components/ChangeMasterPasswordModal', () => {
     });
     expect(onDone).not.toHaveBeenCalled();
 
-    // 失败后按钮恢复可用（退出旅行模式后可原地重试）
+    // After failure the button becomes usable again (retry in place after exiting travel mode)
     expect(screen.getByRole('button', { name: '修改密码' })).toBeEnabled();
   });
 
@@ -150,7 +150,7 @@ describe('components/ChangeMasterPasswordModal', () => {
     const { rerender } = renderModal();
     expect(screen.getByRole('button', { name: '取消' })).toBeInTheDocument();
 
-    // forced：无 Cancel、无 Close，Esc 不触发 onCancel
+    // forced: no Cancel, no Close, and Esc doesn't trigger onCancel
     rerender(
       <ChangeMasterPasswordModal
         isOpen
@@ -166,7 +166,7 @@ describe('components/ChangeMasterPasswordModal', () => {
     fireEvent.keyDown(window, { key: 'Escape' });
     expect(onCancel).not.toHaveBeenCalled();
 
-    // 非 forced：Esc 关闭
+    // Not forced: Esc closes
     rerender(<ChangeMasterPasswordModal isOpen onDone={onDone} onCancel={onCancel} />);
     fireEvent.keyDown(window, { key: 'Escape' });
     expect(onCancel).toHaveBeenCalledTimes(1);
@@ -193,7 +193,7 @@ describe('components/ChangeMasterPasswordModal', () => {
       />,
     );
     expect(screen.getByLabelText('新密码') as HTMLInputElement).toHaveValue('');
-    // initialOldPassword 仍在（解锁屏 forced 流重开时旧密不变）
+    // initialOldPassword persists (the lock screen's forced flow reopens with the old password intact)
     expect(screen.getByLabelText('当前密码') as HTMLInputElement).toHaveValue('pre');
   });
 });

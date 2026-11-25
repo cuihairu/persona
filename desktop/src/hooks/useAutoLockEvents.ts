@@ -4,19 +4,19 @@ import { invoke } from '@tauri-apps/api/core';
 import { useAppStore } from '@/stores/appStore';
 import type { AutoLockEventPayload } from '@/types';
 
-/** 后端 auto-lock 事件通道名（与 Rust 侧 emit 一致） */
+/** Backend auto-lock event channel name (matches the Rust-side emit) */
 export const AUTO_LOCK_EVENT = 'persona://auto-lock';
 
-/** 用户活动回传节流间隔 */
+/** Throttle interval for reporting user activity */
 const ACTIVITY_THROTTLE_MS = 30_000;
 
 /**
- * 订阅后端 auto-lock 事件流：
- * - `lock_pending` → 暴露剩余秒数给顶部倒计时横幅
- * - `locked`       → 清空前端 store、回到解锁屏（后端已在回调中落锁）
+ * Subscribes to the backend auto-lock event stream:
+ * - `lock_pending` -> expose the remaining seconds to the top countdown banner
+ * - `locked`       -> clear the frontend store and return to the unlock screen (the backend already locked inside the callback)
  *
- * 同时把用户活动（pointer/keydown，30s 节流）回传 `touch_activity`，
- * 推迟服务端的不活动锁定。仅在解锁状态下挂监听。
+ * Also reports user activity (pointer/keydown, 30s throttled) back over `touch_activity`,
+ * deferring the server-side inactivity lock. The listener is only attached while unlocked.
  */
 export const useAutoLockEvents = (enabled: boolean) => {
   const [pendingSeconds, setPendingSeconds] = useState<number | null>(null);
@@ -49,8 +49,8 @@ export const useAutoLockEvents = (enabled: boolean) => {
           setPendingSeconds(payload.seconds_remaining);
           break;
         case 'locked':
-          // 后端已落锁：前端只负责清理本地状态，回到解锁屏
-          // （清理项与手动 lockService 对齐：favicon 缓存、选中、待注入跳转一并作废）
+          // The backend has already locked: the frontend only cleans up local state and returns to the unlock screen
+          // (the cleanup items mirror manual lockService: favicon cache, selection, and pending injections all get invalidated)
           setPendingSeconds(null);
           setUnlocked(false);
           setIdentities([]);
@@ -59,9 +59,9 @@ export const useAutoLockEvents = (enabled: boolean) => {
           clearFaviconCache();
           clearPendingCredentialSelection();
           setSelectedCredentialId(null);
-          // 编辑弹窗同随锁作废（解密 payload 不得跨锁存活）
+          // The editing dialog is invalidated with the lock too (a decrypted payload must not survive across locks)
           setEditingCredential(null);
-          // 侧栏分类选中同随锁复位（与手动 lockService 对齐）
+          // Sidebar category selection is also reset with the lock (mirroring manual lockService)
           resetSidebarFilter();
           setCredentialSearchQuery('');
           break;
@@ -102,7 +102,7 @@ export const useAutoLockEvents = (enabled: boolean) => {
       if (now - lastTouchRef.current < ACTIVITY_THROTTLE_MS) return;
       lastTouchRef.current = now;
       invoke('touch_activity').catch(() => {
-        // 服务未初始化时忽略；不影响本地使用
+        // Ignore when the service is not initialized; local use is unaffected
       });
     };
 

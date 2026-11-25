@@ -1,4 +1,4 @@
-//! 非三大桌面平台：一律不可用（fail-closed）。
+//! Any platform outside the three major desktops: always unavailable (fail-closed).
 
 pub fn platform_name() -> &'static str {
     "unsupported"

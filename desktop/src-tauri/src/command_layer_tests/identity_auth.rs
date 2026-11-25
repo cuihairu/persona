@@ -109,12 +109,12 @@ async fn audit_commands_return_empty_results_for_fresh_vault() {
     let resp = audit_cleanup(30, app.state::<AppState>()).await.unwrap();
     assert!(resp.success, "{:?}", resp.error);
 }
-/// 审计查询过滤分支 + init_service 把唯一工作区改道到新路径。
+/// Audit query filter branches + init_service re-routing the sole workspace to a new path.
 #[tokio::test]
 async fn audit_query_filters_and_workspace_repath() {
     let (app, _identity_id) = app_with_identity().await;
 
-    // 合法 action 过滤（空结果）。
+    // A legal action filter (empty result).
     let resp = audit_query(
         AuditQueryRequest {
             user_id: None,
@@ -132,8 +132,9 @@ async fn audit_query_filters_and_workspace_repath() {
     assert!(resp.success, "{:?}", resp.error);
     assert!(resp.data.unwrap().is_empty());
 
-    // AuditAction::from_str 把未知动作映射成 Custom、从不失败，所以
-    // build_audit_query 的 "Unknown audit action" 分支只是防御性死代码。
+    // AuditAction::from_str maps unknown actions to Custom and never fails, so
+    // build_audit_query's "Unknown audit action" branch is purely defensive dead
+    // code.
     let resp = audit_query(
         AuditQueryRequest {
             user_id: None,
@@ -196,8 +197,9 @@ async fn audit_query_filters_and_workspace_repath() {
         resp.error
     );
 
-    // 工作区改道：把 tempdir 挪到新路径后再 init，库内唯一工作区
-    // （指向旧路径）会被改道到新路径（ensure_workspace_for_path 分支）。
+    // Workspace re-routing: move the tempdir to a new path and then init; the
+    // only workspace in the db (pointing at the old path) gets re-routed to the
+    // new path (the ensure_workspace_for_path branch).
     let dir = tempfile::tempdir().unwrap();
     let db_path = dir.path().join("repath.db");
     std::mem::forget(dir);
@@ -214,7 +216,7 @@ async fn audit_query_filters_and_workspace_repath() {
     assert!(resp.success, "first init failed: {:?}", resp.error);
 
     let old_path = std::path::PathBuf::from(&db_path);
-    // 挪到 /tmp 下的兄弟目录（不能挪进自身内部，EINVAL）。
+    // Move it to a sibling directory under /tmp (it cannot be moved inside itself: EINVAL).
     let new_dir = std::env::temp_dir().join(format!("persona-repath-{}", uuid::Uuid::new_v4()));
     std::fs::rename(old_path.parent().unwrap(), &new_dir).unwrap();
     let new_db = new_dir.join("repath.db");
@@ -231,7 +233,7 @@ async fn audit_query_filters_and_workspace_repath() {
     .unwrap();
     assert!(resp.success, "repath init failed: {:?}", resp.error);
 }
-/// `SerializableAutoLockEvent` 四个变体的映射与 serde tag。
+/// The mapping and serde tags of `SerializableAutoLockEvent`'s four variants.
 #[test]
 fn serializable_auto_lock_event_variants() {
     use persona_core::auth::LockReason;
@@ -269,7 +271,7 @@ fn serializable_auto_lock_event_variants() {
         },
     ))
     .unwrap();
-    // reason 经 Debug 格式（枚举名），session 透传。
+    // reason goes through Debug formatting (the enum name), session passes through.
     assert_eq!(locked["session_id"], "s1");
     assert_eq!(locked["reason"], "Inactivity");
 
@@ -282,7 +284,7 @@ fn serializable_auto_lock_event_variants() {
     .unwrap();
     assert_eq!(pending["seconds_remaining"], 30);
 }
-/// `From<AuditLog>`：可选身份/凭据 id 转字符串、动作与资源类型可读化。
+/// `From<AuditLog>`: optional identity/credential ids become strings, and action and resource types are made human-readable.
 #[test]
 fn serializable_audit_log_maps_option_ids() {
     use persona_core::models::{AuditAction, ResourceType};
@@ -310,18 +312,20 @@ fn serializable_audit_log_maps_option_ids() {
     assert!(json["credential_id"]
         .as_str()
         .is_some_and(|s| !s.is_empty()));
-    // 动作与资源类型序列化为 snake_case（与 AuditAction::from_str 对称）。
+    // Action and resource types serialize as snake_case (symmetric with AuditAction::from_str).
     assert_eq!(json["action"], "identity_created");
     assert_eq!(json["resource_type"], "identity");
     assert_eq!(json["success"], true);
 }
-/// auto-lock 事件桥的闭环：Locked 事件触发后，回调 emit 事件并在后台任务
-/// 里强制 `service.lock()` 清掉内存主密钥（不依赖前端存活）。
+/// The auto-lock event bridge closed loop: once the Locked event fires, the
+/// callback emits the event and, in a background task, forces `service.lock()`
+/// to wipe the in-memory master key (not depending on the frontend being
+/// alive).
 #[tokio::test]
 async fn auto_lock_event_bridge_force_locks_on_locked_event() {
     let app = mock_app();
     init_service_ok(&app, "correct-horse").await;
-    // init_service 已注册 bridge 回调。
+    // init_service has registered the bridge callback.
 
     let resp = is_service_unlocked(app.state::<AppState>()).await.unwrap();
     assert_eq!(resp.data, Some(true), "fresh init must be unlocked");
@@ -331,19 +335,21 @@ async fn auto_lock_event_bridge_force_locks_on_locked_event() {
         let mut guard = state.service.lock().await;
         let service = guard.as_mut().expect("service initialized");
 
-        // 首次 init 只调 initialize_user，不建立 auto-lock session（真实
-        // 产品行为：会话在认证时创建）；走一次 lock → 认证来建立 session，
-        // 与前端「初始化 → 锁定 → 再解锁」的真实链路一致。
+        // The first init only calls initialize_user and does not create an
+        // auto-lock session (real product behavior: the session is created at
+        // authentication time); run one lock -> authenticate to create the
+        // session, matching the frontend's real "init -> lock -> unlock again"
+        // chain.
         service.lock();
         let result = service.authenticate_user("correct-horse").await.unwrap();
         assert!(matches!(result, persona_core::AuthResult::Success));
 
-        // 通过公开 API 手动触发 Locked 事件（与超时监控同一 emit 路径，
-        // 无需等待真实定时器）。
+        // Trigger the Locked event manually via the public API (the same emit
+        // path as the timeout monitor, without waiting for a real timer).
         service.force_lock_session().await.expect("force lock");
     }
 
-    // 回调异步执行：轮询等待强制落锁生效。
+    // The callback runs asynchronously: poll until the forced lock takes effect.
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     loop {
         let resp = is_service_unlocked(app.state::<AppState>()).await.unwrap();
@@ -443,8 +449,9 @@ async fn change_master_password_command_rotates_and_allows_reinit() {
     let app = mock_app();
     let db_path = init_service_ok(&app, "old-master-pw").await;
 
-    // 锁定态轮换：命令自建全新 service（state.service 保持 None/旧实例不碰），
-    // 前端随后用新密码重新 init
+    // Rotation while locked: the command builds a fresh service itself
+    // (state.service stays None / the old instance is untouched), and the
+    // frontend then re-inits with the new password
     let resp = lock_service(app.state::<AppState>()).await.unwrap();
     assert!(resp.success, "{:?}", resp.error);
 
@@ -461,7 +468,7 @@ async fn change_master_password_command_rotates_and_allows_reinit() {
     assert!(resp.success, "{:?}", resp.error);
     assert_eq!(resp.data, Some(true));
 
-    // 旧密码从此被拒
+    // The old password is rejected from now on
     let resp = init_service(
         InitRequest {
             master_password: "old-master-pw".to_string(),
@@ -475,7 +482,7 @@ async fn change_master_password_command_rotates_and_allows_reinit() {
     assert!(!resp.success);
     assert_eq!(resp.error.as_deref(), Some("Invalid master password"));
 
-    // 新密码 init 成功且服务解锁（会话照常建立）
+    // The new password init succeeds and the service is unlocked (the session is created as usual)
     let resp = init_service(
         InitRequest {
             master_password: "new-master-pw".to_string(),
@@ -512,7 +519,7 @@ async fn change_master_password_command_rejects_wrong_old_password() {
         "unexpected error: {msg}"
     );
 
-    // 失败尝试不得损坏 vault：真密码依旧能建会话
+    // A failed attempt must not corrupt the vault: the real password still creates a session
     let resp = init_service(
         InitRequest {
             master_password: "real-master-pw".to_string(),
@@ -530,7 +537,7 @@ async fn set_password_expiry_narrow_write_round_trip() {
     let app = mock_app();
     init_service_ok(&app, "master-pw-123").await;
 
-    // 全新 vault：默认不过期
+    // A brand-new vault: no expiry by default
     let resp = get_workspace_settings(app.state::<AppState>())
         .await
         .unwrap();
@@ -538,7 +545,7 @@ async fn set_password_expiry_narrow_write_round_trip() {
     let settings = resp.data.expect("settings present");
     assert_eq!(settings.password_expiry_days, None);
 
-    // 窄写 90 天；返回的全量 settings 里其它字段不被 clobber
+    // A narrow write of 90 days; the other fields in the returned full settings are not clobbered
     let resp = set_password_expiry(Some(90), app.state::<AppState>())
         .await
         .unwrap();
@@ -548,7 +555,7 @@ async fn set_password_expiry_narrow_write_round_trip() {
     assert!(settings.encryption_enabled);
     assert_eq!(settings.session_timeout_seconds, 3600);
 
-    // 与 features 位互不干扰（两条窄写路径共用一行 settings）
+    // No interference with the features bits (the two narrow-write paths share one settings row)
     let resp = set_feature_flags(
         true,
         false,
@@ -575,7 +582,7 @@ async fn set_password_expiry_narrow_write_round_trip() {
         "expiry write must not clobber features"
     );
 
-    // Some(0) 无意义，显式拒绝
+    // Some(0) is meaningless and explicitly rejected
     let resp = set_password_expiry(Some(0), app.state::<AppState>())
         .await
         .unwrap();
@@ -612,13 +619,13 @@ async fn change_master_password_updates_biometric_entry() {
     .await
     .unwrap();
     assert!(resp.success, "{:?}", resp.error);
-    // 托管条目随改密联动更新
+    // The escrow entry is updated in lockstep with the password change
     assert_eq!(
         store.get(&db_path).unwrap().as_deref(),
         Some("new-password")
     );
 
-    // 闭环：用新托管条目 biometric 解锁成功
+    // Closed loop: biometric unlock succeeds with the new escrow entry
     lock_service(app.state::<AppState>()).await.unwrap();
     let resp = biometric_unlock(
         BiometricUnlockRequest { db_path: None },
@@ -637,7 +644,7 @@ async fn change_master_password_deletes_entry_when_keyring_write_fails() {
         Arc::new(FailingSetStore(inner.clone())),
     );
     let db_path = init_service_ok(&app, "old-password").await;
-    // 预置条目（绕过注入的 FailingSetStore.set）：改密成功后联动写失败
+    // A pre-planted entry (bypassing the injected FailingSetStore.set): the coupled write fails after a successful password change
     inner.set(&db_path, "old-password").unwrap();
 
     let resp = change_master_password(
@@ -651,6 +658,6 @@ async fn change_master_password_deletes_entry_when_keyring_write_fails() {
     .await
     .unwrap();
     assert!(resp.success, "{:?}", resp.error);
-    // fail-closed：写失败 → 删条目（宁可重新启用也不留坏条目）
+    // fail-closed: a failed write -> delete the entry (better to re-enable than keep a bad entry)
     assert_eq!(inner.get(&db_path).unwrap(), None);
 }

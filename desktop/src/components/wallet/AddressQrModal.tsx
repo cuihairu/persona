@@ -4,11 +4,11 @@ import { QRCodeSVG } from 'qrcode.react';
 
 interface AddressQrModalProps {
   address: string;
-  /** 点遮罩关闭 */
+  /** Closes when the backdrop is clicked */
   onClose: () => void;
 }
 
-/** 收款地址二维码弹窗：复制地址并关闭 */
+/** Receive-address QR modal: copies the address and closes */
 const AddressQrModal: React.FC<AddressQrModalProps> = ({ address, onClose }) => {
   const { t } = useTranslation();
   return (

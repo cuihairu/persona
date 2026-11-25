@@ -2,7 +2,7 @@
 
 @import "tailwindcss";
 
-/* 暗色模式 class 策略：html 挂 .dark 时启用 dark: 变体（唯一应用点见 hooks/useTheme） */
+/* Dark mode class strategy: enable dark: variants when html carries .dark (sole application site is hooks/useTheme) */
 @custom-variant dark (&:where(.dark, .dark *));
 
 @theme {
@@ -56,10 +56,10 @@
     font-feature-settings: "rlig" 1, "calt" 1;
   }
 
-  /* WebView2/Edge 会在每个 password 输入框内画原生“显示密码”眼睛，与应用
-     自建的 EyeIcon/EyeSlashIcon 切换按钮（UnlockScreen/ReauthModal 等）
-     叠成两只。原生的一律隐藏，可见性统一走应用内切换；WebKitGTK/WKWebView
-     不绘制原生眼睛，这两条规则在其余平台惰性。 */
+  /* WebView2/Edge draws a native "reveal password" eye inside every password input, stacking a second
+     one on top of the app's own EyeIcon/EyeSlashIcon toggle buttons (UnlockScreen/ReauthModal etc.).
+     Hide the native one and route visibility through the in-app toggle exclusively; WebKitGTK/WKWebView
+     draw no native eye, so these two rules are inert on the other platforms. */
   input[type='password']::-ms-reveal,
   input[type='password']::-ms-clear {
     display: none;
@@ -67,18 +67,18 @@
 }
 
 /*
- * 语义 token 暗色翻转：theme 变量输出在 @layer theme 的 :root，
- * 覆盖块必须是非 layer 普通规则（unlayered 优先于任何 layer）才能稳定获胜。
+ * Dark flip of the semantic tokens: the theme variables are emitted on :root inside @layer theme,
+ * so the override block must be an ordinary unlayered rule (unlayered beats any layer) to win reliably.
  */
 .dark {
-  --color-background: #030712; /* gray-950 页面底 */
+  --color-background: #030712; /* gray-950 page background */
   --color-foreground: #f9fafb; /* gray-50 */
-  --color-card: #111827; /* gray-900 卡片面 */
+  --color-card: #111827; /* gray-900 card surface */
   --color-card-foreground: #f9fafb;
-  --color-border: #1f2937; /* gray-800 描边 */
+  --color-border: #1f2937; /* gray-800 border */
 }
 
-/* toast 暗色适配：react-hot-toast 默认白底来自运行时注入的 goober 类（晚于本表），!important 必须 */
+/* Dark toast treatment: react-hot-toast's default white background comes from a goober class injected at runtime (later than this table), so !important is required */
 .persona-toast {
   background: var(--color-card) !important;
   color: var(--color-card-foreground) !important;

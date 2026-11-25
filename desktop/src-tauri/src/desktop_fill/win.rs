@@ -1,4 +1,5 @@
-//! Win32 实现。全部函数失败都返回 Err 带原文，不 panic、不静默。
+//! Win32 implementation. Every function returns Err with the original text on
+//! failure — never panics, never fails silently.
 
 use windows::core::BOOL;
 use windows::Win32::Foundation::{GlobalFree, HANDLE, HWND, LPARAM, WPARAM};
@@ -27,12 +28,14 @@ use windows::Win32::UI::WindowsAndMessaging::{
 use super::FieldState;
 use super::FillTarget;
 
-/// 经典 Win32 编辑控件的窗口类名
+/// Window class name of the classic Win32 edit control
 const EDIT_CLASS: &str = "Edit";
 
-/// 捕获当前前台窗口（浮窗 show 前调用）。本进程自己的窗口返回 None
-///（浮窗/主窗口不该成为注入目标）；指纹查不全（类名/可执行文件路径）
-/// 也返回 None——没有指纹就没有可信注入。
+/// Captures the current foreground window (called before the floating window
+/// shows). Returns None for this process's own windows (the floating/main
+/// window must not become an injection target); also returns None when the
+/// fingerprint cannot be fully queried (class name / executable path) — no
+/// fingerprint, no trusted injection.
 pub fn capture_foreground(self_pid: u32) -> Option<FillTarget> {
     unsafe {
         let hwnd = GetForegroundWindow();
@@ -64,7 +67,8 @@ pub fn capture_foreground(self_pid: u32) -> Option<FillTarget> {
     }
 }
 
-/// 注入前重验证：指纹三要素 + 进程一致性（见模块头"目标可信模型"）。
+/// Revalidation before injection: the three fingerprint factors + process
+/// identity (see the "target trust model" in the module header).
 pub fn validate_target(target: &FillTarget, self_pid: u32) -> bool {
     validate_snapshot(
         target.hwnd,
@@ -76,14 +80,18 @@ pub fn validate_target(target: &FillTarget, self_pid: u32) -> bool {
     )
 }
 
-/// 验证快照语义（[`validate_target`] 的展开形态，纯参数便于测试）：
-/// - hwnd 存活；
-/// - 所属进程 == expected_pid 且 != self_pid（本进程窗口永不注入）；
-/// - 当前顶层类名 == 快照类名；
-/// - 当前进程可执行文件路径 == 快照路径（大小写不敏感，NTFS 语义）；
-/// - 标题：非空快照按前缀比对（登录对话框标题会随状态变化，如
-///   "登录 - 已断开"）；**空快照标题要求当前标题也为空**——堵住
-///   `starts_with("")` 恒真的历史漏洞。
+/// Snapshot validation semantics (the expanded form of [`validate_target`],
+/// pure parameters for ease of testing):
+/// - hwnd is alive;
+/// - owning process == expected_pid and != self_pid (this process's windows are
+///   never injected);
+/// - current top-level class name == snapshot class name;
+/// - current process executable path == snapshot path (case-insensitive, NTFS
+///   semantics);
+/// - title: a non-empty snapshot is compared by prefix (login dialog titles
+///   change with state, e.g. "Log on - Disconnected"); **an empty snapshot
+///   requires the current title to also be empty** — closing the historical
+///   `starts_with("")`-always-true vulnerability.
 pub fn validate_snapshot(
     hwnd: isize,
     expected_title: &str,
@@ -118,10 +126,12 @@ pub fn validate_snapshot(
     }
 }
 
-/// 逐控件写入前重验证：hwnd 存活、GA_ROOT 归属目标顶层窗口、pid、
-/// 类名 Edit、可见/启用/非只读；`require_password` 时必须仍带
-/// ES_PASSWORD 样式（否则必须**不带**——防止 hwnd 复用后字段角色
-/// 对调）。任一不满足返回 Err，调用方拒绝注入。
+/// Per-control revalidation before writing: hwnd alive, GA_ROOT ownership of
+/// the target top-level window, pid, class name Edit, visible/enabled/not
+/// read-only; with `require_password`, the control must still carry the
+/// ES_PASSWORD style (otherwise it must **not** carry it — to prevent field
+/// roles from being swapped after hwnd reuse). Any mismatch returns Err and the
+/// caller refuses to inject.
 pub fn revalidate_field(
     field_hwnd: isize,
     target_hwnd: isize,
@@ -152,14 +162,16 @@ pub fn revalidate_field(
     Ok(())
 }
 
-/// 枚举目标窗口下的经典 EDIT 子控件（Z 序），产出各框完整状态。
+/// Enumerates the classic EDIT child controls of the target window (Z order),
+/// producing the full state of each field.
 pub fn enumerate_edit_fields(top_hwnd: isize) -> Vec<FieldState> {
     struct CollectCtx<'a> {
         out: &'a mut Vec<FieldState>,
     }
     unsafe extern "system" fn enum_proc(child: HWND, lparam: LPARAM) -> BOOL {
         let ctx = &mut *(lparam.0 as *mut CollectCtx);
-        // 只认类名精确等于 "Edit" 的子窗口；取类名失败的一律跳过
+        // Only accept child windows whose class name is exactly "Edit"; always
+        // skip ones whose class name cannot be queried
         let mut buf = [0u16; 64];
         let n = GetClassNameW(child, &mut buf);
         if n <= 0 {
@@ -167,7 +179,7 @@ pub fn enumerate_edit_fields(top_hwnd: isize) -> Vec<FieldState> {
         }
         let class = String::from_utf16_lossy(&buf[..n as usize]);
         if class != EDIT_CLASS {
-            return BOOL(1); // 继续枚举
+            return BOOL(1); // continue enumeration
         }
         if let Some(state) = field_state(child.0 as isize) {
             ctx.out.push(state);
@@ -183,7 +195,8 @@ pub fn enumerate_edit_fields(top_hwnd: isize) -> Vec<FieldState> {
     }
 }
 
-/// 读取单个 hwnd 的字段状态；hwnd 已死或类名不是 Edit 返回 None。
+/// Reads the field state of a single hwnd; returns None if the hwnd is dead or
+/// its class name is not Edit.
 fn field_state(hwnd: isize) -> Option<FieldState> {
     unsafe {
         let handle = HWND(hwnd as *mut _);
@@ -210,8 +223,10 @@ fn field_state(hwnd: isize) -> Option<FieldState> {
     }
 }
 
-/// WM_SETTEXT 直写一个输入框。跨进程安全（同一桌面会话），不依赖焦点。
-/// 调用方（[`execute_fill`]）负责先做 [`revalidate_field`]。
+/// Writes directly into an input field with WM_SETTEXT. Cross-process safe
+/// (within the same desktop session) and does not depend on focus.
+/// The caller ([`execute_fill`]) is responsible for running
+/// [`revalidate_field`] first.
 pub fn inject_settext(field_hwnd: isize, value: &str) -> Result<(), String> {
     unsafe {
         let hwnd = HWND(field_hwnd as *mut _);
@@ -226,7 +241,7 @@ pub fn inject_settext(field_hwnd: isize, value: &str) -> Result<(), String> {
             Some(WPARAM(0)),
             Some(LPARAM(wide.as_ptr() as isize)),
         );
-        // WM_SETTEXT 返回非零表示成功
+        // A nonzero WM_SETTEXT return value means success
         if res.0 == 0 {
             return Err(format!("WM_SETTEXT rejected (lresult={})", res.0));
         }
@@ -234,14 +249,18 @@ pub fn inject_settext(field_hwnd: isize, value: &str) -> Result<(), String> {
     }
 }
 
-/// 读回一个输入框的当前文本（注入后验证与测试用；不进产品回显面）。
+/// Reads back the current text of an input field (for post-injection
+/// verification and testing; not part of the product's echo surface).
 ///
-/// **平台限制（openclaw Server 2022 实测）**：`field_hwnd` 属于其他
-/// 进程且控件带 `ES_PASSWORD` 时，跨进程 `WM_GETTEXT`/`WM_GETTEXTLENGTH`
-/// 恒返回空/0——即使跨进程 `WM_SETTEXT` 写入成功。系统对密码框做了
-/// 跨进程读隐藏，本函数不能用于验证跨进程密码注入；验证须由目标进程
-/// 自己读回（见 fill-test-host 的 `readback` 命令）或退而断言
-/// `EM_GETPASSWORDCHAR`/样式。同进程调用不受影响。
+/// **Platform limitation (verified on openclaw Server 2022)**: when
+/// `field_hwnd` belongs to another process and the control carries
+/// `ES_PASSWORD`, cross-process `WM_GETTEXT`/`WM_GETTEXTLENGTH` always
+/// return empty/0 — even when the cross-process `WM_SETTEXT` write
+/// succeeded. The system hides password fields from cross-process reads, so
+/// this function cannot be used to verify cross-process password injection;
+/// verification must be done by the target process reading back itself (see
+/// the `readback` command of fill-test-host) or by falling back to asserting
+/// `EM_GETPASSWORDCHAR`/style. Same-process calls are unaffected.
 pub fn read_field_text(field_hwnd: isize) -> String {
     unsafe {
         let hwnd = HWND(field_hwnd as *mut _);
@@ -264,7 +283,8 @@ pub fn read_field_text(field_hwnd: isize) -> String {
     }
 }
 
-/// 顶层窗口类名（指纹要素）。查询失败返回空串。
+/// Top-level window class name (fingerprint factor). Returns an empty string
+/// on query failure.
 pub fn window_class_name(hwnd: isize) -> String {
     unsafe {
         let mut buf = [0u16; 256];
@@ -276,8 +296,9 @@ pub fn window_class_name(hwnd: isize) -> String {
     }
 }
 
-/// 进程可执行文件完整路径（指纹要素）。OpenProcess/查询失败返回空串
-///（权限不足或进程已退出）。
+/// Full executable path of the process (fingerprint factor). Returns an empty
+/// string if OpenProcess/the query fails (insufficient permissions or the
+/// process has exited).
 pub fn process_image_path(pid: u32) -> String {
     unsafe {
         let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid);
@@ -301,17 +322,23 @@ pub fn process_image_path(pid: u32) -> String {
     }
 }
 
-/// 剪贴板备份 → 覆写为明文 → 执行 `paste` 闭包 → 恢复备份。
+/// Backs up the clipboard → overwrites with the plaintext → runs the `paste`
+/// closure → restores the backup.
 ///
-/// **保密边界（如实声明）**：`value` 是明文；系统剪贴板是同桌面会话
-/// 全局共享的，驻留期间任何进程都可读取，本函数只缩短暴露窗口，
-/// 不提供保密保证。恢复失败如实返回警告（不静默——用户剪贴板里
-/// 留着密码是事故）。备份前非文本内容（文件/位图）：恢复不了原文，
-/// 结束时覆写为空串，由返回值里的警告说明。闭包 panic 同样先恢复
-/// 剪贴板再传播（catch_unwind 包裹）。
+/// **Confidentiality boundary (stated honestly)**: `value` is plaintext; the
+/// system clipboard is globally shared within the same desktop session, and
+/// any process can read it while it is resident. This function only shrinks
+/// the exposure window and provides no confidentiality guarantee. A restore
+/// failure is returned honestly as a warning (not silently — leaving a
+/// password in the user's clipboard is an incident). Non-text clipboard
+/// content before the backup (files/bitmap): the original cannot be restored,
+/// so it is overwritten with an empty string at the end and explained by the
+/// warning in the return value. A closure panic likewise restores the
+/// clipboard first and then propagates (wrapped in catch_unwind).
 ///
-/// 当前**未接入生产路径**（生产只走 WM_SETTEXT）；启用前须在 UI/文档
-/// 明确披露上述边界。
+/// Currently **not wired into the production path** (production uses
+/// WM_SETTEXT only); before enabling, the boundary above must be disclosed
+/// explicitly in UI/docs.
 pub fn with_clipboard_paste<T>(
     value: &str,
     paste: impl FnOnce() -> T,
@@ -319,9 +346,11 @@ pub fn with_clipboard_paste<T>(
     with_clipboard_paste_with_writer(value, paste, set_clipboard_text)
 }
 
-/// [`with_clipboard_paste`] 的实现体，剪贴板写入函数（明文覆写与恢复
-/// 复用同一支）可注入——测试用它确定性触发「覆写失败 → 恢复也失败」
-/// 的告警分支，不必与真实剪贴板的打开/关闭时序赛跑。
+/// Implementation body of [`with_clipboard_paste`]; the clipboard write
+/// function (shared by the plaintext overwrite and the restore) is injectable
+/// — tests use it to deterministically trigger the "overwrite failed →
+/// restore also failed" warning branch, without racing the real clipboard's
+/// open/close timing.
 pub(crate) fn with_clipboard_paste_with_writer<T>(
     value: &str,
     paste: impl FnOnce() -> T,
@@ -329,8 +358,10 @@ pub(crate) fn with_clipboard_paste_with_writer<T>(
 ) -> Result<(T, Option<String>), String> {
     unsafe {
         open_clipboard_with_retry()?;
-        // 备份当前文本剪贴板（有就存；非文本内容恢复不了原文——结束
-        // 时覆写为空串并**如实告警**，不许静默销毁用户剪贴板）
+        // Back up the current text clipboard (store it if present; non-text
+        // content cannot be restored to its original — at the end it is
+        // overwritten with an empty string and **warned about honestly**;
+        // silently destroying the user's clipboard is not allowed)
         let had_text = IsClipboardFormatAvailable(CF_UNICODETEXT.0 as u32).is_ok();
         let had_non_text = if had_text {
             false
@@ -347,9 +378,11 @@ pub(crate) fn with_clipboard_paste_with_writer<T>(
                     if ptr.is_null() {
                         return None;
                     }
-                    // CF_UNICODETEXT 是 NUL 结尾 UTF-16。分配边界以
-                    // GlobalSize 实测为准（历史版本盲取 1M 字符切片，
-                    // 存在越界读风险），NUL 扫描上限 1M 字符防失控。
+                    // CF_UNICODETEXT is NUL-terminated UTF-16. The allocation
+                    // boundary is measured with GlobalSize (historical
+                    // versions blindly sliced 1M characters, risking an out-of-
+                    // bounds read); the NUL scan is capped at 1M characters to
+                    // prevent runaway.
                     let total_chars = (GlobalSize(gh) / 2) as usize;
                     let scan_limit = total_chars.min(1 << 20);
                     let wide = std::slice::from_raw_parts(ptr as *const u16, scan_limit);
@@ -368,15 +401,18 @@ pub(crate) fn with_clipboard_paste_with_writer<T>(
         let closed = CloseClipboard().map_err(|e| format!("CloseClipboard failed: {e}"));
         let set = closed.and_then(|()| set_text(value));
 
-        // catch_unwind：闭包 panic 不能绕过剪贴板恢复（panic 信息在
-        // 恢复之后按 ResumeUnwind 语义重新抛出）
+        // catch_unwind: a closure panic must not bypass the clipboard restore
+        // (the panic payload is re-raised after the restore, following
+        // ResumeUnwind semantics)
         let paste_result =
             set.map(|()| std::panic::catch_unwind(std::panic::AssertUnwindSafe(paste)));
 
-        // 恢复：写回备份（无文本备份则写空串，把密文清掉）
+        // Restore: write the backup back (with no text backup, write an empty
+        // string to clear the ciphertext)
         let mut restore_warning = set_text(backup.as_deref().unwrap_or("")).err();
-        // 非文本内容（文件/位图/自定义格式）恢复不了原文——覆写为空串
-        // 后必须返回告警（不能静默销毁用户剪贴板）
+        // Non-text content (files/bitmap/custom format) cannot be restored to its
+        // original — after overwriting with an empty string a warning must be
+        // returned (silently destroying the user's clipboard is not allowed)
         if restore_warning.is_none() && had_non_text {
             let msg = "previous non-text clipboard content was cleared and could not be restored"
                 .to_string();
@@ -385,14 +421,16 @@ pub(crate) fn with_clipboard_paste_with_writer<T>(
         }
 
         match paste_result {
-            // set_clipboard_text 失败（String）：恢复路径的告警不能被吞
+            // set_clipboard_text failed (String): the warning on the restore
+            // path must not be swallowed
             Err(e) => {
                 if let Some(w) = &restore_warning {
                     tracing::warn!("clipboard restore warning swallowed by paste failure: {w}");
                 }
                 Err(e)
             }
-            // 闭包 panic：恢复已完成，告警落日志后再原样重抛
+            // Closure panic: the restore has completed, the warning is logged,
+            // and the panic payload is re-raised as-is
             Ok(Err(payload)) => {
                 if let Some(w) = &restore_warning {
                     tracing::warn!("clipboard restore warning on panic path: {w}");
@@ -407,21 +445,24 @@ pub(crate) fn with_clipboard_paste_with_writer<T>(
     }
 }
 
-/// 剪贴板是否装有任何格式（剪贴板处于打开状态时调用）。用于区分
-/// 「空剪贴板」与「有非文本内容」——后者被覆写清空时必须告警。
+/// Whether the clipboard holds any format (call while the clipboard is open).
+/// Used to distinguish "empty clipboard" from "has non-text content" — the
+/// latter must be warned about when overwritten and cleared.
 fn clipboard_has_any_format() -> bool {
     unsafe { windows::Win32::System::DataExchange::EnumClipboardFormats(0) != 0 }
 }
 
-/// 测试专用：直接写入剪贴板文本（绕过备份/恢复语义，用于给
-/// [`with_clipboard_paste`] 的闭环测试造"原有内容"）。
+/// Test-only: writes clipboard text directly (bypassing the backup/restore
+/// semantics, to fabricate "previous content" for the closed-loop tests of
+/// [`with_clipboard_paste`]).
 #[cfg(test)]
 pub(crate) fn seed_clipboard(value: &str) -> Result<(), String> {
     set_clipboard_text(value)
 }
 
-/// 测试专用：写入一个**非文本**剪贴板内容（自定义格式），用于验证
-/// [`with_clipboard_paste`] 对"非文本内容被清空"的告警路径。
+/// Test-only: writes a **non-text** clipboard content (custom format), used to
+/// verify [`with_clipboard_paste`]'s warning path for "non-text content was
+/// cleared".
 #[cfg(test)]
 pub(crate) fn seed_clipboard_non_text() -> Result<(), String> {
     use windows::Win32::System::DataExchange::{CloseClipboard, EmptyClipboard, SetClipboardData};
@@ -459,9 +500,11 @@ pub(crate) fn seed_clipboard_non_text() -> Result<(), String> {
     }
 }
 
-/// 打开剪贴板（带重试）。OpenClipboard 会因其他进程短暂持有剪贴板
-/// 而失败（剪贴板监听器/rdpclip 场景很常见）；按 Win32 惯例小间隔
-/// 重试若干次再放弃，避免把瞬时竞争当成硬错误。
+/// Opens the clipboard (with retries). OpenClipboard can fail because another
+/// process briefly holds the clipboard (clipboard listeners/rdpclip scenarios
+/// are common); following Win32 convention, retry a few times at short
+/// intervals before giving up, so transient contention is not mistaken for a
+/// hard error.
 fn open_clipboard_with_retry() -> Result<(), String> {
     for attempt in 0u32..10 {
         if unsafe { OpenClipboard(None) }.is_ok() {
@@ -474,8 +517,9 @@ fn open_clipboard_with_retry() -> Result<(), String> {
     Err("cannot open clipboard".to_string())
 }
 
-/// 写入文本到剪贴板（内部 Open/Close，可独立调用）。返回 Err 的原文
-/// 可直接作为"恢复失败"警告使用。
+/// Writes text to the clipboard (internally opens/closes; can be called
+/// standalone). The Err text returned can be used directly as a "restore
+/// failed" warning.
 fn set_clipboard_text(value: &str) -> Result<(), String> {
     unsafe {
         open_clipboard_with_retry().map_err(|_| "cannot reopen clipboard".to_string())?;
@@ -492,7 +536,8 @@ fn set_clipboard_text(value: &str) -> Result<(), String> {
             }
             std::ptr::copy_nonoverlapping(wide.as_ptr(), ptr as *mut u16, wide.len());
             let _ = GlobalUnlock(h);
-            // SetClipboardData 成功后剪贴板接管 h（不能再 GlobalFree）
+            // Once SetClipboardData succeeds, the clipboard takes ownership of h
+            // (it must not be GlobalFree'd anymore)
             if SetClipboardData(CF_UNICODETEXT.0 as u32, Some(HANDLE(h.0))).is_err() {
                 let _ = GlobalFree(Some(h));
                 return Err("SetClipboardData failed".to_string());
@@ -504,9 +549,11 @@ fn set_clipboard_text(value: &str) -> Result<(), String> {
     }
 }
 
-/// 聚焦目标输入框并模拟 Ctrl+V（配合 [`with_clipboard_paste`] 使用）。
-/// 焦点转移用 AttachThreadInput 把我们的输入队列短暂挂到目标线程——
-/// Windows 前台锁策略下这是跨进程聚焦的标准做法。
+/// Focuses the target input field and simulates Ctrl+V (used together with
+/// [`with_clipboard_paste`]).
+/// Focus transfer uses AttachThreadInput to briefly attach our input queue to
+/// the target thread — under the Windows foreground lock policy, this is the
+/// standard way to focus across processes.
 pub fn paste_into_focused(field_hwnd: isize) -> Result<(), String> {
     unsafe {
         let hwnd = HWND(field_hwnd as *mut _);
@@ -574,12 +621,15 @@ fn window_text(hwnd: HWND) -> String {
 
 #[cfg(test)]
 pub(crate) mod test_window {
-    //! 供本模块测试创建目标窗口（跨进程套件在 ../fill-test 独立 crate）。
-    //! 测试窗口是真实顶层窗口：验证的就是"枚举子控件 → 分类 → 逐控件
-    //! 重验证 → WM_SETTEXT → 读回"整条链。
+    //! Lets tests in this module create target windows (the cross-process suite
+    //! lives in the separate ../fill-test crate).
+    //! The test windows are real top-level windows: what is verified is the whole
+    //! "enumerate child controls → classify → per-control revalidation →
+    //! WM_SETTEXT → read back" chain.
     //!
-    //! 测试靶窗：一个真实顶层窗口 + username/password 两个 EDIT 控件。
-    //! 在测试进程内创建（同一桌面会话），跑完销毁。
+    //! Test target window: one real top-level window plus two EDIT controls
+    //! (username/password). Created inside the test process (same desktop
+    //! session) and destroyed when the test finishes.
 
     use windows::core::{HSTRING, PCWSTR};
     use windows::Win32::UI::WindowsAndMessaging::{
@@ -600,8 +650,9 @@ pub(crate) mod test_window {
     }
 
     impl TestTargetWindow {
-        /// title 原样成为窗口标题（重验证断言要用同一串）；
-        /// `password_style` = 给第二个框挂 ES_PASSWORD 样式。
+        /// title becomes the window title verbatim (the revalidation assertion
+        /// uses the same string);
+        /// `password_style` = attach the ES_PASSWORD style to the second field.
         pub fn create(title: &str, password_style: bool) -> Result<Self, String> {
             unsafe {
                 let title_h = HSTRING::from(title);
@@ -658,7 +709,8 @@ pub(crate) mod test_window {
             }
         }
 
-        /// 真实 pid + 类名 + 可执行文件路径组装可信快照（测试用）。
+        /// Assembles a trusted snapshot from the real pid + class name +
+        /// executable path (test use).
         pub fn snapshot(&self, title: &str) -> super::super::FillTarget {
             let mut pid = 0u32;
             unsafe {

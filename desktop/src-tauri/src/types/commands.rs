@@ -1,4 +1,4 @@
-//! 命令 wire 请求、`ApiResponse<T>` 与 `CredentialDataRequest` 域。
+//! Command wire requests, `ApiResponse<T>` and the `CredentialDataRequest` domain.
 
 use persona_core::*;
 use serde::{Deserialize, Serialize};
@@ -9,7 +9,8 @@ pub struct ApiResponse<T> {
     pub success: bool,
     pub data: Option<T>,
     pub error: Option<String>,
-    /// 机器可读错误码（"REAUTH_REQUIRED" / "SERVICE_LOCKED"），供前端分流
+    /// Machine-readable error code ("REAUTH_REQUIRED" / "SERVICE_LOCKED"),
+    /// used by the frontend to route handling
     pub error_code: Option<String>,
 }
 
@@ -41,8 +42,11 @@ impl<T> ApiResponse<T> {
         }
     }
 
-    /// code 为 None 时等价 [`Self::error`]，有码时等价 [`Self::error_with_code`]。
-    /// 供边界收敛点使用：错误有时可映射错误码、有时只能透传消息。
+    /// With `code = None` this is equivalent to [`Self::error`]; with a code
+    /// present it is equivalent to [`Self::error_with_code`].
+    /// For use at boundary convergence points: an error can sometimes be
+    /// mapped to an error code and sometimes only the message can be passed
+    /// through.
     pub fn error_maybe_coded(error_code: Option<String>, message: String) -> Self {
         Self {
             success: false,
@@ -60,8 +64,9 @@ pub struct InitRequest {
     pub db_path: Option<String>,
 }
 
-/// Change-master-password request（改密命令参数；旧密码仅存在于本请求，
-/// 不落盘不进日志）
+/// Change-master-password request (parameters for the change-password
+/// command; the old password exists only in this request — never persisted,
+/// never logged)
 #[derive(Debug, Deserialize)]
 pub struct ChangeMasterPasswordRequest {
     pub old_password: String,
@@ -69,8 +74,10 @@ pub struct ChangeMasterPasswordRequest {
     pub db_path: Option<String>,
 }
 
-/// `generate_password_advanced` 的结果：候选口令 + 供 UI 展示的熵值估计
-/// 与字符池大小（显示参考而非安全承诺；字符集与 core 生成器同源）。
+/// Result of `generate_password_advanced`: candidate passwords plus an entropy
+/// estimate and character-pool size for UI display (a display aid, not a
+/// security guarantee; the character sets come from the same source as the
+/// core generator).
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GeneratedPasswords {
@@ -120,8 +127,9 @@ pub struct CreateCredentialRequest {
     pub credential_data: CredentialDataRequest,
 }
 
-/// Credential metadata edit request（1Password 对齐：编辑不改条目类型，
-/// payload 单独走 update_credential_data）
+/// Credential metadata edit request (1Password-aligned: editing does not
+/// change the item type; the payload goes through update_credential_data
+/// separately)
 #[derive(Debug, Deserialize)]
 pub struct UpdateCredentialRequest {
     pub id: String,
@@ -133,7 +141,8 @@ pub struct UpdateCredentialRequest {
     pub tags: Option<Vec<String>>,
 }
 
-/// Credential payload edit request（敏感：复用原 item key 重封 + 敏感门禁）
+/// Credential payload edit request (sensitive: re-seals under the original
+/// item key + sensitive-op gating)
 #[derive(Debug, Deserialize)]
 pub struct UpdateCredentialDataRequest {
     pub credential_id: String,
@@ -177,7 +186,8 @@ pub enum CredentialDataRequest {
         algorithm: String,
         digits: u8,
         period: u32,
-        /// HOTP（RFC 4226）计数器型条目；缺省（旧前端）= 时间型 TOTP。
+        /// HOTP (RFC 4226) counter-based entry; the default (older frontends) is
+        /// time-based TOTP.
         #[serde(default)]
         hotp: Option<bool>,
         #[serde(default)]
@@ -248,14 +258,17 @@ pub struct SshKeySummary {
     pub tags: Vec<String>,
     pub created_at: String,
     pub updated_at: String,
-    /// 展示用：线格式算法（`ssh-ed25519` 等）；数据取不到时为 null
+    /// Display only: wire-format algorithm (`ssh-ed25519`, etc.); null when the
+    /// data cannot be obtained
     pub ssh_algorithm: Option<String>,
-    /// 展示用：SHA256 指纹（`SHA256:…`），与导入/生成确认处同口径
+    /// Display only: SHA256 fingerprint (`SHA256:…`), using the same
+    /// convention as the import/generation confirmation
     pub fingerprint: Option<String>,
-    /// 展示用：位数/曲线标签（Ed25519→`256`、RSA→`4096`、ECDSA→`P-256`）；
-    /// 证书等不适用的容器为 null
+    /// Display only: bit count / curve label (Ed25519→`256`, RSA→`4096`,
+    /// ECDSA→`P-256`); null for containers where this does not apply, such
+    /// as certificates
     pub key_size: Option<String>,
-    /// 完整公钥行，供一键复制到 authorized_keys / GitHub
+    /// Full public key line, for one-click copy into authorized_keys / GitHub
     pub public_key: Option<String>,
 }
 
@@ -306,8 +319,9 @@ impl CredentialDataRequest {
                 address: address.clone(),
                 network: network.clone(),
                 bip39_passphrase: bip39_passphrase.clone(),
-                // 条目级独立密码走 wallet_set_item_password 独立命令设置
-                // （创建后二次加固），创建请求不承载
+                // Item-level standalone passwords are set through the separate
+                // wallet_set_item_password command (a second hardening step
+                // after creation); the create request does not carry them
                 item_password_hash: None,
                 item_password_hint: None,
             }),
@@ -431,7 +445,7 @@ impl CredentialDataRequest {
 }
 
 // ---------------------------------------------------------------------------
-// 审计查询
+// Audit queries
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Deserialize)]
@@ -441,8 +455,9 @@ pub struct RevealSecretRequest {
     /// "api_key" | "api_secret" | "token" | "wallet_private_key" |
     /// "wallet_mnemonic" | "raw_data"
     pub field: String,
-    /// 钱包条目级独立密码（可选）：条目设置了 item_password_hash 的种子
-    /// 材料 reveal 必须携带，后端 Argon2id 比对通过才返回明文
+    /// Wallet item-level standalone password (optional): when the entry has
+    /// item_password_hash set, its seed material must be carried on every
+    /// reveal; the backend returns the plaintext only after an Argon2id match
     #[serde(default)]
     pub item_password: Option<String>,
 }
@@ -458,8 +473,9 @@ pub struct ReauthRequest {
     pub master_password: String,
 }
 
-/// Quick Access 浮窗"在 Persona 中打开"：跨窗跳转的两个 id（UUID 形态，
-/// 后端会再校验一次——前端校验只是提前反馈）
+/// Quick Access floating window's "open in Persona": the two ids for the
+/// cross-window jump (UUID form; the backend re-validates — frontend
+/// validation is only early feedback)
 #[derive(Debug, Deserialize)]
 pub struct QuickAccessOpenCredentialRequest {
     pub identity_id: String,
@@ -467,5 +483,5 @@ pub struct QuickAccessOpenCredentialRequest {
 }
 
 // ---------------------------------------------------------------------------
-// 身份导出
+// Identity export
 // ---------------------------------------------------------------------------

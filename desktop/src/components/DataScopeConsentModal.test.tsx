@@ -18,7 +18,7 @@ describe('components/DataScopeConsentModal', () => {
     ).toBeInTheDocument();
     expect(screen.getByTestId('data-scope-sees')).toHaveTextContent('连接来源 IP');
     expect(screen.getByTestId('data-scope-not-sees')).toHaveTextContent('主密码、设备私钥');
-    // 通道边界注：审计开关与 E2EE 加入是两处显式动作
+    // Channel-boundary note: the audit toggle and the E2EE join are two separate explicit actions
     expect(screen.getByText(/此开关只控制审计事件上报/)).toBeInTheDocument();
   });
 
@@ -32,7 +32,7 @@ describe('components/DataScopeConsentModal', () => {
     expect(screen.getByTestId('data-scope-sees')).toHaveTextContent('密文操作日志');
     expect(screen.getByTestId('data-scope-sees')).toHaveTextContent('尺寸侧信道');
     expect(screen.getByTestId('data-scope-not-sees')).toHaveTextContent('Passkey');
-    // 通道边界注只在 audit 面
+    // The channel-boundary note only appears on the audit face
     expect(screen.queryByText(/此开关只控制审计事件上报/)).not.toBeInTheDocument();
   });
 

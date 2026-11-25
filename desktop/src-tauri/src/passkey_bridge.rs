@@ -21,7 +21,8 @@
 //! gesture gate.
 
 use crate::approval::PendingApprovals;
-// Windows 分流不构建审批 sink 链路（CI 编译实测该路径零使用）
+// The Windows fork never builds the approval sink chain (a CI compile
+// confirmed zero uses of this path)
 #[cfg(unix)]
 use crate::types::PasskeyApprovalRequest;
 use std::path::PathBuf;
@@ -124,11 +125,14 @@ fn parse_query(line: &str) -> Result<BridgeApprovalQuery, ApprovalDecision> {
     if query.v != 1 {
         return Err(ApprovalDecision::deny("unsupported"));
     }
-    // passkey_list（含 provider 变体）不放行：枚举非敏感，出现在这里是
-    // 协议误用，按 unsupported 拒绝而非批准。provider 代断言与扩展断言
-    // 同闸门——op 名透传给弹窗，用户可辨识来源（P4.4）。
-    // credential_save（桥协议 v4）：插件保存/更新登录的第二次同意线，
-    // 与 passkey 写入同一闸门语义。
+    // passkey_list (including the provider variant) is not let through:
+    // enumeration is not sensitive, and its presence here is a protocol
+    // misuse — deny as unsupported rather than approve. Provider
+    // assertion shares the gate with extension assertion — the op name is
+    // passed through to the prompt so the user can tell the source apart (P4.4).
+    // credential_save (bridge protocol v4): the second consent line for a
+    // plugin saving/updating a login, under the same gate semantics as
+    // passkey writes.
     if query.op != "passkey_create"
         && query.op != "passkey_assert"
         && query.op != "passkey_credential_provider_assert"
@@ -148,8 +152,9 @@ pub fn approval_socket_path() -> PathBuf {
 ///
 /// Spawned from `main` setup: it runs whether or not the vault is unlocked,
 /// because locked sessions answer `locked` instead of bubbling to the GUI.
-/// 关停通路：`shutdown` 收到信号（或 sender 被 drop）即退出 accept loop、
-/// 清掉 socket 文件并丢弃未应答审批——工作区关掉 passkeys 开关立即生效。
+/// Shutdown path: as soon as `shutdown` signals (or the sender is dropped),
+/// exit the accept loop, remove the socket file, and drop unanswered
+/// approvals — toggling passkeys off in the workspace takes effect immediately.
 #[cfg(unix)]
 pub async fn run_passkey_approval_server<R: Runtime>(
     app: tauri::AppHandle<R>,
@@ -173,8 +178,9 @@ pub async fn run_passkey_approval_server_with<S: PasskeyApprovalSink>(
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
     }
-    // 陈旧 socket 残骸（上次进程崩溃没清理）会挡 bind；但活着的另一个桌面
-    // 实例在监听时不得无条件删除劫持（transport.rs 同款口径）。
+    // A stale socket leftover (from a previous crashed process that never
+    // cleaned up) blocks bind; but a live desktop instance listening must not
+    // have its socket unconditionally removed (same rule as transport.rs).
     let listener = match UnixListener::bind(&path) {
         Ok(l) => l,
         Err(err) if path.exists() => {
@@ -207,10 +213,12 @@ pub async fn run_passkey_approval_server_with<S: PasskeyApprovalSink>(
         shutdown,
     )
     .await?;
-    // 正常退出（收到关停信号）：socket 文件随之移除，bridge 侧 connect
-    // 立即失败而不是挂在一个无人应答的端点上。
+    // Normal exit (shutdown signal received): the socket file is removed so
+    // bridge-side connect fails immediately instead of hanging on an
+    // endpoint nobody will answer.
     let _ = std::fs::remove_file(&path);
-    // 丢弃未应答审批：sender drop 后 bridge 侧 oneshot 收到断连 → 拒绝
+    // Drop unanswered approvals: after the sender drops, the bridge's oneshot
+    // sees a disconnect and rejects.
     if let Ok(mut map) = pending.lock() {
         map.clear();
     }
@@ -494,7 +502,8 @@ mod tests {
             parse_query(r#"{"v":1,"op":"passkey_list","origin":"https://x"}"#),
             Err(ApprovalDecision::deny("unsupported"))
         );
-        // Provider 代断言与扩展断言同闸门（P4.1）；provider 枚举同 list 不放行。
+        // Provider assertion shares the gate with extension assertion (P4.1);
+        // provider enumeration is not let through, same as list.
         assert!(parse_query(
             r#"{"v":1,"op":"passkey_credential_provider_assert","origin":"https://github.com","item_id":"abc"}"#
         )
@@ -503,7 +512,8 @@ mod tests {
             parse_query(r#"{"v":1,"op":"passkey_credential_provider_list","origin":"https://x"}"#),
             Err(ApprovalDecision::deny("unsupported"))
         );
-        // credential_save（桥协议 v4）：插件保存/更新登录走同一确认闸门。
+        // credential_save (bridge protocol v4): a plugin saving/updating a login
+        // goes through the same confirmation gate.
         assert!(parse_query(
             r#"{"v":1,"op":"credential_save","origin":"https://github.com","user_name":"bob@example.com"}"#
         )
@@ -599,7 +609,7 @@ mod tests {
             "locked vault denies over the real socket"
         );
 
-        // shutdown 信号 → accept loop 优雅退出（join 完成）
+        // shutdown signal -> the accept loop exits gracefully (join completes)
         shutdown_tx.send(()).unwrap();
         tokio::time::timeout(Duration::from_secs(3), server)
             .await
@@ -747,8 +757,8 @@ mod tests {
         );
     }
 
-    /// emit 失败（GUI 通道断开）→ 回复 deny 且 pending map 不留悬挂条目
-    ///（ask_frontend 的 emit-request 错误臂）。
+    /// emit failure (GUI channel gone) -> answer deny and leave no dangling
+    /// entry in the pending map (the emit-request error arm of ask_frontend).
     #[tokio::test]
     async fn failing_sink_denies_and_cleans_pending() {
         struct BrokenSink;
@@ -797,19 +807,21 @@ mod tests {
         );
     }
 
-    /// run_passkey_approval_server_with 全链路：bind 到 sandbox 状态目录、
-    /// 设置 0600 权限、清掉遗留 socket，真实连接得到 locked 应答。
+    /// run_passkey_approval_server_with end to end: binds into the sandbox
+    /// state dir, sets 0600 permissions, clears a leftover socket, and a
+    /// real connection gets a locked answer.
     #[tokio::test]
     async fn approval_server_binds_sandbox_socket_with_owner_permissions() {
         let dir = tempfile::tempdir().unwrap();
-        // 与 agent 测试同一把进程级锁：env 是全局的，并行测试会互相改道。
+        // Same process-wide lock as the agent tests: env is global, and parallel
+        // tests would redirect each other's state dir.
         let _guard = crate::command_layer_tests::StateDirGuard::sandbox(&dir);
 
         let service: Arc<tokio::sync::Mutex<Option<persona_core::PersonaService>>> =
             Arc::new(tokio::sync::Mutex::new(None));
         let pending: PendingApprovals = Arc::new(StdMutex::new(HashMap::new()));
 
-        // 预先放一个遗留 socket 文件：server 必须清掉再 bind。
+        // Pre-place a leftover socket file: the server must clear it before binding.
         let stale = dir.path().join(APPROVAL_SOCKET_NAME);
         std::fs::write(&stale, b"stale").unwrap();
 
@@ -824,11 +836,11 @@ mod tests {
             shutdown_rx,
         ));
 
-        // 等待 socket 就绪并完成一次 locked 应答。
+        // Wait for the socket to come up and complete one locked answer.
         let answer = {
             let mut client = None;
             for _ in 0..100 {
-                // 尚未就绪（连接拒绝/超时）时让出调度权后重试
+                // Not ready yet (connection refused/timeout): yield to the scheduler and retry
                 if let Ok(Ok(c)) = tokio::time::timeout(
                     Duration::from_millis(50),
                     tokio::net::UnixStream::connect(dir.path().join(APPROVAL_SOCKET_NAME)),
@@ -873,8 +885,9 @@ mod tests {
             assert_eq!(mode & 0o777, 0o600, "socket must be owner-only");
         }
 
-        // 优雅关停：信号 → server 退出 + socket 文件移除（bridge 侧 connect
-        // 立即失败而不是挂在无人应答的端点上）
+        // Graceful shutdown: signal -> server exits + socket file removed (bridge-side
+        // connect fails immediately instead of hanging on an endpoint nobody
+        // answers)
         shutdown_tx.send(()).unwrap();
         tokio::time::timeout(Duration::from_secs(3), server)
             .await

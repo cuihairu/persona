@@ -1,4 +1,4 @@
-//! `Serializable*` wire 类型与 persona_core → wire 的 `From` 转换域。
+//! `Serializable*` wire types and the persona_core -> wire `From` conversion domain.
 
 use persona_core::*;
 use serde::{Deserialize, Serialize};
@@ -19,7 +19,8 @@ pub struct SerializableIdentity {
     pub created_at: String,
     pub updated_at: String,
     pub is_active: bool,
-    /// 旅行模式标记：enter 时随之移出本设备（编辑表单的开关直读写）。
+    /// Travel-mode marker: removed from this device on enter (the edit form's
+    /// toggle reads/writes it directly).
     pub travel_marked: bool,
 }
 
@@ -195,7 +196,8 @@ pub fn credential_data_to_json(data: &CredentialData) -> serde_json::Value {
             "type": "Raw",
             "message": "Binary data"
         }),
-        // secret_key 不回传前端（与 TwoFactor 不回传 secret_key 同理）
+        // secret_key is not sent back to the frontend (same reason TwoFactor does
+        // not return secret_key)
         CredentialData::GameToken(gt_data) => serde_json::json!({
             "type": "GameToken",
             "provider": gt_data.provider,
@@ -203,14 +205,16 @@ pub fn credential_data_to_json(data: &CredentialData) -> serde_json::Value {
             "account_name": gt_data.account_name,
             "url": gt_data.url
         }),
-        // 笔记正文回传（详情面板展示需要；get_credential_data 走敏感操作
-        // 门禁，与 Password 回传 password 同理）
+        // Note body is sent back (needed for the detail panel display;
+        // get_credential_data goes through the sensitive-op gate, same
+        // reason Password returns password)
         CredentialData::SecureNote(note_data) => serde_json::json!({
             "type": "SecureNote",
             "note": note_data.note
         }),
-        // 证件号 / license_key 等敏感字段同上：详情面板展示需要，
-        // 读取走敏感操作门禁（与 Password/SecureNote 一致）
+        // ID number / license_key and other sensitive fields, same as above:
+        // needed for detail panel display; reads go through the
+        // sensitive-op gate (consistent with Password/SecureNote)
         CredentialData::Identity(id_data) => serde_json::json!({
             "type": "Identity",
             "first_name": id_data.first_name,
@@ -320,7 +324,7 @@ pub struct WalletExportRequest {
     pub password: Option<String>,
 }
 
-/// 可序列化的审计日志（不含敏感负载）
+/// Serializable audit log (no sensitive payload)
 #[derive(Debug, Serialize)]
 pub struct SerializableAuditLog {
     pub id: String,
@@ -356,35 +360,36 @@ impl From<AuditLog> for SerializableAuditLog {
     }
 }
 
-/// 审计查询请求（None 字段 = 不过滤）
+/// Audit query request (None fields = no filter)
 #[derive(Debug, Deserialize)]
 pub struct AuditQueryRequest {
     pub user_id: Option<String>,
     pub identity_id: Option<String>,
-    /// 动作名（如 "identity_created"），非法名称返回错误
+    /// Action name (e.g. "identity_created"); an illegal name returns an error
     pub action: Option<String>,
     pub failures_only: Option<bool>,
     pub security_sensitive_only: Option<bool>,
-    /// RFC 3339 时间，(start, end)
+    /// RFC 3339 times, (start, end)
     pub time_range: Option<(String, String)>,
     pub limit: Option<usize>,
 }
 
-/// Watchtower 健康扫描请求（None 字段 = 使用 core 默认值）
+/// Watchtower health scan request (None fields = use the core defaults)
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct HealthScanRequest {
-    /// zxcvbn 分数阈值（0-4）：低于该值的密码判弱
+    /// zxcvbn score threshold (0-4): passwords below it count as weak
     pub min_password_score: Option<u8>,
-    /// 过期警告窗口（天）
+    /// Expiry warning window (days)
     pub expiry_warning_days: Option<i64>,
-    /// 超过该天数未更新的凭据判陈旧
+    /// Credentials not updated within this many days count as stale
     pub stale_after_days: Option<i64>,
-    /// 同时查询 HIBP 泄露库（k-anonymity：仅发送哈希前 5 字符）；
-    /// 网络失败降级为告警，不影响离线规则
+    /// Also query the HIBP breach database (k-anonymity: only the first 5
+    /// characters of the hash are sent); a network failure degrades to a
+    /// warning and does not affect the offline rules
     pub check_breaches: Option<bool>,
 }
 
-/// 审计统计
+/// Audit statistics
 #[derive(Debug, Serialize)]
 pub struct SerializableAuditStatistics {
     pub total_logs: u64,
@@ -394,10 +399,10 @@ pub struct SerializableAuditStatistics {
 }
 
 // ---------------------------------------------------------------------------
-// Passkey 管理（P3 桌面 GUI 的命令层接缝）
+// Passkey management (command-layer seam for the P3 desktop GUI)
 // ---------------------------------------------------------------------------
 
-/// 可序列化的 passkey（永不包含私钥字段）
+/// Serializable passkey (never carries private-key fields)
 #[derive(Debug, Serialize)]
 pub struct SerializablePasskey {
     pub id: String,
@@ -419,7 +424,7 @@ pub struct CreatePasskeyRequest {
     pub identity_id: String,
     pub rp_id: String,
     pub origin: String,
-    /// base64(UTF-8 JSON) 的 clientDataJSON
+    /// base64(UTF-8 JSON) clientDataJSON
     pub client_data_json_b64: String,
     pub user_handle_b64: Option<String>,
     pub user_name: Option<String>,
@@ -430,7 +435,7 @@ pub struct CreatePasskeyRequest {
 #[derive(Debug, Serialize)]
 pub struct PasskeyCreationResponse {
     pub passkey: SerializablePasskey,
-    /// base64 的 `none` 格式 attestation object
+    /// base64 `none`-format attestation object
     pub attestation_object_b64: String,
 }
 
@@ -465,7 +470,8 @@ pub struct AutoLockConfigRequest {
     pub inactivity_timeout_secs: u64,
     pub absolute_timeout_secs: Option<u64>,
     pub require_reauth_sensitive: Option<bool>,
-    /// 敏感操作再认证的窗口（秒）；不传用 core 默认（300）。
+    /// Re-authentication window for sensitive operations (seconds); core default
+    /// (300) when absent.
     pub sensitive_operation_timeout_secs: Option<u64>,
 }
 
@@ -477,7 +483,7 @@ pub struct AutoLockStatusResponse {
     pub inactivity_timeout_secs: u64,
 }
 
-/// 跨 emit 传递的 auto-lock 事件（serde tag 区分变体）
+/// Auto-lock event carried across emit (variants discriminated by serde tag)
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum SerializableAutoLockEvent {
@@ -518,7 +524,7 @@ impl From<AutoLockEvent> for SerializableAutoLockEvent {
 }
 
 // ---------------------------------------------------------------------------
-// 敏感字段 reveal / 重新认证
+// Sensitive field reveal / re-authentication
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Serialize)]
@@ -528,15 +534,16 @@ pub struct SerializableIdentityExport {
 }
 
 // ---------------------------------------------------------------------------
-// favicon 缓存
+// favicon cache
 // ---------------------------------------------------------------------------
 
-/// 前端 favicon DTO；图标字节 base64 编码，前端拼 `data:` URL 渲染。
+/// Frontend favicon DTO; icon bytes base64-encoded, the frontend composes a
+/// `data:` URL to render.
 #[derive(Debug, Clone, Serialize)]
 pub struct SerializableFavicon {
     pub host: String,
     pub mime_type: String,
-    /// base64 编码的图像字节（≤ 512 KiB）
+    /// base64-encoded image bytes (≤ 512 KiB)
     pub data: String,
 }
 
@@ -552,10 +559,11 @@ impl From<persona_core::models::FaviconCacheEntry> for SerializableFavicon {
 }
 
 // ---------------------------------------------------------------------------
-// Item history（1Password 对齐）
+// Item history (1Password-aligned)
 // ---------------------------------------------------------------------------
 
-/// 字段级 diff（快照 JSON 不回传前端，diff 足够 UI 展示）
+/// Field-level diff (the snapshot JSON is not sent to the frontend; the diff
+/// is enough for the UI)
 #[derive(Debug, Serialize)]
 pub struct SerializableFieldChange {
     pub field: String,
@@ -563,9 +571,11 @@ pub struct SerializableFieldChange {
     pub new_value: String,
 }
 
-/// 可序列化的历史行。previous_state/new_state 整份 JSON 不回传——
-/// 字段级 diff 是展示所需的最小信息。`restorable` 只暴露「是否可恢复」
-/// 一位（删除行无 new_state 不可恢复），快照本身仍不进 IPC。
+/// Serializable history row. The full previous_state/new_state JSON is not
+/// sent — the field-level diff is the minimum information the display needs.
+/// `restorable` only exposes the single "is it recoverable" bit (a deleted
+/// row has no new_state and is not recoverable); the snapshot itself still
+/// never enters IPC.
 #[derive(Debug, Serialize)]
 pub struct SerializableChangeHistory {
     pub id: String,
@@ -600,11 +610,12 @@ impl From<persona_core::models::ChangeHistory> for SerializableChangeHistory {
 }
 
 // ---------------------------------------------------------------------------
-// Attachments（1Password 对齐）：元数据即可展示信息；
-// encryption_key_id 只是密钥指纹（前 16 字节 hex），不含密钥材料
+// Attachments (1Password-aligned): metadata alone is what gets displayed;
+// encryption_key_id is only a key fingerprint (first 16 bytes hex), not key
+// material
 // ---------------------------------------------------------------------------
 
-/// 可序列化的附件元数据
+/// Serializable attachment metadata
 #[derive(Debug, Serialize)]
 pub struct SerializableAttachment {
     pub id: String,
@@ -633,5 +644,5 @@ impl From<persona_core::models::Attachment> for SerializableAttachment {
 }
 
 // ---------------------------------------------------------------------------
-// 同步组配对（S1 桌面接线）
+// Sync-group pairing (S1 desktop wiring)
 // ---------------------------------------------------------------------------

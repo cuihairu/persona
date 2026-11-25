@@ -45,14 +45,14 @@ async fn reveal_credential_secret_round_trip_and_unknown_field() {
     .unwrap();
     assert!(!resp.success, "unknown field must not reveal");
 }
-/// `extract_secret_field` 的字段×类型全矩阵（纯函数，无需服务）。
+/// Full field x type matrix for `extract_secret_field` (pure function, no service needed).
 #[test]
 fn extract_secret_field_type_matrix() {
     use persona_core::models::credential::{
         ApiKeyData, CryptoWalletData, PasswordCredentialData, SecurityQuestion, SshKeyData,
     };
 
-    // Password：明文密码 + 安全问题 JSON 序列化；跨类型字段拒绝。
+    // Password: plaintext password + security questions JSON serialization; cross-type fields rejected.
     let password = CredentialData::Password(PasswordCredentialData {
         password: "pw-1".to_string(),
         email: None,
@@ -68,7 +68,7 @@ fn extract_secret_field_type_matrix() {
     assert_eq!(parsed[0]["answer"], "cat");
     assert!(extract_secret_field(&password, "ssh_private_key").is_err());
 
-    // CryptoWallet：私钥/助记词可选，缺失时给出可读错误。
+    // CryptoWallet: private key/mnemonic optional, readable error when missing.
     let wallet = |mnemonic: Option<&str>, key: Option<&str>| {
         CredentialData::CryptoWallet(CryptoWalletData {
             wallet_type: "hd".to_string(),
@@ -100,7 +100,7 @@ fn extract_secret_field_type_matrix() {
     );
     assert!(extract_secret_field(&wallet(None, None), "api_key").is_err());
 
-    // SshKey：私钥必有；口令可选。
+    // SshKey: private key required; passphrase optional.
     let ssh = |passphrase: Option<&str>| {
         CredentialData::SshKey(SshKeyData {
             private_key: "-----BEGIN OPENSSH PRIVATE KEY-----".to_string(),
@@ -121,7 +121,7 @@ fn extract_secret_field_type_matrix() {
         "This SSH key has no stored passphrase"
     );
 
-    // ApiKey：secret 与 token 可选。
+    // ApiKey: secret and token optional.
     let api = |secret: Option<&str>, token: Option<&str>| {
         CredentialData::ApiKey(ApiKeyData {
             api_key: "AK123".to_string(),
@@ -152,7 +152,7 @@ fn extract_secret_field_type_matrix() {
         "This API credential has no stored token"
     );
 
-    // Raw：必须能按 UTF-8 解码。
+    // Raw: must decode as UTF-8.
     let raw_utf8 = CredentialData::Raw("plain-bytes".as_bytes().to_vec());
     assert_eq!(
         extract_secret_field(&raw_utf8, "raw_data").unwrap(),
@@ -164,19 +164,20 @@ fn extract_secret_field_type_matrix() {
         "Raw data is not valid UTF-8"
     );
 
-    // 未知字段名一律拒绝。
+    // Unknown field names are always rejected.
     assert_eq!(
         extract_secret_field(&password, "nonexistent").unwrap_err(),
         "Field 'nonexistent' is not available for this credential type"
     );
 }
-/// reveal 命令的错误路径 + ApiKey 凭据的成功 reveal（覆盖
-/// `CredentialDataRequest::ApiKey` 的转换与序列化链）。
+/// Error paths for the reveal command + a successful reveal for an ApiKey
+/// credential (covers the conversion and serialization chain of
+/// `CredentialDataRequest::ApiKey`).
 #[tokio::test]
 async fn reveal_secret_paths_and_api_key_round_trip() {
     let app = mock_app();
 
-    // 未初始化：服务缺失分支。
+    // Not initialized: missing-service branch.
     let resp = reveal_credential_secret(
         RevealSecretRequest {
             credential_id: uuid::Uuid::new_v4().to_string(),
@@ -191,7 +192,7 @@ async fn reveal_secret_paths_and_api_key_round_trip() {
 
     let (app, identity_id) = app_with_identity().await;
 
-    // 坏 UUID 在拿服务之前就被拒。
+    // A bad UUID is rejected before the service is even obtained.
     let resp = reveal_credential_secret(
         RevealSecretRequest {
             credential_id: "not-a-uuid".to_string(),
@@ -204,7 +205,7 @@ async fn reveal_secret_paths_and_api_key_round_trip() {
     .unwrap();
     assert_eq!(resp.error.as_deref(), Some("Invalid UUID format"));
 
-    // ApiKey 凭据：创建 → reveal api_key 命中成功臂。
+    // ApiKey credential: create -> reveal api_key hits the success arm.
     let mut req = password_credential_request(&identity_id);
     req.name = "Service API".to_string();
     req.credential_type = "ApiKey".to_string();
@@ -236,7 +237,7 @@ async fn reveal_secret_paths_and_api_key_round_trip() {
     assert_eq!(revealed.field, "api_key");
     assert_eq!(revealed.value, "AKIA-example");
 
-    // 类型不匹配：对 ApiKey 凭据要 password 字段。
+    // Type mismatch: asking for the password field on an ApiKey credential.
     let resp = reveal_credential_secret(
         RevealSecretRequest {
             credential_id: api_cred.id.clone(),
@@ -254,7 +255,7 @@ async fn reveal_secret_paths_and_api_key_round_trip() {
         .unwrap_or_default()
         .contains("not available for this credential type"));
 
-    // 不存在的凭据 id。
+    // A credential id that does not exist.
     let resp = reveal_credential_secret(
         RevealSecretRequest {
             credential_id: uuid::Uuid::new_v4().to_string(),
@@ -267,8 +268,9 @@ async fn reveal_secret_paths_and_api_key_round_trip() {
     .unwrap();
     assert_eq!(resp.error.as_deref(), Some("Credential not found"));
 }
-/// `credential_data_to_json` 覆盖全部凭据类型的序列化臂，并验证各敏感
-/// 字段（密码、私钥、助记词、API secret、完整卡号）一律不出现在 JSON 里。
+/// `credential_data_to_json` covers the serialization arm of every credential
+/// type and verifies that the sensitive fields (password, private key,
+/// mnemonic, API secret, full card number) never appear in the JSON.
 #[test]
 fn credential_data_to_json_type_matrix_and_redaction() {
     use persona_core::models::credential::{
@@ -287,9 +289,10 @@ fn credential_data_to_json_type_matrix_and_redaction() {
     let json = credential_data_to_json(&password);
     assert_eq!(json["type"], "Password");
     assert_eq!(json["email"], "a@b.c");
-    // 分层契约：登录密码是 UI 主视图数据（get_credential_data 直接携带），
-    // 而钱包私钥/SSH 私钥/API secret/TOTP 种子等更高级别的敏感材料一律
-    // 不进序列化负载，只能走 reveal_credential_secret。
+    // Layered contract: the login password is primary UI view data (carried
+    // directly by get_credential_data), while higher-tier sensitive material such
+    // as wallet private keys, SSH private keys, API secrets, and TOTP seeds never
+    // enters the serialized payload and can only come via reveal_credential_secret.
     assert_eq!(json["password"], "plain-secret");
 
     let wallet = CredentialData::CryptoWallet(CryptoWalletData {
@@ -385,8 +388,8 @@ fn credential_data_to_json_type_matrix_and_redaction() {
     assert_eq!(json["type"], "Raw");
     assert_eq!(json["message"], "Binary data");
 }
-/// `CredentialDataRequest::to_credential_data` 的剩余转换臂：
-/// CryptoWallet / SshKey / Raw，以及 ApiKey 的 expires_at RFC3339 解析。
+/// The remaining conversion arms of `CredentialDataRequest::to_credential_data`:
+/// CryptoWallet / SshKey / Raw, plus ApiKey expires_at RFC3339 parsing.
 #[test]
 fn credential_data_request_conversion_extras() {
     let wallet = CredentialDataRequest::CryptoWallet {

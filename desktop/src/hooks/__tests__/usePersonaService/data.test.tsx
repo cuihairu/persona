@@ -123,7 +123,7 @@ describe('hooks/usePersonaService', () => {
     });
     expect(toastSuccess).toHaveBeenCalledWith('图标已获取');
 
-    // 失败臂：不写缓存
+    // Failure arm: nothing gets written to the cache
     fav.mockResolvedValueOnce({ success: false, data: undefined, error: '404' });
     await act(async () => {
       expect(await result.current.fetchFavicon('c1')).toBeNull();
@@ -131,7 +131,7 @@ describe('hooks/usePersonaService', () => {
     expect(toastError).toHaveBeenCalledWith('404');
     expect(useAppStore.getState().faviconCache['a.com']).toBeDefined();
 
-    // 抛错臂：统一 toast
+    // Throwing arm: a single toast for everything
     fav.mockRejectedValueOnce(new Error('ipc down'));
     await act(async () => {
       expect(await result.current.fetchFavicon('c1')).toBeNull();
@@ -195,7 +195,7 @@ describe('hooks/usePersonaService', () => {
     });
     expect(out).toEqual(fields);
 
-    // 非数组 data（后端异常态）→ null，面板显示错误行而非空态
+    // Non-array data (a broken backend state) -> null, so the panel shows an error row rather than an empty state
     jest.spyOn(personaAPI, 'getCredentialCustomFields').mockResolvedValue({
       success: true,
       data: null,

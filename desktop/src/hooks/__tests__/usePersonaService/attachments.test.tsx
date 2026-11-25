@@ -204,5 +204,5 @@ describe('hooks/usePersonaService', () => {
     expect(toastError).toHaveBeenCalled();
   });
 
-  // -- 余下 catch / else 臂 ----------------------------------------------
+  // -- remaining catch / else arms -------------------------------------
 });

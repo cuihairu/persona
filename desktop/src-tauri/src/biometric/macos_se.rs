@@ -1,31 +1,37 @@
-//! macOS：Secure Enclave 路线 B'——永久 SE 密钥 + ECIES 包裹 vault 主密钥
-//! （`docs/biometric-unlock-design.md` §5）。
+//! macOS: Secure Enclave route B' — a permanent SE key plus ECIES wrapping of
+//! the vault master key (`docs/biometric-unlock-design.md` §5).
 //!
-//! **spike 门控**：仅在环境变量 `PERSONA_BIOMETRIC_SE_SPIKE=1` 时由
-//! [`super::key_wrapper`] 装配（`biometric_wrap_spike` 命令在真机上逐项
-//! 探测并回报 OSStatus）。生产 unlock 主链路默认不含本模块——路线 B'
-//! 是否被 ad-hoc 签名挡住（`errSecMissingEntitlement -34018`）只能真机
-//! 验证，未验证前不切换默认行为。
+//! **Spike-gated**: this module is wired in by [`super::key_wrapper`] only when
+//! the `PERSONA_BIOMETRIC_SE_SPIKE=1` env var is set (the `biometric_wrap_spike`
+//! command probes each item on real hardware and reports OSStatus codes). The
+//! production unlock path does not include this module by default — whether
+//! route B' is blocked by ad-hoc signing (`errSecMissingEntitlement -34018`) can
+//! only be verified on real hardware, and the default is not switched until
+//! then.
 //!
-//! 机制：`SecKeyCreateRandomKey` 生成 256 位 EC 密钥（`kSecAttrTokenID
-//! SecureEnclave` + `IsPermanent: true` + AccessControl
-//! `.privateKeyUsage | .biometryCurrentSet`）。包裹 = 公钥 ECIES 加密
-//! （无提示）；解包 = 私钥 ECIES 解密——SE 在此刻强制生物识别/系统密码，
-//! 私钥永不导出。`biometryCurrentSet` 使换指纹后旧密钥永久失效。
+//! Mechanism: `SecKeyCreateRandomKey` generates a 256-bit EC key
+//! (`kSecAttrTokenID SecureEnclave` + `IsPermanent: true` + AccessControl
+//! `.privateKeyUsage | .biometryCurrentSet`). Wrap = ECIES encryption with the
+//! public key (no prompt); unwrap = ECIES decryption with the private key — the
+//! SE enforces biometrics/system password at that moment, and the private key is
+//! never exported. `biometryCurrentSet` permanently invalidates old keys after
+//! a fingerprint change.
 //!
-//! 算法族说明：objc2-security 0.3 暴露的 ECIES 常量只有 AESGCM 一族
-//! （`...SHA256AESGCM`）；Apple 早年标注为 legacy 的 `...SHA256AEAD`
-//! 在该 crate 里已不导出。取 AESGCM 变体：同样是 SE 硬件内的
-//! ECDH + HKDF + AES-GCM，无自造密文。
+//! Algorithm family note: the ECIES constants exposed by objc2-security 0.3
+//! only include the AESGCM family (`...SHA256AESGCM`); Apple's long-ago
+//! deprecated `...SHA256AEAD` variant is no longer exported by that crate. We
+//! take the AESGCM variant: still ECDH + HKDF + AES-GCM inside the SE hardware,
+//! no hand-rolled ciphertext.
 //!
-//! 验证状态：**编译**由 `desktop-build` 工作流的 macOS job（macos-latest
-//! runner 上 `tauri build`）把关——本仓库无 macOS 实机，Linux 上无法
-//! 编译 objc2 系 crate（`objc2` 显式拒绝非 Apple target，连
-//! `cargo check` 都跑不过）；**运行时**行为以真机 spike 输出为准
-//! （§5.2 的探针未跑过，结论待回填）。
+//! Verification status: **compilation** is gated by the macOS job of the
+//! `desktop-build` workflow (`tauri build` on a macos-latest runner) — this repo
+//! has no macOS hardware, and the objc2-family crates cannot be compiled on
+//! Linux (`objc2` explicitly rejects non-Apple targets, even `cargo check`
+//! fails); **runtime** behavior is judged by real-hardware spike output (the
+//! §5.2 probes have not been run, conclusions pending backfill).
 
-// CF 基础类型走直接依赖 objc2-core-foundation（objc2-foundation 不在
-// 根上重导出它们）。
+// Core Foundation types go through the direct objc2-core-foundation dependency
+// (objc2-foundation does not re-export them at its root).
 use objc2_core_foundation::{CFBoolean, CFData, CFDictionary, CFRetained, CFType};
 use objc2_security::{
     kSecAttrAccessControl, kSecAttrAccessibleWhenPasscodeSetThisDeviceOnly, kSecAttrApplicationTag,
@@ -42,16 +48,18 @@ use persona_core::{
     BiometricKeyWrapper, BiometricWrapCapability, BiometricWrapError, WrapPlatform,
 };
 
-/// SE 密钥的 application tag（keychain 内唯一标识本应用的包裹密钥）
+/// Application tag of the SE key (uniquely identifies this app's wrap key
+/// within the keychain)
 const KEY_TAG: &[u8] = b"persona.vault-wrap.v1";
 
-/// ECIES 算法：cofactor + 变长 IV + X9.63 KDF + SHA-256 + AES-GCM
-/// （1Password/age 系的 SE 包裹同款算法族）
+/// ECIES algorithm: cofactor + variable-length IV + X9.63 KDF + SHA-256 +
+/// AES-GCM (the same algorithm family used for SE wrapping by 1Password/age)
 ///
-/// 本文件里所有 `unsafe { kSec… }` 静态读取的统一 SAFETY 前提：这些
-/// extern static 是 Security.framework 导出的进程级常量（指向不可变
-/// CFString 的引用），框架保证其有效性与永生——读取本身按 Rust 规则
-/// 需 unsafe，值语义无风险。
+/// Uniform SAFETY precondition for every `unsafe { kSec… }` static read in this
+/// file: these extern statics are process-level constants exported by
+/// Security.framework (references to immutable CFStrings); the framework
+/// guarantees their validity and immortality — the read itself requires unsafe
+/// under Rust rules, but the value semantics carry no risk.
 fn ecies_algorithm() -> &'static SecKeyAlgorithm {
     unsafe { kSecKeyAlgorithmECIESEncryptionCofactorVariableIVX963SHA256AESGCM }
 }
@@ -60,7 +68,7 @@ pub fn spike_enabled() -> bool {
     std::env::var_os("PERSONA_BIOMETRIC_SE_SPIKE").is_some_and(|v| v == "1")
 }
 
-/// spike 门控的装配入口（`biometric::key_wrapper` 调用）
+/// Spike-gated assembly entry point (called by `biometric::key_wrapper`)
 pub fn spike_wrapper_if_enabled() -> Option<SeKeyWrapper> {
     if spike_enabled() {
         Some(SeKeyWrapper)
@@ -69,45 +77,51 @@ pub fn spike_wrapper_if_enabled() -> Option<SeKeyWrapper> {
     }
 }
 
-/// CFError 文案。`errSecMissingEntitlement (-34018)`、`errSecUserCanceled
-/// (-25293)` 这些码从 CFError 的 code 读出（Security 框架把 OSStatus
-/// 原样塞进 CFError code）——spike 报告与错误分流都依赖它。
+/// CFError wording. Codes such as `errSecMissingEntitlement (-34018)` and
+/// `errSecUserCanceled (-25293)` are read from the CFError code (Security
+/// puts the OSStatus into the CFError code verbatim) — both the spike report
+/// and error triage depend on this.
 fn cf_error_context(step: &str, err: *mut objc2_core_foundation::CFError) -> String {
     if err.is_null() {
         format!("{step}: failed with null CFError")
     } else {
-        // SAFETY: 调用方保证 err 指向一个有效的 CFError
+        // SAFETY: the caller guarantees err points to a valid CFError
         let e = unsafe { &*err };
         format!("{step}: os_status={}", e.code())
     }
 }
 
-/// 用户在系统弹框点了取消（`errSecUserCanceled = -25293`）。仅取消走
-/// 静默回退，其余失败一律当"包裹失效"（见设计文档 §3.4）。
+/// The user hit cancel in the system dialog (`errSecUserCanceled = -25293`).
+/// Only cancellation goes through the silent fallback; all other failures are
+/// treated as "wrap invalid" (see design doc §3.4).
 const ERR_SEC_USER_CANCELED: i64 = -25293;
-/// 条目不存在（`errSecItemNotFound`）：删除操作的幂等成功。
+/// Item not found (`errSecItemNotFound`): the idempotent success of a delete.
 const ERR_SEC_ITEM_NOT_FOUND: i32 = -25300;
 
 fn is_user_cancelled(context: &str) -> bool {
     context.contains(&ERR_SEC_USER_CANCELED.to_string())
 }
 
-/// AccessControl：私钥操作必须经生物识别（当前注册集）或系统密码回退
+/// AccessControl: private-key operations must go through biometrics (current
+/// enrollment set) or the system password fallback
 fn access_control() -> std::result::Result<CFRetained<SecAccessControl>, BiometricWrapError> {
     let mut err: *mut objc2_core_foundation::CFError = std::ptr::null_mut();
-    // SAFETY: 框架常量静态（统一前提见 ecies_algorithm 文档）
+    // SAFETY: framework constant static (uniform precondition, see
+    // ecies_algorithm docs)
     let protection: &CFType = unsafe { kSecAttrAccessibleWhenPasscodeSetThisDeviceOnly };
     let flags = SecAccessControlCreateFlags::PrivateKeyUsage
         | SecAccessControlCreateFlags::BiometryCurrentSet;
-    // SAFETY: 两个入参都是框架常量/位标志，out 错误指针由本函数持有
+    // SAFETY: both inputs are framework constants/flag bits, and the out error
+    // pointer is owned by this function
     let acl = unsafe { SecAccessControl::with_flags(None, protection, flags, &mut err) };
     acl.ok_or_else(|| BiometricWrapError::Platform(cf_error_context("access control create", err)))
 }
 
-/// 找已存在的包裹密钥；没有就 None
+/// Find an existing wrap key; None if absent
 fn find_key() -> Option<CFRetained<SecKey>> {
     let tag = CFData::from_bytes(KEY_TAG);
-    // SAFETY: 读框架常量静态构造查询字典（统一前提见 ecies_algorithm 文档）
+    // SAFETY: a query dictionary built from framework constant statics (uniform
+    // precondition, see ecies_algorithm docs)
     let query = unsafe {
         CFDictionary::<CFType, CFType>::from_slices(
             &[
@@ -123,18 +137,19 @@ fn find_key() -> Option<CFRetained<SecKey>> {
         )
     };
     let mut found: *const CFType = std::ptr::null_mut();
-    // SAFETY: query 是合法字典；found 由本函数持有并在 Ok 后转移所有权
+    // SAFETY: query is a valid dictionary; found is owned by this function and
+    // ownership is transferred after Ok
     let status = unsafe { SecItemCopyMatching(query.as_opaque(), &mut found) };
     if status == 0 && !found.is_null() {
-        // SAFETY: SecItemCopyMatching 成功时 found 是保留引用的 CFType
-        // （kSecReturnRef → SecKeyRef），按 SecKey 转移所有权
+        // SAFETY: on success, SecItemCopyMatching leaves found as a retained
+        // CFType (kSecReturnRef -> SecKeyRef); ownership is transferred as SecKey
         NonNull::new(found as *mut SecKey).map(|nn| unsafe { CFRetained::from_raw(nn) })
     } else {
         None
     }
 }
 
-/// 生成（或找回）Secure Enclave 包裹密钥
+/// Generate (or retrieve) the Secure Enclave wrap key
 fn generate_or_find_key() -> std::result::Result<CFRetained<SecKey>, BiometricWrapError> {
     if let Some(key) = find_key() {
         return Ok(key);
@@ -142,7 +157,8 @@ fn generate_or_find_key() -> std::result::Result<CFRetained<SecKey>, BiometricWr
     let acl = access_control()?;
     let tag = CFData::from_bytes(KEY_TAG);
     let key_size = objc2_core_foundation::CFNumber::new_i32(256);
-    // SAFETY: 读框架常量静态构造参数字典（统一前提见 ecies_algorithm 文档）
+    // SAFETY: a parameters dictionary built from framework constant statics
+    // (uniform precondition, see ecies_algorithm docs)
     let parameters = unsafe {
         CFDictionary::<CFType, CFType>::from_slices(
             &[
@@ -164,33 +180,36 @@ fn generate_or_find_key() -> std::result::Result<CFRetained<SecKey>, BiometricWr
         )
     };
     let mut err: *mut objc2_core_foundation::CFError = std::ptr::null_mut();
-    // SAFETY: parameters 合法；err 由本函数持有
+    // SAFETY: parameters is valid; err is owned by this function
     let key = unsafe { SecKey::new_random_key(parameters.as_opaque(), &mut err) };
     key.ok_or_else(|| {
-        // ad-hoc 签名下预期可能 -34018：spike 就是为了抓这个码
+        // Under ad-hoc signing -34018 is a plausible expectation: the spike
+        // exists precisely to catch this code
         BiometricWrapError::Platform(cf_error_context("SecKeyCreateRandomKey (route B')", err))
     })
 }
 
-/// ECIES 包裹（走公钥，不弹框）
+/// ECIES wrap (public key, no dialog)
 fn ecies_wrap(key: &SecKey, plaintext: &[u8]) -> std::result::Result<Vec<u8>, BiometricWrapError> {
-    // SAFETY: key 是合法 SecKey；err 由本函数持有
+    // SAFETY: key is a valid SecKey; err is owned by this function
     let public = unsafe { key.public_key() }
         .ok_or_else(|| BiometricWrapError::Platform("SecKeyCopyPublicKey returned None".into()))?;
     let data = CFData::from_bytes(plaintext);
     let mut err: *mut objc2_core_foundation::CFError = std::ptr::null_mut();
-    // SAFETY: 公开的 ECIES 加密，无用户交互
+    // SAFETY: public ECIES encryption, no user interaction
     let ciphertext = unsafe { public.encrypted_data(ecies_algorithm(), &data, &mut err) };
     ciphertext
         .map(|d| d.to_vec())
         .ok_or_else(|| BiometricWrapError::Platform(cf_error_context("ECIES wrap", err)))
 }
 
-/// ECIES 解包（走私钥：SE 在此刻强制生物识别/系统密码）
+/// ECIES unwrap (private key: the SE enforces biometrics/system password at
+/// this moment)
 fn ecies_unwrap(key: &SecKey, payload: &[u8]) -> std::result::Result<Vec<u8>, BiometricWrapError> {
     let ciphertext = CFData::from_bytes(payload);
     let mut err: *mut objc2_core_foundation::CFError = std::ptr::null_mut();
-    // SAFETY: 私钥操作；Secure Enclave 在此刻强制用户认证（biometryCurrentSet）
+    // SAFETY: private-key operation; the Secure Enclave enforces user
+    // authentication at this moment (biometryCurrentSet)
     let plaintext = unsafe { key.decrypted_data(ecies_algorithm(), &ciphertext, &mut err) };
     let plaintext = match plaintext {
         Some(d) => d,
@@ -199,29 +218,34 @@ fn ecies_unwrap(key: &SecKey, payload: &[u8]) -> std::result::Result<Vec<u8>, Bi
             if is_user_cancelled(&detail) {
                 return Err(BiometricWrapError::UserCancelled);
             }
-            // 其余（含换指纹后密钥被 SE 永久作废）一律当包裹失效
+            // Everything else (including the key being permanently invalidated
+            // by the SE after a fingerprint change) is treated as wrap invalid
             return Err(BiometricWrapError::Platform(detail));
         }
     };
     Ok(plaintext.to_vec())
 }
 
-/// spike 专用探针输出（`biometric_wrap_spike` 命令消费）：逐步骤的
-/// OSStatus/结论，真机上跑完贴回设计文档 §5.2
+/// Spike-specific probe output (consumed by the `biometric_wrap_spike`
+/// command): per-step OSStatus/verdicts, to be pasted back into design doc
+/// §5.2 after running on real hardware
 pub struct SpikeStep {
     pub name: &'static str,
     pub ok: bool,
     pub detail: String,
 }
 
-/// 跑 spike 全部探针（设计文档 §5.2 的探针 1/1b/2a/2b/3/4/5；"删一条指纹
-/// 后解包"需要人在真机上操作生物注册，属手动对照：跑一次本函数、删一条
-/// 指纹、再跑一次——第 2b 步必须失败才算 biometryCurrentSet 生效）。
-/// 第 3 步的"重启后"维度同样靠连续两次运行本函数对比。
+/// Run all spike probes (probes 1/1b/2a/2b/3/4/5 from design doc §5.2;
+/// "unwrap after deleting one fingerprint" requires a person on real hardware to
+/// touch the biometric enrollment, so it is a manual control: run this function
+/// once, delete one fingerprint, run it again — step 2b must fail for
+/// biometryCurrentSet to be considered effective).
+/// The "after restart" dimension of step 3 likewise comes from comparing two
+/// consecutive runs of this function.
 pub fn run_spike() -> Vec<SpikeStep> {
     let mut steps = Vec::new();
 
-    // 1. B' 密钥生成（access control + 永久 SE）
+    // 1. Route B' key generation (access control + permanent SE)
     let key = match generate_or_find_key() {
         Ok(_) => {
             steps.push(SpikeStep {
@@ -251,7 +275,8 @@ pub fn run_spike() -> Vec<SpikeStep> {
         }
     };
 
-    // 2. ECIES roundtrip（wrap 侧无提示，unwrap 侧会弹生物识别）
+    // 2. ECIES roundtrip (wrap side prompts nothing, unwrap side triggers
+    // biometrics)
     let probe = b"persona-spike-probe";
     let ciphertext = match ecies_wrap(&key, probe) {
         Ok(c) => {
@@ -291,8 +316,10 @@ pub fn run_spike() -> Vec<SpikeStep> {
         }),
     }
 
-    // 3. 持久性：本次进程能找回既有密钥（find_key 命中 = keychain 引用存活；
-    //    完整的"重启后"验证 = 结束本进程后再次运行 spike，看本步是否 still found）
+    // 3. Persistence: this process can retrieve the existing key (find_key
+    //    hitting = the keychain reference is alive; the full "after restart"
+    //    verification = terminate this process and run the spike again, then see
+    //    whether this step still reports found)
     steps.push(SpikeStep {
         name: "3. find_key (persistence probe)",
         ok: find_key().is_some(),
@@ -300,11 +327,13 @@ pub fn run_spike() -> Vec<SpikeStep> {
             .into(),
     });
 
-    // 5. 对照组 A（设计文档 §5.2 第 5 项）：DP keychain + AccessControl
-    //    在 ad-hoc 签名下预期 -34018——确认签名坑基线真实存在
+    // 5. Control group A (item 5 of design doc §5.2): DP keychain + AccessControl
+    //    is expected to return -34018 under ad-hoc signing — confirming that the
+    //    signing pitfall baseline really exists
     steps.push(access_control_probe());
 
-    // 6. 删除路径（禁用 / 失效自愈都走它；幂等）
+    // 6. Delete path (both disable and invalidate self-heal go through it;
+    //    idempotent)
     let delete_status = match delete_se_key() {
         Ok(()) => String::new(),
         Err(e) => e.to_string(),
@@ -322,10 +351,12 @@ pub fn run_spike() -> Vec<SpikeStep> {
     steps
 }
 
-/// 对照组 A 探针：仅构造 AccessControl（不建 keychain 条目也足以观察
-/// 签名门限——`SecAccessControlCreateWithFlags` 本身不吃 entitlement，
-/// 真正的 -34018 出现在带 ACL 的 SecItemAdd/SecKeyCreateRandomKey；
-/// 本步记录构造是否成功，主判断仍看第 1 步的真实 OSStatus）。
+/// Control group A probe: only construct an AccessControl (not even creating a
+/// keychain item is enough to observe the signing gate — `SecAccessControlCreateWithFlags`
+/// itself does not consume entitlements, the real -34018 shows up at
+/// SecItemAdd/SecKeyCreateRandomKey with an ACL; this step records whether the
+/// construction succeeded, and the primary judgement still rests on step 1's
+/// real OSStatus).
 fn access_control_probe() -> SpikeStep {
     match access_control() {
         Ok(_) => SpikeStep {
@@ -342,17 +373,19 @@ fn access_control_probe() -> SpikeStep {
     }
 }
 
-/// 删除 keychain 里的 SE 包裹密钥（幂等：不存在也算成功）
+/// Delete the SE wrap key in the keychain (idempotent: absence also counts as
+/// success)
 fn delete_se_key() -> std::result::Result<(), BiometricWrapError> {
     let tag = CFData::from_bytes(KEY_TAG);
-    // SAFETY: 读框架常量静态构造查询字典（统一前提见 ecies_algorithm 文档）
+    // SAFETY: a query dictionary built from framework constant statics (uniform
+    // precondition, see ecies_algorithm docs)
     let query = unsafe {
         CFDictionary::<CFType, CFType>::from_slices(
             &[kSecClass.as_ref(), kSecAttrApplicationTag.as_ref()],
             &[kSecClassKey.as_ref(), tag.as_ref()],
         )
     };
-    // SAFETY: query 合法
+    // SAFETY: query is valid
     let status = unsafe { SecItemDelete(query.as_opaque()) };
     if status == 0 || status == ERR_SEC_ITEM_NOT_FOUND {
         Ok(())
@@ -363,7 +396,7 @@ fn delete_se_key() -> std::result::Result<(), BiometricWrapError> {
     }
 }
 
-/// Secure Enclave 路线 B' 的硬件包裹器
+/// Hardware wrap wrapper for Secure Enclave route B'
 pub struct SeKeyWrapper;
 
 impl BiometricKeyWrapper for SeKeyWrapper {
@@ -372,7 +405,8 @@ impl BiometricKeyWrapper for SeKeyWrapper {
     }
 
     fn is_available(&self) -> bool {
-        // 硬件存在 + 生物注册在册才可用（复用门禁层的 LAContext 探测）
+        // Available only when the hardware exists and a biometric enrollment is
+        // on record (reusing the gate layer's LAContext probe)
         super::macos::available()
     }
 
@@ -381,9 +415,12 @@ impl BiometricKeyWrapper for SeKeyWrapper {
     }
 
     fn enrollment_fingerprint(&self) -> std::result::Result<[u8; 32], BiometricWrapError> {
-        // SE 密钥的 AccessControl 带 .biometryCurrentSet：注册集漂移由
-        // 硬件强制失效（解包必失败）。core 的指纹比对是第二道防线，这里
-        // 返回固定占位——不伪造注册集状态（Apple 不暴露，拿了也拿不准）。
+        // The SE key's AccessControl carries .biometryCurrentSet: enrollment-set
+        // drift is enforced as invalidation by the hardware (unwrap necessarily
+        // fails). The core's fingerprint comparison is the second line of
+        // defense, so this returns a fixed placeholder — we do not fabricate
+        // enrollment-set state (Apple does not expose it, and what we could get
+        // would not be reliable).
         Ok([0u8; 32])
     }
 
@@ -401,7 +438,7 @@ impl BiometricKeyWrapper for SeKeyWrapper {
         payload: &[u8],
         prompt: &str,
     ) -> std::result::Result<Zeroizing<[u8; 32]>, BiometricWrapError> {
-        let _ = prompt; // SE 弹框文案由 AccessControl 的 prompt 机制管，Rust 侧仅审计
+        let _ = prompt; // the SE dialog wording is governed by AccessControl's prompt mechanism; the Rust side is audit-only
         let key = generate_or_find_key()?;
         let bytes = ecies_unwrap(&key, payload)?;
         let arr: [u8; 32] = bytes
@@ -419,12 +456,14 @@ impl BiometricKeyWrapper for SeKeyWrapper {
 mod tests {
     use super::*;
 
-    /// 真机/CI 探针入口：`cargo test --lib spike_probes_print_report
-    /// -- --ignored --nocapture`。探针结果本身就是数据（GitHub runner 是
-    /// VM，无 Secure Enclave / Touch ID，各步会如实失败并把 OSStatus 打进
-    /// 日志——这正是 desktop-build macos job 跑它的目的：把真实输出回填
-    /// 设计文档 §5.2），断言只保证"能出报告"，不对 ok 位做门禁——门禁
-    /// 语义在 spike 输出的人工判读，不在测试。
+    /// Real-hardware/CI probe entry point: `cargo test --lib
+    /// spike_probes_print_report -- --ignored --nocapture`. The probe results
+    /// are themselves the data (a GitHub runner is a VM with no Secure Enclave /
+    /// Touch ID, so each step will honestly fail and log its OSStatus — that is
+    /// exactly why the desktop-build macos job runs it: to backfill the real
+    /// output into design doc §5.2); the assertion only guarantees "a report is
+    /// produced" and does not gate on the ok field — the gating semantics live
+    /// in the manual judgement of the spike output, not in the test.
     #[test]
     #[ignore = "需要真实 macOS 环境（Secure Enclave / Touch ID）；desktop-build macos job 按计划跑"]
     fn spike_probes_print_report() {

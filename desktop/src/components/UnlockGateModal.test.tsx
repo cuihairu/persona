@@ -48,7 +48,7 @@ describe('components/UnlockGateModal', () => {
     fireEvent.change(passwordInput(), { target: { value: 'wrong' } });
     fireEvent.click(submitButton());
     await waitFor(() => expect(initializeService).toHaveBeenCalledTimes(1));
-    // 失败不关弹窗：submit 回到可用态等待重输
+    // A failure keeps the dialog open: submit returns to the usable state awaiting re-entry
     await waitFor(() => expect(submitButton()).toBeEnabled());
     expect(onResolve).not.toHaveBeenCalled();
   });
@@ -74,7 +74,7 @@ describe('components/UnlockGateModal', () => {
 
     expect(submitButton()).toBeDisabled();
     expect(submitButton()).toHaveTextContent('解锁中…');
-    // verifying 中重复提交（绕过 disabled 的表单提交路径）不再触发 initializeService
+    // A duplicate submit while verifying (via the form-submit path that bypasses disabled) no longer triggers initializeService
     fireEvent.submit(form());
     expect(initializeService).toHaveBeenCalledTimes(1);
 
@@ -96,11 +96,11 @@ describe('components/UnlockGateModal', () => {
     fireEvent.keyDown(window, { key: 'Escape' });
     expect(onResolve).toHaveBeenCalledTimes(3);
 
-    // 点内容区（输入框）不算点空白
+    // Clicking the content area (the input) does not count as clicking the backdrop
     fireEvent.mouseDown(passwordInput());
     expect(onResolve).toHaveBeenCalledTimes(3);
 
-    // 点遮罩空白 = 取消
+    // Clicking the backdrop = cancel
     fireEvent.mouseDown(screen.getByTestId('unlock-gate-modal'));
     expect(onResolve).toHaveBeenCalledTimes(4);
     expect(onResolve).toHaveBeenLastCalledWith(false);

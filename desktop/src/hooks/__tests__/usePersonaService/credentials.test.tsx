@@ -68,7 +68,7 @@ describe('hooks/usePersonaService', () => {
       updated_at: '2023-01-01T00:00:00Z',
     }) as any;
 
-  /** 每个 action 测试的公共前置：mount 时的 status 轮询 mock 成已解锁。 */
+  /** Shared setup for every action test: the status poll on mount is mocked as unlocked. */
 
   const mockUnlockedOnMount = () => {
     jest.spyOn(personaAPI, 'isServiceUnlocked').mockResolvedValue({
@@ -84,7 +84,7 @@ describe('hooks/usePersonaService', () => {
       pendingCredentialSelection: { identityId: 'i1', credentialId: 'c1' },
     });
 
-    // success: false 路径
+    // success: false path
     jest.spyOn(personaAPI, 'getCredentialsForIdentity').mockResolvedValueOnce({
       success: false,
       data: undefined,
@@ -94,11 +94,11 @@ describe('hooks/usePersonaService', () => {
     await act(async () => {
       await result.current.loadCredentialsForIdentity('i1');
     });
-    // 凭据没加载出来 pending 永远不会被注入；清掉防下次进该身份突然选中
+    // With no credentials loaded, the pending jump can never be injected; clear it so the next visit to this identity does not select something unexpectedly
     expect(useAppStore.getState().pendingCredentialSelection).toBeNull();
     expect(useAppStore.getState().error).toBe('db busy');
 
-    // throw 路径同样清理
+    // The throwing path cleans up too
     useAppStore.setState({
       pendingCredentialSelection: { identityId: 'i1', credentialId: 'c1' },
     });
@@ -121,13 +121,13 @@ describe('hooks/usePersonaService', () => {
       error: undefined,
     } as any);
 
-    // A 的凭据加载慢（手动控制 resolve），B 的即时返回
+    // A's credential load is slow (resolve driven manually), B's returns immediately
     let resolveA: (v: unknown) => void = () => {};
     const slowA = new Promise((r) => {
       resolveA = r;
     });
     const getCreds = jest.spyOn(personaAPI, 'getCredentialsForIdentity');
-    getCreds.mockImplementationOnce(() => slowA as any); // 第一次调用 = A（慢）
+    getCreds.mockImplementationOnce(() => slowA as any); // first call = A (slow)
     getCreds.mockResolvedValueOnce({
       success: true,
       data: [makeCredential('b-cred')],
@@ -140,13 +140,13 @@ describe('hooks/usePersonaService', () => {
     act(() => {
       pA = result.current.switchIdentity(identityA, { silent: true });
     });
-    // 先让 A 完成 setActiveIdentity 并进入慢凭据加载（A 此刻是 currentIdentity）
+    // Let A finish setActiveIdentity first and enter the slow credential load (A is currentIdentity at this point)
     await act(async () => {
       await Promise.resolve();
       await Promise.resolve();
     });
 
-    // B 切换完整落地（currentIdentity + credentials 都是 B）
+    // The switch to B has fully landed (currentIdentity + credentials are both B)
     await act(async () => {
       await result.current.switchIdentity(identityB, { silent: true });
     });
@@ -154,7 +154,7 @@ describe('hooks/usePersonaService', () => {
     expect(useAppStore.getState().credentials).toHaveLength(1);
     expect(useAppStore.getState().credentials[0].id).toBe('b-cred');
 
-    // A 的慢凭据响应后到：序号守卫丢弃，不得覆盖 B 的凭据
+    // A's slow credential response arrives late: the sequence guard drops it and it must not clobber B's credentials
     await act(async () => {
       resolveA({ success: true, data: [makeCredential('a-cred')], error: undefined });
       await pA;
@@ -188,7 +188,7 @@ describe('hooks/usePersonaService', () => {
     expect(useAppStore.getState().credentials).toHaveLength(1);
     expect(toastSuccess).toHaveBeenCalledWith('凭据创建成功');
 
-    // 失败臂
+    // Failure arm
     jest.spyOn(personaAPI, 'createCredential').mockResolvedValueOnce({
       success: false,
       data: undefined,
@@ -242,7 +242,7 @@ describe('hooks/usePersonaService', () => {
     expect(useAppStore.getState().credentials[0].is_favorite).toBe(true);
     expect(toastSuccess).toHaveBeenCalledWith('已加入收藏');
 
-    // 取消收藏臂
+    // Unfavorite arm
     const toggledOff = { ...c1, is_favorite: false };
     fav.mockResolvedValueOnce({ success: true, data: toggledOff, error: undefined });
     await act(async () => {
@@ -250,7 +250,7 @@ describe('hooks/usePersonaService', () => {
     });
     expect(toastSuccess).toHaveBeenLastCalledWith('已移出收藏');
 
-    // 失败臂
+    // Failure arm
     fav.mockResolvedValueOnce({ success: false, data: undefined, error: 'busy' });
     await act(async () => {
       await result.current.toggleCredentialFavorite('c1');
@@ -372,7 +372,7 @@ describe('hooks/usePersonaService', () => {
     expect(spy).toHaveBeenCalledWith({ id: 'c1' });
   });
 
-  // -- 历史与恢复 ---------------------------------------------------------
+  // -- history and restore ------------------------------------------------
 
   it('restoreCredentialVersion reloads on success and reports failure both ways', async () => {
     mockUnlockedOnMount();
@@ -420,7 +420,7 @@ describe('hooks/usePersonaService', () => {
     expect(toastError).toHaveBeenCalled();
   });
 
-  // -- 附件四动作 ---------------------------------------------------------
+  // -- the four attachment actions ---------------------------------------
 
   it('toggleCredentialFavorite survives an IPC rejection with null', async () => {
     mockUnlockedOnMount();

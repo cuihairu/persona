@@ -1,24 +1,25 @@
-/** 凭据域：身份/凭据/附件/历史/自定义字段、passkey 与揭示、快速访问与填充确认。 */
+/** Credential domain: identities/credentials/attachments/history/custom fields, passkeys and reveal, quick access and fill confirmation. */
 
-/** persona://passkey-approval 事件的负载（与 Rust 侧 PasskeyApprovalRequest 对应） */
+/** Payload of the persona://passkey-approval event (corresponds to PasskeyApprovalRequest on the Rust side) */
 export interface PasskeyApprovalRequest {
   request_id: string;
-  /** bridge wire 的操作名："passkey_create" | "passkey_assert" */
+  /** Operation name on the bridge wire: "passkey_create" | "passkey_assert" */
   operation: string;
-  /** 人工核对的 relying party（assert 时为 null：rp 存在 vault item 上） */
+  /** Relying party to verify by hand (null for assert: the rp lives on the vault item) */
   rp_id: string | null;
-  /** 发起请求的完整页面 origin */
+  /** Full page origin that issued the request */
   origin: string;
-  /** create 时的账号名 */
+  /** Account name at create time */
   user_name: string | null;
-  /** assert 时对应 vault item 的 UUID */
+  /** UUID of the vault item for assert */
   item_id: string | null;
 }
 
 /**
- * Quick Access 状态面（对应 Rust quick_access::QuickAccessStatus）。
- * configured（DB 真值）与 registered（真实抢注结果）分开：抢注失败时
- * 前者有值、后者为 null，UI 据此显示"未生效 + 原因"
+ * Quick Access status surface (mirrors Rust quick_access::QuickAccessStatus).
+ * configured (the DB truth) and registered (the actual grab result) are kept
+ * separate: when the grab fails, the former has a value while the latter is
+ * null, so the UI can show "not in effect + reason".
  */
 export interface QuickAccessStatus {
   enabled: boolean;
@@ -28,8 +29,9 @@ export interface QuickAccessStatus {
 }
 
 /**
- * 生成器热键状态面（对应 Rust quick_access::GeneratorStatus，语义与
- * QuickAccessStatus 同构：configured = DB 真值，registered = 真实抢注结果）
+ * Generator hotkey status surface (mirrors Rust quick_access::GeneratorStatus;
+ * same semantics as QuickAccessStatus: configured = the DB truth, registered =
+ * the actual grab result).
  */
 export interface GeneratorStatus {
   enabled: boolean;
@@ -38,25 +40,25 @@ export interface GeneratorStatus {
   error: string | null;
 }
 
-/** persona://quick-access-open-credential 事件载荷（浮窗 → 主窗口跨窗跳转） */
+/** Payload of the persona://quick-access-open-credential event (floating panel → main window cross-window jump) */
 export interface QuickAccessOpenCredential {
   identity_id: string;
   credential_id: string;
 }
 
-/** 桌面填充注入目标状态（fill_target_status 命令响应；snake_case 逐字对齐） */
+/** Desktop fill injection target status (fill_target_status command response; snake_case matched field-for-field) */
 export interface FillTargetStatus {
   supported: boolean;
-  /** 已捕获且当前指纹（窗口/进程/类名/可执行文件）仍然一致的目标 */
+  /** A target that has been captured and whose fingerprint (window/process/class name/executable) is still unchanged */
   ready: boolean;
   target_title: string | null;
-  /** 目标应用可执行文件名（如 "notepad.exe"；确认面展示用） */
+  /** Executable name of the target application (e.g. "notepad.exe"; shown on the confirmation surface) */
   target_app: string | null;
-  /** 当前有效快照标识（P1 确认绑定）：注入请求必须原样带回 */
+  /** Currently valid snapshot identifier (P1 confirmation binding): the injection request must return it verbatim */
   snapshot_id: string | null;
 }
 
-/** 桌面填充注入结果（desktop_fill_credential 命令响应；snake_case 逐字对齐） */
+/** Desktop fill injection result (desktop_fill_credential command response; snake_case matched field-for-field) */
 export interface DesktopFillResult {
   username_filled: boolean;
   password_filled: boolean;
@@ -64,7 +66,7 @@ export interface DesktopFillResult {
   warning: string | null;
 }
 
-/** Passkey 列表项（永不含私钥字段） */
+/** Passkey list entry (never contains private key fields) */
 export interface Passkey {
   id: string;
   identity_id: string;
@@ -84,7 +86,7 @@ export interface CreatePasskeyRequest {
   identity_id: string;
   rp_id: string;
   origin: string;
-  /** base64(UTF-8 JSON) 的 clientDataJSON */
+  /** clientDataJSON as base64(UTF-8 JSON) */
   client_data_json_b64: string;
   user_handle_b64?: string;
   user_name?: string;
@@ -94,11 +96,11 @@ export interface CreatePasskeyRequest {
 
 export interface PasskeyCreationResponse {
   passkey: Passkey;
-  /** base64 的 `none` 格式 attestation object */
+  /** The `none`-format attestation object, base64 encoded */
   attestation_object_b64: string;
 }
 
-/** 敏感字段名（对应 Rust reveal_credential_secret 的 field 集合） */
+/** Sensitive field names (the field set of Rust reveal_credential_secret) */
 export type SecretField =
   | 'password'
   | 'security_questions'
@@ -123,7 +125,7 @@ export interface IdentityExport {
 }
 
 // ---------------------------------------------------------------------------
-// 钱包交易（与 Rust TransactionRequest/SignedTransaction 的 serde 输出对应）
+// Wallet transactions (correspond to the serde output of Rust TransactionRequest/SignedTransaction)
 // ---------------------------------------------------------------------------
 
 export interface Identity {
@@ -139,12 +141,12 @@ export interface Identity {
   created_at: string;
   updated_at: string;
   is_active: boolean;
-  /** 旅行模式标记：enter 时随之移出本设备 */
+  /** Travel mode marker: leaves this device together with the identity on enter */
   travel_marked: boolean;
 }
 
 // ---------------------------------------------------------------------------
-// 旅行模式（与 Rust TravelStatus/TravelCounts 的 serde 输出对应）
+// Travel mode (correspond to the serde output of Rust TravelStatus/TravelCounts)
 // ---------------------------------------------------------------------------
 
 export interface Credential {
@@ -170,9 +172,10 @@ export interface CredentialData {
 }
 
 /**
- * 结构化自定义字段（1Password 对齐，对应 Rust SerializableCustomField）。
- * 整表以 per-item key 密封存于 credential.metadata，读需解锁；
- * `concealed` 行 value 是密文解出后的明文，仅在 UI 层打码。
+ * Structured custom fields (1Password-aligned, mirrors Rust SerializableCustomField).
+ * The whole table is sealed with the per-item key and stored in credential.metadata,
+ * so reading requires an unlock; the value of a `concealed` row is plaintext
+ * decrypted from the ciphertext, masked only in the UI layer.
  */
 export interface CustomField {
   id: string;
@@ -182,14 +185,14 @@ export interface CustomField {
   section: string | null;
 }
 
-/** 字段级 diff（对应 Rust SerializableFieldChange；快照 JSON 不回传） */
+/** Field-level diff (mirrors Rust SerializableFieldChange; snapshot JSON is never sent back) */
 export interface FieldChangeEntry {
   field: string;
   old_value: string;
   new_value: string;
 }
 
-/** 凭据历史行（对应 Rust SerializableChangeHistory；新版本在前） */
+/** Credential history row (mirrors Rust SerializableChangeHistory; newest version first) */
 export interface CredentialHistoryEntry {
   id: string;
   entity_id: string;
@@ -197,11 +200,11 @@ export interface CredentialHistoryEntry {
   version: number;
   timestamp: string;
   changes: FieldChangeEntry[];
-  /** 该版本可否恢复（删除行无 new_state，不可恢复） */
+  /** Whether this version can be restored (deletion rows have no new_state and cannot) */
   restorable: boolean;
 }
 
-/** 附件元数据（对应 Rust SerializableAttachment；blob 内容永不整段回传） */
+/** Attachment metadata (mirrors Rust SerializableAttachment; the blob content is never sent back in full) */
 export interface AttachmentEntry {
   id: string;
   credential_id: string;
@@ -243,7 +246,7 @@ export interface CreateCredentialRequest {
   credential_data: CredentialDataRequest;
 }
 
-/** 元数据编辑请求（条目类型不可变；payload 编辑走 UpdateCredentialDataRequest） */
+/** Metadata edit request (the item type is immutable; payload edits go through UpdateCredentialDataRequest) */
 export interface UpdateCredentialRequest {
   id: string;
   name: string;
@@ -254,7 +257,7 @@ export interface UpdateCredentialRequest {
   tags?: string[];
 }
 
-/** 密文 payload 编辑请求（敏感：复用原 item key 重封 + 敏感门禁） */
+/** Ciphertext payload edit request (sensitive: re-seals with the original item key + passes the sensitive-operation gate) */
 export interface UpdateCredentialDataRequest {
   credential_id: string;
   credential_data: CredentialDataRequest;
@@ -310,9 +313,10 @@ export type CredentialType = 'Password' | 'CryptoWallet' | 'SshKey' | 'ApiKey' |
 export type SecurityLevel = 'Critical' | 'High' | 'Medium' | 'Low';
 
 /**
- * 1Password 式凭据分类（侧栏"类别"分组 + 列表筛选）。
- * 每个分类映射到一组 credential_type（见 sidebarNav.ts CATEGORY_TYPES）；
- * 通行密钥不在此列——它存在独立的 passkeys 表里，由 { kind: 'passkeys' } 视图管理。
+ * 1Password-style credential categories (sidebar "Categories" group + list filtering).
+ * Each category maps to a set of credential_type values (see CATEGORY_TYPES in
+ * sidebarNav.ts); passkeys are not among them — they live in a separate passkeys
+ * table and are managed by the { kind: 'passkeys' } view.
  */
 export type CredentialCategory =
   | 'passwords'
@@ -324,7 +328,7 @@ export type CredentialCategory =
   | 'crypto_wallets'
   | 'game_tokens';
 
-/** 侧栏分类树的单选筛选态（默认 { kind: 'all' }；不做 localStorage 持久化） */
+/** Single-select filter state of the sidebar category tree (defaults to { kind: 'all' }; not persisted to localStorage) */
 export type SidebarFilter =
   | { kind: 'all' }
   | { kind: 'favorites' }
@@ -332,7 +336,7 @@ export type SidebarFilter =
   | { kind: 'category'; value: CredentialCategory }
   | { kind: 'identity'; value: string } // identity id
   | { kind: 'tag'; value: string }
-  // 特殊视图（不参与凭据筛选，直接渲染对应面板）
+  // Special views (excluded from credential filtering; render their own panel directly)
   | { kind: 'statistics' }
   | { kind: 'sshAgent' }
   | { kind: 'wallets' }
@@ -341,7 +345,8 @@ export type SidebarFilter =
   | { kind: 'generator' };
 
 /**
- * 待注入的凭据选中项（全局搜索跨身份跳转用）：QuickSearch 写入，
- * CredentialList 在目标身份的凭据加载完成后消费并清除。
+ * Pending credential selection to inject (used by global search to jump across
+ * identities): QuickSearch writes it, and CredentialList consumes and clears it
+ * once the target identity's credentials have loaded.
  */
 export type PendingCredentialSelection = { identityId: string; credentialId: string };

@@ -1,4 +1,5 @@
-//! `AppState` 与 `PairingSession`：Tauri 全局状态与同步组配对会话（内存态）。
+//! `AppState` and `PairingSession`: Tauri global state and the sync-group
+//! pairing session (in-memory state).
 
 use persona_core::*;
 use std::collections::HashMap;
@@ -8,98 +9,127 @@ use tokio::sync::Mutex;
 
 /// Application state that holds the Persona service
 ///
-/// `service` 用 `Arc` 包裹：auto-lock 回调在独立任务里触发落锁，
-/// 需要在不经过 Tauri `State` 的情况下持有同一份引用。
+/// `service` is wrapped in an `Arc`: the auto-lock callback triggers the
+/// lock from a separate task, which needs to hold the same reference without
+/// going through Tauri `State`.
 pub struct AppState {
     pub service: Arc<Mutex<Option<PersonaService>>>,
     pub db_path: Mutex<Option<String>>,
     pub agent_handle: Mutex<Option<JoinHandle<()>>>,
-    /// auto-lock 回调只注册一次（多次 init_service 时防重复）
+    /// The auto-lock callback is registered only once (guards against
+    /// duplicates across repeated init_service calls)
     pub auto_lock_registered: std::sync::atomic::AtomicBool,
-    /// passkey 审批服务端本会话已启动（workspace 开关门禁的幂等标记）
+    /// The passkey approval server has already been started this session
+    /// (idempotence marker behind the workspace switch gate)
     pub passkey_server_started: std::sync::atomic::AtomicBool,
-    /// passkey 审批服务端的关停通道（maybe_start 填充、关 flag 时消费发送；
-    /// None = 本会话未启动或已关停）
+    /// Shutdown channel for the passkey approval server (filled by
+    /// maybe_start, consumed and sent when the flag is turned off;
+    /// None = not started or already shut down this session)
     pub passkey_server_shutdown: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
-    /// 待应答的 SSH 签名审批（request_id → oneshot），由
-    /// DesktopApprovalHandler 写入、ssh_approval_respond 命令取出
+    /// Pending SSH signing approvals (request_id -> oneshot), written by
+    /// DesktopApprovalHandler and taken out by the ssh_approval_respond
+    /// command
     pub ssh_approvals: Arc<std::sync::Mutex<HashMap<String, tokio::sync::oneshot::Sender<bool>>>>,
-    /// 待应答的 bridge passkey 审批（request_id → oneshot），由
-    /// passkey_bridge 服务端写入、passkey_approval_respond 命令取出
+    /// Pending bridge passkey approvals (request_id -> oneshot), written by
+    /// the passkey_bridge server and taken out by the
+    /// passkey_approval_respond command
     pub passkey_approvals:
         Arc<std::sync::Mutex<HashMap<String, tokio::sync::oneshot::Sender<bool>>>>,
-    /// 审计事件同步上报器（settings.sync 配置驱动；None = 未启用）。
-    /// 槽位即真相源：重挂时先 stop 旧的再换新，防止双任务。注意这里
-    /// 用全路径——`tauri::Emitter`（事件 emit trait）占用了 `Emitter` 名。
+    /// Sync uploader for audit events (driven by settings.sync;
+    /// None = not enabled). The slot is the source of truth: on re-mount,
+    /// stop the old one before swapping in the new one, preventing two
+    /// tasks. Note the fully-qualified path here — `tauri::Emitter` (the
+    /// event emit trait) takes the `Emitter` name.
     pub sync_emitter: Mutex<Option<persona_core::events::Emitter>>,
-    /// sync token 的字段级加密存储（生产 = OS keyring，测试 = 内存
-    /// fake）。vault settings JSON 里的 `server_token` 恒为空串占位，
-    /// 真值只存在这里。
+    /// Field-level encrypted storage for the sync token (production = OS
+    /// keyring, tests = in-memory fake). The `server_token` in the vault
+    /// settings JSON is always an empty-string placeholder; the real value
+    /// lives only here.
     pub token_store: Arc<dyn crate::token_store::TokenStore>,
-    /// OS 级 biometric provider（Touch ID / Windows Hello / polkit）。
-    /// 解锁屏 ceremony 没有活的 PersonaService，provider 挂在这里；
-    /// init_service 建服务后把它注入 PersonaService（SSH agent 的
-    /// require_biometric 策略同一份）。
+    /// OS-level biometric provider (Touch ID / Windows Hello / polkit).
+    /// The unlock-screen ceremony has no live PersonaService, so the
+    /// provider is parked here; init_service injects it into PersonaService
+    /// after building the service (the same instance as the SSH agent's
+    /// require_biometric policy).
     pub biometric_provider: Arc<dyn BiometricProvider>,
-    /// 硬件绑定的密钥包裹器（`biometric_wrap` 模块 trait）。生产装配按
-    /// 平台选择：macOS 上 PERSONA_BIOMETRIC_SE_SPIKE=1 时为 Secure
-    /// Enclave 路线 B' 实现，其余平台/默认为 gate-only 桩（capability
-    /// OsGateOnly → enable 恒走门禁层密码托管，行为与历史版本一致）。
+    /// Hardware-bound key wrapper (the `biometric_wrap` module trait).
+    /// Production wiring is chosen per platform: with
+    /// PERSONA_BIOMETRIC_SE_SPIKE=1 on macOS this is the Secure Enclave
+    /// route B' implementation; on other platforms / by default it is a
+    /// gate-only stub (capability OsGateOnly -> enable always goes through
+    /// gate-layer password custody, same behavior as earlier versions).
     pub biometric_wrapper: Arc<dyn persona_core::BiometricKeyWrapper>,
-    /// biometric 托管主密码的 keyring 存储（service "persona-biometric"、
-    /// 键 = vault db_path）。条目存在与否 = biometric unlock 是否启用
-    /// （单一真相源，settings 不存开关——vault 文件拷机后 keyring 无
-    /// 条目，功能自然回到未启用）。
+    /// Keyring storage for the biometric-custodied master password (service
+    /// "persona-biometric", key = vault db_path). Whether the entry exists
+    /// says whether biometric unlock is enabled (single source of truth;
+    /// settings stores no switch — after copying the vault files to another
+    /// machine the keyring has no entry, so the feature naturally reverts to
+    /// disabled).
     pub biometric_store: Arc<dyn crate::token_store::TokenStore>,
-    /// 硬件绑定包裹 blob 的 keyring 存储（service
-    /// "persona-biometric-wrap"）。与 biometric_store 一样只存密文：
-    /// blob 是被平台硬件密钥包裹的主密钥，同用户进程读到了也打不开。
+    /// Keyring storage for the hardware-bound wrapper blob (service
+    /// "persona-biometric-wrap"). Like biometric_store it stores ciphertext
+    /// only: the blob is the master key wrapped by platform hardware keys,
+    /// unreadable even to a process reading it as the same user.
     pub biometric_wrap_store: Arc<dyn crate::token_store::TokenStore>,
-    /// Connect 本机自动化 listener 句柄（端口 + 关停通道）；None = 未
-    /// 启动（DR-4 默认关闭 = 不创建 listener）。槽位即真相源，start/stop
-    /// 换槽防双 listener。
+    /// Connect local-automation listener handle (port + shutdown channel);
+    /// None = not started (DR-4 default off = no listener created). The slot
+    /// is the source of truth; start/stop swap slots to avoid two listeners.
     pub connect_server: Mutex<Option<crate::connect_server::ConnectServerHandle>>,
-    /// E2EE sync 设备身份存储（生产 = OS keyring service `persona-device`，
-    /// 测试 = 内存 fake）。值 = `DeviceIdentity::to_stored_json`，键同
-    /// token_store = vault db_path。条目存在与否 = 本 vault 是否已加入
-    /// 同步（单一真相源，settings 不存开关）。
+    /// E2EE sync device identity storage (production = OS keyring service
+    /// `persona-device`, tests = in-memory fake). Value =
+    /// `DeviceIdentity::to_stored_json`, key as in token_store = vault
+    /// db_path. Whether the entry exists says whether this vault has joined
+    /// sync (single source of truth; settings stores no switch).
     pub device_store: Arc<dyn crate::token_store::TokenStore>,
-    /// 账号域 bearer 的 keyring 存储（service `persona-account`，键同
-    /// token_store = vault db_path）。`account_srp_verify` /
-    /// `account_create_session` 成功后写入，`account_revoke_session`
-    /// 自吊销时清除；Bearer 门禁的账号命令从这里解析（fail-closed）。
+    /// Keyring storage for the account-domain bearer (service
+    /// `persona-account`, key as in token_store = vault db_path). Written
+    /// after `account_srp_verify` / `account_create_session` succeeds and
+    /// cleared on self-revocation by `account_revoke_session`; the
+    /// bearer-gated account commands resolve it from here (fail-closed).
     pub account_token_store: Arc<dyn crate::token_store::TokenStore>,
-    /// Quick Access 全局热键的进程内运行态（实际抢注结果 + 失败原因）。
-    /// 绑定与开关的持久化真值在 workspace settings，本字段只反映"这一
-    /// 进程里 OS 抢注成功没有"——见 `quick_access` 模块注释。用 std Mutex
-    /// （同 ssh_approvals 槽位）：锁内只做字段读写，从不跨 await。
+    /// In-process runtime state of the Quick Access global hotkey (actual
+    /// grab result + failure reason). The persisted truth for the binding
+    /// and switch lives in workspace settings; this field only reflects
+    /// "whether the OS grab succeeded in this process" — see the
+    /// `quick_access` module notes. Uses a std Mutex (like the
+    /// ssh_approvals slot): only field reads/writes inside the lock, never
+    /// held across await.
     pub quick_access: std::sync::Mutex<crate::quick_access::QuickAccessRuntime>,
-    /// 桌面填充注入目标（FEATURE_GAP_ANALYSIS #12）：热键唤起检索浮窗时
-    /// 捕获的前台窗口快照（`desktop_fill::FillTarget`）。None = 尚未捕获/
-    /// 目标已失效/平台不支持。std Mutex：锁内只做快照读写，从不跨 await。
+    /// Desktop fill injection target (FEATURE_GAP_ANALYSIS #12): the
+    /// foreground window snapshot (`desktop_fill::FillTarget`) captured when
+    /// the hotkey summons the search popup. None = not captured yet / target
+    /// stale / platform unsupported. std Mutex: only snapshot reads/writes
+    /// inside the lock, never held across await.
     pub fill_target: std::sync::Mutex<Option<crate::desktop_fill::FillTarget>>,
-    /// 同步组配对进行中的会话（session_id → 会话态）。host 出码、guest
-    /// 输码各存一条；完成/取消即移除。动态密码派生值与 SRP 私有份额只在
-    /// 这里存活（内存态，不落盘）——见 `core/src/sync/pairing.rs` 模块
-    /// 注释。锁内只做 take/put，从不跨 await 持锁（drive/join 的网络等待
-    /// 都在锁外）。
+    /// In-flight sync-group pairing sessions (session_id -> session state).
+    /// The host code-issue side and the guest code-entry side each store one;
+    /// removed on completion/cancel. The dynamic-code derived value and the
+    /// SRP private shares live only here (in memory, never persisted) — see
+    /// the `core/src/sync/pairing.rs` module notes. Only take/put inside the
+    /// lock, never held across await (the network waits in drive/join all
+    /// happen outside the lock).
     pub pairing_sessions: Arc<std::sync::Mutex<HashMap<String, crate::types::PairingSession>>>,
-    /// 同步组组密钥的 keyring 存储（service `persona-sync-group`，键 =
-    /// vault db_path，值 = hex）。条目存在与否 = 本 vault 是否已加入同步
-    /// 组（单一真相源）；配对完成时写入，S2 指令流从这里读。
+    /// Keyring storage for the sync group key (service
+    /// `persona-sync-group`, key = vault db_path, value = hex). Whether the
+    /// entry exists says whether this vault has joined the sync group
+    /// (single source of truth); written when pairing completes and read by
+    /// the S2 command flow.
     pub sync_group_store: Arc<dyn crate::token_store::TokenStore>,
 }
 
-/// 同步组配对会话（host 出码 / guest 输码两种角色，内存态）。
+/// Sync-group pairing session (host code-issue / guest code-entry roles,
+/// in-memory state).
 pub enum PairingSession {
-    /// 邀请端：动态密码握手现场 + 待递交的组密钥（完成时落
-    /// sync_group_store）。GroupKey 带内存清零（Drop/ZeroizeOnDrop）。
+    /// Invite side: the dynamic-code handshake in place + the group key
+    /// awaiting delivery (landed in sync_group_store on completion).
+    /// GroupKey zeroes its memory (Drop/ZeroizeOnDrop).
     Host {
         host: persona_core::sync::pairing::PairingHost,
         group_key: persona_core::sync::keys::GroupKey,
         relay_url: String,
     },
-    /// 加入端：join_begin 与 join_confirm 之间持有（指纹比对通过后 confirm）。
+    /// Join side: held between join_begin and join_confirm (confirm after the
+    /// fingerprint comparison passes).
     Guest {
         guest: persona_core::sync::pairing::PairingGuest,
         relay_url: String,

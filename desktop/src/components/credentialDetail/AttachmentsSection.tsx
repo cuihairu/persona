@@ -8,7 +8,7 @@ import {
 } from '@heroicons/react/24/outline';
 import type { AttachmentEntry } from '@/types';
 
-/** 附件区（原 JSX 块平移）：列表、落盘与删除入口由父级状态驱动。 */
+/** Attachments section (the former JSX block moved as-is): the list, save-to-disk and delete entries are driven by parent state. */
 const AttachmentsSection: React.FC<{
   attachments: AttachmentEntry[];
   isAttachmentBusy: boolean;
@@ -24,7 +24,7 @@ const AttachmentsSection: React.FC<{
 }) => {
   const { t } = useTranslation();
 
-// Attachments（1Password 对齐）：附件经凭据 item key 加密封存
+// Attachments (1Password parity): attachments are sealed with the credential item key
   return (
     <div className="border-t pt-3">
       <div className="flex items-center justify-between">
@@ -100,7 +100,7 @@ const AttachmentsSection: React.FC<{
   );
 };
 
-/** 人类可读的附件大小（B → KB → MB） */
+/** Human-readable attachment size (B → KB → MB) */
 function formatFileSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;

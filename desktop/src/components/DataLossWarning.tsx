@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { ExclamationTriangleIcon } from '@heroicons/react/24/outline';
 import { useDataLossRisk } from '@/hooks/useDataLossRisk';
 
-/** 滚动到目标设置节（自救动作的跳转；目标节都在同一 GeneralPane 里）。 */
+/** Scrolls to the target settings section (jump target of the self-rescue actions; all target sections live in the same GeneralPane). */
 function scrollToSection(testid: string): void {
   document
     .querySelector(`[data-testid="${testid}"]`)
@@ -11,14 +11,17 @@ function scrollToSection(testid: string): void {
 }
 
 /**
- * 数据丢失强提示（S5-b，设计稿 §6.5 硬要求）。
+ * Data loss strong prompt (S5-b, a hard requirement of the design spec §6.5).
  *
- * - `strong`：同步组「首次启用」场景的在位强提示（挂在入组成功块内），
- *   文案明示两种救法（④）：再连一台设备，或立即导出加密备份。
- * - `banner`：设置页顶部常驻横幅（②红点常驻，不做一次性弹窗）。
+ * - `strong`: the in-place strong prompt for the sync group "first enable" scenario
+ *   (nested inside the join-success block); the copy spells out the two ways out (④):
+ *   connect another device, or export an encrypted backup right away.
+ * - `banner`: the resident banner at the top of the settings page
+ *   (② the red dot stays resident; no one-shot dialog).
  *
- * 档位与解除全部由 [`useDataLossRisk`] 驱动：第二台设备到位或已导出
- * 备份自动解除（③）；账号绑定降一档（有找回路径）。
+ * The level and its clearing are all driven by [`useDataLossRisk`]: a second device
+ * in place or a backup already exported clears it automatically (③); a bound account
+ * drops the level by one (a recovery path exists).
  */
 const DataLossWarning: React.FC<{ variant?: 'strong' | 'banner' }> = ({
   variant = 'banner',
@@ -28,8 +31,9 @@ const DataLossWarning: React.FC<{ variant?: 'strong' | 'banner' }> = ({
 
   if (loading || level === 'none') return null;
   const high = level === 'high';
-  // 关了跨设备同步但数据仍在组内（keyring 事实）：如实地指回开启入口，
-  // 不因为偏好关了就收起风险警示（档位判定不随偏好降级）。
+  // Cross-device sync is off but the data still lives in the group (a keyring fact): point back at the
+  // enable entry honestly, and do not withdraw the risk warning just because the preference is off
+  // (the level decision does not degrade with the preference).
   const syncDisabledNote = !crossDeviceSyncEnabled ? (
     <p
       className="text-xs text-gray-600 dark:text-gray-300 mt-1"

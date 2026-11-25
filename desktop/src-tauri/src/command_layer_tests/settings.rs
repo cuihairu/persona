@@ -10,7 +10,7 @@ async fn workspace_settings_round_trip_through_get_and_set_feature_flags() {
     let app = mock_app();
     init_service_ok(&app, "master-pw-123").await;
 
-    // 全新 vault：flags 默认全关，其余字段保持 core 默认
+    // A brand-new vault: flags are all off by default, the remaining fields keep the core defaults
     let resp = get_workspace_settings(app.state::<AppState>())
         .await
         .unwrap();
@@ -23,7 +23,7 @@ async fn workspace_settings_round_trip_through_get_and_set_feature_flags() {
     assert!(settings.encryption_enabled);
     assert_eq!(settings.session_timeout_seconds, 3600);
 
-    // 窄写 features，返回更新后的全量 settings
+    // A narrow write of features, returning the full updated settings
     let resp = set_feature_flags(
         true,
         true,
@@ -41,14 +41,14 @@ async fn workspace_settings_round_trip_through_get_and_set_feature_flags() {
     assert!(settings.features.passkeys);
     assert!(settings.features.fetch_favicons);
 
-    // get 反映持久化结果
+    // get reflects the persisted result
     let resp = get_workspace_settings(app.state::<AppState>())
         .await
         .unwrap();
     let settings = resp.data.expect("settings present");
     assert!(settings.features.ssh_agent);
 
-    // 部分开启：只动 features 四个位
+    // Partial enablement: only the four feature bits change
     let resp = set_feature_flags(
         true,
         false,
@@ -69,7 +69,7 @@ async fn workspace_settings_round_trip_through_get_and_set_feature_flags() {
 async fn set_feature_flags_requires_unlocked_service() {
     let app = mock_app();
 
-    // 未初始化：set 拒绝
+    // Not initialized: set is rejected
     let resp = set_feature_flags(
         true,
         false,
@@ -85,7 +85,7 @@ async fn set_feature_flags_requires_unlocked_service() {
 
     init_service_ok(&app, "master-pw-123").await;
 
-    // get 免解锁约束（解锁屏也要按 flags 裁剪 UI），set 需要解锁
+    // get has no unlock requirement (the unlock screen must also tailor its UI to the flags); set requires being unlocked
     lock_service(app.state::<AppState>()).await.unwrap();
     let resp = get_workspace_settings(app.state::<AppState>())
         .await
@@ -105,14 +105,15 @@ async fn set_feature_flags_requires_unlocked_service() {
     assert!(!resp.success);
     assert_eq!(resp.error.as_deref(), Some("Service is locked"));
 }
-/// set_feature_flags 的开关联动：开 passkeys → 审批服务端本会话即时拉起
-/// （不再等 lock→unlock）；关 passkeys → 发送关停信号、复位幂等标记、
-/// 丢弃残留审批；关 ssh_agent → 运行中的 agent 被停止。
+/// The switch coupling of set_feature_flags: turning passkeys on pulls up the
+/// approval server in this very session (no longer waiting for lock->unlock);
+/// turning passkeys off sends the shutdown signal, resets the idempotency flag,
+/// and drops any leftover approvals; turning ssh_agent off stops a running agent.
 #[tokio::test]
 async fn set_feature_flags_toggles_passkey_server_and_ssh_agent_lifecycle() {
     use std::sync::atomic::Ordering;
 
-    // 联动启动会真 spawn 服务端 bind 真 socket：重定向 agent state dir
+    // The coupled startup really spawns the server and binds a real socket: redirect the agent state dir
     let state_dir = tempfile::tempdir().unwrap();
     let _guard = StateDirGuard::sandbox(&state_dir);
 
@@ -120,7 +121,7 @@ async fn set_feature_flags_toggles_passkey_server_and_ssh_agent_lifecycle() {
     init_service_ok(&app, "master-pw-123").await;
     let state = app.state::<AppState>();
 
-    // 开 passkeys + ssh_agent：即时拉起（fresh vault 默认全关，prev 全 false）
+    // Turn on passkeys + ssh_agent: pulled up immediately (a fresh vault has everything off by default, so prev is all false)
     let resp = set_feature_flags(
         true,
         false,
@@ -141,7 +142,7 @@ async fn set_feature_flags_toggles_passkey_server_and_ssh_agent_lifecycle() {
         "shutdown sender must be stored for the started server"
     );
 
-    // 造残留状态：一条未应答审批 + 一个运行中的 agent handle + confirm env
+    // Manufacture leftover state: one unanswered approval + one running agent handle + confirm env
     let (stale_tx, _stale_rx) = tokio::sync::oneshot::channel();
     state
         .passkey_approvals
@@ -158,7 +159,7 @@ async fn set_feature_flags_toggles_passkey_server_and_ssh_agent_lifecycle() {
     *state.agent_handle.lock().await = Some(agent_task);
     std::env::set_var("PERSONA_AGENT_REQUIRE_CONFIRM", "1");
 
-    // 关 passkeys + ssh_agent：联动停止
+    // Turn off passkeys + ssh_agent: the coupled stop
     let resp = set_feature_flags(
         false,
         false,
@@ -209,7 +210,7 @@ async fn workspace_settings_commands_fail_without_db_path() {
         Some("Database path unavailable. Initialize the service first.")
     );
 
-    // set 在解锁检查处先拒绝（Service not initialized）
+    // set is rejected first, at the unlock check (Service not initialized)
     let resp = set_feature_flags(
         true,
         true,
@@ -223,7 +224,7 @@ async fn workspace_settings_commands_fail_without_db_path() {
     assert!(!resp.success);
     assert_eq!(resp.error.as_deref(), Some("Service not initialized"));
 
-    // token 存在性查询同样要 db_path
+    // The token existence query needs db_path as well
     let resp = sync_token_present(app.state::<AppState>()).await.unwrap();
     assert!(!resp.success);
     assert_eq!(
@@ -235,7 +236,7 @@ async fn workspace_settings_commands_fail_without_db_path() {
 async fn favicon_commands_gate_on_service_state_and_flag() {
     let app = mock_app();
 
-    // 未初始化：fetch 报错、get 静默空数组
+    // Not initialized: fetch reports an error, get silently returns an empty array
     let resp = fetch_credential_favicon(
         "00000000-0000-0000-0000-000000000000".to_string(),
         app.state::<AppState>(),
@@ -249,7 +250,7 @@ async fn favicon_commands_gate_on_service_state_and_flag() {
     assert!(resp.success, "{:?}", resp.error);
     assert!(resp.data.unwrap().is_empty());
 
-    // 锁定：fetch 报锁、get 静默空数组
+    // Locked: fetch reports the lock, get silently returns an empty array
     init_service_ok(&app, "master-pw-123").await;
     lock_service(app.state::<AppState>()).await.unwrap();
     let resp = fetch_credential_favicon(
@@ -265,7 +266,7 @@ async fn favicon_commands_gate_on_service_state_and_flag() {
     assert!(resp.success, "{:?}", resp.error);
     assert!(resp.data.unwrap().is_empty());
 
-    // 解锁但 flag 关（默认）：fetch 被后端兜底拒绝、get 静默空数组
+    // Unlocked but the flag is off (default): fetch is rejected by the backend's backstop, get silently returns an empty array
     init_service_ok(&app, "master-pw-123").await;
     let resp = fetch_credential_favicon(
         "00000000-0000-0000-0000-000000000000".to_string(),
@@ -287,7 +288,7 @@ async fn favicon_commands_gate_on_service_state_and_flag() {
 async fn favicon_commands_validate_input_and_read_cache_locally_when_flag_enabled() {
     let (app, identity_id) = app_with_identity().await;
 
-    // flag 关时藏按钮不够——这里显式开后端才放行后续用例
+    // Hiding the button while the flag is off is not enough — here the backend is explicitly turned on before the later cases are allowed
     let resp = set_feature_flags(
         false,
         false,
@@ -300,13 +301,13 @@ async fn favicon_commands_validate_input_and_read_cache_locally_when_flag_enable
     .unwrap();
     assert!(resp.success, "{:?}", resp.error);
 
-    // 坏 UUID → Invalid UUID format（flag 检查通过后才轮到参数校验）
+    // Bad UUID -> Invalid UUID format (parameter validation only happens after the flag check passes)
     let resp = fetch_credential_favicon("nope".to_string(), app.state::<AppState>())
         .await
         .unwrap();
     assert_eq!(resp.error.as_deref(), Some("Invalid UUID format"));
 
-    // flag 开 + 凭据无 url → 拒绝（绝不外联）
+    // Flag on + a credential without a url -> rejected (never contacts the outside)
     let mut req = password_credential_request(&identity_id);
     req.url = None;
     let resp = create_credential(req, app.state::<AppState>())
@@ -324,7 +325,7 @@ async fn favicon_commands_validate_input_and_read_cache_locally_when_flag_enable
         resp.error
     );
 
-    // flag 开的批量读是纯本地：空 hosts / 未缓存 host 都回成功 + 空数组
+    // The bulk read with the flag on is purely local: empty hosts / an uncached host both return success + an empty array
     let resp = get_favicons(Vec::new(), app.state::<AppState>())
         .await
         .unwrap();
@@ -343,21 +344,21 @@ async fn favicon_commands_validate_input_and_read_cache_locally_when_flag_enable
 async fn set_locale_rejects_bad_values_and_gates_on_lock() {
     let app = mock_app();
 
-    // 非法 locale 优先拒绝（无需初始化——参数校验先于解锁门禁）
+    // An invalid locale is rejected first (no initialization needed — parameter validation precedes the unlock gate)
     let resp = set_locale("fr".to_string(), app.state::<AppState>())
         .await
         .unwrap();
     assert!(!resp.success);
     assert_eq!(resp.error.as_deref(), Some("Unsupported locale: fr"));
 
-    // 未初始化：Service not initialized
+    // Not initialized: Service not initialized
     let resp = set_locale("en".to_string(), app.state::<AppState>())
         .await
         .unwrap();
     assert!(!resp.success);
     assert_eq!(resp.error.as_deref(), Some("Service not initialized"));
 
-    // 已初始化但锁定：Service is locked
+    // Initialized but locked: Service is locked
     init_service_ok(&app, "correct-horse").await;
     lock_service(app.state::<AppState>()).await.unwrap();
     let resp = set_locale("en".to_string(), app.state::<AppState>())
@@ -379,7 +380,7 @@ async fn set_locale_round_trips_zh_cn_and_en() {
         let settings = resp.data.expect("updated settings");
         assert_eq!(settings.locale.as_deref(), Some(locale));
 
-        // get 反映持久化结果（新连接读库，非进程内缓存）
+        // get reflects the persisted result (a fresh connection reads the db, not an in-process cache)
         let resp = get_workspace_settings(app.state::<AppState>())
             .await
             .unwrap();
@@ -391,8 +392,9 @@ async fn set_locale_round_trips_zh_cn_and_en() {
 async fn set_tray_locale_is_harmless_noop_without_tray() {
     let app = mock_app();
 
-    // 测试环境无托盘（tray_by_id 找不到）：应报成功而非报错——降级运行不该
-    // 把语言切换炸红
+    // No tray in the test environment (tray_by_id finds nothing): it must report
+    // success, not an error — running in degraded mode must not turn the language
+    // switch red
     let labels = crate::TrayLocaleLabels {
         open: "Open Persona".to_string(),
         quick_access: "Quick Access".to_string(),
@@ -404,8 +406,8 @@ async fn set_tray_locale_is_harmless_noop_without_tray() {
     assert!(resp.success);
     assert_eq!(resp.data, Some(true));
 }
-/// `set_account_binding`：写 vault JSON（get_workspace_settings 直出可读），
-/// None 解绑；锁户拒绝。
+/// `set_account_binding`: writes the vault JSON (directly readable from
+/// get_workspace_settings); None unbinds; a locked account is rejected.
 #[tokio::test]
 async fn set_account_binding_round_trips_through_workspace_settings() {
     let app = mock_app();
@@ -426,12 +428,12 @@ async fn set_account_binding_round_trips_through_workspace_settings() {
     let resp = get_workspace_settings(state.clone()).await.unwrap();
     assert_eq!(resp.data.unwrap().account, Some(binding.clone()));
 
-    // 解绑
+    // Unbind
     let resp = set_account_binding(None, state.clone()).await.unwrap();
     assert!(resp.success, "{:?}", resp.error);
     assert_eq!(resp.data.unwrap().account, None);
 
-    // 锁户拒绝
+    // Rejected when locked
     let resp = lock_service(state.clone()).await.unwrap();
     assert!(resp.success, "{:?}", resp.error);
     let resp = set_account_binding(Some(binding), state.clone())

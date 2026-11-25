@@ -30,7 +30,7 @@ async fn connect_token_commands_round_trip_create_list_revoke() {
     let app = mock_app();
     init_service_ok(&app, "correct-horse").await;
 
-    // create：明文 token 只在响应里出现一次，info 视图剥哈希
+    // create: the plaintext token appears only once, in the response; the info view strips the hash
     let resp = connect_token_create(
         app.state::<AppState>(),
         "desktop-pairing".to_string(),
@@ -45,7 +45,7 @@ async fn connect_token_commands_round_trip_create_list_revoke() {
     assert_eq!(created.info.fingerprint.len(), 16);
     assert!(created.info.revoked_at.is_none());
 
-    // list：刚创建的 token 处于 active 态
+    // list: the just-created token is in the active state
     let resp = connect_token_list(app.state::<AppState>()).await.unwrap();
     assert!(resp.success, "{:?}", resp.error);
     let rows = resp.data.expect("token rows");
@@ -53,7 +53,7 @@ async fn connect_token_commands_round_trip_create_list_revoke() {
     assert_eq!(rows[0].id, created.info.id);
     assert!(rows[0].revoked_at.is_none());
 
-    // revoke：合法 UUID 生效；重复吊销幂等返回 false
+    // revoke: a valid UUID takes effect; revoking twice is idempotent and returns false
     let resp = connect_token_revoke(app.state::<AppState>(), created.info.id.clone())
         .await
         .unwrap();
@@ -65,12 +65,12 @@ async fn connect_token_commands_round_trip_create_list_revoke() {
     assert!(resp.success, "{:?}", resp.error);
     assert_eq!(resp.data, Some(false));
 
-    // list：revoked_at 已盖章
+    // list: revoked_at is stamped
     let resp = connect_token_list(app.state::<AppState>()).await.unwrap();
     let rows = resp.data.expect("token rows");
     assert!(rows[0].revoked_at.is_some());
 
-    // revoke：非法 UUID 走参数错误分支
+    // revoke: an invalid UUID goes down the argument-error branch
     let resp = connect_token_revoke(app.state::<AppState>(), "not-a-uuid".to_string())
         .await
         .unwrap();
@@ -88,7 +88,7 @@ async fn connect_token_commands_round_trip_create_list_revoke() {
 async fn connect_server_start_requires_unlocked_vault() {
     let app = mock_app();
 
-    // 未初始化：unlocked 检查走 None → false，同样落 SERVICE_LOCKED 门禁
+    // Not initialized: the unlocked check takes the None -> false path, which also lands on the SERVICE_LOCKED gate
     let resp = connect_server_start(app.state::<AppState>(), None)
         .await
         .unwrap();
@@ -98,7 +98,7 @@ async fn connect_server_start_requires_unlocked_vault() {
         Some(crate::error::CODE_SERVICE_LOCKED)
     );
 
-    // 已初始化但锁定：is_unlocked() = false → 同一门禁
+    // Initialized but locked: is_unlocked() = false -> the same gate
     init_service_ok(&app, "correct-horse").await;
     lock_service(app.state::<AppState>()).await.unwrap();
     let resp = connect_server_start(app.state::<AppState>(), None)
@@ -123,7 +123,7 @@ async fn connect_server_start_status_stop_lifecycle_round_trip() {
     let app = mock_app();
     init_service_ok(&app, "correct-horse").await;
 
-    // 空态 status：未运行、无端口
+    // Idle status: not running, no port
     let resp = connect_server_status(app.state::<AppState>())
         .await
         .unwrap();
@@ -132,7 +132,7 @@ async fn connect_server_start_status_stop_lifecycle_round_trip() {
     assert!(!status.running);
     assert_eq!(status.port, None);
 
-    // 启动（None = OS 分配端口）：127.0.0.1 bind，真实端口非 0
+    // Start (None = OS-assigned port): binds 127.0.0.1 with a real non-zero port
     let resp = connect_server_start(app.state::<AppState>(), None)
         .await
         .unwrap();
@@ -142,7 +142,7 @@ async fn connect_server_start_status_stop_lifecycle_round_trip() {
     let port = status.port.expect("OS-assigned port");
     assert_ne!(port, 0);
 
-    // 已运行再 start：明确报错（前端按 status 渲染，不该走到这）
+    // start while already running: an explicit error (the frontend renders from status, so it should never hit this)
     let resp = connect_server_start(app.state::<AppState>(), Some(port))
         .await
         .unwrap();
@@ -156,7 +156,7 @@ async fn connect_server_start_status_stop_lifecycle_round_trip() {
         resp.error
     );
 
-    // status 反映运行态
+    // status reflects the running state
     let resp = connect_server_status(app.state::<AppState>())
         .await
         .unwrap();
@@ -164,7 +164,7 @@ async fn connect_server_start_status_stop_lifecycle_round_trip() {
     assert!(status.running);
     assert_eq!(status.port, Some(port));
 
-    // stop → 停止并复位；再 stop 幂等；status 回到空态
+    // stop -> stops and resets; a second stop is idempotent; status returns to the idle state
     let resp = connect_server_stop(app.state::<AppState>()).await.unwrap();
     assert!(resp.success);
     let status = resp.data.expect("stopped status");
@@ -182,8 +182,8 @@ async fn connect_server_start_status_stop_lifecycle_round_trip() {
 }
 #[tokio::test]
 async fn connect_token_commands_surface_locked_and_db_errors() {
-    // 锁定的真实库：core 抛 AuthenticationFailed("Service is locked")
-    // → map_persona_error 命中 SERVICE_LOCKED（Some(code) 臂）
+    // Locked real vault: core throws AuthenticationFailed("Service is locked")
+    // -> map_persona_error hits SERVICE_LOCKED (the Some(code) arm)
     let app = mock_app();
     init_service_ok(&app, "correct-horse").await;
     lock_service(app.state::<AppState>()).await.unwrap();
@@ -205,7 +205,7 @@ async fn connect_token_commands_surface_locked_and_db_errors() {
         Some(crate::error::CODE_SERVICE_LOCKED)
     );
 
-    // 垃圾库：repo 层 sqlite 错误 → 无错误码（None 臂），三命令都降级
+    // Garbage vault: a repo-layer sqlite error -> no error code (the None arm); all three commands degrade
     let app = app_with_garbage_db_service().await;
     let resp = connect_token_list(app.state::<AppState>()).await.unwrap();
     assert!(!resp.success);

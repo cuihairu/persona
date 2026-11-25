@@ -1,23 +1,30 @@
-//! 云盘同步目录变更 watcher（宿主侧）。
+//! Watcher for changes in the cloud sync directory (host side).
 //!
-//! 同步引擎是 pull-driven：没有任何机制在远端把新 op 写进云盘目录后
-//! 主动触发本机同步。本模块补上这条「远端变更 → 触发 run_cycle」链路：
-//! 监听 `cloud_drive_dir` 的协议文件（`dev-*.jsonl` / `snapshot-*` /
-//! `env-*` / `registry.json`）变更，去抖（5s 主循环即天然去抖）后跑一轮
-//! 同步周期。
+//! The sync engine is pull-driven: nothing actively triggers a local sync once
+//! the remote writes a new op into the cloud drive directory. This module
+//! supplies that "remote change -> trigger run_cycle" link: it watches the
+//! protocol files in `cloud_drive_dir` (`dev-*.jsonl` / `snapshot-*` /
+//! `env-*` / `registry.json`) and, after debouncing (the 5s main loop is
+//! natural debounce), runs one sync cycle.
 //!
-//! 两条触发源：
-//! - **`notify`（主）**：目录级文件系统事件。目录在网络文件系统（inotify
-//!   不触发）或 watch 启动失败时自动降级——只留下轮询。
-//! - **mtime 指纹轮询（兜底，恒开）**：每 30s 对协议文件做
-//!   `(mtime_ns, size)` 指纹，变了才触发。notify 失效时靠它收敛。
+//! Two trigger sources:
+//! - **`notify` (primary)**: directory-level filesystem events. On a network
+//!   filesystem (inotify does not fire) or when the watch fails to start, it
+//!   degrades automatically — only polling is left.
+//! - **mtime fingerprint polling (fallback, always on)**: every 30s it takes a
+//!   `(mtime_ns, size)` fingerprint of the protocol files and triggers only on
+//!   change. This is what converges things when notify fails.
 //!
-//! 反馈抑制：周期里本机 push 会写自己的分片 → 又触发一轮。周期结束后把
-//! 基线刷到当前指纹，使自写不产生连锁（下一轮周期无事可推即停）。
+//! Feedback suppression: the local push during a cycle writes its own shard ->
+//! which triggers another cycle. After the cycle ends the baseline is refreshed
+//! to the current fingerprint, so self-writes do not chain (the next cycle has
+//! nothing to push and stops).
 //!
-//! core 保持依赖无关——watcher 只在 desktop 宿主（`notify` 是本 crate
-//! 的依赖，不进 core）。周期编排复用 [`crate::commands::sync::sync_cycle_once`]，
-//! 门禁（解锁/已入组/云盘目录已配）都在那里，watcher 只负责触发。
+//! core stays dependency-free — the watcher lives only in the desktop host
+//! (`notify` is a dependency of this crate, not of core). Cycle orchestration
+//! reuses [`crate::commands::sync::sync_cycle_once`], and the gates
+//! (unlocked / joined / cloud drive directory configured) all live there; the
+//! watcher only triggers.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -29,8 +36,8 @@ use tauri::{AppHandle, Manager};
 use crate::commands::{sync_cycle_once, sync_transport_config};
 use crate::types::AppState;
 
-/// 协议文件名谓词：只有云盘同步协议文件值得触发周期（用户放进去的
-/// 无关文件不惊动同步）。
+/// Protocol-file name predicate: only cloud sync protocol files are worth
+/// triggering a cycle (unrelated files the user drops in must not disturb sync).
 fn is_protocol_file(path: &Path) -> bool {
     let name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
     (name.starts_with("dev-") && name.ends_with(".jsonl"))
@@ -39,8 +46,9 @@ fn is_protocol_file(path: &Path) -> bool {
         || name == "registry.json"
 }
 
-/// 协议文件的 mtime/size 指纹（name → (mtime_ns, len)）。目录不存在 /
-/// 读失败 = 空表（安全侧：空表变化会触发一轮，不会漏）。
+/// The mtime/size fingerprint of protocol files (name -> (mtime_ns, len)).
+/// Directory missing / read failure = empty table (safe side: an empty-table
+/// change triggers a round, so nothing is missed).
 async fn fingerprint(dir: &Path) -> BTreeMap<String, (u64, u64)> {
     let mut out = BTreeMap::new();
     let mut entries = match tokio::fs::read_dir(dir).await {
@@ -67,13 +75,16 @@ async fn fingerprint(dir: &Path) -> BTreeMap<String, (u64, u64)> {
     out
 }
 
-/// 一个云盘目录的监听器：notify（尽力而为）+ 轮询指纹 + 周期触发。
+/// A watcher for one cloud drive directory: notify (best effort) + fingerprint
+/// polling + cycle triggering.
 struct DirWatcher<R: tauri::Runtime> {
     dir: PathBuf,
     app: AppHandle<R>,
-    /// notify 事件信号（协议文件变更 → 置位；去抖在主循环）。
+    /// notify event signal (protocol file changed -> set; debouncing happens in
+    /// the main loop)
     notify_events: tokio::sync::mpsc::UnboundedReceiver<()>,
-    /// notify 监听器本体（None = notify 不可用/启动失败，只留轮询）。
+    /// The notify watcher itself (None = notify unavailable / failed to start,
+    /// polling only)
     _notify: Option<notify::RecommendedWatcher>,
     baseline: BTreeMap<String, (u64, u64)>,
     last_poll: Instant,
@@ -82,8 +93,9 @@ struct DirWatcher<R: tauri::Runtime> {
 
 impl<R: tauri::Runtime> DirWatcher<R> {
     fn new(app: AppHandle<R>, dir: PathBuf) -> Self {
-        // notify 尽力而为：目录不存在 / 平台不支持 / 网络文件系统 →
-        // None，轮询兜底（日志记录降级原因，不阻断）。
+        // notify is best effort: directory missing / unsupported platform /
+        // network filesystem -> None, polling fallback (the log records the
+        // degradation reason without blocking).
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
         let notify =
             notify::recommended_watcher(move |res: Result<notify::Event, notify::Error>| {
@@ -117,16 +129,19 @@ impl<R: tauri::Runtime> DirWatcher<R> {
         }
     }
 
-    /// 跑一轮（主循环每 5s 调一次）：排空 notify 信号 + 到点轮询指纹 →
-    /// 有变更则触发周期（防重入）。
+    /// Run one round (called every 5s by the main loop): drain the notify
+    /// signals + poll fingerprints when due -> trigger a cycle if anything
+    /// changed (re-entrancy guarded).
     async fn tick(&mut self) {
         let mut changed = false;
-        // 排空 notify 事件（主循环 5s 一次即天然去抖：周期只在排空时跑，
-        // 突发变更折叠成一轮）
+        // Drain the notify events (the main loop's 5s cadence is natural
+        // debounce: the cycle only runs when drained, so a burst of changes
+        // collapses into one round)
         while self.notify_events.try_recv().is_ok() {
             changed = true;
         }
-        // 轮询兜底：每 30s 对协议文件做指纹，变了才触发
+        // Polling fallback: every 30s, fingerprint the protocol files and
+        // trigger only on change
         if self.last_poll.elapsed() >= Duration::from_secs(30) {
             self.last_poll = Instant::now();
             let fp = fingerprint(&self.dir).await;
@@ -159,28 +174,32 @@ impl<R: tauri::Runtime> DirWatcher<R> {
                 );
             }
             Err(e) => {
-                // 常见是「已锁定/未入组/目录未配置」——这些不是故障，
-                // 门禁在 sync_cycle_once 内，静默（debug 级）即可。
+                // Usually "locked / not joined / directory not configured" — these
+                // are not faults; the gates live inside sync_cycle_once, so staying
+                // quiet (debug level) is fine.
                 tracing::debug!(error = %e, "cloud watcher sync cycle skipped");
             }
         }
-        // 周期后基线刷新：本机 push 写的分片不再触发下一轮（自写反馈
-        // 抑制——下一轮无事可推即停）。
+        // Refresh the baseline after the cycle: the shards written by our own
+        // push no longer trigger the next round (self-write feedback
+        // suppression — the next round has nothing to push and stops).
         self.baseline = fingerprint(&self.dir).await;
     }
 }
 
-/// 启动云盘 watcher 总监督（应用 setup 时一次）。单任务循环：每 5s 重评
-/// 配置（transport/dir 是否 cloud + 目录是否变化），维护一个 [`DirWatcher`]。
-/// 任务随进程退出自然终止；无需 stop 句柄——watcher 只在 cloud 传输配置
-/// 且目录存在时做实事，其余时间空转（一个轻量配置读取）。
+/// Spawn the cloud-drive watcher supervisor (once at app setup). A single task
+/// loop: every 5s re-evaluate the config (whether transport/dir is cloud +
+/// whether the directory changed) and maintain a [`DirWatcher`].
+/// The task ends naturally when the process exits; no stop handle is needed —
+/// the watcher only does real work while the cloud transport is configured and
+/// the directory exists, and idles otherwise (one lightweight config read).
 pub(crate) fn spawn_sync_watcher<R: tauri::Runtime>(app: AppHandle<R>) {
     tauri::async_runtime::spawn(async move {
         let mut watcher: Option<DirWatcher<R>> = None;
         let mut last_dir: Option<PathBuf> = None;
         loop {
-            // 当前配置（transport + dir）。db_path 未初始化 = 默认 Server
-            // → 不 watch。
+            // Current config (transport + dir). An uninitialized db_path = default
+            // Server -> do not watch.
             let (is_cloud, dir) = {
                 let state = app.state::<AppState>();
                 let (transport, cloud_dir) = sync_transport_config(&state).await;
@@ -189,8 +208,9 @@ pub(crate) fn spawn_sync_watcher<R: tauri::Runtime>(app: AppHandle<R>) {
                     cloud_dir.filter(|d| !d.trim().is_empty()),
                 )
             };
-            // 传输/目录变化 → 重建（或停掉）监听器。目录为空/未配置/
-            // 非 cloud → 停（watcher=None），配置回来再起。
+            // Transport/directory changed -> rebuild (or stop) the watcher. An
+            // empty/unconfigured/non-cloud directory -> stop (watcher=None), and
+            // start again once the config returns.
             let desired: Option<PathBuf> = if is_cloud {
                 dir.map(PathBuf::from)
             } else {
@@ -219,7 +239,7 @@ mod tests {
         assert!(is_protocol_file(Path::new("/d/env-abc.bin")));
         assert!(is_protocol_file(Path::new("/d/env-abc.json")));
         assert!(is_protocol_file(Path::new("/d/registry.json")));
-        // 用户放进目录的无关文件不触发同步
+        // Unrelated files dropped into the directory do not trigger sync
         assert!(!is_protocol_file(Path::new("/d/photo.jpg")));
         assert!(!is_protocol_file(Path::new("/d/readme.txt")));
         assert!(!is_protocol_file(Path::new("/d/dev-abc.txt")));
@@ -237,7 +257,8 @@ mod tests {
         let dev = fp.get("dev-a.jsonl").expect("dev 分片入指纹");
         assert_eq!(dev.1, 6, "size = 分片行字节数");
 
-        // 目录不存在 = 空指纹（安全侧：与任何状态比较都会触发一轮，不漏）
+        // Directory missing = empty fingerprint (safe side: comparing against any
+        // state triggers a round, so nothing is missed)
         assert!(fingerprint(Path::new("/definitely/not/here"))
             .await
             .is_empty());
@@ -249,18 +270,19 @@ mod tests {
         std::fs::write(dir.path().join("dev-a.jsonl"), b"v1").unwrap();
         let before = fingerprint(dir.path()).await;
 
-        // 无操作 → 稳定（轮询不触发）
+        // No-op -> stable (polling does not trigger)
         std::thread::sleep(std::time::Duration::from_millis(2));
         assert_eq!(fingerprint(dir.path()).await, before);
 
-        // 写入（内容或大小变化）→ 指纹不同（轮询会触发周期）
+        // A write (content or size change) -> different fingerprint (polling
+        // will trigger a cycle)
         std::fs::write(dir.path().join("dev-a.jsonl"), b"v1 plus").unwrap();
         std::fs::write(dir.path().join("dev-b.jsonl"), b"new shard").unwrap();
         let after = fingerprint(dir.path()).await;
         assert_ne!(after, before);
         assert_eq!(after.len(), 2);
 
-        // 文件删除 → 指纹不同（收敛检测）
+        // File deletion -> different fingerprint (convergence detection)
         std::fs::remove_file(dir.path().join("dev-b.jsonl")).unwrap();
         let removed = fingerprint(dir.path()).await;
         assert_ne!(removed, after);

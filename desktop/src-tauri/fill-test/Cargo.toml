@@ -5,16 +5,19 @@ description = "Persona desktop fill injection cross-process test suite (test-onl
 license = "MIT"
 edition = "2021"
 
-# 独立 test-only crate 的原因：跨进程注入套件需要在链接期嵌入
-# comctl32 v6 manifest（RUSTFLAGS /MANIFEST:EMBED，裸测试二进制无内嵌
-# manifest 会在加载器绑 comctl32 5.x 时 STATUS_ENTRYPOINT_NOT_FOUND，
-# 见 windows/app.manifest 与 commit 745dca2）。若把集成测试留在
-# persona-desktop 包内，cargo test 会连包内全部 bin（含内嵌了 manifest
-# 资源的 tauri 主程序）一起链接，触发 CVT1100 资源重复（MANIFEST,
-# 1, 0x0409）。独立包只构建测试与靶进程 bin，与主包 manifest 互不干扰。
+# Why this is a standalone test-only crate: the cross-process injection suite
+# needs a comctl32 v6 manifest embedded at link time (RUSTFLAGS
+# /MANIFEST:EMBED; a bare test binary without an embedded manifest gets
+# STATUS_ENTRYPOINT_NOT_FOUND when the loader binds comctl32 5.x, see
+# windows/app.manifest and commit 745dca2). Leaving the integration tests inside
+# the persona-desktop package would make cargo test link every bin in the package
+# (including the tauri main program carrying the embedded manifest resource),
+# triggering a CVT1100 duplicate resource error (MANIFEST, 1, 0x0409). The
+# standalone package only builds the tests and the target-process bin, so it never
+# clashes with the main package's manifest.
 #
-# 门禁：bin 与测试都挂在 `fill-test-host` feature 后面，正常构建/打包
-# 不产出任何二进制。真机验收：
+# Gating: the bin and the tests both sit behind the `fill-test-host` feature, so a
+# normal build/package produces no binaries at all. Acceptance on real hardware:
 #   cargo test --features fill-test-host --test desktop_fill_cross_process
 
 [lib]
@@ -30,27 +33,30 @@ fill-test-host = []
 
 [dependencies]
 persona-desktop = { path = ".." }
-# MockBiometricProvider（AppState.biometric_provider 的测试装配用）
+# MockBiometricProvider (test wiring for AppState.biometric_provider)
 persona-core = { path = "../../../core" }
-# 命令层取消时序套件（tests/desktop_fill_command_cancel.rs）经 tauri mock
-# runtime 直驱真命令 `desktop_fill_credential`：tokio test 运行时 + 每测
-# 临时 vault + 快照 id 生成。全部已在主包 Cargo.lock 里（desktop 的
-# dev-dependencies 同版本），不引入新上游
+# The command-layer cancellation timing suite
+# (tests/desktop_fill_command_cancel.rs) drives the real command
+# `desktop_fill_credential` through the tauri mock runtime: tokio test runtime +
+# a per-test temp vault + snapshot id generation. Everything is already in the
+# main package's Cargo.lock (same versions as desktop's dev-dependencies), so no
+# new upstream dependency is introduced
 tokio = { version = "1.0", features = ["macros", "rt-multi-thread"] }
 tempfile = "3"
 uuid = { version = "1.6", features = ["v4"] }
 tauri = { version = "2", features = ["test"] }
 
-# windows crate 只挂在 Windows 目标下：Linux/CI 侧本 crate 的 bin 与测试
-# 全部 cfg 掉，不拉 windows 编译单元（windows-future 在非 MSVC 目标编不过）
+# The windows crate is gated to the Windows target only: on Linux/CI the bin and
+# tests of this crate are all cfg'd out, so no windows compilation unit is pulled
+# in (windows-future does not build on non-MSVC targets)
 [target.'cfg(target_os = "windows")'.dependencies]
 windows = { version = "0.61", features = [
   "Win32_Foundation",
-  # 靶进程窗口类注册（RegisterClassW/WNDCLASSW 在 Gdi feature 下）
+  # Target-process window class registration (RegisterClassW/WNDCLASSW live under the Gdi feature)
   "Win32_Graphics_Gdi",
-  # GetModuleHandleW（System/LibraryLoader）
+  # GetModuleHandleW (System/LibraryLoader)
   "Win32_System_LibraryLoader",
-  # EM_GETPASSWORDCHAR（掩码字符元数据，跨进程可读）
+  # EM_GETPASSWORDCHAR (mask character metadata, readable across processes)
   "Win32_UI_Controls",
   "Win32_UI_WindowsAndMessaging",
 ] }

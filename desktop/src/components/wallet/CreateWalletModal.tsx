@@ -12,14 +12,14 @@ export interface CreateWalletForm {
 interface CreateWalletModalProps {
   form: CreateWalletForm;
   setForm: React.Dispatch<React.SetStateAction<CreateWalletForm>>;
-  /** 生成成功后的助记词结果；null = 表单态 */
+  /** Mnemonic result after a successful generation; null = form state */
   result: WalletGenerateResponse | null;
   onCreate: () => void;
-  /** 关闭并复位表单与结果（父层负责） */
+  /** Closes and resets the form and result (parent's responsibility) */
   onClose: () => void;
 }
 
-/** 创建钱包弹窗：表单态 ↔ 助记词展示态两段式 */
+/** Create-wallet modal: two phases, form state <-> mnemonic display state */
 const CreateWalletModal: React.FC<CreateWalletModalProps> = ({
   form,
   setForm,

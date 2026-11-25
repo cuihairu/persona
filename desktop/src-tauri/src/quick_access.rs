@@ -1,33 +1,44 @@
-//! Quick Access：OS 级全局热键唤出的浮窗（对标矩阵 #22）。
+//! Quick Access: an OS-level global-hotkey popup window (matrix item #22).
 //!
-//! 机制分层：
-//! - **装载面**：global-shortcut 插件在 `setup` 里**运行时装载**
-//!   （[`install_plugin`]，不用 `Builder::plugin`）。原因是它的 `setup`
-//!   会建 X11/平台热键管理器，失败即 Err——走 Builder 链的话这个 Err 会
-//!   让整个 app 构建失败（`.expect` 直接 panic），一个"锦上添花的全局热键
-//!   不该让密码管理器起不来"。headless Linux/无 XWayland 正是这条路径。
-//! - **注册面**（本模块其余部分）：两个独立绑定各自抢注——Quick Access
-//!   检索浮窗（对标矩阵 #22）与密码生成器浮窗（#9 余项）。成功才把
-//!   `registered` 记为 Some。**抢注失败不静默**：原因进 `last_error`，
-//!   设置页如实显示（被别的应用/WM 占用、平台不支持都会走到这里）。
-//!   改绑**只注销自己的旧键**（`unregister` 单个），不动另一个绑定。
-//! - **浮窗面**：`quick-access` / `generator-panel` 两个无边框置顶小窗
-//!   （tauri.conf.json 声明，初始 `visible: false`）。热键是 toggle：
-//!   已显示则隐藏（把焦点还给原应用），未显示则 show + focus + emit
-//!   该窗口的 OPENED 事件让前端重置状态。
+//! Layered mechanism:
+//! - **Install layer**: the global-shortcut plugin is loaded **at runtime in
+//!   `setup`** ([`install_plugin`], not via `Builder::plugin`). The reason is
+//!   that its `setup` creates the X11/platform hotkey manager and fails with
+//!   Err — through the Builder chain that Err would make the whole app
+//!   build fail (`.expect` panics directly), and "a nice-to-have global
+//!   hotkey must not keep the password manager from starting". Headless
+//!   Linux / no XWayland is exactly this path.
+//! - **Registration layer** (the rest of this module): two independent
+//!   bindings each grab their own registration — the Quick Access lookup
+//!   popup (matrix item #22) and the password generator popup (leftover of
+//!   #9). Only on success is `registered` set to Some. **A failed grab is
+//!   never silent**: the reason goes into `last_error` and the settings page
+//!   shows it as-is (taken by another app/WM, or unsupported platform, both
+//!   land here). Rebinding **only unregisters its own old key** (a single
+//!   `unregister`), never the other binding.
+//! - **Popup layer**: the `quick-access` / `generator-panel` two frameless
+//!   always-on-top small windows (declared in tauri.conf.json, initially
+//!   `visible: false`). The hotkey is a toggle: if shown, hide (returning
+//!   focus to the previous app); if not shown, show + focus + emit that
+//!   window's OPENED event so the frontend resets its state.
 //!
-//! 真值源纪律：绑定与开关的**持久化真值**在 workspace settings
-//! （`quick_access_enabled` / `quick_access_hotkey`，见
-//! `core::models::WorkspaceSettings`）。本模块只持进程内运行态；解锁成功后
-//! 由 `commands::apply_quick_access` 从 DB 重新下发（[`apply_from_settings`]），
-//! 改绑走 `commands::quick_access_set`（先落库再重注册）。前端不参与决定
-//! 抢注什么键。
+//! Source-of-truth discipline: the **persistent truth** for bindings and
+//! toggles lives in workspace settings
+//! (`quick_access_enabled` / `quick_access_hotkey`, see
+//! `core::models::WorkspaceSettings`). This module only holds in-process
+//! runtime state; after a successful unlock `commands::apply_quick_access`
+//! re-pushes it from the DB ([`apply_from_settings`]), and rebinding goes
+//! through `commands::quick_access_set` (persist first, then re-register).
+//! The frontend has no say in which key gets grabbed.
 //!
-//! 已知边界（诚实记录，不在文档里吹）：
-//! - Linux 只走 X11（global-hotkey 用 x11-dl 运行时 dlopen，不链 X 库）；
-//!   Wayland 需 XWayland，无则抢注失败并如实上报。
-//! - 浮窗内的检索/复制全部经已解锁的 service；锁定态唤起只显示"需先解锁"
-//!   并把主窗口拉到前台（不在浮窗里复刻解锁流，见 THREAT_MODEL 登记）。
+//! Known limits (recorded honestly, not glossed over in docs):
+//! - Linux only uses X11 (global-hotkey dlopens x11-dl at runtime, does not
+//!   link X libs); Wayland needs XWayland, and without it the grab fails and
+//!   is reported as-is.
+//! - All lookup/copy inside the popup goes through the unlocked service;
+//!   invoking while locked only shows "unlock first" and brings the main
+//!   window to the front (the unlock flow is not replicated inside the
+//!   popup; see the THREAT_MODEL entry).
 
 use std::str::FromStr;
 use std::sync::Mutex;
@@ -38,58 +49,71 @@ use tauri_plugin_global_shortcut::{GlobalShortcut, ShortcutState};
 
 use persona_core::models::WorkspaceSettings;
 
-/// 浮窗标签（tauri.conf.json 里 windows[1].label 必须一致）
+/// Popup window label (must match windows[1].label in tauri.conf.json)
 pub const WINDOW_LABEL: &str = "quick-access";
 
-/// 生成器浮窗标签（tauri.conf.json 里同名 window 的 label 必须一致）
+/// Generator popup label (must match the label of that window in tauri.conf.json)
 pub const GENERATOR_WINDOW_LABEL: &str = "generator-panel";
 
-/// 浮窗被热键唤起时向自身 webview 发的事件：前端据此清空上一次查询、
-/// 聚焦输入框（同一进程内多窗口的 wake 通道，不用轮询）
+/// Event emitted to the popup's own webview when the hotkey wakes it: the
+/// frontend uses it to clear the previous query and focus the input (the
+/// wake channel between windows inside one process, no polling)
 pub const OPENED_EVENT: &str = "persona://quick-access-opened";
 
-/// 生成器浮窗的唤醒事件（同 [`OPENED_EVENT`] 语义，各自的 webview 各听各的）
+/// The generator popup's wake event (same [`OPENED_EVENT`] semantics; each
+/// webview listens for its own)
 pub const GENERATOR_OPENED_EVENT: &str = "persona://generator-panel-opened";
 
-/// 浮窗里"在 Persona 中打开"→ 主窗口：事件 + 载荷（跨 webview 唯一通道，
-/// 两个窗口各有独立的 JS store，不能靠前端内存互传）
+/// "Open in Persona" inside the popup -> main window: the event plus its
+/// payload (the only channel across webviews; the two windows each have
+/// their own JS store, so they cannot hand things off via frontend memory)
 pub const OPEN_CREDENTIAL_EVENT: &str = "persona://quick-access-open-credential";
 
-/// 主窗口标签（tauri.conf.json windows[0].label）
+/// Main window label (tauri.conf.json windows[0].label)
 pub const MAIN_WINDOW_LABEL: &str = "main";
 
-/// 浮窗不存在时的失败原因（热键的作用对象都没了，抢注无意义）
+/// Failure reason when the popup does not exist (the hotkey's target is gone,
+/// so grabbing registration is meaningless)
 const ERR_WINDOW_MISSING: &str = "quick-access window is not available";
 
-/// [`OPEN_CREDENTIAL_EVENT`] 的载荷（snake_case：与仓库既有 DTO 口径一致，
-/// 前端 `types/index.ts` 的 `QuickAccessOpenCredential` 逐字对齐）
+/// Payload of [`OPEN_CREDENTIAL_EVENT`] (snake_case: same convention as the
+/// repo's existing DTOs, matching the frontend `types/index.ts`
+/// `QuickAccessOpenCredential` field for field)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OpenCredentialPayload {
     pub identity_id: String,
     pub credential_id: String,
 }
 
-/// 进程内运行态（`AppState` 持有）。`registered` 与 DB 里的
-/// `quick_access_hotkey` 不一定一致——抢注失败时前者为 None、后者保留，
-/// 设置页据此显示"绑定为 X，实际未生效（原因）"
+/// In-process runtime state (held by `AppState`). `registered` is not
+/// necessarily in sync with `quick_access_hotkey` in the DB — on a failed
+/// grab the former is None while the latter is kept, and the settings page
+/// shows "bound to X, but not actually in effect (reason)" from that
 #[derive(Debug, Default)]
 pub struct QuickAccessRuntime {
-    /// 当前真正抢注成功的加速键（None = 未注册：关闭、抢注失败或未下发）
+    /// The accelerator currently actually registered (None = not registered:
+    /// disabled, grab failed, or never pushed down)
     pub registered: Option<String>,
-    /// 最近一次抢注失败的原文（设置页展示；成功/关闭时清空）
+    /// Verbatim text of the most recent grab failure (shown on the settings
+    /// page; cleared on success/disable)
     pub last_error: Option<String>,
-    /// 生成器热键的抢注结果（语义同 `registered`，槽位独立互不影响）
+    /// Grab result for the generator hotkey (same semantics as `registered`,
+    /// an independent slot that does not affect the other)
     pub generator_registered: Option<String>,
-    /// 生成器热键最近一次抢注失败的原文（语义同 `last_error`）
+    /// Verbatim text of the most recent generator hotkey grab failure (same
+    /// semantics as `last_error`)
     pub generator_last_error: Option<String>,
-    /// 插件装载失败原因（headless 会话 / 平台不支持）。与 `last_error` 分开
-    /// 记：一个是"这台机器上全局热键根本起不来"，一个是"键被占用了"。
-    /// 装载失败对两个绑定一视同仁（同一个插件实例）
+    /// Plugin install failure reason (headless session / unsupported
+    /// platform). Recorded separately from `last_error`: one means "global
+    /// hotkeys simply cannot start on this machine", the other "the key is
+    /// already taken". An install failure affects both bindings equally
+    /// (same plugin instance)
     pub install_error: Option<String>,
 }
 
 impl QuickAccessRuntime {
-    /// 收口成可序列化的状态面（`quick_access_status` 命令返回）
+    /// Collapse into the serializable status face returned by the
+    /// `quick_access_status` command
     pub fn snapshot(&self, settings: &WorkspaceSettings) -> QuickAccessStatus {
         let enabled = settings.quick_access_enabled;
         let configured = settings
@@ -98,11 +122,13 @@ impl QuickAccessRuntime {
             .unwrap_or_else(|| default_accelerator().to_string());
         QuickAccessStatus {
             enabled,
-            // 设置页展示的绑定（DB 真值，未设置时是平台默认值）
+            // The binding shown on the settings page (DB truth; the platform
+            // default when unset)
             configured_accelerator: configured,
-            // 实际生效的绑定（抢注成功才 Some）
+            // The binding actually in effect (Some only on a successful grab)
             registered_accelerator: self.registered.clone(),
-            // 一个就够 UI 说的失败原因：本次抢注失败优先于装载失败
+            // One failure reason is enough for the UI: this grab's failure
+            // takes priority over an install failure
             error: self
                 .last_error
                 .clone()
@@ -111,22 +137,24 @@ impl QuickAccessRuntime {
     }
 }
 
-/// `generator_status` 的返回形状（与 [`QuickAccessStatus`] 同构，字段
-/// snake_case：前端 `GeneratorStatus` 逐字对齐）
+/// Return shape of `generator_status` (isomorphic with
+/// [`QuickAccessStatus`], fields snake_case: matching the frontend
+/// `GeneratorStatus` field for field)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GeneratorStatus {
-    /// 用户开关（DB 真值）
+    /// User toggle (DB truth)
     pub enabled: bool,
-    /// 设置页展示的绑定
+    /// The binding shown on the settings page
     pub configured_accelerator: String,
-    /// 实际抢注成功的绑定（None = 未生效）
+    /// The binding actually registered (None = not in effect)
     pub registered_accelerator: Option<String>,
-    /// 未生效原因（抢注失败或插件装载失败）
+    /// Why it is not in effect (grab failure or plugin install failure)
     pub error: Option<String>,
 }
 
 impl GeneratorStatus {
-    /// 从运行态 + 设置收口（与 [`QuickAccessRuntime::snapshot`] 同构）
+    /// Collapse runtime state + settings (isomorphic with
+    /// [`QuickAccessRuntime::snapshot`])
     pub fn snapshot(runtime: &QuickAccessRuntime, settings: &WorkspaceSettings) -> Self {
         let enabled = settings.generator_panel_enabled;
         let configured = settings
@@ -145,24 +173,27 @@ impl GeneratorStatus {
     }
 }
 
-/// `quick_access_status` 的返回形状（snake_case：命令响应面与仓库既有 DTO
-/// 同口径，前端 `QuickAccessStatus` 逐字对齐）
+/// Return shape of `quick_access_status` (snake_case: the command response
+/// face follows the repo's existing DTO convention, matching the frontend
+/// `QuickAccessStatus` field for field)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct QuickAccessStatus {
-    /// 用户开关（DB 真值）
+    /// User toggle (DB truth)
     pub enabled: bool,
-    /// 设置页展示的绑定
+    /// The binding shown on the settings page
     pub configured_accelerator: String,
-    /// 实际抢注成功的绑定（None = 未生效）
+    /// The binding actually registered (None = not in effect)
     pub registered_accelerator: Option<String>,
-    /// 未生效原因（抢注失败或插件装载失败）
+    /// Why it is not in effect (grab failure or plugin install failure)
     pub error: Option<String>,
 }
 
-/// 平台默认绑定。macOS 用 ⌘⇧Space（与 Spotlight 习惯同构、且避开系统
-/// 常用的 ⌘Space），Win/Linux 用 Ctrl+Shift+Space——**不用** Ctrl+Alt+\
-/// 之类的低频键位：这类键在部分发行版/WM 已被窗口管理器占用，抢注失败率
-/// 高，而失败只会被用户读成"功能坏了"。
+/// Platform default binding. macOS uses ⌘⇧Space (mirrors the Spotlight
+/// habit and dodges the system's common ⌘Space), Win/Linux use
+/// Ctrl+Shift+Space — **not** low-traffic keys like Ctrl+Alt+\: those are
+/// already claimed by window managers on some distros/WMs, so the grab
+/// failure rate is high, and a failure reads to users as "the feature is
+/// broken".
 #[cfg(target_os = "macos")]
 pub const fn default_accelerator() -> &'static str {
     "Command+Shift+Space"
@@ -173,9 +204,11 @@ pub const fn default_accelerator() -> &'static str {
     "Control+Shift+Space"
 }
 
-/// 生成器热键的平台默认绑定。macOS 用 ⌘⇧G（与 Finder「前往文件夹」重叠，
-/// 全局注册后生成器优先——介意可在设置页改绑），Win/Linux 用
-/// Ctrl+Shift+G（避开 WM 高频占用键位，与检索浮窗默认键同构好记）
+/// Platform default binding for the generator hotkey. macOS uses ⌘⇧G
+/// (overlaps Finder's "Go to Folder"; once globally registered the generator
+/// wins — rebind in settings if that bothers you), Win/Linux use
+/// Ctrl+Shift+G (avoids WM high-traffic keys, and mirrors the lookup popup's
+/// default so it is easy to remember)
 #[cfg(target_os = "macos")]
 pub const fn default_generator_accelerator() -> &'static str {
     "Command+Shift+G"
@@ -186,38 +219,46 @@ pub const fn default_generator_accelerator() -> &'static str {
     "Control+Shift+G"
 }
 
-/// 校验并解析加速键串（tauri global-shortcut 语法）。空串与空白按"恢复
-/// 平台默认"处理由调用方决定，这里只做语法判定
+/// Validate and parse an accelerator string (tauri global-shortcut syntax).
+/// An empty or whitespace-only string is treated as "restore the platform
+/// default" by the caller; here only the syntax is judged
 pub fn parse_accelerator(raw: &str) -> Result<tauri_plugin_global_shortcut::Shortcut, String> {
     tauri_plugin_global_shortcut::Shortcut::from_str(raw.trim())
         .map_err(|e| format!("invalid accelerator: {e}"))
 }
 
-/// 归一化（仅去空白）。**刻意不用 `Shortcut` 的 `Display`**：它会把
-/// "Ctrl+Shift+Space" 改写成 "shift+control+Space"（小写修饰键 + 固定
-/// 顺序），展示与回显都用原文更符合"设置页显示的就是我填的"
+/// Normalize (strip whitespace only). **Deliberately not `Shortcut`'s
+/// `Display`**: it rewrites "Ctrl+Shift+Space" as "shift+control+Space"
+/// (lowercase modifiers + fixed ordering); showing and echoing the original
+/// text better matches "what the settings page shows is exactly what I typed"
 pub fn normalize_accelerator(raw: &str) -> String {
     raw.trim().to_string()
 }
 
-/// 装载 global-shortcut 插件（`setup` 调用；幂等）。
+/// Install the global-shortcut plugin (called from `setup`; idempotent).
 ///
-/// 运行时装载而非 `Builder::plugin`：插件 setup 里的
-/// `GlobalHotKeyManager::new()` 在 headless Linux / 无 XWayland 的
-/// Wayland 上会返回 Err，走 Builder 链这个 Err 会让 `build()` 失败、
-/// `.expect` 直接 panic——全局热键不可用不该让整个密码管理器起不来。
-/// 失败原因存进运行态，设置页能如实显示。
+/// Loaded at runtime rather than via `Builder::plugin`: inside the plugin
+/// setup, `GlobalHotKeyManager::new()` returns Err on headless Linux /
+/// Wayland without XWayland, and through the Builder chain that Err makes
+/// `build()` fail with a `.expect` panic — an unusable global hotkey must
+/// not keep the whole password manager from starting. The failure reason is
+/// stored in runtime state so the settings page can display it as-is.
 ///
-/// **必须挂 `with_handler`**（2026-09-28 修复"热键不生效"的根因）：
-/// 插件的事件分发只有两路——`register()` 存的 per-shortcut handler
-/// （Rust 侧 `register` 恒为 None）和 Builder 级 handler。此前两路
-/// 都是 None：OS 抢注成功（无冲突报错）、`registered` 也记为 Some，
-/// 但按键事件分发给空 handler，什么都不发生。挂在 Builder 级对
-/// 本应用注册的任何加速键都生效（检索 + 生成器两个绑定）；只在
-/// `Pressed` 沿触发——global-hotkey 的 Pressed/Released 都会上报，
-/// 不过滤会 show 完立刻 hide。哪个键按下由运行态里的注册串反查
-/// （[`dispatch_shortcut`]）：两个绑定抢到同一个加速键只可能有一个
-/// 真注册成功（第二个 register 必撞 OS 冲突），不会双触发。
+/// **Must attach `with_handler`** (root cause of the 2026-09-28 "hotkey does
+/// nothing" fix): the plugin's event dispatch has only two paths — the
+/// per-shortcut handler stored by `register()` (always None on the Rust
+/// side's `register`) and the Builder-level handler. Previously both paths
+/// were None: the OS grab succeeded (no conflict error) and `registered`
+/// was also set to Some, but key events were dispatched to an empty handler
+/// and nothing happened. Attaching at the Builder level covers any
+/// accelerator registered by this app (both the lookup and generator
+/// bindings); it fires only on the `Pressed` edge — global-hotkey reports
+/// both Pressed and Released, and without filtering it would show then
+/// immediately hide. Which binding was pressed is resolved by looking the
+/// registered string up in runtime state ([`dispatch_shortcut`]): when two
+/// bindings grab the same accelerator, at most one can actually register
+/// successfully (the second register must hit an OS conflict), so there is
+/// no double trigger.
 pub fn install_plugin<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<(), String> {
     if app.try_state::<GlobalShortcut<R>>().is_some() {
         return Ok(());
@@ -235,17 +276,20 @@ pub fn install_plugin<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<(), Strin
     .map_err(|e| e.to_string())
 }
 
-/// 一次抢注的结果
+/// The outcome of one grab attempt
 enum Registration {
-    /// 抢注成功，存的是**配置串**（不是 `Display` 归一化串）
+    /// Grab succeeded; what is stored is the **configured string** (not the
+    /// `Display`-normalized string)
     Registered(String),
-    /// 开关关闭：主动释放本绑定的旧键（不动另一个绑定）
+    /// Toggle off: release this binding's old key proactively (leaving the
+    /// other binding alone)
     Disabled,
-    /// 没抢上，原因原样带给设置页
+    /// Did not get the grab; the reason is passed to the settings page as-is
     Failed(String),
 }
 
-/// 按窗口标签定位该绑定在运行态里的槽位对（生成器与检索各一组字段）
+/// Locate the slot pair for this binding in runtime state by window label
+/// (generator and lookup each own a field pair)
 fn slots_for<'a>(
     guard: &'a mut QuickAccessRuntime,
     window_label: &str,
@@ -260,20 +304,26 @@ fn slots_for<'a>(
     }
 }
 
-/// 同步 OS 抢注状态并返回结果（不改运行态，由调用方统一落盘——避免
-/// "先改状态后抢注失败"留下半截状态）。`previous` 是该绑定当前已注册
-/// 的加速键串：改绑/关闭时**只注销自己这一个旧键**——`unregister_all`
-/// 会把另一个绑定的键一起杀掉，两绑定并存后不能再全局清。
+/// Sync the OS grab state and return the outcome (does not touch runtime
+/// state; the caller persists uniformly — avoiding a half-committed state
+/// from "changed state first, grab failed after"). `previous` is the
+/// accelerator string this binding currently has registered: on rebind/off,
+/// **only that one old key is unregistered** — `unregister_all` would also
+/// kill the other binding's key, so a global clear is no longer possible
+/// once the two bindings coexist.
 fn compute_registration<R: tauri::Runtime>(
     app: &AppHandle<R>,
     window_label: &str,
     accelerator: Option<&str>,
     previous: Option<String>,
 ) -> Registration {
-    // 开关关闭最先判：关闭 = 用户明确不要热键，**不是失败**——浮窗缺失
-    // /headless 等环境问题不该给关着的开关记一条错误原因（设置页会把
-    // "已关闭"误渲染成"未生效（原因）"）。能拿到插件就只注销自己的旧键；
-    // 拿不到（mock / 未装载）说明本来就没注册过，无需清理。
+    // The off check comes first: off = the user explicitly does not want the
+    // hotkey, **not a failure** — a missing popup, headless, or other
+    // environment problems must not record an error reason against an
+    // already-off toggle (the settings page would misrender "off" as "not in
+    // effect (reason)"). When the plugin is available, unregister only this
+    // binding's old key; when it is not (mock / not installed), nothing was
+    // ever registered, so no cleanup is needed.
     let Some(raw) = accelerator else {
         if let (Some(plugin), Some(prev)) =
             (app.try_state::<GlobalShortcut<R>>(), previous.as_deref())
@@ -284,21 +334,23 @@ fn compute_registration<R: tauri::Runtime>(
         }
         return Registration::Disabled;
     };
-    // 热键唯一作用是唤出浮窗：浮窗不在（集成测试的 mock context 就是
-    // 没有窗口）就没什么可绑的，直接短路。顺带避开一个测试隐患——
-    // mock runtime 的 run_on_main_thread 只排队不执行，插件 register 里
-    // 的阻塞 recv 会把测试挂死。
+    // The hotkey's only job is to summon the popup: if there is no popup
+    // (integration tests' mock context has no window), there is nothing to
+    // bind and we short-circuit. This also sidesteps a test hazard — the
+    // mock runtime's run_on_main_thread only queues without executing, so
+    // the blocking recv inside the plugin's register would hang the test.
     if app.get_webview_window(window_label).is_none() {
         return Registration::Failed(ERR_WINDOW_MISSING.to_string());
     }
-    // 插件装载失败（headless / 平台不支持）：如实报，不 panic
+    // Plugin install failed (headless / platform unsupported): report as-is, no panic
     let Some(plugin) = app.try_state::<GlobalShortcut<R>>() else {
         return Registration::Failed(
             "global shortcut support is unavailable on this session".to_string(),
         );
     };
-    // 先释放自己绑定的旧键：改绑时旧键必须先让位，否则新旧两键同时响应。
-    // 只动自己的——另一个绑定的键不归这里管
+    // Release this binding's old key first: on rebind the old key must yield
+    // before the new one, or both would respond at once. Only our own — the
+    // other binding's key is not this function's concern
     if let Some(prev) = previous.as_deref() {
         if let Ok(old) = parse_accelerator(prev) {
             let _ = plugin.unregister(old);
@@ -315,7 +367,7 @@ fn compute_registration<R: tauri::Runtime>(
     }
 }
 
-/// 把抢注结果写回运行态（按 `window_label` 选边）
+/// Write the grab result back into runtime state (side chosen by `window_label`)
 fn store_registration(
     runtime: &Mutex<QuickAccessRuntime>,
     window_label: &str,
@@ -340,13 +392,15 @@ fn store_registration(
     }
 }
 
-/// 读取该绑定当前已注册的加速键串（`compute_registration` 的 `previous`）
+/// Read the accelerator string this binding currently has registered (the
+/// `previous` of `compute_registration`)
 fn current_registration(runtime: &Mutex<QuickAccessRuntime>, window_label: &str) -> Option<String> {
     let mut guard = runtime.lock().unwrap_or_else(|p| p.into_inner());
     slots_for(&mut guard, window_label).0.clone()
 }
 
-/// 单个绑定的"开关+绑定串"下发（检索与生成器共用，窗口标签区分）。
+/// Push down one binding's "toggle + accelerator string" (shared by lookup and
+/// generator, distinguished by window label)
 fn apply_binding<R: tauri::Runtime>(
     app: &AppHandle<R>,
     runtime: &Mutex<QuickAccessRuntime>,
@@ -365,12 +419,13 @@ fn apply_binding<R: tauri::Runtime>(
     store_registration(runtime, window_label, outcome);
 }
 
-/// 按 workspace settings 下发两个绑定（解锁成功后调用；开关关 = 注销
-/// 该绑定自己的旧键）。
+/// Push down both bindings from workspace settings (called after a successful
+/// unlock; toggle off = unregister that binding's own old key).
 ///
-/// DB 是真值源，所以这里不做"是否与当前一致"的短路判断——每次解锁都重放
-/// 一遍，代价是至多两次 unregister + 两次 register，收益是任何一端的
-/// 改绑（包括 CLI 手改 settings JSON）都在下次解锁时收敛。
+/// The DB is the source of truth, so there is no "is it already consistent"
+/// short-circuit here — every unlock replays it all, costing at most two
+/// unregister + two register calls, and the payoff is that any end's rebind
+/// (including a CLI edit of settings JSON) converges on the next unlock.
 pub fn apply_from_settings<R: tauri::Runtime>(
     app: &AppHandle<R>,
     runtime: &Mutex<QuickAccessRuntime>,
@@ -394,8 +449,10 @@ pub fn apply_from_settings<R: tauri::Runtime>(
     );
 }
 
-/// 显式下发检索绑定（设置页改开关/改绑后调用，与 [`apply_from_settings`]
-/// 同一套抢注逻辑，区别只是绑定串由调用方给定而非从 DB 读）
+/// Explicitly push down the lookup binding (called after the settings page
+/// changes the toggle/binding; same registration logic as
+/// [`apply_from_settings`], except the accelerator string is given by the
+/// caller rather than read from the DB)
 pub fn apply_explicit<R: tauri::Runtime>(
     app: &AppHandle<R>,
     runtime: &Mutex<QuickAccessRuntime>,
@@ -429,7 +486,8 @@ pub fn apply_explicit<R: tauri::Runtime>(
     }
 }
 
-/// 显式下发生成器绑定（语义同 [`apply_explicit`]，窗口与槽位独立）
+/// Explicitly push down the generator binding (same semantics as
+/// [`apply_explicit`], window and slots are independent)
 pub fn apply_explicit_generator<R: tauri::Runtime>(
     app: &AppHandle<R>,
     runtime: &Mutex<QuickAccessRuntime>,
@@ -463,8 +521,10 @@ pub fn apply_explicit_generator<R: tauri::Runtime>(
     }
 }
 
-/// 热键回调体：toggle 浮窗。抽成独立函数便于托盘、命令与插件回调共用。
-/// `window_label`/`opened_event` 成对传（检索与生成器各一套，语义一致）
+/// Hotkey callback body: toggle the popup. Pulled into its own function so
+/// the tray, commands, and the plugin callback can share it.
+/// `window_label`/`opened_event` are passed as a pair (one set each for the
+/// lookup and generator, same semantics)
 fn toggle_window<R: tauri::Runtime>(app: &AppHandle<R>, window_label: &str, opened_event: &str) {
     let Some(window) = app.get_webview_window(window_label) else {
         return;
@@ -472,32 +532,41 @@ fn toggle_window<R: tauri::Runtime>(app: &AppHandle<R>, window_label: &str, open
     match window.is_visible() {
         Ok(true) => {
             let _ = window.hide();
-            // 安全评审收紧：浮窗收起即丢弃填充目标。目标快照是"show 前
-            // 的前台窗口"，浮窗一旦收起，用户注意力已离开该目标；保留
-            // 陈旧槽位会让下一次热键周期外的注入打在过期指纹上（就绪态
-            // 与真实状态不一致，见 codex 2026-11-05 审查 P2）。
+            // Security review tightening: discard the fill target as soon as
+            // the popup hides. The target snapshot is "the foreground window
+            // before show"; once the popup is gone, the user's attention has
+            // left that target, and keeping a stale slot would let an
+            // injection outside the next hotkey cycle land on an outdated
+            // fingerprint (ready state out of sync with reality; see the
+            // codex 2026-11-05 review P2).
             if window_label == WINDOW_LABEL {
                 clear_fill_target(app);
             }
         }
         _ => {
-            // 桌面填充目标捕获（#12）：此刻目标应用还持有前台，show 之前
-            // 拍快照，注入时按 hwnd+标题+pid 重验证。只有检索浮窗要捕获
-            //（生成器浮窗不消费注入目标）。失败不阻断浮窗——填充是浮窗
-            // 的增值动作，没有目标就如实报错。
+            // Desktop fill target capture (#12): at this moment the target
+            // app still holds the foreground; snapshot before show and
+            // re-verify by hwnd+title+pid at injection time. Only the lookup
+            // popup captures (the generator popup consumes no injection
+            // target). Failure does not block the popup — filling is a
+            // value-add action of the popup, and a missing target is just
+            // reported honestly.
             if window_label == WINDOW_LABEL {
                 capture_fill_target(app);
             }
             let _ = window.show();
             let _ = window.set_focus();
-            // 唤醒事件：前端清查询 + 聚焦输入框（浮窗复用上次结果会很迷惑）
+            // Wake event: the frontend clears the query and focuses the input
+            // (reusing the previous results in the popup would be confusing)
             let _ = window.emit(opened_event, ());
         }
     }
 }
 
-/// 捕获当前前台窗口为填充注入目标（#12）。失败静默：注入命令届时会
-/// 因目标缺失/失效如实报错，这里不刷日志噪音（每次热键都可能没目标）。
+/// Capture the current foreground window as the fill injection target (#12).
+/// Failure is silent: the injection command will report the missing/stale
+/// target honestly when the time comes, so no log noise is produced here
+/// (every hotkey press may legitimately have no target).
 #[cfg(target_os = "windows")]
 fn capture_fill_target<R: tauri::Runtime>(app: &AppHandle<R>) {
     use crate::AppState;
@@ -509,7 +578,8 @@ fn capture_fill_target<R: tauri::Runtime>(app: &AppHandle<R>) {
     *slot = captured;
 }
 
-/// 非 Windows 平台：无捕获能力（`fill_supported()` = false），目标恒空。
+/// Non-Windows platforms: no capture capability (`fill_supported()` = false),
+/// so the target is always empty
 #[cfg(not(target_os = "windows"))]
 fn capture_fill_target<R: tauri::Runtime>(app: &AppHandle<R>) {
     use crate::AppState;
@@ -520,7 +590,8 @@ fn capture_fill_target<R: tauri::Runtime>(app: &AppHandle<R>) {
     *slot = None;
 }
 
-/// 拉起浮窗（托盘菜单 / 设置页按钮用；已显示时只聚焦）
+/// Bring up the popup (used by the tray menu / settings page button; when it
+/// is already shown, only focus it)
 fn open_window<R: tauri::Runtime>(app: &AppHandle<R>, window_label: &str, opened_event: &str) {
     let Some(window) = app.get_webview_window(window_label) else {
         return;
@@ -530,8 +601,10 @@ fn open_window<R: tauri::Runtime>(app: &AppHandle<R>, window_label: &str, opened
     let _ = window.emit(opened_event, ());
 }
 
-/// 丢弃检索浮窗的填充注入目标快照（浮窗 hide / Esc / 失焦收尾都会走）。
-/// 陈旧目标不保留：`fill_target_status` 的 ready 必须反映真实可信状态。
+/// Discard the lookup popup's fill injection target snapshot (reached by popup
+/// hide / Esc / focus-loss cleanup alike).
+/// No stale target is kept: `fill_target_status`'s ready must reflect the real
+/// trustworthy state
 #[cfg(target_os = "windows")]
 fn clear_fill_target<R: tauri::Runtime>(app: &AppHandle<R>) {
     use crate::AppState;
@@ -541,7 +614,8 @@ fn clear_fill_target<R: tauri::Runtime>(app: &AppHandle<R>) {
     }
 }
 
-/// 非 Windows 平台：槽位恒空，无可清（签名对齐便于调用点无 cfg 分叉）。
+/// Non-Windows platforms: the slot is always empty, so nothing to clear (the
+/// signature is aligned so call sites need no cfg branching)
 #[cfg(not(target_os = "windows"))]
 fn clear_fill_target<R: tauri::Runtime>(app: &AppHandle<R>) {
     use crate::AppState;
@@ -551,7 +625,8 @@ fn clear_fill_target<R: tauri::Runtime>(app: &AppHandle<R>) {
     }
 }
 
-/// 收回浮窗（前端 Esc / 失焦自收尾都走它，避免两处各写一遍 hide）
+/// Retract the popup (the frontend's Esc / focus-loss self-cleanup both go
+/// through it, so `hide` is not written twice)
 fn close_window<R: tauri::Runtime>(app: &AppHandle<R>, window_label: &str) {
     if let Some(window) = app.get_webview_window(window_label) {
         let _ = window.hide();
@@ -561,46 +636,51 @@ fn close_window<R: tauri::Runtime>(app: &AppHandle<R>, window_label: &str) {
     }
 }
 
-/// 检索浮窗热键回调（toggle）
+/// Lookup popup hotkey callback (toggle)
 pub fn toggle<R: tauri::Runtime>(app: &AppHandle<R>) {
     toggle_window(app, WINDOW_LABEL, OPENED_EVENT);
 }
 
-/// 生成器浮窗热键回调（toggle）
+/// Generator popup hotkey callback (toggle)
 pub fn toggle_generator<R: tauri::Runtime>(app: &AppHandle<R>) {
     toggle_window(app, GENERATOR_WINDOW_LABEL, GENERATOR_OPENED_EVENT);
 }
 
-/// 拉起检索浮窗（托盘菜单 / 设置页按钮用）
+/// Bring up the lookup popup (used by the tray menu / settings page button)
 pub fn open<R: tauri::Runtime>(app: &AppHandle<R>) {
     open_window(app, WINDOW_LABEL, OPENED_EVENT);
 }
 
-/// 拉起生成器浮窗（托盘菜单入口，语义同 [`open`]）
+/// Bring up the generator popup (tray menu entry, same semantics as [`open`])
 pub fn open_generator<R: tauri::Runtime>(app: &AppHandle<R>) {
     open_window(app, GENERATOR_WINDOW_LABEL, GENERATOR_OPENED_EVENT);
 }
 
-/// 收回检索浮窗
+/// Retract the lookup popup
 pub fn close<R: tauri::Runtime>(app: &AppHandle<R>) {
     close_window(app, WINDOW_LABEL);
 }
 
-/// 收回生成器浮窗。生成结果虽非库内密文，但用户可能刚复制走要用的密码，
-/// 锁户时同样不该留在屏幕上（与 [`close`] 同一数据暴露面论据）
+/// Retract the generator popup. Although the generated result is not vault
+/// ciphertext, the user may have just copied a password they are about to
+/// use, so it likewise must not stay on screen when locked (same
+/// data-exposure argument as [`close`])
 pub fn close_generator<R: tauri::Runtime>(app: &AppHandle<R>) {
     close_window(app, GENERATOR_WINDOW_LABEL);
 }
 
-/// 锁户时两个浮窗一起收（托盘 lock 菜单 / 前端锁屏动作共用）
+/// Retract both popups on lock (shared by the tray lock menu and the frontend
+/// lock-screen action)
 pub fn close_all<R: tauri::Runtime>(app: &AppHandle<R>) {
     close(app);
     close_generator(app);
 }
 
-/// Builder 级 handler 的分发体：反查运行态里哪个绑定注册了这枚按键。
-/// 配置串解析失败的槽位跳过（不该发生——注册成功时存的就是合法串）；
-/// 两个绑定都没命中就忽略（理论不可达，防御式不 panic）。
+/// Dispatch body of the Builder-level handler: resolve which binding
+/// registered this key by checking runtime state.
+/// Slots whose configured string fails to parse are skipped (should not
+/// happen — a successful registration stores a valid string); if neither
+/// binding matches, ignore (theoretically unreachable, defensively no panic).
 fn dispatch_shortcut<R: tauri::Runtime>(
     app: &AppHandle<R>,
     fired: &tauri_plugin_global_shortcut::Shortcut,
@@ -629,11 +709,14 @@ fn dispatch_shortcut<R: tauri::Runtime>(
     }
 }
 
-/// 浮窗里选中某条凭据 → 主窗口切到该身份并打开详情。
+/// A credential selected in the popup -> switch the main window to that
+/// identity and open its details.
 ///
-/// 事件用 `emit_to(MAIN_WINDOW_LABEL)` 定向投递：广播会让浮窗自己也收到
-/// 一份，白跑一轮副作用。返回 false = 主窗口不存在（不该发生，报给前端
-/// 做错误提示而不是静默）。
+/// The event is delivered with `emit_to(MAIN_WINDOW_LABEL)` targeting:
+/// a broadcast would also reach the popup itself, running one round of
+/// side effects for nothing. Returning false = the main window does not
+/// exist (should not happen; report it to the frontend for an error prompt
+/// rather than staying silent).
 pub fn open_credential_in_main<R: tauri::Runtime>(
     app: &AppHandle<R>,
     identity_id: &str,
@@ -659,8 +742,10 @@ pub fn open_credential_in_main<R: tauri::Runtime>(
     true
 }
 
-/// 把主窗口拉到前台（浮窗的"锁定态"出口：不在浮窗里复刻解锁流，
-/// 统一回主窗口的解锁屏——见模块注释的已知边界）
+/// Bring the main window to the front (the popup's "locked state" exit: the
+/// unlock flow is not replicated inside the popup, everything falls back to
+/// the main window's unlock screen — see the known limits in the module
+/// comment)
 pub fn focus_main_window<R: tauri::Runtime>(app: &AppHandle<R>) -> bool {
     match app.get_webview_window(MAIN_WINDOW_LABEL) {
         Some(main) => {
@@ -694,7 +779,7 @@ mod tests {
 
     #[test]
     fn normalize_trims_only() {
-        // 不改写大小写/顺序（与 Shortcut::Display 的归一化刻意不同）
+        // Does not rewrite case/order (deliberately different from Shortcut::Display normalization)
         assert_eq!(
             normalize_accelerator("  Ctrl+Shift+Space  "),
             "Ctrl+Shift+Space"
@@ -708,8 +793,8 @@ mod tests {
             last_error: None,
             ..QuickAccessRuntime::default()
         };
-        // 开启态（默认已改关，2026-09-28）：未自定义绑定 → configured 落到
-        // 平台默认值
+        // Enabled state (the default has since been switched off, 2026-09-28): no
+        // custom binding -> configured falls back to the platform default
         let settings = WorkspaceSettings {
             quick_access_enabled: true,
             ..WorkspaceSettings::default()
@@ -726,7 +811,8 @@ mod tests {
 
     #[test]
     fn snapshot_surfaces_registration_failure() {
-        // 抢注失败：configured 仍是 DB 里的绑定，registered 空、error 有值
+        // Registration failure: configured is still the binding from the DB, registered
+        // is empty and error has a value
         let runtime = QuickAccessRuntime {
             registered: None,
             last_error: Some("Another process has already registered".to_string()),
@@ -744,7 +830,8 @@ mod tests {
 
     #[test]
     fn snapshot_prefers_registration_error_over_install_error() {
-        // 两个错误同时存在时给更具体的那个（本次抢注失败 > 装载失败）
+        // When both errors exist, report the more specific one (this grab
+        // failure > install failure)
         let runtime = QuickAccessRuntime {
             registered: None,
             last_error: Some("hotkey taken".to_string()),
@@ -775,7 +862,8 @@ mod tests {
         };
         let status = QuickAccessRuntime::default().snapshot(&settings);
         assert!(!status.enabled);
-        // 关掉时 configured 仍展示绑定串（设置页要能看见"当前配置"）
+        // When disabled, configured still shows the binding string (the settings page
+        // needs to see the "current configuration")
         assert_eq!(status.configured_accelerator, default_accelerator());
         assert!(status.registered_accelerator.is_none());
     }
@@ -813,7 +901,8 @@ mod tests {
 
     #[test]
     fn generator_snapshot_surfaces_registration_failure() {
-        // 抢注失败：configured 保留 DB 里的绑定，registered 空、error 有值
+        // Registration failure: configured keeps the binding from the DB, registered
+        // is empty and error has a value
         let runtime = QuickAccessRuntime {
             generator_last_error: Some("Another process has already registered".to_string()),
             ..QuickAccessRuntime::default()
@@ -865,15 +954,19 @@ mod tests {
         assert!(json.get("configuredAccelerator").is_none());
     }
 
-    // 抢注路径（compute_registration / apply_*）需要 AppHandle，其"浮窗
-    // 不存在 → 明确失败"的分支由 command_layer_tests 的 quick_access_*
-    // 用例覆盖（那里 mock_app 是既有惯例）。**不要**在本模块的单元测试里
-    // 造 mock app：`tauri::test::mock_app()` 的 mock runtime 会毒化本进程
-    // 的 tokio socket IO 探测，同进程并跑的 sqlx 用例会随机 disk I/O error
-    // （见 lib.rs 模块注释与 sqlite_works_after_mock_app_creation 探针）。
+    // The grab path (compute_registration / apply_*) needs an AppHandle; its "no
+    // popup -> definite failure" branch is covered by the quick_access_* cases
+    // in command_layer_tests (where mock_app is the established convention).
+    // **Do not** build a mock app in this module's unit tests: the mock
+    // runtime of `tauri::test::mock_app()` poisons the process's tokio socket
+    // IO probing, and sqlx cases running concurrently in the same process
+    // would randomly hit disk I/O errors (see the lib.rs module comment and
+    // the sqlite_works_after_mock_app_creation probe).
 
-    /// 线格式锁：状态面字段名是前端 `QuickAccessStatus` 的契约，改了这里
-    /// 必须同步改 TS，否则 UI 静默读到 undefined（比编译错误更难查）
+    /// Wire-format lock: the status-face field names are the frontend
+    /// `QuickAccessStatus` contract; if you change them here you must change
+    /// the TS side in lockstep, otherwise the UI silently reads undefined
+    /// (far harder to debug than a compile error)
     #[test]
     fn status_serializes_snake_case_keys() {
         let json = serde_json::to_value(
@@ -891,7 +984,7 @@ mod tests {
         assert!(json.get("configuredAccelerator").is_none());
     }
 
-    /// 同上，跨窗事件载荷
+    /// Same as above, for the cross-window event payload
     #[test]
     fn open_credential_payload_serializes_snake_case_keys() {
         let json = serde_json::to_value(OpenCredentialPayload {

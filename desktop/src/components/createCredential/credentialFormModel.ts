@@ -1,7 +1,7 @@
 import type { CredentialDataRequest, CredentialType, SecurityLevel } from '@/types';
 
-// 提交时按类型编码 payload；类型/等级下拉的选项常量（与 CLI 侧约定一致：
-// GameToken 创建时挂在 TwoFactor 类型上）。
+// Encodes the payload by type on submit; option constants for the type/grade dropdowns (matching the CLI-side
+// convention: GameToken hangs off the TwoFactor type at creation).
   export const CREDENTIAL_TYPE_OPTIONS: CredentialType[] = [
     'Password',
     'CryptoWallet',
@@ -48,7 +48,7 @@ export const parseOtpauthUri = (uri: string) => {
   }
 };
 
-/** 表单状态 → CredentialDataRequest（纯编码，不发请求；trim/缺省口径见各分支）。 */
+/** Form state -> CredentialDataRequest (pure encoding, no request issued; the trim/default conventions are per branch). */
 export const buildCredentialDataRequest = (
   credentialType: CredentialType,
   credentialData: any,

@@ -18,7 +18,7 @@ const mockGetVersion = getVersion as jest.Mock;
 
 type FakeResponse = { status: number; ok: boolean; payload?: unknown };
 
-/** 极简 Response 桩：只实现 checkForUpdate 用到的三个面 */
+/** Minimal Response stub: only implements the three surfaces checkForUpdate uses */
 const fakeFetch = (responsesByMatcher: Array<{ match: (url: string) => boolean; response: FakeResponse | Error }>) => {
   return jest.fn(async (url: string) => {
     const hit = responsesByMatcher.find((entry) => entry.match(url));
@@ -36,7 +36,7 @@ const fakeFetch = (responsesByMatcher: Array<{ match: (url: string) => boolean; 
 const RELEASE_LATEST = (url: string) => url.endsWith('/releases/latest');
 const WORKFLOW_RUNS = (url: string) => url.includes('/actions/workflows/desktop-build.yml/runs');
 
-/** 设定构建元信息（globalThis 上直接放 __PERSONA_BUILD__，对齐 vite define 注入点） */
+/** Sets the build metadata (places __PERSONA_BUILD__ directly on globalThis, matching the vite define injection point) */
 const setBuildMeta = (meta: { channel: string; sha?: string; builtAt?: string }) => {
   (globalThis as Record<string, unknown>).__PERSONA_BUILD__ = {
     channel: meta.channel,

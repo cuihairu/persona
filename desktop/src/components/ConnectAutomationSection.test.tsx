@@ -38,7 +38,7 @@ const activeToken = {
   revoked_at: null,
 };
 
-/** 默认全绿的面板加载（status/list/identities） */
+/** The default all-green panel load (status/list/identities) */
 const seedDefaults = () => {
   mockStatus.mockResolvedValue(stopped);
   mockList.mockResolvedValue({ success: true, data: [] });
@@ -70,7 +70,7 @@ describe('components/ConnectAutomationSection', () => {
     mockStop.mockResolvedValue(stopped);
 
     renderSection();
-    // status 加载完成（toggle 解禁）后再点，否则 disabled 吞掉 click
+    // Click only after the status has finished loading (the toggle is no longer disabled); otherwise the disabled state swallows the click
     const toggle = await screen.findByTestId('connect-server-toggle');
     await waitFor(() => expect(toggle).toBeEnabled());
 
@@ -114,12 +114,12 @@ describe('components/ConnectAutomationSection', () => {
     await waitFor(() => {
       expect(screen.getByTestId('connect-tokens-list')).toBeInTheDocument();
     });
-    // 活跃 token：指纹、scope 摘要（全部身份 · password · 只读）、未使用、可吊销
+    // An active token: fingerprint, scope summary (all identities · password · read-only), unused, revocable
     expect(screen.getByText('a1b2c3d4e5f6a7b8')).toBeInTheDocument();
     expect(screen.getByText('全部身份 · password · 只读')).toBeInTheDocument();
     expect(screen.getAllByText('从未使用')).toHaveLength(2);
     expect(screen.getByTestId('connect-revoke-tok-1')).toBeInTheDocument();
-    // 已吊销 token：标注 + 无吊销按钮
+    // A revoked token: labeled, with no revoke button
     expect(screen.getByText('(已吊销)')).toBeInTheDocument();
     expect(screen.queryByTestId('connect-revoke-tok-2')).not.toBeInTheDocument();
   });
@@ -144,7 +144,7 @@ describe('components/ConnectAutomationSection', () => {
     await waitFor(() => {
       expect(mockRevoke).toHaveBeenCalledWith('tok-1');
     });
-    // 刷新后变已吊销：按钮消失
+    // After a refresh it shows as revoked: the button disappears
     await waitFor(() => {
       expect(screen.queryByTestId('connect-revoke-tok-1')).not.toBeInTheDocument();
     });
@@ -163,7 +163,7 @@ describe('components/ConnectAutomationSection', () => {
     renderSection();
     fireEvent.click(await screen.findByTestId('connect-create-token'));
 
-    // 默认表单：全部身份 + 指定类型（password 勾选），全部身份警示可见
+    // The default form: all identities + a specific type (password ticked), with the all-identities warning visible
     expect(screen.getByTestId('connect-all-identities-warning')).toBeInTheDocument();
     fireEvent.change(screen.getByTestId('connect-token-label'), { target: { value: 'cli' } });
 
@@ -178,7 +178,7 @@ describe('components/ConnectAutomationSection', () => {
         verbs: ['read'],
       });
     });
-    // 明文一次性展示：警示 + token + 复制 + 完成
+    // One-time plaintext display: warning + token + copy + done
     await waitFor(() => {
       expect(screen.getByTestId('connect-created-token')).toHaveTextContent(
         'pconn_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
@@ -228,13 +228,13 @@ describe('components/ConnectAutomationSection', () => {
     renderSection();
     fireEvent.click(await screen.findByTestId('connect-create-token'));
 
-    // 空 label
+    // An empty label
     fireEvent.click(screen.getByTestId('connect-create-submit'));
     await act(async () => {});
     expect(screen.getByTestId('connect-create-error')).toHaveTextContent('请填写名称');
     expect(mockCreate).not.toHaveBeenCalled();
 
-    // 指定身份但不勾选
+    // Specific identities chosen but none ticked
     fireEvent.change(screen.getByTestId('connect-token-label'), { target: { value: 'cli' } });
     fireEvent.click(screen.getByTestId('connect-identities-pick'));
     fireEvent.click(screen.getByTestId('connect-create-submit'));
@@ -242,8 +242,8 @@ describe('components/ConnectAutomationSection', () => {
     expect(screen.getByTestId('connect-create-error')).toHaveTextContent('至少选择一个身份');
     expect(mockCreate).not.toHaveBeenCalled();
 
-    // 勾上后放行，scope 携带指定身份
-    // 类型清单须含全部 10 个可授权类型（曾漏 certificate 导致证书条目无法授权）
+    // Ticking them lets it through, and the scope carries the specified identities
+    // The type list must include all 10 grantable types (certificate was once missing, which left certificate entries ungrantable)
     fireEvent.click(screen.getByTestId('connect-types-pick'));
     expect(screen.getByTestId('connect-type-certificate')).toBeInTheDocument();
     expect(screen.getByTestId('connect-type-software_license')).toBeInTheDocument();
@@ -288,7 +288,7 @@ describe('components/ConnectAutomationSection', () => {
       fireEvent.click(screen.getByTestId('connect-create-submit'));
     });
 
-    // 表单收起，弹主密码重验（findBy 内部 waitFor+act，拿到的是排空后的稳定 DOM）
+    // The form collapses and the master password re-verification pops up (findBy runs waitFor+act internally, so what we get is the stable DOM after it has drained)
     const reauthModal = await screen.findByTestId('reauth-modal');
     expect(screen.queryByTestId('connect-create-modal')).not.toBeInTheDocument();
     expect(mockReauthVerify).not.toHaveBeenCalled();
@@ -300,7 +300,7 @@ describe('components/ConnectAutomationSection', () => {
       fireEvent.click(screen.getByRole('button', { name: '确认' }));
     });
 
-    // 验证通过 → 原表单重开（label 保留），需用户再点一次创建
+    // Verification passed → the original form reopens (the label is preserved), and the user must click create once more
     await waitFor(() => {
       expect(mockReauthVerify).toHaveBeenCalledWith('master-pw');
     });

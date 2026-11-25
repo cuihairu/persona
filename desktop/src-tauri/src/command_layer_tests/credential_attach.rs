@@ -18,12 +18,12 @@ async fn attachment_commands_round_trip_encrypted() {
     assert!(resp.success, "{:?}", resp.error);
     let cred = resp.data.expect("credential created");
 
-    // 命令测试的 db 在 leaked tempdir 里；附件 blob 跟随同一目录
+    // The command tests' db lives in a leaked tempdir; attachment blobs follow the same directory
     let source_dir = tempfile::tempdir().unwrap();
     let source = source_dir.path().join("recovery-codes.txt");
     std::fs::write(&source, b"attachment-round-trip-payload").unwrap();
 
-    // 加密挂载：元数据回读（is_encrypted / 文件名 / 大小）
+    // Encrypted attach: metadata read back (is_encrypted / filename / size)
     let resp = attach_file_to_credential(
         cred.id.clone(),
         source.to_string_lossy().to_string(),
@@ -42,7 +42,7 @@ async fn attachment_commands_round_trip_encrypted() {
     );
     let attachment_id = attachment.id;
 
-    // 列表
+    // Listing
     let resp = list_attachments(cred.id.clone(), app.state::<AppState>())
         .await
         .unwrap();
@@ -51,7 +51,7 @@ async fn attachment_commands_round_trip_encrypted() {
     assert_eq!(listed.len(), 1);
     assert_eq!(listed[0].id, attachment_id);
 
-    // 解密保存：读回与源字节一致（凭据 item key 封存的核心保障）
+    // Decrypted save: read back identical to the source bytes (the core guarantee of the credential item key seal)
     let out = source_dir.path().join("restored.txt");
     let resp = save_attachment_to_file(
         attachment_id.clone(),
@@ -66,7 +66,7 @@ async fn attachment_commands_round_trip_encrypted() {
         b"attachment-round-trip-payload".to_vec()
     );
 
-    // 删除 → 列表清空
+    // Delete -> the list is emptied
     let resp = delete_attachment(attachment_id, app.state::<AppState>())
         .await
         .unwrap();
@@ -81,7 +81,7 @@ async fn attachment_commands_round_trip_encrypted() {
 async fn attachment_commands_validate_uuid_and_delete_credential_cascades() {
     let (app, identity_id) = app_with_identity().await;
 
-    // 坏 UUID 在四命令上都得到统一错误
+    // A bad UUID yields the same error on all four commands
     let resp = list_attachments("not-a-uuid".to_string(), app.state::<AppState>())
         .await
         .unwrap();
@@ -94,7 +94,7 @@ async fn attachment_commands_validate_uuid_and_delete_credential_cascades() {
     assert!(!resp.success);
     assert_eq!(resp.error.as_deref(), Some("Invalid UUID format"));
 
-    // 凭据删除级联清附件（命令层只验证可见效果：列表清空）
+    // Deleting a credential cascades to its attachments (the command layer only verifies the visible effect: the list is emptied)
     let resp = create_credential(
         password_credential_request(&identity_id),
         app.state::<AppState>(),

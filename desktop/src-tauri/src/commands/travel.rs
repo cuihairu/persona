@@ -1,13 +1,16 @@
 use super::*;
 
-/// 旅行模式状态（无门禁：锁屏也能看，帮助用户理解当前库处境）。
-/// `inconsistent = active && !sidecar_exists` 由 core 判定，前端红警告。
+/// Travel mode status (no gate: visible from the lock screen too, helping the
+/// user understand the vault's situation).
+/// `inconsistent = active && !sidecar_exists` is determined by core; the
+/// frontend shows a red warning.
 #[command]
 pub async fn get_travel_status(
     state: State<'_, AppState>,
 ) -> std::result::Result<ApiResponse<TravelStatus>, String> {
-    // 与命令层错误模式一致：缺 db_path 走 Ok(ApiResponse::error)，不让
-    // Err(String) 逃出命令边界（前端统一按 success 字段分流）
+    // Consistent with the command-layer error pattern: a missing db_path yields
+    // Ok(ApiResponse::error) and never lets Err(String) escape the command
+    // boundary (the frontend branches uniformly on the success field)
     let db_path = {
         let guard = state.db_path.lock().await;
         match guard.clone() {
@@ -35,8 +38,9 @@ pub async fn get_travel_status(
     }
 }
 
-/// 窄写身份的 travel 标记位（进旅行模式时随之移出本设备的身份清单）。
-/// 门禁与 set_feature_flags 一致（已解锁即可，core 再做审计）。
+/// Narrow-write the identity's travel marked flag (when travel mode is entered,
+/// marked identities are removed from this device's identity list).
+/// Same gate as set_feature_flags (unlocked is enough; core audits on top).
 #[command]
 pub async fn set_travel_marked(
     identity_id: String,
@@ -79,17 +83,20 @@ pub async fn set_travel_marked(
     }
 }
 
-/// 进入旅行模式：被标记身份打包加密进 sidecar 并从主库删除。
+/// Enter travel mode: marked identities are packaged, encrypted into the
+/// sidecar, and removed from the main vault.
 ///
-/// 命令层不设解锁门禁——core 的 `ensure_sensitive_operation_allowed` 是
-/// 权威（未重新认证 → REAUTH_REQUIRED 码，前端弹 ReauthModal 后重试）。
+/// The command layer sets no unlock gate — core's
+/// `ensure_sensitive_operation_allowed` is the authority (no re-auth ->
+/// REAUTH_REQUIRED code; the frontend shows the ReauthModal then retries).
 #[command]
 pub async fn enter_travel_mode(
     passphrase: String,
     state: State<'_, AppState>,
 ) -> std::result::Result<ApiResponse<TravelCounts>, String> {
-    // 与命令层错误模式一致：缺 db_path 走 Ok(ApiResponse::error)，不让
-    // Err(String) 逃出命令边界（前端统一按 success 字段分流）
+    // Consistent with the command-layer error pattern: a missing db_path yields
+    // Ok(ApiResponse::error) and never lets Err(String) escape the command
+    // boundary (the frontend branches uniformly on the success field)
     let db_path = {
         let guard = state.db_path.lock().await;
         match guard.clone() {
@@ -114,8 +121,9 @@ pub async fn enter_travel_mode(
     };
     match result {
         Ok(counts) => {
-            // agent 内存可能仍持有被移除身份的密钥：进入旅行模式即停
-            //（exit 后由用户在 SSH 面板重新 start，对齐 set_feature_flags 语义）
+            // The agent's memory may still hold keys of the removed identities:
+            // stop the agent when travel mode is entered (the user restarts it
+            // from the SSH panel after exit, matching set_feature_flags semantics)
             stop_ssh_agent_internal(&state).await;
             Ok(ApiResponse::success(counts))
         }
@@ -129,14 +137,16 @@ pub async fn enter_travel_mode(
     }
 }
 
-/// 退出旅行模式：输 travel 口令把被移除身份原样恢复回主库。
+/// Exit travel mode: enter the travel passphrase to restore the removed
+/// identities back into the main vault unchanged.
 #[command]
 pub async fn exit_travel_mode(
     passphrase: String,
     state: State<'_, AppState>,
 ) -> std::result::Result<ApiResponse<TravelCounts>, String> {
-    // 与命令层错误模式一致：缺 db_path 走 Ok(ApiResponse::error)，不让
-    // Err(String) 逃出命令边界（前端统一按 success 字段分流）
+    // Consistent with the command-layer error pattern: a missing db_path yields
+    // Ok(ApiResponse::error) and never lets Err(String) escape the command
+    // boundary (the frontend branches uniformly on the success field)
     let db_path = {
         let guard = state.db_path.lock().await;
         match guard.clone() {

@@ -14,8 +14,8 @@ jest.mock('@/hooks/usePersonaService', () => ({
   usePersonaService: jest.fn(),
 }));
 
-// 复制失败 toast 用例走真实 copyToClipboardWithToast：写入主路（tauri 插件）
-// 由这里拦截，navigator.clipboard / execCommand 回退在用例内各自模拟
+// The copy-failure toast cases go through the real copyToClipboardWithToast: the primary write path (tauri plugin)
+// is intercepted here, while the navigator.clipboard / execCommand fallbacks are mocked per case
 jest.mock('@tauri-apps/plugin-clipboard-manager', () => ({
   writeText: (...args: any[]) => mockTauriWriteText(...args),
   readText: (...args: any[]) => mockTauriReadText(...args),
@@ -27,20 +27,20 @@ jest.mock('react-hot-toast', () => ({
   Toaster: () => null,
 }));
 
-// 原生文件对话框只在用户点击 Add File / 保存时触发；jsdom 下哑掉
+// The native file dialog only triggers on an Add File / save click; stubbed out under jsdom
 jest.mock('@tauri-apps/plugin-dialog', () => ({
   open: jest.fn(),
   save: jest.fn(),
 }));
 
-// flag 开时面板会挂 useFavicons 预取；这里哑掉 IPC（缓存命中路径另有专测）
+// With the flag on the pane mounts useFavicons to prefetch; the IPC is stubbed here (the cache-hit path has its own dedicated test)
 jest.mock('@/utils/api', () => ({
   personaAPI: {
     getFavicons: jest.fn().mockResolvedValue({ success: true, data: [] }),
   },
 }));
 
-// 单独测过 reveal 重试编排，这里哑渲染并暴露 field 传参
+// The reveal retry choreography is tested separately; here the render is stubbed and the field argument exposed
 jest.mock('@/components/RevealSecretButton', () => ({
   __esModule: true,
   default: ({ field, label }: any) => (
@@ -66,8 +66,8 @@ const makeCred = (over: Record<string, any> = {}) => ({
   ...over,
 });
 
-/** props 直驱渲染面板；service mock 覆盖默认空实现，onCopy/onClose 为 jest.fn
- *  （onCopyOverride：复制失败 toast 用例注入真实 copyToClipboardWithToast） */
+/** Renders the pane driven directly by props; the service mock overrides the default empty implementation, onCopy/onClose are jest.fn
+ *  (onCopyOverride: injects the real copyToClipboardWithToast for the copy-failure toast cases) */
 const setupPane = (
   credOver: Record<string, any> = {},
   credentialData: any = null,
@@ -79,11 +79,11 @@ const setupPane = (
     deleteCredential: jest.fn(),
     getTotpCode: jest.fn(),
     getCredentialHistory: jest.fn().mockResolvedValue([]),
-    // 默认返回永不 resolve 的 promise：挂载期拉取不产生 setState，
-    // 同步收尾的旧用例不受影响（悬挂 promise 卸载后无害）；附件用例
-    // 显式传 mockResolvedValue 并用 findBy/act 收尾
+    // By default return a promise that never resolves: the mount-time fetch produces no setState,
+    // older cases that finish synchronously are unaffected (a dangling promise is harmless after unmount);
+    // attachment cases pass mockResolvedValue explicitly and wrap up with findBy/act
     listAttachments: jest.fn(() => new Promise(() => {})),
-    // 自定义字段同口径：默认悬挂，专项用例显式 mockResolvedValue + findBy 收尾
+    // Same policy for custom fields: dangling by default, dedicated cases pass mockResolvedValue explicitly and finish with findBy
     getCredentialCustomFields: jest.fn(() => new Promise(() => {})),
     attachFileToCredential: jest.fn(),
     saveAttachmentToFile: jest.fn().mockResolvedValue(true),
@@ -105,8 +105,8 @@ const setupPane = (
   return { service, onCopy, onClose };
 };
 
-/** 点击紧挨着给定文本右侧的复制按钮（URL 行可能还有 Fetch icon 按钮，
- * 因此按复制按钮的 aria-label 定位，而不是 flex 容器里的第一个 button） */
+/** Clicks the copy button right next to the given text (the URL row may also carry a Fetch icon button,
+ * so the copy button is located by its aria-label rather than the first button in the flex container) */
 const clickCopyNextTo = (text: string) => {
   const btn = screen
     .getByText(text)
@@ -133,10 +133,10 @@ describe('components/CredentialDetailPane', () => {
 
   it('renders nothing in the body when detail data is missing its payload', () => {
     setupPane({ name: 'Broken' }, { credential_type: 'Password' });
-    // credentialData 存在但无 data：不显示 loading，也不渲染任何字段
+    // credentialData exists but has no data: no loading state and no fields rendered
     expect(screen.queryByTestId('detail-loading')).not.toBeInTheDocument();
     expect(screen.queryByTestId('reveal-password')).not.toBeInTheDocument();
-    expect(screen.getByText('高')).toBeInTheDocument(); // 头部/元数据不受影响
+    expect(screen.getByText('高')).toBeInTheDocument(); // header/metadata unaffected
   });
 
   it('shows last used and created dates in the metadata footer', () => {
@@ -161,7 +161,7 @@ describe('components/CredentialDetailPane', () => {
     await act(async () => {});
     expect(screen.getByTitle('收藏')).toBeInTheDocument();
 
-    // favorite 返回空（如失败）：状态不翻转、不崩
+    // favorite returns empty (e.g. on failure): state does not flip and nothing crashes
     fireEvent.click(screen.getByTitle('收藏'));
     await act(async () => {});
     expect(screen.getByTitle('收藏')).toBeInTheDocument();
@@ -174,7 +174,7 @@ describe('components/CredentialDetailPane', () => {
     );
 
     expect(screen.getByText('a@b.com')).toBeInTheDocument();
-    expect(screen.getByTestId('reveal-password')).toBeInTheDocument(); // 密码走 reveal 流程
+    expect(screen.getByTestId('reveal-password')).toBeInTheDocument(); // the password goes through the reveal flow
     expect(screen.getByText('my note')).toBeInTheDocument();
     expect(screen.getByText('zebra')).toBeInTheDocument();
 
@@ -225,13 +225,13 @@ describe('components/CredentialDetailPane', () => {
       },
     );
 
-    // 高敏提示行 + 三个 reveal 缝（助记词 / 第 25 词 / 私钥）
+    // The high-sensitivity hint line plus three reveal slots (mnemonic / 25th word / private key)
     expect(screen.getByText(/钱包种子材料为高敏字段/)).toBeInTheDocument();
     expect(screen.getByTestId('reveal-wallet_mnemonic')).toBeInTheDocument();
     expect(screen.getByTestId('reveal-wallet_bip39_passphrase')).toBeInTheDocument();
     expect(screen.getByTestId('reveal-wallet_private_key')).toBeInTheDocument();
 
-    // 公钥非敏：直接显示 + 复制
+    // The public key is not sensitive: shown directly and copyable
     expect(screen.getByText('02a1b2')).toBeInTheDocument();
     clickCopyNextTo('02a1b2');
     expect(onCopy).toHaveBeenCalledWith('02a1b2', '公钥');
@@ -265,7 +265,7 @@ describe('components/CredentialDetailPane', () => {
       },
     );
 
-    // 未启用：徽章 + 启用入口；表单含新密码与提示两个输入
+    // Not enabled: badge plus an enable entry; the form holds two inputs, the new password and the hint
     expect(screen.getByText('未启用')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: '启用' }));
     expect(screen.getByPlaceholderText('新条目密码（至少 4 位）')).toBeInTheDocument();
@@ -283,7 +283,7 @@ describe('components/CredentialDetailPane', () => {
     expect(toast.success).toHaveBeenCalledWith('条目独立密码已启用');
     expect(screen.getByText('已启用')).toBeInTheDocument();
 
-    // 已启用 → 清除入口换当前密码表单
+    // Enabled -> the clear entry swaps in the current-password form
     fireEvent.click(screen.getByRole('button', { name: '清除' }));
     expect(screen.getByPlaceholderText('当前条目密码')).toBeInTheDocument();
     fireEvent.change(screen.getByPlaceholderText('当前条目密码'), {
@@ -315,7 +315,7 @@ describe('components/CredentialDetailPane', () => {
       },
     );
 
-    // payload 带 hash → 徽章直接已启用
+    // Payload carries a hash -> the badge shows enabled right away
     expect(screen.getByText('已启用')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: '清除' }));
     fireEvent.change(screen.getByPlaceholderText('当前条目密码'), {
@@ -324,7 +324,7 @@ describe('components/CredentialDetailPane', () => {
     fireEvent.click(screen.getByRole('button', { name: '清除' }));
     await act(async () => {});
     expect(screen.getByText('Item password is incorrect')).toBeInTheDocument();
-    // 徽章不变、表单保留可重试
+    // Badge unchanged and the form is kept for retry
     expect(screen.getByText('已启用')).toBeInTheDocument();
     expect(screen.getByPlaceholderText('当前条目密码')).toBeInTheDocument();
   });
@@ -396,8 +396,8 @@ describe('components/CredentialDetailPane', () => {
       { credential_type: 'SecureNote', data: { note: '1111-2222\n3333-4444' } },
     );
 
-    // pre 块按原样保留换行（getByText 默认空白归一化会吃掉 \n，
-    // 这里对 textContent 做精确断言）
+    // The pre block keeps line breaks verbatim (getByText normalizes whitespace by default and swallows \n,
+    // so the assertion here runs against textContent exactly)
     const pre = screen.getByText(
       (_, element) =>
         element?.tagName === 'PRE' && element.textContent === '1111-2222\n3333-4444',
@@ -432,15 +432,15 @@ describe('components/CredentialDetailPane', () => {
 
     expect(screen.getByText('Alice Zhang')).toBeInTheDocument();
     expect(screen.getByText('110101199001310011')).toBeInTheDocument();
-    // 多行地址对 textContent 精确断言（getByText 会归一化换行；限定 span
-    // 避免命中逐层相同 textContent 的外层容器）
+    // The multi-line address is asserted against textContent exactly (getByText normalizes line breaks; scoping
+    // to the span avoids matching outer containers with identical textContent at each level)
     expect(
       screen.getByText(
         (_, el) => el?.tagName === 'SPAN' && el.textContent === '1 Main St\nBeijing',
       ),
     ).toBeInTheDocument();
     expect(screen.getByText('Example Inc')).toBeInTheDocument();
-    // 未提供的字段整行不渲染（birthday / passport / job title 缺席）
+    // Fields not provided do not render their whole row (birthday / passport / job title absent)
     expect(screen.queryByText('生日')).not.toBeInTheDocument();
     expect(screen.queryByText('护照号')).not.toBeInTheDocument();
     expect(screen.queryByText('职位')).not.toBeInTheDocument();
@@ -502,7 +502,7 @@ describe('components/CredentialDetailPane', () => {
       { getCredentialHistory },
     );
 
-    // 折叠态不预取
+    // No prefetch while collapsed
     expect(getCredentialHistory).not.toHaveBeenCalled();
 
     await act(async () => {
@@ -511,12 +511,12 @@ describe('components/CredentialDetailPane', () => {
 
     expect(await screen.findByText('v2 · updated')).toBeInTheDocument();
     expect(getCredentialHistory).toHaveBeenCalledWith('c1');
-    // 字段 diff：old 为空展示 (empty)，密文变化只出现占位
+    // Field diff: an empty old value renders as (empty); changed secrets show only a placeholder
     expect(screen.getByText(/（空）/)).toBeInTheDocument();
     expect(
       screen.getAllByText(/<encrypted>/).length,
     ).toBeGreaterThanOrEqual(2);
-    // created 行（无字段 diff）也在时间线上
+    // The created row (no field diff) is on the timeline too
     expect(screen.getByText('v1 · created')).toBeInTheDocument();
   });
 
@@ -555,7 +555,7 @@ describe('components/CredentialDetailPane', () => {
     });
     await screen.findByText('v1 · created');
 
-    // restorable 行有恢复按钮；不可恢复行（如删除行）没有
+    // Restorable rows have a restore button; non-restorable ones (such as deletion rows) do not
     const buttons = screen.getAllByTestId('history-restore');
     expect(buttons).toHaveLength(1);
 
@@ -564,7 +564,7 @@ describe('components/CredentialDetailPane', () => {
     });
     expect(confirmSpy).toHaveBeenCalled();
     expect(restoreCredentialVersion).toHaveBeenCalledWith('c1', 1);
-    // 成功后重置已加载标记 → 时间线重新拉取
+    // On success the loaded flag resets -> the timeline is fetched again
     expect(getCredentialHistory).toHaveBeenCalledTimes(2);
     confirmSpy.mockRestore();
   });
@@ -603,7 +603,7 @@ describe('components/CredentialDetailPane', () => {
 
     expect(await screen.findByText('recovery-codes.txt')).toBeInTheDocument();
     expect(listAttachments).toHaveBeenCalledWith('c1');
-    // 大小（2 KB）与加密标记
+    // Size (2 KB) and the encrypted marker
     expect(screen.getByText(/2\.0 KB/)).toBeInTheDocument();
     expect(screen.getByText(/已加密/)).toBeInTheDocument();
     expect(screen.getByTestId('attachment-save-a1')).toBeInTheDocument();
@@ -765,7 +765,7 @@ describe('components/CredentialDetailPane', () => {
         { getTotpCode },
       );
 
-      // flush：面板挂载 + 首次 refreshTotp
+      // Flush: pane mounted plus the first refreshTotp
       await act(async () => {});
       expect(screen.getByText('AAA111')).toBeInTheDocument();
       expect(screen.getByText('2 秒后过期')).toBeInTheDocument();
@@ -775,7 +775,7 @@ describe('components/CredentialDetailPane', () => {
       });
       expect(screen.getByText('1 秒后过期')).toBeInTheDocument();
 
-      // 归零后自动重新拉取
+      // After reaching zero it refetches automatically
       act(() => {
         jest.advanceTimersByTime(1000);
       });
@@ -796,7 +796,7 @@ describe('components/CredentialDetailPane', () => {
 
     const { onClose } = setupPane({ name: 'Victim' }, null, { deleteCredential });
 
-    // 取消确认：不删除，面板保留
+    // Confirmation cancelled: nothing deleted and the pane stays
     fireEvent.click(screen.getByTitle('删除'));
     expect(confirmSpy).toHaveBeenCalledWith(
       '删除「Victim」？此操作不可撤销。',
@@ -804,7 +804,7 @@ describe('components/CredentialDetailPane', () => {
     expect(deleteCredential).not.toHaveBeenCalled();
     expect(onClose).not.toHaveBeenCalled();
 
-    // 确认但后端返回 false：面板同样保留
+    // Confirmed but the backend returns false: the pane likewise stays
     confirmSpy.mockReturnValue(true);
     (deleteCredential as jest.Mock).mockResolvedValue(false);
     fireEvent.click(screen.getByTitle('删除'));
@@ -812,7 +812,7 @@ describe('components/CredentialDetailPane', () => {
     expect(deleteCredential).toHaveBeenCalledWith('c1');
     expect(onClose).not.toHaveBeenCalled();
 
-    // 确认且成功：onClose 被调（由父组件清空选中）
+    // Confirmed and successful: onClose is called (the parent clears the selection)
     (deleteCredential as jest.Mock).mockResolvedValue(true);
     fireEvent.click(screen.getByTitle('删除'));
     await act(async () => {});
@@ -848,17 +848,17 @@ describe('components/CredentialDetailPane', () => {
     });
     setupPane({ url: 'https://site.com' });
 
-    // 头部图标被 favicon 替换（无 url 字段的静态图标不受影响）
+    // The header icon is replaced by the favicon (static icons without a url field are unaffected)
     const img = screen.getByTestId('favicon-img');
     expect(img).toHaveAttribute('src', 'data:image/png;base64,AAA');
 
-    // 破图回退：onError 后回到静态 heroicon
+    // Broken-image fallback: after onError it reverts to the static heroicon
     fireEvent.error(img);
     expect(screen.queryByTestId('favicon-img')).not.toBeInTheDocument();
   });
 
   // ------------------------------------------------------------------
-  // 编辑入口：Edit 按钮把凭据 + 面板已解密 payload 写进 store
+  // Edit entry: the Edit button writes the credential plus the pane's already-decrypted payload into the store
   // ------------------------------------------------------------------
   it('writes credential and decrypted payload to the store on Edit', () => {
     const payload = { credential_type: 'Password', data: { password: 'secret' } };
@@ -876,7 +876,7 @@ describe('components/CredentialDetailPane', () => {
   it('keeps Edit usable when the payload has not been decrypted yet', () => {
     setupPane({ name: 'No payload' }, null);
 
-    // payload null 也能进编辑（modal 退化为元数据编辑 + 空白 payload 字段）
+    // Editing also works with a null payload (the modal degrades to metadata editing with blank payload fields)
     fireEvent.click(screen.getByTestId('edit-credential-button'));
     const editing = useAppStore.getState().editingCredential;
     expect(editing).not.toBeNull();
@@ -884,8 +884,8 @@ describe('components/CredentialDetailPane', () => {
   });
 
   it('surfaces the error toast when copying fails end-to-end', async () => {
-    // 真实剪贴板链路（App 传给面板的就是它）：tauri 插件拒绝 →
-    // navigator.clipboard 不可用 → execCommand 返回 false → 失败 toast
+    // The real clipboard chain (exactly what App passes to the pane): the tauri plugin refuses ->
+    // navigator.clipboard unavailable -> execCommand returns false -> failure toast
     setupPane(
       { username: 'bob' },
       { credential_type: 'Password', data: { username: 'bob' } },
@@ -901,8 +901,9 @@ describe('components/CredentialDetailPane', () => {
   });
 
   it('renders custom fields with concealed masking, reveal and copy', async () => {
-    // 结构化自定义字段（1Password 对齐）：明文 text 直接显示，concealed
-    // UI 层打码（值已随列表解密，打码只为防肩窥）；复制带字段标签
+    // Structured custom fields (1Password-aligned): text shows in the clear, concealed is
+    // masked at the UI layer (the value is already decrypted with the list; masking only guards
+    // against shoulder surfing); copying carries the field label
     const { onCopy } = setupPane(
       { name: 'WithFields' },
       null,
@@ -916,17 +917,17 @@ describe('components/CredentialDetailPane', () => {
 
     await screen.findByTestId('custom-fields-section');
     expect(screen.getByTestId('custom-field-value-f1')).toHaveTextContent('db.internal:5432');
-    // concealed 默认打码
+    // concealed is masked by default
     expect(screen.getByTestId('custom-field-value-f2')).toHaveTextContent('••••••••');
     expect(screen.getByTestId('custom-field-value-f2')).not.toHaveTextContent('abcd-efgh');
 
-    // 显示→隐藏两态翻转
+    // Toggle between the visible and hidden states
     fireEvent.click(screen.getByTestId('custom-field-reveal-f2'));
     expect(screen.getByTestId('custom-field-value-f2')).toHaveTextContent('abcd-efgh');
     fireEvent.click(screen.getByTestId('custom-field-reveal-f2'));
     expect(screen.getByTestId('custom-field-value-f2')).toHaveTextContent('••••••••');
 
-    // 复制走 onCopy，带字段标签
+    // Copying goes through onCopy, carrying the field label
     fireEvent.click(screen.getByTestId('custom-field-copy-f2'));
     expect(onCopy).toHaveBeenCalledWith('abcd-efgh', 'Recovery code');
   });
@@ -941,7 +942,7 @@ describe('components/CredentialDetailPane', () => {
   });
 
   it('shows an error line when custom fields fail to load (no fake empty state)', async () => {
-    // 读失败（如保险库已上锁）必须如实显示错误行，不冒充「无字段」
+    // A read failure (e.g. the vault is locked) must show the error row honestly, never masquerading as "no fields"
     setupPane({ name: 'Locked' }, null, {
       getCredentialCustomFields: jest.fn().mockResolvedValue(null),
     });

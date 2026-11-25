@@ -4,7 +4,7 @@ import { useTranslation } from 'react-i18next';
 import { personaAPI } from '@/utils/api';
 import DataScopeConsentModal from '../DataScopeConsentModal';
 
-/** 同步服务器区块：审计事件上报到 persona-server（enabled + url + token）。 */
+/** Sync server section: report audit events to persona-server (enabled + url + token). */
 const SyncServerPane: React.FC = () => {
   const { t } = useTranslation();
   const [enabled, setEnabled] = useState(false);
@@ -12,12 +12,13 @@ const SyncServerPane: React.FC = () => {
   const [token, setToken] = useState('');
   const [tokenPlaceholder, setTokenPlaceholder] = useState('API token');
   const [saving, setSaving] = useState(false);
-  // 隐私红线：开启前先过数据范围披露，确认才展开配置表单（取消 = 保持关闭）
+  // Privacy red line: the data-scope disclosure must pass before enabling; only confirmation expands the config form (cancel = stays off)
   const [consentOpen, setConsentOpen] = useState(false);
 
-  // token 真值存 OS keyring（后端 sync.server_token 恒回空串），placeholder
-  // 由 sync_token_present 驱动；token 不回填（避免既有令牌常驻前端内存，
-  // 空串提交 = 后端保留 keyring 旧 token）
+  // Token truth lives in the OS keyring (the backend's sync.server_token always returns an empty
+  // string); the placeholder is driven by sync_token_present; the token is never backfilled
+  // (so an existing token doesn't sit in frontend memory permanently; submitting an empty string
+  // = the backend keeps the old keyring token)
   const refreshTokenPlaceholder = async (): Promise<void> => {
     try {
       const resp = await personaAPI.syncTokenPresent();
@@ -29,7 +30,7 @@ const SyncServerPane: React.FC = () => {
     }
   };
 
-  // 初始值来自服务端真相
+  // Initial values come from server truth
   useEffect(() => {
     let cancelled = false;
     personaAPI
@@ -59,8 +60,8 @@ const SyncServerPane: React.FC = () => {
         server_token: token,
       });
       if (resp.success && resp.data) {
-        // 回填服务端真相；token 输入框清空（空串提交 = 后端保留 keyring 旧值，
-        // 关闭 = 后端清除令牌）。placeholder 重查 keyring 存在性。
+        // Backfill server truth; clear the token input (an empty-string submit = the backend keeps the
+        // old keyring value; disabling = the backend clears the token). Re-query the keyring for the placeholder.
         const sync = resp.data.sync;
         if (sync) {
           setEnabled(sync.enabled);
@@ -97,13 +98,13 @@ const SyncServerPane: React.FC = () => {
           disabled={saving}
           onClick={() => {
             if (!enabled) {
-              // 隐私红线：开启 = 先明示数据范围，确认才展开配置表单
+              // Privacy red line: enabling = disclose the data scope first; only confirmation expands the config form
               setConsentOpen(true);
               return;
             }
-            // 关闭不提前乐观翻转：保存成功后由服务端真相回填，失败保持
-            // 真实状态（2026-11-13 深审 Major 修复）；saving 期间按钮禁用
-            // 不产生叠写
+            // No early optimistic flip on disable: after a successful save, server truth is backfilled;
+            // on failure the real state stays (2026-11-13 deep-review Major fix); the button is disabled
+            // during saving so no stacked writes happen
             void save(false);
           }}
           className={`relative inline-flex h-6 w-11 flex-shrink-0 items-center rounded-full transition-colors ${

@@ -6,15 +6,17 @@ import { usePersonaService } from '@/hooks/usePersonaService';
 
 export interface UnlockGateModalProps {
   isOpen: boolean;
-  /** 挂起的原操作继续（true）/放弃（false） */
+  /** Resolves the pending original operation: continue (true) / abandon (false) */
   onResolve: (unlocked: boolean) => void;
 }
 
 /**
- * SERVICE_LOCKED 引导解锁弹窗：后端惰性 auto-lock（无 locked 事件的
- * 竞态窗口）让操作撞「Session is auto-locked」时，由 utils/api 的
- * invoke gate 触发——输主密码解锁，成功后挂起的原操作自动重试。
- * 与锁定屏（UnlockScreen）不同：这是操作中引导，不打断当前页面上下文。
+ * SERVICE_LOCKED guided-unlock modal: with the backend's lazy auto-lock (no
+ * locked event leaves a race window), an operation hitting "Session is
+ * auto-locked" triggers the invoke gate in utils/api — enter the master
+ * password to unlock, and on success the pending original operation retries
+ * automatically. Unlike the lock screen (UnlockScreen), this is an in-flight
+ * guided flow that doesn't interrupt the current page context.
  */
 const UnlockGateModal: React.FC<UnlockGateModalProps> = ({ isOpen, onResolve }) => {
   const { t } = useTranslation();
@@ -39,7 +41,7 @@ const UnlockGateModal: React.FC<UnlockGateModalProps> = ({ isOpen, onResolve }) 
     e.preventDefault();
     if (!password || isVerifying) return;
     setIsVerifying(true);
-    // initializeService 成功即恢复 store 解锁态并重载身份；失败已 toast
+    // On success initializeService restores the store's unlocked state and reloads identities; failure is already toasted
     const ok = await initializeService(password);
     setIsVerifying(false);
     if (ok) close(true);
@@ -50,7 +52,7 @@ const UnlockGateModal: React.FC<UnlockGateModalProps> = ({ isOpen, onResolve }) 
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
       data-testid="unlock-gate-modal"
       onMouseDown={(e) => {
-        // 点空白 = 取消（原操作以原错误返回），与 Esc 同口径
+        // Click on backdrop = cancel (the original operation returns with its original error), same as Esc
         if (e.target === e.currentTarget) close(false);
       }}
     >

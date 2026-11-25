@@ -9,7 +9,7 @@ import ReauthModal from '../ReauthModal';
 import TravelPassphraseModal from '../TravelPassphraseModal';
 import TravelModeSection from './TravelModeSection';
 
-/** General 面板的密码安全区块：过期策略（NIST 取向默认不过期）+ 手动改密。 */
+/** Password security block of the General pane: expiry policy (NIST-leaning default of no expiry) + manual password change. */
 const SECURITY_EXPIRY_OPTIONS: { value: string; label: string }[] = [
   { value: '', label: 'settings.security.expiryNever' },
   { value: '90', label: 'settings.security.expiry90' },
@@ -25,18 +25,19 @@ const SecurityPane: React.FC<{
   const { lockService, loadIdentities } = usePersonaService();
   const [expiryDays, setExpiryDays] = useState<number | null>(null);
   const [saving, setSaving] = useState(false);
-  // biometric：enabled = keyring 有托管条目（活查；不随 settings JSON 走，
-  // 双真相源会漂移）。null = 尚未查到（toggle 禁用）。
+  // biometric: enabled = the keyring holds an escrow entry (queried live; not derived from
+  // the settings JSON, two sources of truth would drift). null = not yet queried (toggle disabled).
   const [biometric, setBiometric] = useState<BiometricStatus | null>(null);
   const [showEnableModal, setShowEnableModal] = useState(false);
   const [enabling, setEnabling] = useState(false);
   const [enableError, setEnableError] = useState<string | null>(null);
 
-  // 旅行模式：状态免解锁可读；enter/exit 弹口令窗。REAUTH_REQUIRED 时先
-  // 验主密码再重开口令窗（不保存明文口令跨弹窗）。
+  // Travel mode: status is readable without unlocking; enter/exit opens a passphrase modal.
+  // On REAUTH_REQUIRED verify the master password first, then reopen the passphrase modal
+  // (the plaintext passphrase is never kept across modals).
   const [travelStatus, setTravelStatus] = useState<TravelStatus | null>(null);
   const [travelModalMode, setTravelModalMode] = useState<null | 'set' | 'enter'>(null);
-  // REAUTH 打断前的原意图（reauth 成功后据此重开口令窗）
+  // Original intent before REAUTH interrupted (the passphrase modal reopens accordingly after reauth succeeds)
   const [travelPendingMode, setTravelPendingMode] = useState<'set' | 'enter'>('set');
   const [travelBusy, setTravelBusy] = useState(false);
   const [travelError, setTravelError] = useState<string | null>(null);
@@ -47,11 +48,11 @@ const SecurityPane: React.FC<{
       const resp = await personaAPI.getTravelStatus();
       if (resp.success && resp.data) setTravelStatus(resp.data);
     } catch {
-      // 状态读取失败不打断面板，保持上次值
+      // A status read failure doesn't disrupt the pane; keep the last value
     }
   };
 
-  // 初始值来自服务端真相（旧 JSON 缺键 → null = 不过期）
+  // Initial value comes from server truth (missing key in old JSON → null = no expiry)
   useEffect(() => {
     let cancelled = false;
     personaAPI
@@ -91,16 +92,18 @@ const SecurityPane: React.FC<{
     }
   };
 
-  // 已解锁态改密成功后回锁屏：state.service 里的旧会话密钥已作废，
-  // 锁屏重新解锁以新密码建会话（最简安全语义）
+  // After a successful password change in the unlocked state, return to the lock screen:
+  // the old session key in state.service is already invalidated, and unlocking again builds
+  // a session with the new password (simplest safe semantics)
   const handleRotationDone = async () => {
     setChangingPassword(false);
     toast.success(t('settings.security.changedRelock'));
     await lockService();
   };
 
-  // 开 = 先验主密码（ReauthModal）→ 后端再弹 OS 认证框；关 = 幂等删
-  //（收紧操作不设密码门禁）。enable 的成败在弹窗内闭环，可原地重试。
+  // On = verify the master password first (ReauthModal) → the backend then raises the OS auth
+  // prompt; off = idempotent delete (tightening operations get no password gate). Enable's
+  // success/failure closes the loop inside the modal, so it can be retried in place.
   const handleBiometricToggle = () => {
     if (biometric?.enabled) {
       void disableBiometric();
@@ -127,8 +130,8 @@ const SecurityPane: React.FC<{
     }
   };
 
-  // ReauthModal 收到的明文密码即请求体；失败留在弹窗内（enableError 驱动
-  // 弹窗错误条），不吞掉关闭
+  // The plaintext password the ReauthModal receives is the request body; failures stay in the
+  // modal (enableError drives the modal's error bar) and closing is not swallowed
   const handleBiometricEnable = async (masterPassword: string) => {
     setEnabling(true);
     try {
@@ -148,10 +151,11 @@ const SecurityPane: React.FC<{
   };
 
   // ---------------------------------------------------------------------
-  // 旅行模式：enter（口令窗 mode='set'）/ exit（mode='enter'）。
-  // REAUTH_REQUIRED → 关口令窗、弹 ReauthModal；验证过后按原意图重开
-  // 口令窗再输 travel 口令（口令不跨弹窗保留）。成功后刷新状态 + 重载
-  // 身份列表。
+  // Travel mode: enter (passphrase modal mode='set') / exit (mode='enter').
+  // REAUTH_REQUIRED → close the passphrase modal, open ReauthModal; once verified, reopen
+  // the passphrase modal per the original intent and enter the travel passphrase (the
+  // passphrase is not kept across modals). On success refresh the status and reload the
+  // identity list.
   // ---------------------------------------------------------------------
   const submitTravelPassphrase = async (passphrase: string) => {
     const mode = travelModalMode;
@@ -186,7 +190,7 @@ const SecurityPane: React.FC<{
     }
   };
 
-  // reauth 失败也显示在 ReauthModal 的错误条（travelError 此时只喂它）
+  // A reauth failure is shown in ReauthModal's error bar too (travelError only feeds it at that point)
   const handleTravelReauth = async (masterPassword: string) => {
     setTravelBusy(true);
     try {
@@ -313,8 +317,8 @@ const SecurityPane: React.FC<{
         />
       )}
 
-      {/* 直接用组件而非 useReauth hook：enable 需要密码本身作请求体，
-          而非"验证通过"这一结果 */}
+      {/* Use the component directly instead of the useReauth hook: enable needs the password
+          itself as the request body, not the "验证通过" result */}
       {showEnableModal && (
         <ReauthModal
           isOpen

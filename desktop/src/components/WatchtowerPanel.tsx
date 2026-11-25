@@ -18,7 +18,7 @@ const getSeverityColor = (severity: HealthSeverity) => {
   }
 };
 
-/** 规则短标签的 i18n key（渲染处 t()）；措辞与 CLI `persona watchtower` 对应 */
+/** i18n key for the rule's short label (t() at the render site); wording corresponds to the CLI `persona watchtower` */
 const KIND_LABELS: Record<HealthIssueKindPayload['type'], string> = {
   weak_password: 'watchtower.kind.weak_password',
   reused_password: 'watchtower.kind.reused_password',
@@ -30,8 +30,8 @@ const KIND_LABELS: Record<HealthIssueKindPayload['type'], string> = {
 };
 
 /**
- * 本地化 detail：按结构化 type 字段渲染（后端 detail 是英文固定模板，供 CLI
- * 消费；前端不复用，保证界面语言一致）。
+ * Localized detail: rendered from the structured type field (the backend detail is a fixed English template for
+ * CLI consumption; the frontend does not reuse it, keeping the UI language consistent).
  */
 const detailFor = (
   issue: HealthIssue,

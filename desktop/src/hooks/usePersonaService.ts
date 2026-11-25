@@ -49,9 +49,10 @@ export const usePersonaService = () => {
     setCredentialSearchQuery,
   } = useAppStore();
 
-  // 身份切换/凭据加载的过期响应守卫（JS-5）：快速连续切换身份时，慢的
-  // 上一个请求后到会覆盖新身份的状态。每个操作递增序号，完成后若序号已
-  // 被更新的操作取代则丢弃结果，防身份凭据串号。
+  // Stale-response guard for identity switching / credential loading (JS-5): when identities are
+  // switched in quick succession, the slow previous request can arrive last and clobber the new
+  // identity's state. Every operation bumps a sequence number, and once it completes the result is
+  // dropped if a newer operation has superseded it, preventing identity/credential crossover.
   const switchSeq = useRef(0);
   const credentialLoadSeq = useRef(0);
 
@@ -89,14 +90,14 @@ export const usePersonaService = () => {
       if (response.success) {
         setUnlocked(true);
         setInitialized(true);
-        // 解锁成功即清除遗留的强制改密标志（新会话无需再轮换）
+        // Clear any leftover forced password-change flag once unlocking succeeds (a new session needs no rotation)
         setPasswordChangeRequired(false);
         await loadIdentities();
         toast.success(t('svc.initSuccess'));
         return true;
       } else if (response.error_code === 'PASSWORD_CHANGE_REQUIRED') {
-        // 主密码按策略需要轮换：解锁屏渲染强制改密弹窗，
-        // 不走通用错误框/toast（密码本身没错）
+        // The master password needs rotation per policy: the unlock screen renders the forced change dialog,
+        // without a generic error box/toast (the password itself is not wrong)
         setPasswordChangeRequired(true);
         return false;
       } else {
@@ -114,10 +115,11 @@ export const usePersonaService = () => {
     }
   };
 
-  /** biometric 解锁：后端已走 init_service 全链路（OS 认证 → keyring 取回
-   * 密码），前端只做会话状态编排。返回原始 ApiResponse 供解锁屏按
-   * error_code 分流（BIOMETRIC_RESET 刷 status 隐藏按钮；改密码走既有
-   * forced 机制）。失败不 toast——解锁屏的错误条/按钮显隐是唯一反馈面。 */
+  /** Biometric unlock: the backend already runs the full init_service chain (OS authentication ->
+   *  retrieving the password from the keyring), so the frontend only orchestrates session state. The raw
+   *  ApiResponse is returned so the unlock screen can branch on error_code (BIOMETRIC_RESET refreshes status
+   *  to hide the button; a password change goes through the existing forced mechanism). Failures are not
+   *  toasted—the unlock screen's error bar and button visibility are the only feedback surface. */
   const unlockWithBiometric = async (dbPath?: string): Promise<ApiResponse<boolean>> => {
     setLoading(true);
     clearError();
@@ -132,14 +134,15 @@ export const usePersonaService = () => {
         return response;
       }
       if (response.error_code === 'PASSWORD_CHANGE_REQUIRED') {
-        // 生物解锁成功但策略要求轮换：与密码路径共用 forced 改密弹窗
+        // Biometric unlock succeeded but policy requires rotation: share the password path's forced change dialog
         setPasswordChangeRequired(true);
       } else if (response.error_code === 'BIOMETRIC_RESET') {
-        // 托管条目不存在/已自删：本地化提示（后端消息为英文），解锁屏随后刷 status
+        // The managed entry is missing or was self-deleted: localized hint (the backend message is English), and the unlock screen refreshes status afterwards
         setError(t('svc.biometricReset'));
       } else if (response.error_code === 'BIOMETRIC_CANCELLED') {
-        // 用户主动取消弹框：包裹仍有效，静默回解锁屏（入口已 clearError，
-        // 指纹按钮保留）——刻意不 setError，取消不是失败（设计文档 §3.4）
+        // The user dismissed the prompt on purpose: the vault is still valid, so return silently to the unlock screen
+        // (the entry point already clearError'd and the fingerprint button stays)—deliberately not setting an error,
+        // since cancelling is not a failure (design doc §3.4)
       } else {
         setError(response.error || t('svc.initFailed'));
       }
@@ -157,22 +160,22 @@ export const usePersonaService = () => {
       const response = await personaAPI.lockService();
       if (response.success) {
         setUnlocked(false);
-        // 锁屏清强制改密标志（下次解锁由后端策略重新判定）
+        // Clear the forced password-change flag when locking (backend policy re-decides on the next unlock)
         setPasswordChangeRequired(false);
         setIdentities([]);
         setCurrentIdentity(null);
         setCredentials([]);
-        // favicon 缓存随锁清空（后端 vault 未锁文件仍在，前端不落盘无害；
-        // 重新解锁后按需重读）
+        // The favicon cache is cleared with the lock (the backend vault is not locked and the file is still there,
+        // so skipping a disk write is harmless; it gets re-read on demand after re-unlocking)
         clearFaviconCache();
-        // 选中与待注入的跨身份跳转都随锁作废（否则解锁后可能自动选中陈旧条目）
+        // Both the selection and the pending cross-identity jump are invalidated with the lock (otherwise unlocking could auto-select a stale entry)
         clearPendingCredentialSelection();
         setSelectedCredentialId(null);
-        // 侧栏分类选中同随锁复位（否则解锁后树选中残留上一会话状态）
+        // Sidebar category selection is reset with the lock too (otherwise the tree selection would carry the previous session's state into the next unlock)
         resetSidebarFilter();
-        // 列表搜索词同随锁清空
+        // The list search query is also cleared with the lock
         setCredentialSearchQuery('');
-        // 编辑弹窗同随锁作废（解密 payload 不得跨锁存活）
+        // The editing dialog is invalidated with the lock too (a decrypted payload must not survive across locks)
         setEditingCredential(null);
         toast.success(t('svc.lockSuccess'));
       } else {
@@ -183,11 +186,12 @@ export const usePersonaService = () => {
     }
   };
 
-  /** 恢复换库后的前端收尾（S5 restore-from-file）：后端换库段已取下
-   * service（连接排空，主密码可能来自备份）。与 lockService 同口径清
-   * 旧库在内存里的身份/凭据（currentIdentity 残留会让解锁后 loadIdentities
-   * 跳过重选），但**不调 lockService**——后端槽位已是 None，锁命令必败；
-   * 最后重探解锁态把 App 驱回解锁屏（is_service_unlocked 免解锁可查）。 */
+  /** Frontend wrap-up after a restore with a vault swap (S5 restore-from-file): the backend's swap stage has
+   *  already taken the service down (connections drained, and the master password may have come from a backup).
+   *  The old vault's identities/credentials are cleared from memory the same way lockService does (a leftover
+   *  currentIdentity would make loadIdentities skip reselection after unlocking), but **lockService is not called**
+   *  —the backend slot is already None and a lock command would surely fail; finally the unlock state is re-probed
+   *  to drive the App back to the unlock screen (is_service_unlocked is queryable without unlocking). */
   const finalizeVaultRestore = async () => {
     setPasswordChangeRequired(false);
     setIdentities([]);
@@ -253,8 +257,8 @@ export const usePersonaService = () => {
         try {
           await personaAPI.setActiveIdentity(response.data.id);
         } catch {
-          // 创建已服务端确认，不撤销；但激活失败必须可见——workspace 活动
-          // 身份仍指旧身份，CLI/浏览器会按旧身份工作，不得静默成功
+          // The creation is already confirmed by the server and is not rolled back; but the activation failure must be visible—
+          // the workspace's active identity still points at the old one, so the CLI/browser would keep working with it; this cannot silently succeed
           toast.error(t('svc.activateIdentityFailed'));
         }
         toast.success(t('svc.identityCreated'));
@@ -327,15 +331,15 @@ export const usePersonaService = () => {
     }
   };
 
-  /** 切换活动身份。以服务端提交成功为准才更新 UI 身份与凭据；
-   * 失败保留原身份并走 setError，不弹成功提示（silent 只抑制成功
-   * toast，不抑制失败反馈——失败静默会让用户以为已在目标身份工作）。 */
+  /** Switches the active identity. The UI identity and credentials are only updated once the server commit succeeds;
+   * on failure the original identity is kept and setError is used, with no success toast (silent only suppresses the
+   * success toast, not failure feedback—a silent failure would make the user believe they are already working in the target identity). */
   const switchIdentity = async (
     identity: Identity,
     options?: { silent?: boolean },
   ): Promise<boolean> => {
     clearError();
-    // 序号守卫：并发切换时慢的旧切换完成不得覆盖新切换的 currentIdentity
+    // Sequence guard: with concurrent switches, a slow older switch finishing later must not clobber the new switch's currentIdentity
     const seq = ++switchSeq.current;
     try {
       const response = await personaAPI.setActiveIdentity(identity.id);
@@ -348,7 +352,7 @@ export const usePersonaService = () => {
       }
       setCurrentIdentity(identity);
       await loadCredentialsForIdentity(identity.id);
-      // 搜索跳转等场景传 silent：切换是手段不是用户动作，成功 toast 属噪声
+      // Scenarios like search jumps pass silent: the switch is a means rather than a user action, so a success toast would be noise
       if (!options?.silent) {
         toast.success(t('svc.switchedTo', { name: identity.name }));
       }
@@ -362,7 +366,7 @@ export const usePersonaService = () => {
   };
 
   const loadCredentialsForIdentity = async (identityId: string) => {
-    // 序号守卫：慢的旧身份凭据响应后到不得覆盖新身份（JS-5 凭据串号）
+    // Sequence guard: a slow response for the old identity's credentials must not clobber the new identity (JS-5 credential crossover)
     const seq = ++credentialLoadSeq.current;
     try {
       const response = await personaAPI.getCredentialsForIdentity(identityId);
@@ -371,7 +375,7 @@ export const usePersonaService = () => {
         setCredentials(response.data);
       } else {
         setError(response.error || t('svc.loadCredentialsFailed'));
-        // 凭据没加载出来，pending 跳转永远不会被注入；清掉防下次进该身份突然选中
+        // With no credentials loaded, the pending jump can never be injected; clear it so a later visit to this identity does not select something unexpectedly
         clearPendingCredentialSelection();
       }
     } catch {
@@ -406,7 +410,7 @@ export const usePersonaService = () => {
     }
   };
 
-  /** 元数据编辑：成功后刷新列表并返回更新行；REAUTH 等错误码走 toast */
+  /** Metadata edit: on success refreshes the list and returns the updated row; error codes such as REAUTH go to a toast */
   const updateCredential = async (request: UpdateCredentialRequest) => {
     setLoading(true);
     clearError();
@@ -432,9 +436,9 @@ export const usePersonaService = () => {
   };
 
   /**
-   * 密文 payload 编辑（敏感：后端复用原 item key 重封 + 敏感门禁）。
-   * 返回原始 ApiResponse 交调用方编排（modal 需识别 REAUTH_REQUIRED
-   * 弹 ReauthModal 重试，不做吞码 toast）。
+   * Encrypted payload editing (sensitive: the backend reseals with the original item key plus a sensitivity gate).
+   * The raw ApiResponse is returned for the caller to orchestrate (the modal must recognize REAUTH_REQUIRED,
+   * open the ReauthModal and retry, rather than swallowing the code in a toast).
    */
   const updateCredentialData = async (request: UpdateCredentialDataRequest) => {
     return personaAPI.updateCredentialData(request);
@@ -499,7 +503,7 @@ export const usePersonaService = () => {
     }
   };
 
-  /** 元数据恢复到历史版本：成功后刷新列表并返回更新行（秘密永不回滚） */
+  /** Restores metadata to a historical version: on success refreshes the list and returns the updated row (secrets are never rolled back) */
   const restoreCredentialVersion = async (credentialId: string, version: number) => {
     try {
       const response = await personaAPI.restoreCredentialVersion(credentialId, version);
@@ -518,7 +522,7 @@ export const usePersonaService = () => {
     }
   };
 
-  /** 附件四动作。列表失败回 []（面板显示空态）；增删保存失败 toast 且返回 null/[] */
+  /** The four attachment actions. A failed list returns [] (the panel shows an empty state); failed add/delete/save toast and return null/[] */
   const listAttachments = async (credentialId: string) => {
     try {
       const response = await personaAPI.listAttachments(credentialId);
@@ -534,8 +538,9 @@ export const usePersonaService = () => {
   };
 
   /**
-   * 结构化自定义字段（1Password 对齐）。读失败返回 null（与「空表」区分，
-   * 面板据此显示错误行而非空态）；值随列表一并解密，UI 层对 concealed 打码。
+   * Structured custom fields (aligned with 1Password). A failed read returns null (to distinguish it from an
+   * "empty table", so the panel shows an error row rather than an empty state); values are decrypted alongside the
+   * list, and the UI layer masks concealed ones.
    */
   const getCredentialCustomFields = async (credentialId: string): Promise<CustomField[] | null> => {
     try {
@@ -623,7 +628,7 @@ export const usePersonaService = () => {
     }
   };
 
-  /** 按需抓取凭据站点 favicon（唯一外联入口；成功并入缓存，失败 toast） */
+  /** Fetches a credential site's favicon on demand (the only outbound request; success merges into the cache, failure toasts) */
   const fetchFavicon = async (credentialId: string) => {
     try {
       const response = await personaAPI.fetchCredentialFavicon(credentialId);
@@ -679,8 +684,8 @@ export const usePersonaService = () => {
         toast.error(response.error || t('svc.sshAgentStartFailed'));
       }
     } catch (err) {
-      // api 层已把 Tauri 的字符串 rejection 归一成 Error——这里带上底层
-      // 原因（缺库/socket 路径权限/IPC 参数问题），不再只报"启动失败"
+      // The api layer has already normalized Tauri's string rejection into an Error—include the underlying
+      // cause here (missing vault / socket path permissions / IPC argument issues) rather than only reporting "failed to start"
       toast.error(err instanceof Error ? err.message : t('svc.sshAgentStartFailed'));
     }
   };
@@ -712,8 +717,8 @@ export const usePersonaService = () => {
     }
   };
 
-  /** SSH 私钥文件导入的两段（inspect/import）不在这里 toast：导入弹框
-   *  需要按响应分支（受保护钥要补口令、错口令要原地重试），错误就地展示 */
+  /** The two stages of SSH private key file import (inspect/import) do not toast here: the import dialog
+   *  must branch on the response (a protected key needs a passphrase, a wrong one needs an in-place retry), so errors are shown in place */
   const inspectSshKeyFile = async (path: string) => {
     try {
       return await personaAPI.inspectSshKeyFile(path);
@@ -745,8 +750,8 @@ export const usePersonaService = () => {
     }
   };
 
-  /** 生成 SSH 密钥对并入库；与导入同理不在 hook 层 toast——生成弹框
-   *  需要 RSA 4096 的长加载态与成功后的公钥展示，分支在弹框内处理 */
+  /** Generates an SSH key pair and stores it; like import, no toast at the hook level—the generation dialog
+   *  needs a long loading state for RSA 4096 and the public key display on success, so the branching happens inside the dialog */
   const generateSshKey = async (request: {
     identity_id: string;
     key_type: string;
@@ -782,10 +787,10 @@ export const usePersonaService = () => {
     initializeService,
     unlockWithBiometric,
     lockService,
-    /** 重新探一次后端解锁态（Quick Access 浮窗每次被唤起都要问一遍：两个
-     *  窗口各有独立 store，主窗口那边解锁/锁定本窗口不会自动知道） */
+    /** Re-probes the backend unlock state (the Quick Access popover has to ask every time it is summoned:
+     *  the two windows each have their own store, so unlocking/locking in the main window does not reach here automatically) */
     checkServiceStatus,
-    /** 恢复换库后的清内存 + 重探解锁态（BackupSection 恢复成功后调用） */
+    /** Clears memory and re-probes the unlock state after a restore with a vault swap (called after BackupSection succeeds) */
     finalizeVaultRestore,
     loadIdentities,
     createIdentity,

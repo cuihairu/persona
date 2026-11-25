@@ -5,7 +5,7 @@
 
 use super::*;
 
-/// 未初始化的库：status 走"缺 db_path"错误，不 panic
+/// Uninitialized database: status hits the "missing db_path" error instead of panicking
 #[tokio::test]
 async fn quick_access_status_requires_initialized_service() {
     let app = mock_app();
@@ -16,7 +16,7 @@ async fn quick_access_status_requires_initialized_service() {
         .as_deref()
         .is_some_and(|e| e.contains("Database path unavailable")));
 }
-/// 写配置要过解锁门禁（同 set_locale / set_feature_flags）；读状态免解锁
+/// Writing the config passes the unlock gate (like set_locale / set_feature_flags); reading status needs no unlock
 #[tokio::test]
 async fn quick_access_set_requires_unlocked_service() {
     let app = mock_app();
@@ -34,7 +34,7 @@ async fn quick_access_set_requires_unlocked_service() {
 
     init_service_ok(&app, "master-pw-123").await;
 
-    // 锁上：读仍然可以（设置页要显示"热键到底生效没有"），写拒绝
+    // Locked: reads still work (the settings page has to show whether the hotkey actually took effect); writes are refused
     lock_service(app.state::<AppState>()).await.unwrap();
     let resp = quick_access_status(app.state::<AppState>()).await.unwrap();
     assert!(
@@ -54,21 +54,22 @@ async fn quick_access_set_requires_unlocked_service() {
     assert!(!resp.success);
     assert_eq!(resp.error.as_deref(), Some("Service is locked"));
 
-    // 锁定态的写入不得落库
+    // Writes in the locked state must not land in the DB
     let resp = get_workspace_settings(app.state::<AppState>())
         .await
         .unwrap();
     assert!(resp.data.expect("settings").quick_access_hotkey.is_none());
 }
-/// 默认档（2026-09-28 起默认关）：开关关、绑定落到平台默认值；显式
-/// 开启后测试环境（mock context）没有 quick-access 浮窗，抢注必然
-/// 失败 → registered 为空且带原因（这就是设置页要显示的面）
+/// Default tier (off by default since 2026-09-28): the switch is off and the binding
+/// falls back to the platform default; once explicitly enabled, the test environment (mock
+/// context) has no quick-access overlay, so registration necessarily fails -> registered is
+/// empty but carries a reason (exactly the surface the settings page displays)
 #[tokio::test]
 async fn quick_access_status_reports_defaults_and_missing_registration() {
     let app = mock_app();
     init_service_ok(&app, "master-pw-123").await;
 
-    // 默认关：新装/缺键不抢注任何全局热键，registered 空、无错误
+    // Off by default: a fresh install / missing key registers no global hotkey, registered is empty, no error
     let resp = quick_access_status(app.state::<AppState>()).await.unwrap();
     assert!(resp.success, "{:?}", resp.error);
     let status = resp.data.expect("status present");
@@ -76,7 +77,7 @@ async fn quick_access_status_reports_defaults_and_missing_registration() {
     assert!(status.registered_accelerator.is_none());
     assert!(status.error.is_none(), "默认关不是失败，不带原因");
 
-    // 显式开启（设置页开关）后才有"抢注失败"面
+    // Only after explicit enablement (the settings page switch) does the "registration failed" surface appear
     let resp = quick_access_set(app.handle().clone(), true, None, app.state::<AppState>())
         .await
         .unwrap();
@@ -90,13 +91,13 @@ async fn quick_access_status_reports_defaults_and_missing_registration() {
     assert!(status.registered_accelerator.is_none());
     assert!(status.error.is_some(), "未生效必须带原因，不能静默");
 
-    // 运行态确实被记下了（解锁时的 apply_quick_access 走的是同一条路径）
+    // The runtime state was really recorded (unlock's apply_quick_access goes through the same path)
     let state = app.state::<AppState>();
     let runtime = state.quick_access.lock().unwrap();
     assert!(runtime.registered.is_none());
     assert!(runtime.last_error.is_some());
 }
-/// 改绑落库并回读（DB 是真值源）；非法加速键**不落库**
+/// Rebinding persists to the DB and reads back (the DB is the source of truth); an invalid accelerator does **not** land in the DB
 #[tokio::test]
 async fn quick_access_set_persists_binding_and_rejects_invalid() {
     let app = mock_app();
@@ -114,7 +115,7 @@ async fn quick_access_set_persists_binding_and_rejects_invalid() {
     let status = resp.data.expect("status present");
     assert_eq!(status.configured_accelerator, "Control+Alt+K");
 
-    // 落库回读
+    // Persist and read back
     let resp = get_workspace_settings(app.state::<AppState>())
         .await
         .unwrap();
@@ -123,7 +124,7 @@ async fn quick_access_set_persists_binding_and_rejects_invalid() {
         Some("Control+Alt+K")
     );
 
-    // 非法串：命令失败且 DB 不动
+    // Invalid string: the command fails and the DB is untouched
     let resp = quick_access_set(
         app.handle().clone(),
         true,
@@ -142,7 +143,7 @@ async fn quick_access_set_persists_binding_and_rejects_invalid() {
         "非法加速键不得覆盖已落库的绑定"
     );
 }
-/// 关开关 + 空串恢复默认：hotkey 存回 None（不把默认值钉进 DB）
+/// Switching off + a blank string restores the default: hotkey is stored back as None (the default value is not pinned into the DB)
 #[tokio::test]
 async fn quick_access_set_disable_and_reset_default() {
     let app = mock_app();
@@ -179,13 +180,13 @@ async fn quick_access_set_disable_and_reset_default() {
     assert!(settings.quick_access_enabled);
     assert!(settings.quick_access_hotkey.is_none());
 }
-/// 关开关后运行态不得残留"已注册"（否则 UI 会显示一个其实已失效的绑定）
+/// After switching off, the runtime state must not retain "registered" (otherwise the UI would display a binding that has actually lapsed)
 #[tokio::test]
 async fn quick_access_set_disable_clears_registered_state() {
     let app = mock_app();
     init_service_ok(&app, "master-pw-123").await;
 
-    // 先手工置一个"曾抢注成功"的运行态，模拟改绑前的进程内状态
+    // First hand-set a "previously registered successfully" runtime state, simulating the in-process state before rebinding
     {
         let state = app.state::<AppState>();
         let mut runtime = state.quick_access.lock().unwrap();
@@ -209,7 +210,7 @@ async fn quick_access_set_disable_clears_registered_state() {
     let runtime = state.quick_access.lock().unwrap();
     assert!(runtime.registered.is_none());
 }
-/// 未初始化的库：status 走"缺 db_path"错误，不 panic（与 quick_access 同因）
+/// Uninitialized database: status hits the "missing db_path" error instead of panicking (same cause as quick_access)
 #[tokio::test]
 async fn generator_status_requires_initialized_service() {
     let app = mock_app();
@@ -220,7 +221,7 @@ async fn generator_status_requires_initialized_service() {
         .as_deref()
         .is_some_and(|e| e.contains("Database path unavailable")));
 }
-/// 写配置要过解锁门禁（读免解锁）；锁定态的写入不得落库
+/// Writing the config passes the unlock gate (reads need no unlock); writes in the locked state must not land in the DB
 #[tokio::test]
 async fn generator_set_requires_unlocked_service() {
     let app = mock_app();
@@ -266,8 +267,9 @@ async fn generator_set_requires_unlocked_service() {
         .generator_panel_hotkey
         .is_none());
 }
-/// 默认关；显式开启后 mock context 没有 generator-panel 浮窗 → 抢注
-/// 必然失败且带原因。**改检索绑定不得动生成器槽位**（独立运行态）
+/// Off by default; once explicitly enabled the mock context has no generator-panel overlay ->
+/// registration necessarily fails and carries a reason. **Changing the search binding must not
+/// touch the generator slot** (independent runtime state)
 #[tokio::test]
 async fn generator_status_reports_defaults_and_missing_registration() {
     let app = mock_app();
@@ -301,7 +303,7 @@ async fn generator_status_reports_defaults_and_missing_registration() {
     assert!(runtime.generator_registered.is_none());
     assert!(runtime.generator_last_error.is_some());
 }
-/// 改绑落库并回读；非法加速键不落库；与检索绑定互不影响
+/// Rebinding persists and reads back; invalid accelerators do not land in the DB; no cross-effects with the search binding
 #[tokio::test]
 async fn generator_set_persists_binding_and_rejects_invalid() {
     let app = mock_app();
@@ -319,7 +321,7 @@ async fn generator_set_persists_binding_and_rejects_invalid() {
     let status = resp.data.expect("status present");
     assert_eq!(status.configured_accelerator, "Control+Alt+G");
 
-    // 落库回读
+    // Persist and read back
     let resp = get_workspace_settings(app.state::<AppState>())
         .await
         .unwrap();
@@ -331,7 +333,7 @@ async fn generator_set_persists_binding_and_rejects_invalid() {
         Some("Control+Alt+G")
     );
 
-    // 检索绑定写入后，生成器的 DB 值与运行态槽位都不被带跑
+    // After writing the search binding, neither the generator's DB value nor its runtime slot gets carried along
     let resp = quick_access_set(
         app.handle().clone(),
         true,
@@ -355,7 +357,7 @@ async fn generator_set_persists_binding_and_rejects_invalid() {
         Some("Control+Alt+K")
     );
     let state = app.state::<AppState>();
-    // 锁的作用域止步于块尾：后面还有 await（clippy::await_holding_lock）
+    // The lock's scope ends at the end of the block: there are more awaits later (clippy::await_holding_lock)
     {
         let runtime = state.quick_access.lock().unwrap();
         assert!(runtime.generator_last_error.is_some());
@@ -365,7 +367,7 @@ async fn generator_set_persists_binding_and_rejects_invalid() {
         );
     }
 
-    // 非法串：命令失败且 DB 不动
+    // Invalid string: the command fails and the DB is untouched
     let resp = generator_set(
         app.handle().clone(),
         true,
@@ -387,7 +389,7 @@ async fn generator_set_persists_binding_and_rejects_invalid() {
         "非法加速键不得覆盖已落库的绑定"
     );
 }
-/// 关开关 + 空串恢复默认：hotkey 存回 None（不把默认值钉进 DB）
+/// Switching off + a blank string restores the default: hotkey is stored back as None (the default value is not pinned into the DB)
 #[tokio::test]
 async fn generator_set_disable_and_reset_default() {
     let app = mock_app();
@@ -424,7 +426,7 @@ async fn generator_set_disable_and_reset_default() {
     assert!(settings.generator_panel_enabled);
     assert!(settings.generator_panel_hotkey.is_none());
 }
-/// 跨窗跳转的入参校验：非法 UUID 直接拒（主窗口拿到非法 id 只会静默不选中）
+/// Input validation for cross-window jumps: an invalid UUID is rejected outright (the main window receiving a bad id would only silently skip selection)
 #[tokio::test]
 async fn quick_access_open_credential_rejects_invalid_uuid() {
     let app = mock_app();
@@ -440,7 +442,7 @@ async fn quick_access_open_credential_rejects_invalid_uuid() {
     assert!(!resp.success);
     assert_eq!(resp.error.as_deref(), Some("Invalid UUID format"));
 
-    // 主窗口不存在（mock context 无窗口）→ 明确报错，不静默
+    // Main window absent (mock context has no windows) -> an explicit error, not silence
     let resp = quick_access_open_credential(
         QuickAccessOpenCredentialRequest {
             identity_id: uuid::Uuid::new_v4().to_string(),
@@ -455,11 +457,11 @@ async fn quick_access_open_credential_rejects_invalid_uuid() {
 }
 #[tokio::test]
 async fn report_frontend_error_never_fails_on_any_input_shape() {
-    // 上报路径永不失败：空参数
+    // The reporting path never fails: empty arguments
     let resp = report_frontend_error(String::new(), None, None);
     assert!(resp.success);
 
-    // 常规参数
+    // Regular arguments
     let resp = report_frontend_error(
         "boom".to_string(),
         Some("at Foo (bar.tsx:1)".to_string()),
@@ -467,7 +469,7 @@ async fn report_frontend_error_never_fails_on_any_input_shape() {
     );
     assert!(resp.success);
 
-    // 超长字段（> 8 KiB，含多字节字符）：按 char 边界截断不 panic
+    // Overlong field (> 8 KiB, with multi-byte characters): truncates on a char boundary without panicking
     let long_message = "错".repeat(10_000);
     let long_stack = "x".repeat(50_000);
     let resp = report_frontend_error(long_message, Some(long_stack), None);

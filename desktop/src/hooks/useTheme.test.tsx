@@ -12,7 +12,7 @@ jest.mock('@tauri-apps/api/window', () => ({
   }),
 }));
 
-/** 可控的 matchMedia 替身：listeners 集合 + emit 触发 change 事件 */
+/** Controllable matchMedia stand-in: a listeners set plus emit to fire change events */
 const installMq = (initial: boolean) => {
   const listeners = new Set<(e: { matches: boolean }) => void>();
   const mq = {
@@ -141,7 +141,7 @@ describe('hooks/useTheme', () => {
   });
 
   it('guards a missing matchMedia without crashing', () => {
-    // window.matchMedia 保持未定义（jsdom 默认）
+    // Leave window.matchMedia undefined (jsdom default)
     renderHook(() => useTheme());
     act(() => {
       useAppStore.getState().setTheme('dark');
@@ -165,7 +165,7 @@ describe('hooks/useTheme', () => {
     mockSetTheme.mockRejectedValueOnce(new Error('boom'));
 
     renderHook(() => useTheme());
-    await act(async () => {}); // 吸收微任务，避免 unhandled rejection
+    await act(async () => {}); // flush microtasks to avoid an unhandled rejection
     expect(document.documentElement.classList.contains('dark')).toBe(false);
   });
 

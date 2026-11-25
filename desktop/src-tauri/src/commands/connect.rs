@@ -43,14 +43,17 @@ pub(crate) fn read_agent_status(running_hint: bool) -> SshAgentStatus {
         .and_then(|sock| query_agent_key_count(sock).ok());
 
     SshAgentStatus {
-        // 三态判定，杜绝旧 `hint || files` 的假绿：
-        // - 内嵌 agent（desktop 启动）：任务句柄存活 + state 文件在；
-        // - 外部 agent（CLI 独立进程起的 daemon，desktop 无句柄）：socket
-        //   能真实连上（unix 连接探测）才算运行中；
-        // - 任务已死只剩上次残留的 state 文件：不算运行中（这是"点击启动
-        //   无效果但徽章恒绿"bug 的根源）。
-        // Windows 无连接探测（query_agent_key_count 是 unix 专属）：内嵌
-        // 场景由句柄覆盖；外部 daemon 可见性为已知限制。
+        // Three-way determination, killing the old `hint || files` false green:
+        // - embedded agent (started by desktop): task handle alive + state file present;
+        // - external agent (daemon spawned by a standalone CLI process, no handle in
+        //   desktop): only counts as running if the socket actually connects
+        //   (unix connection probe);
+        // - task dead with only the leftover state file from last time: not running
+        //   (this is the root of the "clicking start does nothing but the badge
+        //   stays green" bug).
+        // Windows has no connection probe (query_agent_key_count is unix-only): the
+        // embedded case is covered by the handle; external daemon visibility is a
+        // known limitation.
         running: (running_hint && (socket_value.is_some() || pid_value.is_some()))
             || (!running_hint && probe_agent_alive(socket_value.as_deref())),
         socket_path: socket_value,
@@ -60,14 +63,17 @@ pub(crate) fn read_agent_status(running_hint: bool) -> SshAgentStatus {
     }
 }
 
-/// 外部 agent 探测：unix 下对 state 文件记录的 socket 做一次 connect-only
-/// 探活（不进行协议对话——对无应答的残留 socket 也不会阻塞）。
-/// 连不上 = agent 已死，state 文件只是残留。
+/// External agent probe: on unix, run a connect-only liveness check
+/// against the socket recorded in the state file (no protocol
+/// conversation — it will not block against a leftover socket that never
+/// answers).
+/// Cannot connect = the agent is dead and the state file is just leftover.
 #[cfg(unix)]
 pub(crate) fn probe_agent_alive(sock_path: Option<&str>) -> bool {
     use std::os::unix::net::UnixStream;
-    // connect-only 探活：本地 unix socket 连接即时完成（成功/ECONNREFUSED/
-    // ENOENT），不做协议对话，无阻塞窗口。
+    // connect-only liveness check: a local unix socket connection completes
+    // immediately (success / ECONNREFUSED / ENOENT); no protocol conversation
+    // and no blocking window.
     sock_path
         .map(|sock| UnixStream::connect(sock).is_ok())
         .unwrap_or(false)
@@ -75,8 +81,9 @@ pub(crate) fn probe_agent_alive(sock_path: Option<&str>) -> bool {
 
 #[cfg(not(unix))]
 pub(crate) fn probe_agent_alive(_sock_path: Option<&str>) -> bool {
-    // Windows：内嵌 agent 由任务句柄覆盖；外部 daemon 的 named pipe 探测
-    // 未实现，为已知限制（待 Windows 实机验收一并核对）。
+    // Windows: the embedded agent is covered by the task handle; a named-pipe
+    // probe for an external daemon is not implemented and is a known
+    // limitation (to be checked together with on-machine Windows acceptance).
     false
 }
 
@@ -86,10 +93,11 @@ pub(crate) fn query_agent_key_count(sock_path: &str) -> std::result::Result<usiz
     use std::io::{Read, Write};
     use std::os::unix::net::UnixStream;
 
-    // 全程限时：status 查询跑在 UI 路径上，对"活着但不应答"的 socket
-    // （残留监听、卡死的 daemon）无超时会永久阻塞面板。connect 在本地
-    // unix socket 上即时返回；read/write 超时挡住所有协议阶段挂起。
-    // （本工具链的 std 没有 UnixStream::connect_timeout。）
+    // Deadline throughout: the status query runs on the UI path, and without
+    // a timeout a socket that is "alive but never answers" (leftover listener,
+    // wedged daemon) blocks the panel forever. connect on a local unix socket
+    // returns immediately; the read/write timeouts cover every protocol stage.
+    // (This toolchain's std has no UnixStream::connect_timeout.)
     const QUERY_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(500);
     let mut stream =
         UnixStream::connect(sock_path).map_err(|e| format!("Failed to connect to agent: {}", e))?;
@@ -124,15 +132,17 @@ pub(crate) fn query_agent_key_count(_sock_path: &str) -> std::result::Result<usi
     Err("Agent key count not supported on this platform".to_string())
 }
 
-/// Connect listener 运行状态（设置页渲染 + 自动化开关判定）。
+/// Connect listener running status (settings-page rendering + automation switch decision).
 #[derive(Debug, Serialize)]
 pub struct ConnectServerStatus {
     pub running: bool,
-    /// listener 实际端口（未运行 = None；端口 0 = OS 分配后的真实值）。
+    /// The listener's actual port (not running = None; port 0 = the real value
+    /// after OS assignment).
     pub port: Option<u16>,
 }
 
-/// token 管理列表视图——剥除哈希（哈希不出库；列表只展示指纹）。
+/// Token management list view — hashes stripped (hashes never leave the vault;
+/// the list only shows fingerprints).
 #[derive(Debug, Serialize)]
 pub struct ConnectTokenView {
     pub id: String,
@@ -162,7 +172,8 @@ impl From<&persona_core::connect::ConnectTokenRow> for ConnectTokenView {
     }
 }
 
-/// 创建成功响应：明文 token 只此一次（前端展示 + 复制，关闭后无法再查）。
+/// Creation success response: the plaintext token is shown exactly once
+/// (frontend display + copy; it cannot be retrieved again after the dialog closes).
 #[derive(Debug, Serialize)]
 pub struct ConnectTokenCreatedView {
     pub token: String,
@@ -183,8 +194,9 @@ pub(crate) async fn connect_server_status_of(state: &State<'_, AppState>) -> Con
     }
 }
 
-/// 启动 Connect listener（bind 硬编码 127.0.0.1；端口 None = 0 = OS 分配）。
-/// 需要解锁会话；已运行时报错（前端先 stop 或按状态渲染）。
+/// Start the Connect listener (bind hardcoded to 127.0.0.1; port None = 0 = OS-assigned).
+/// Requires an unlocked session; errors when already running (the frontend
+/// should stop it first or render by state).
 #[command]
 pub async fn connect_server_start(
     state: State<'_, AppState>,
@@ -221,9 +233,10 @@ pub async fn connect_server_start(
                 port: Some(port),
             };
             let mut guard = state.connect_server.lock().await;
-            // 竞态防御：重入时后到者不写槽（先到者已持有 listener），
-            // 后到的 handle 直接 drop（oneshot sender drop = 没有启动过
-            // 的 shutdown 通道被丢弃，不影响先到 listener）。
+            // Race defense: on re-entry the latecomer does not write the slot
+            // (the earlycomer already owns the listener); the latecomer's handle
+            // is simply dropped (dropping the oneshot sender = the never-started
+            // shutdown channel is discarded; it does not affect the earlier listener).
             if guard.is_some() {
                 drop(handle);
                 return Ok(ApiResponse::error(
@@ -246,7 +259,7 @@ pub async fn connect_server_start(
     }
 }
 
-/// 停止 Connect listener（幂等：未运行返回 running=false）。
+/// Stop the Connect listener (idempotent: returns running=false when not running).
 #[command]
 pub async fn connect_server_stop(
     state: State<'_, AppState>,
@@ -267,7 +280,7 @@ pub async fn connect_server_stop(
     }))
 }
 
-/// 查询 Connect listener 运行状态。
+/// Query the Connect listener's running status.
 #[command]
 pub async fn connect_server_status(
     state: State<'_, AppState>,
@@ -275,7 +288,8 @@ pub async fn connect_server_status(
     Ok(ApiResponse::success(connect_server_status_of(&state).await))
 }
 
-/// 创建 Connect token（敏感操作：core 权威 reauth 门禁；明文仅响应一次）。
+/// Create a Connect token (sensitive operation: core-authoritative reauth
+/// gate; the plaintext is returned exactly once).
 #[command]
 pub async fn connect_token_create(
     state: State<'_, AppState>,
@@ -304,7 +318,8 @@ pub async fn connect_token_create(
     }
 }
 
-/// token 管理列表（含已吊销，剥除哈希）。敏感面：需解锁会话。
+/// Token management list (including revoked ones, hashes stripped). Sensitive
+/// surface: requires an unlocked session.
 #[command]
 pub async fn connect_token_list(
     state: State<'_, AppState>,
@@ -330,7 +345,7 @@ pub async fn connect_token_list(
     }
 }
 
-/// 吊销 Connect token（幂等；core 权威 reauth 门禁）。即时生效。
+/// Revoke a Connect token (idempotent; core-authoritative reauth gate). Takes effect immediately.
 #[command]
 pub async fn connect_token_revoke(
     state: State<'_, AppState>,

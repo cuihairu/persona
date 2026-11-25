@@ -11,7 +11,7 @@ export interface TransactionConfirmModalProps {
   onClose: () => void;
   wallet: WalletSummary;
   fromAddress: string;
-  /** 已知地址列表（用于投毒启发式），通常是该钱包的全部历史地址 */
+  /** Known addresses (used by the poisoning heuristic), usually all historical addresses of this wallet */
   knownAddresses: string[];
   onSuccess?: (signed: WalletSignedTransaction) => void;
 }
@@ -19,8 +19,9 @@ export interface TransactionConfirmModalProps {
 type ModalStep = 'form' | 'signing' | 'result';
 
 /**
- * 钱包签名确认流：填表 → 确认（含地址投毒告警）→ 输密码签名 → 展示 hash。
- * 密码只在本弹窗内使用，不落任何 store。
+ * Wallet signing confirmation flow: fill the form → confirm (with address
+ * poisoning warning) → enter the password to sign → show the hash.
+ * The password is only used inside this dialog and never lands in any store.
  */
 const TransactionConfirmModal: React.FC<TransactionConfirmModalProps> = ({
   isOpen,
@@ -82,8 +83,9 @@ const TransactionConfirmModal: React.FC<TransactionConfirmModalProps> = ({
       const result = await personaAPI.walletSignTransaction({
         transaction_id: created.data.id,
         password,
-        // 弹窗展示投毒告警后用户仍在二次确认中点击了确认 = 显式确认
-        // （后端 sign 入口会再跑一次启发式，无 ack 即拒绝签名）
+        // The dialog showed the poisoning warning and the user still clicked confirm during the
+        // second confirmation = an explicit acknowledgement (the backend sign entry point runs the
+        // heuristic again and refuses to sign without an ack)
         confirm_poisoning_check: poisonSource !== null,
       });
       if (!result.success || !result.data) {
@@ -108,7 +110,7 @@ const TransactionConfirmModal: React.FC<TransactionConfirmModalProps> = ({
       className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4"
       data-testid="transaction-confirm-modal"
       onMouseDown={(e) => {
-        // 点空白 = 取消（不签署）；签署必须显式点确认，误触外的代价最小
+        // Backdrop click = cancel (do not sign); signing requires an explicit confirm click, minimizing the cost of stray touches
         if (e.target === e.currentTarget) onClose();
       }}
     >

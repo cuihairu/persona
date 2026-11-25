@@ -25,9 +25,9 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose }) => {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draft, setDraft] = useState<Partial<Identity>>({});
   const [draftTags, setDraftTags] = useState<string>('');
-  // travel 标记开关是即时生效（非草稿字段）：请求中锁行防双击
+  // The travel-marker toggle applies immediately (not a draft field): the row locks while a request is in flight to block double clicks
   const [markBusyId, setMarkBusyId] = useState<string | null>(null);
-  // 改密弹窗开关提升到本层：SettingsModal 的 Esc 在其叠开时让位上层
+  // The password-change modal toggle is lifted to this level: SettingsModal's Esc yields to the upper layer while it is stacked open
   const [changingPassword, setChangingPassword] = useState(false);
   useEscapeToClose(isOpen && !changingPassword, onClose);
 
@@ -110,7 +110,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose }) => {
     <div
       className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50"
       onMouseDown={(e) => {
-        // 点空白 = 关闭；改密子弹框打开时不逃逸（与 Esc 同口径）
+        // Clicking the backdrop = close; while the password-change sub-modal is open it does not escape (same policy as Esc)
         if (e.target === e.currentTarget && !changingPassword) onClose();
       }}
     >
@@ -242,7 +242,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose }) => {
                                 />
                               </div>
 
-                              {/* 旅行模式标记：即时生效（enter 时随之移出本设备）。
+                              {/* Travel mode marker: applies immediately (entering travel mode moves this device out with it).
                                   enter 之后该身份已从列表移除，故"激活中"的
                                   disabled 天然不可达，无需全局 travel 状态。 */}
                               <div className="flex items-center justify-between gap-3">

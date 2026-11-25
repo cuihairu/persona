@@ -62,9 +62,9 @@ describe('utils/clipboard', () => {
     jest.useRealTimers();
   });
 
-  // -- 补全：tauri 之后的浏览器 fallback 链 --------------------------------
+  // -- Completion: the browser fallback chain after tauri --------------------------------
 
-  /** 临时替换 jsdom navigator.clipboard（可能本来就没有该属性）。 */
+  /** Temporarily replaces the jsdom navigator.clipboard (which may not exist at all). */
   const setNavigatorClipboard = (impl: Partial<Clipboard> | undefined) => {
     const original = (navigator as any).clipboard;
     if (impl === undefined) {
@@ -106,11 +106,11 @@ describe('utils/clipboard', () => {
     await expect(copyWithAutoClear('s', 30_000)).resolves.toBe(true);
     expect(execCommand).toHaveBeenCalledWith('copy');
 
-    // execCommand 报 false → 写入失败
+    // execCommand returns false → write failed
     execCommand.mockReturnValue(false);
     await expect(copyWithAutoClear('s', 30_000)).resolves.toBe(false);
 
-    // execCommand 抛异常 → catch → false
+    // execCommand throws → caught → false
     execCommand.mockImplementation(() => {
       throw new Error('denied');
     });
@@ -129,25 +129,26 @@ describe('utils/clipboard', () => {
     await expect(copyWithAutoClear('secret', 10)).resolves.toBe(true);
 
     jest.advanceTimersByTime(10);
-    // 清空回调链路较长（tauri 读 reject → navigator 读 → 比较 → 再写），
-    // 用足够多的微任务 tick 把整条 await 链冲完
+    // The clear callback chain is long (tauri read rejects → navigator read →
+    // comparison → write again), so flush the entire await chain with enough
+    // microtask ticks
     for (let i = 0; i < 20; i++) {
       await Promise.resolve();
     }
 
-    // tauri 读失败 → navigator 读到相同内容 → 清空（写链仍是 tauri 主路）
+    // tauri read fails → navigator reads the same content → clear (the write chain still goes through tauri as the primary path)
     expect(mockTauriReadText).toHaveBeenCalled();
     expect(readText).toHaveBeenCalled();
     expect(mockTauriWriteText).toHaveBeenLastCalledWith('');
 
-    // navigator 也没有 readText → 读不到 → 不清空
+    // navigator has no readText either → cannot read → do not clear
     const restore2 = setNavigatorClipboard({ writeText } as any);
     mockTauriWriteText.mockClear();
     await expect(copyWithAutoClear('x', 10)).resolves.toBe(true);
     jest.advanceTimersByTime(10);
     await Promise.resolve();
     await Promise.resolve();
-    expect(mockTauriWriteText).toHaveBeenCalledTimes(1); // 只有最初那次写
+    expect(mockTauriWriteText).toHaveBeenCalledTimes(1); // only the initial write
     restore2();
     restore();
 

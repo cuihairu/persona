@@ -26,9 +26,9 @@ describe('hooks/useGlobalShortcut', () => {
     const handler = jest.fn();
     renderHook(() => useGlobalShortcut('k', handler));
 
-    press('k'); // 无修饰键
-    press('k', { altKey: true } as any); // 仅 alt
-    press('j', { metaKey: true }); // 修饰键对但 key 不对
+    press('k'); // no modifier keys
+    press('k', { altKey: true } as any); // alt only
+    press('j', { metaKey: true }); // right modifier but wrong key
     press('k', { metaKey: false, ctrlKey: false });
     expect(handler).not.toHaveBeenCalled();
   });

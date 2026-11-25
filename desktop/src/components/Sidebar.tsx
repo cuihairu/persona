@@ -29,9 +29,9 @@ import type { SidebarGroupKey } from '@/utils/sidebarPrefs';
 import type { SidebarFilter } from '@/types';
 
 interface SidebarProps {
-  /** 侧栏是唯一的导航源：点击节点先写 store 筛选态，再回调通知 App（切身份等副作用） */
+  /** The sidebar is the only navigation source: clicking a node writes the store filter state first, then the callback notifies App (identity switches and other side effects) */
   onNavigate: (filter: SidebarFilter) => void;
-  /** 透传给 IdentitySwitcher 下拉的 "Create new identity" */
+  /** Passed through to the IdentitySwitcher dropdown's "Create new identity" */
   onCreateIdentity?: () => void;
   onOpenSettings: () => void;
   onLock: () => void;
@@ -42,14 +42,14 @@ interface RowProps {
   icon: NavNode['icon'];
   active: boolean;
   onClick: () => void;
-  /** 数字徽标；undefined = 不显示（徽标对读屏隐藏，行名保持干净） */
+  /** Numeric badge; undefined = not shown (the badge is hidden from screen readers, keeping the row name clean) */
   count?: number;
   testId: string;
-  /** 图标条形态：只留图标，tooltip/aria 用行名兜底 */
+  /** Icon-rail mode: icon only, with tooltip/aria falling back to the row name */
   rail?: boolean;
 }
 
-/** 侧栏行：图标 + 名称 + 计数，紧凑行高（1Password 式单行选中块） */
+/** Sidebar row: icon + name + count with compact row height (1Password-style single-row selection block) */
 const NavRow: React.FC<RowProps> = ({ label, icon: Icon, active, onClick, count, testId, rail }) => (
   <button
     type="button"
@@ -87,7 +87,7 @@ const NavRow: React.FC<RowProps> = ({ label, icon: Icon, active, onClick, count,
   </button>
 );
 
-/** 分组标题（类别 / 保险库 / 标签 / 工具），点击折叠/展开整组 */
+/** Group header (categories / vaults / tags / tools); clicking collapses/expands the whole group */
 const GroupHeader: React.FC<{
   label: string;
   groupKey: SidebarGroupKey;
@@ -114,10 +114,13 @@ const GroupHeader: React.FC<{
 );
 
 /**
- * 全局左侧栏（1Password 式）：顶部身份切换器与大搜索框 → 顶部三行
- * （全部条目 / 收藏 / 最近使用）→ 类别 → 保险库（身份）→ 标签 → 工具；
- * 底部设置与锁定。整栏可收成图标条（窄窗口给主区让宽度），四个分组
- * 各自可折叠；两种偏好都落 localStorage。整栏独立滚动，分组之间留出呼吸间距。
+ * Global left sidebar (1Password-style): identity switcher and large search
+ * box on top → top three rows (All Items / Favorites / Recently Used) →
+ * categories → vaults (identities) → tags → tools; settings and lock at the
+ * bottom. The whole column can collapse into an icon rail (freeing width for
+ * the main area in narrow windows), and each of the four groups can collapse
+ * independently; both preferences persist to localStorage. The column scrolls
+ * independently, with breathing room between groups.
  */
 const Sidebar: React.FC<SidebarProps> = ({
   onNavigate,
@@ -141,7 +144,7 @@ const Sidebar: React.FC<SidebarProps> = ({
 
   const visible = (nodes: NavNode[]) => nodes.filter((n) => !n.flag || featureFlags[n.flag]);
 
-  // 计数口径：store 里的 credentials 即当前身份已加载的条目
+  // Counting convention: the store's credentials are the entries loaded for the current identity
   const counts = useMemo(
     () => ({
       all: credentials.length,
@@ -183,7 +186,7 @@ const Sidebar: React.FC<SidebarProps> = ({
 
   const handleSearch = (value: string) => {
     setCredentialSearchQuery(value);
-    // 搜索只在列表视图有意义：正处于工具/管理面板时先切回全部条目
+    // Search is only meaningful in the list view: switch back to All Items when currently in a tool/admin panel
     if (value && viewForFilter(sidebarFilter) !== 'credentials') {
       select(ALL_ITEMS_FILTER);
     }
@@ -235,8 +238,9 @@ const Sidebar: React.FC<SidebarProps> = ({
         label={identity.name}
         icon={identityIcon(identity.identity_type)}
         active={currentIdentity?.id === identity.id}
-        // 只在条目已加载时给徽标：store 仅持有当前身份的条目，
-        // 其余保险库留白而不是显示误导性的 0
+        // Only badge when entries are loaded: the store holds just the current
+        // identity's entries, so other vaults stay blank rather than showing a
+        // misleading 0
         count={loaded > 0 ? loaded : undefined}
         rail={rail}
         onClick={() => onNavigate({ kind: 'identity', value: identity.id })}
@@ -260,8 +264,8 @@ const Sidebar: React.FC<SidebarProps> = ({
   });
   const toolRows = visible(TOOL_NODES).map((node) => nodeRow(node));
 
-  // element（而非组件）：identityIcon 在渲染期返回图标组件，直接 JSX 化会被
-  // react-hooks/static-components 拦下
+  // element (not a component): identityIcon returns an icon component during
+  // render, and JSX-ifying it directly trips react-hooks/static-components
   const railIdentityEl = currentIdentity ? (
     React.createElement(identityIcon(currentIdentity.identity_type), {
       className: 'h-5 w-5',
@@ -280,7 +284,7 @@ const Sidebar: React.FC<SidebarProps> = ({
         rail ? 'w-14 items-center' : 'w-[264px]',
       )}
     >
-      {/* 顶部：身份切换器 + 大搜索框（对应 1Password 的账户行与搜索）；图标条形态只留身份图标 */}
+      {/* Top: identity switcher + large search box (mirroring 1Password's account row and search); icon-rail mode keeps only the identity icon */}
       {rail ? (
         <div className="flex w-full flex-col items-center border-b border-secondary-200 px-1.5 py-3 dark:border-gray-800">
           <button
@@ -320,12 +324,12 @@ const Sidebar: React.FC<SidebarProps> = ({
         aria-label={t('sidebar.a11yNav')}
         className="flex-1 overflow-y-auto px-2 pb-3"
       >
-        {/* 顶部三行：全部条目 / 收藏 / 最近使用（不参与分组折叠） */}
+        {/* Top three rows: All Items / Favorites / Recently Used (not part of group collapsing) */}
         <div className={clsx('space-y-0.5 pt-2', rail && 'flex flex-col items-center')}>
           {topRows}
         </div>
 
-        {/* 类别：1Password 的 item 分类（通行密钥指向独立管理视图，无列表计数） */}
+        {/* Categories: 1Password's item categories (passkeys point to a standalone admin view, no list count) */}
         {rail ? (
           <div className="mt-2 flex flex-col items-center gap-0.5">{categoryRows}</div>
         ) : (
@@ -335,7 +339,7 @@ const Sidebar: React.FC<SidebarProps> = ({
           </>
         )}
 
-        {/* 保险库：persona 的身份 = 1Password 的保险库，点击即切换当前身份 */}
+        {/* Vaults: a persona identity = a 1Password vault; clicking switches the current identity */}
         {identities.length > 0 &&
           (rail ? (
             <div className="mt-2 flex flex-col items-center gap-0.5">{vaultRows}</div>
@@ -346,7 +350,7 @@ const Sidebar: React.FC<SidebarProps> = ({
             </>
           ))}
 
-        {/* 标签 */}
+        {/* Tags */}
         {availableTags.length > 0 &&
           (rail ? (
             <div className="mt-2 flex flex-col items-center gap-0.5">{tagRows}</div>
@@ -357,7 +361,7 @@ const Sidebar: React.FC<SidebarProps> = ({
             </>
           ))}
 
-        {/* 工具：统计 / SSH Agent / 钱包 / 安全瞭望 / 生成器 */}
+        {/* Tools: Statistics / SSH Agent / Wallets / Watchtower / Generator */}
         {rail ? (
           <div className="mt-2 flex flex-col items-center gap-0.5">{toolRows}</div>
         ) : (
@@ -368,7 +372,7 @@ const Sidebar: React.FC<SidebarProps> = ({
         )}
       </nav>
 
-      {/* 底部操作区：收起/展开 + 设置 + 锁定（title 只做快捷键提示，不参与可访问名） */}
+      {/* Bottom action area: collapse/expand + settings + lock (title only hints at shortcuts, not part of the accessible name) */}
       <div
         data-testid="sidebar-footer"
         className={clsx(

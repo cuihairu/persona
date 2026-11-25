@@ -3,7 +3,7 @@ import { useAppStore } from '@/stores/appStore';
 import { getFaviconCacheKey } from '@/components/credentialDisplay';
 
 interface FaviconImgProps {
-  /** 凭据 URL（可选；缺省或 flag 关一律渲染静态图标） */
+  /** Credential URL (optional; a missing url or a disabled flag always renders the static icon) */
   url?: string | null;
   fallbackIcon: React.ComponentType<{ className?: string }>;
   sizeClass?: string;
@@ -11,9 +11,10 @@ interface FaviconImgProps {
 }
 
 /**
- * favicon 三态收口：flag 开且缓存命中且未破图 → <img data: URL>；
- * flag 关 / 缓存 miss / onError 破图 → 静态 fallback 图标。
- * 组件只查缓存，不触发任何 IPC（预取由调用方的 useFavicons 负责）。
+ * Three-state favicon convergence: flag on and a cache hit and not broken →
+ * <img data: URL>; flag off / cache miss / broken via onError → the static
+ * fallback icon. The component only reads the cache and never triggers IPC
+ * (prefetching is the caller's useFavicons job).
  */
 const FaviconImg: React.FC<FaviconImgProps> = ({
   url,

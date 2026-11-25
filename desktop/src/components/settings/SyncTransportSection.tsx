@@ -6,19 +6,22 @@ import { personaAPI } from '@/utils/api';
 
 type Transport = 'server' | 'cloud';
 
-/** 同步传输区块：指令流走 persona-server 还是云盘目录文件交换。
+/** Sync transport section: whether the command stream goes through persona-server or cloud-drive folder file exchange.
  *
- * 与既有开关的语义边界（2026-11-23 用户令「云盘同步 UI + watcher」）：
- * - `settings.sync_methods`（同步方式）控**入口可用性**；这里控**引擎用哪条
- *   传输**——两套独立语义，绝不合并（`SyncConfig.sync_transport`）。
- * - 云盘传输需先选目录（后端校验：cloud 必须带非空目录）；空目录 = 保留旧值，
- *   切回 server 再切回 cloud 不必重选。
- * - 切换不乐观翻转：保存成功由服务端真相回填，失败保持真实状态。
- * - 保存即生效：watcher（宿主侧）按此配置监听云盘目录变更并自动跑同步周期。
+ * Semantic boundary with the existing toggles (2026-11-23 user directive "cloud sync UI + watcher"):
+ * - `settings.sync_methods` (sync methods) controls **entry availability**; this controls **which
+ *   transport the engine uses** — two independent semantics, never merged (`SyncConfig.sync_transport`).
+ * - Cloud transport needs a folder chosen first (backend validation: cloud must come with a non-empty
+ *   folder); an empty folder = keep the old value, so switching back to server and then to cloud
+ *   doesn't require re-picking.
+ * - No optimistic flip on switching: a successful save is backfilled from server truth; on failure
+ *   the real state stays.
+ * - Saving takes effect immediately: the watcher (host side) watches the cloud folder for changes
+ *   under this config and runs sync cycles automatically.
  */
 const SyncTransportSection: React.FC = () => {
   const { t } = useTranslation();
-  // null = 尚未加载（服务端真相未到）——控件禁用，避免拿默认值盖写
+  // null = not yet loaded (server truth hasn't arrived) — controls disabled, avoiding an overwrite with default values
   const [transport, setTransport] = useState<Transport | null>(null);
   const [dir, setDir] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -30,13 +33,13 @@ const SyncTransportSection: React.FC = () => {
       .then((resp) => {
         if (cancelled || !resp.success) return;
         const sync = resp.data?.sync;
-        // 旧 JSON 缺键由后端 serde 回退默认 server；sync 整段缺失（fresh vault）
-        // 同样按默认 server 呈现
+        // A missing key in old JSON falls back to the default server via backend serde; a missing
+        // sync section entirely (fresh vault) is likewise presented as the default server
         setTransport(sync?.sync_transport ?? 'server');
         setDir(sync?.cloud_drive_dir ?? null);
       })
       .catch(() => {
-        // 读取失败保持禁用态，不打断设置页（同 SyncMethodsSection 口径）
+        // On read failure stay disabled, don't disrupt the settings page (same policy as SyncMethodsSection)
       });
     return () => {
       cancelled = true;
@@ -68,7 +71,7 @@ const SyncTransportSection: React.FC = () => {
     }
   };
 
-  /** 打开系统目录选择器；选定即保存（云盘传输无目录无从工作）。 */
+  /** Open the system folder picker; a pick saves immediately (cloud transport cannot work without a folder). */
   const pickDir = async (): Promise<void> => {
     const picked = await openDialog({ directory: true, multiple: false });
     if (typeof picked !== 'string' || !picked) return;
@@ -78,14 +81,14 @@ const SyncTransportSection: React.FC = () => {
 
   const chooseServer = (): void => {
     if (transport === null) return;
-    // 保留既有云盘目录（切回 cloud 时不必重选）
+    // Keep the existing cloud folder (no need to re-pick when switching back to cloud)
     void save('server', dir);
   };
 
   const chooseCloud = (): void => {
     if (transport === null) return;
     if (!dir) {
-      // 无目录：先选目录，选完即存（后端拒绝无目录的 cloud）
+      // No folder: pick one first, saving right after the pick (the backend rejects cloud without a folder)
       void pickDir();
       return;
     }

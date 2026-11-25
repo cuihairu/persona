@@ -1,7 +1,8 @@
 use super::*;
 
-/// 只读 passkey 开关：vault 打不开/行不存在一律视为关（审批链路另有
-/// 解锁门禁兜底，静默跳过安全）。
+/// Read-only passkey flag: an unopenable vault / missing row is always
+/// treated as off (the approval path has its own unlock gate fallback;
+/// skipping silently is safe).
 pub(crate) async fn passkeys_flag_enabled(db_path: &str) -> bool {
     let Ok(db) = Database::from_file(db_path).await else {
         return false;
@@ -17,13 +18,16 @@ pub(crate) async fn passkeys_flag_enabled(db_path: &str) -> bool {
     }
 }
 
-/// 按 workspace 开关门禁启动 passkey 审批服务端（init_service 成功尾部调用）。
+/// Start the passkey approval server gated by the workspace flag (called at
+/// the end of a successful init_service).
 ///
-/// 不放 setup：setup 时 db_path 尚未写入，猜默认路径会读错 vault。只读
-/// `find_by_path` 不开 workspace 行；开关关闭/读取失败 → 不 spawn。设置页
-/// 打开开关后，下一次 lock→unlock（重新 init_service）即生效，无需重启。
-/// `passkey_server_started` 保证多次 init_service 只 spawn 一次；关停通道
-/// 存入 AppState 供 [`stop_passkey_server`] 使用。
+/// Not at setup: during setup db_path is not written yet, and guessing the
+/// default path would read the wrong vault. Only `find_by_path` is read —
+/// no workspace row is opened; flag off / read failure -> do not spawn.
+/// Once the settings page turns the flag on, the next lock->unlock (a fresh
+/// init_service) applies it — no restart needed. `passkey_server_started`
+/// ensures only one spawn across multiple init_service calls; the shutdown
+/// channel is stored in AppState for [`stop_passkey_server`].
 pub(crate) async fn maybe_start_passkey_server<R: tauri::Runtime>(
     db_path: &str,
     state: &State<'_, AppState>,
@@ -57,11 +61,14 @@ pub(crate) async fn maybe_start_passkey_server<R: tauri::Runtime>(
     });
 }
 
-/// 关停 passkey 审批服务端（工作区关掉 passkeys 开关时调用）。
+/// Stop the passkey approval server (called when the workspace turns off the
+/// passkeys flag).
 ///
-/// 发送信号后服务端自行退出并清 socket 文件与未应答审批；本函数同步做
-/// 的是复位 `passkey_server_started`（下次开开关可重启）并兜底丢弃残留
-/// 审批（服务端退出前的窗口期内新进的请求）。
+/// After the signal is sent the server exits on its own and cleans up its
+/// socket file and unanswered approvals; this function synchronously resets
+/// `passkey_server_started` (so the flag can be started again later) and
+/// defensively discards any leftover approvals (requests that arrived
+/// during the window before the server exited).
 pub(crate) async fn stop_passkey_server(state: &State<'_, AppState>) {
     use std::sync::atomic::Ordering;
 

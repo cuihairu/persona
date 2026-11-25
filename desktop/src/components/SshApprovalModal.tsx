@@ -5,15 +5,15 @@ import type { SshApprovalRequest } from '@/types';
 
 export interface SshApprovalModalProps {
   request: SshApprovalRequest | null;
-  /** 后端仍在等待应答的请求总数（>1 时提示还有排队） */
+  /** Total number of requests the backend is still waiting for a reply to (when >1, note that more are queued) */
   pendingCount?: number;
   onRespond: (requestId: string, allow: boolean) => void;
 }
 
 /**
- * SSH 签名审批弹窗：内嵌 agent 需要用户确认时弹出。
- * 显示公钥指纹 / 目标主机 / 触发原因；Deny 后 agent 拒签。
- * 无密码输入——审批只决定"允许用已解锁的钥匙签名"。
+ * SSH signing approval dialog: pops up when the embedded agent needs user confirmation.
+ * Shows the public key fingerprint / target host / trigger reason; after Deny the agent refuses to sign.
+ * No password input — the approval only decides "allow signing with the already unlocked key".
  */
 const SshApprovalModal: React.FC<SshApprovalModalProps> = ({
   request,
@@ -24,7 +24,7 @@ const SshApprovalModal: React.FC<SshApprovalModalProps> = ({
   useEffect(() => {
     if (!request) return;
     const onKey = (e: KeyboardEvent) => {
-      // Esc = 拒绝：安全默认
+      // Esc = deny: the safe default
       if (e.key === 'Escape') onRespond(request.request_id, false);
     };
     window.addEventListener('keydown', onKey);
@@ -40,7 +40,7 @@ const SshApprovalModal: React.FC<SshApprovalModalProps> = ({
       role="alertdialog"
       aria-label={t('sshApproval.ariaLabel')}
       onMouseDown={(e) => {
-        // 点空白 = 拒绝（安全默认，与 Esc 同口径）；签名必须显式允许
+        // Backdrop click = deny (the safe default, same rule as Esc); signing requires an explicit allow
         if (e.target === e.currentTarget) onRespond(request.request_id, false);
       }}
     >

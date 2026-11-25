@@ -16,7 +16,7 @@ jest.mock('@/utils/api', () => ({
     syncRevoke: jest.fn(),
     syncSetDeviceRemark: jest.fn(),
     syncStatus: jest.fn().mockResolvedValue({ success: true, data: null }),
-    // SyncConflictsModal（本区块子组件）用到的
+    // Used by SyncConflictsModal (a child component of this section)
     syncConflictsList: jest.fn(),
     syncConflictResolve: jest.fn(),
   },
@@ -32,7 +32,7 @@ const mockListDevices = personaAPI.syncListDevices as jest.Mock;
 const mockSyncNow = personaAPI.syncNow as jest.Mock;
 const mockToastError = toast.error as jest.Mock;
 
-/** 已入组态：状态行 + 立即同步按钮可见 */
+/** Joined state: the status row and the sync-now button are visible */
 function mockJoined(): void {
   mockStatus.mockResolvedValue({
     success: true,
@@ -74,7 +74,7 @@ describe('components/settings/SyncDevicesSection — sync failure surfacing (CLO
         i18n.t('settings.syncDevices.serverUnreachable'),
       );
     });
-    // 不走通用「同步失败」兜底
+    // Does not fall back to the generic "sync failed" toast
     expect(mockToastError).not.toHaveBeenCalledWith(
       i18n.t('settings.syncDevices.syncFailed'),
     );

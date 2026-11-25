@@ -13,14 +13,14 @@ import {
   type UpdateCheckResult,
 } from '@/utils/updateCheck';
 
-/** 渠道 → 文案键（settings.updateCheck.channel*） */
+/** Channel -> copy key (settings.updateCheck.channel*) */
 const CHANNEL_LABEL_KEY: Record<UpdateChannel, string> = {
   dev: 'settings.updateCheck.channelDev',
   nightly: 'settings.updateCheck.channelNightly',
   release: 'settings.updateCheck.channelRelease',
 };
 
-/** unavailable 原因 → 文案键 */
+/** unavailable reason -> copy key */
 const REASON_LABEL_KEY: Record<NonNullable<UpdateCheckResult['reason']>, string> = {
   'no-release': 'settings.updateCheck.reasonNoRelease',
   'dev-channel': 'settings.updateCheck.reasonDev',
@@ -29,9 +29,9 @@ const REASON_LABEL_KEY: Record<NonNullable<UpdateCheckResult['reason']>, string>
 };
 
 /**
- * 版本更新检测设置区：按构建渠道检查新版本——nightly（每日构建）看
- * desktop-build workflow 最近一次成功 run，release 看 GitHub Releases
- * latest。只查询不下载；启动时自动检查的开关也在这里。
+ * Update-check settings section: checks for new versions by build channel -- nightly (daily build)
+ * looks at the latest successful desktop-build workflow run, release looks at the GitHub Releases
+ * latest tag. Queries only, never downloads; the auto-check-on-launch toggle lives here too.
  */
 const UpdateCheckSection: React.FC = () => {
   const { t } = useTranslation();

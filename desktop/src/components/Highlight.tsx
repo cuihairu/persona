@@ -1,7 +1,8 @@
 /**
- * 搜索词高亮：把文本按不区分大小写的整串匹配拆成普通与命中片段，
- * 命中渲染 <mark>。纯文本拆分渲染（不走 innerHTML），无注入面；
- * 行为对齐后端搜索（SQLite LIKE 对 ASCII 大小写不敏感）。
+ * Search-term highlighting: split the text into plain and hit fragments by
+ * case-insensitive whole-string match, rendering hits as <mark>. Plain text
+ * splitting only (no innerHTML), so there is no injection surface; the behavior
+ * matches the backend search (SQLite LIKE is case-insensitive for ASCII).
  */
 const Highlight = ({ text, query }: { text: string; query: string }) => {
   const needle = query.trim();

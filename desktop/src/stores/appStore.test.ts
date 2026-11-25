@@ -3,7 +3,7 @@ import { THEME_STORAGE_KEY } from '@/utils/theme';
 
 describe('stores/appStore', () => {
   beforeEach(() => {
-    localStorage.removeItem(THEME_STORAGE_KEY); // jsdom localStorage 跨用例存活
+    localStorage.removeItem(THEME_STORAGE_KEY); // jsdom localStorage survives across test cases
     useAppStore.setState({
       isUnlocked: false,
       isInitialized: false,
@@ -67,14 +67,14 @@ describe('stores/appStore', () => {
     expect(stored).toEqual(incoming);
     expect(stored).not.toBe(incoming);
 
-    // 后续改动入参不影响 store（optimistic 更新回滚路径依赖这一点）
+    // Later changes to the argument must not affect the store (the optimistic-update rollback path depends on this)
     incoming.wallet = true;
     expect(useAppStore.getState().featureFlags.wallet).toBe(false);
   });
 
   it('initializes theme from localStorage when the store module loads', async () => {
     localStorage.setItem(THEME_STORAGE_KEY, 'dark');
-    // store 是模块单例：isolateModules 重载后重新走 create() 的初始化分支
+    // The store is a module singleton: isolateModules reloads it and re-runs create()'s initialisation branch
     let isolated!: typeof import('./appStore');
     await jest.isolateModulesAsync(async () => {
       isolated = await import('./appStore');
@@ -122,13 +122,13 @@ describe('stores/appStore', () => {
     useAppStore.getState().setSelectedCredentialId('c1');
     expect(useAppStore.getState().selectedCredentialId).toBe('c1');
 
-    // 锁屏清空走同一 action（null 即清）
+    // Locking clears through the same action (null means clear)
     useAppStore.getState().setSelectedCredentialId(null);
     expect(useAppStore.getState().selectedCredentialId).toBeNull();
   });
 
   it('setFaviconEntries merges into cache and clears hits from misses', () => {
-    // 预置一个陈旧 miss（曾被批量读判为未命中）
+    // Pre-seed a stale miss (previously reported as a miss by a batch read)
     useAppStore.getState().setFaviconMisses(['a.com', 'b.com']);
     expect(useAppStore.getState().faviconMisses).toEqual({ 'a.com': true, 'b.com': true });
 
@@ -149,7 +149,7 @@ describe('stores/appStore', () => {
     useAppStore.getState().setFaviconMisses(['cached.com', 'missing.com']);
 
     const state = useAppStore.getState();
-    // 缓存赢过陈旧 miss：不落负缓存，避免已抓取图标被覆盖判定
+    // A cache hit beats a stale miss: do not record a negative entry, so an already-fetched icon is not overridden
     expect(state.faviconMisses).toEqual({ 'missing.com': true });
     expect(state.faviconCache['cached.com']).toBeDefined();
   });

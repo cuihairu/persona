@@ -7,22 +7,25 @@ import { useEscapeToClose } from '@/hooks/useEscapeToClose';
 export interface ChangeMasterPasswordModalProps {
   isOpen: boolean;
   /**
-   * 强制模式（解锁屏引导）：隐藏取消/关闭/Esc——轮换完成前不能离开；
-   * 旧密码经 initialOldPassword 预填（仅存在于 React state，不落盘）
+   * Forced mode (unlock-screen guidance): hides cancel/close/Esc — you cannot
+   * leave before the rotation completes; the old password is prefilled via
+   * initialOldPassword (lives only in React state, never written to disk)
    */
   forced?: boolean;
   initialOldPassword?: string;
-  /** 自定义 vault 路径（解锁屏自定义路径时透传；缺省用后端 state 记录的路径） */
+  /** Custom vault path (passed through when the unlock screen uses a custom path; defaults to the path recorded in the backend state) */
   dbPath?: string;
-  /** 轮换成功回调（携带新密码，供宿主重新 init 建会话） */
+  /** Rotation success callback (carries the new password for the host to re-init and establish a session) */
   onDone: (newPassword: string) => void;
   onCancel: () => void;
 }
 
 /**
- * 修改主密码弹窗：解锁屏强引导（forced）与 Settings 手动改密共用。
- * 客户端校验（非空/两次一致/新旧不同）→ change_master_password；
- * 成功后由宿主决定建新会话（解锁屏）或回锁屏（Settings）。
+ * Change-master-password dialog, shared by the unlock screen's forced flow
+ * and the manual rotation in Settings. Client-side validation (non-empty /
+ * both entries match / new differs from old) then change_master_password;
+ * after success the host decides whether to establish a new session (unlock
+ * screen) or fall back to the lock screen (Settings).
  */
 const ChangeMasterPasswordModal: React.FC<ChangeMasterPasswordModalProps> = ({
   isOpen,
@@ -51,7 +54,7 @@ const ChangeMasterPasswordModal: React.FC<ChangeMasterPasswordModalProps> = ({
     }
   }, [isOpen, initialOldPassword]);
 
-  // 非 forced 才可 Esc 离开；forced 模式轮换完成前不能逃逸
+  // Esc only leaves when not forced; forced mode cannot escape before the rotation completes
   useEscapeToClose(isOpen && !forced, onCancel);
 
   if (!isOpen) return null;
@@ -86,7 +89,7 @@ const ChangeMasterPasswordModal: React.FC<ChangeMasterPasswordModalProps> = ({
       if (resp.success) {
         onDone(newPassword);
       } else if (resp.error_code === 'TRAVEL_MODE_ACTIVE') {
-        // 改密与 sidecar 中 wrapped key 不兼容：引导先退出旅行模式
+        // Rotation is incompatible with the wrapped key in the sidecar: guide the user out of travel mode first
         setError(t('changePassword.travelActive'));
         setIsSubmitting(false);
       } else {
@@ -104,7 +107,7 @@ const ChangeMasterPasswordModal: React.FC<ChangeMasterPasswordModalProps> = ({
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
       data-testid="change-password-modal"
       onMouseDown={(e) => {
-        // 点空白 = 取消；forced（解锁屏强引导）不可离开，与 Esc/取消按钮同口径
+        // Clicking the backdrop = cancel; forced (unlock-screen guidance) cannot leave, same rule as Esc/the cancel button
         if (e.target === e.currentTarget && !forced) onCancel();
       }}
     >

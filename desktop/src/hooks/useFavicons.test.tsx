@@ -11,7 +11,7 @@ jest.mock('@/utils/api', () => ({
 
 const mockGetFavicons = personaAPI.getFavicons as jest.Mock;
 
-/** 极简探针：把 faviconFor 的返回值渲染出来 */
+/** Minimal probe: renders the value returned by faviconFor */
 const Probe = ({ urls }: { urls: (string | null)[] }) => {
   const { faviconFor } = useFavicons(urls);
   return (
@@ -45,7 +45,7 @@ describe('hooks/useFavicons', () => {
     const { container } = render(<Probe urls={['https://a.com/x']} />);
 
     await act(async () => {});
-    // flag 关：不请求、faviconFor 恒 null
+    // flag off: no request, faviconFor always null
     expect(mockGetFavicons).not.toHaveBeenCalled();
     expect(readProbe(container, 0)).toBe('null');
   });
@@ -62,10 +62,10 @@ describe('hooks/useFavicons', () => {
 
     await act(async () => {});
     expect(mockGetFavicons).toHaveBeenCalledTimes(1);
-    // 归一去重：a.com 大小写合并；null 丢弃；排序稳定
+    // Normalized dedupe: a.com merges across cases; nulls are dropped; ordering is stable
     expect(mockGetFavicons).toHaveBeenCalledWith(['a.com', 'b.com']);
 
-    // 命中进缓存；缺席落负缓存
+    // Hits enter the cache; misses land in the negative cache
     expect(useAppStore.getState().faviconCache['a.com']).toEqual({
       mime_type: 'image/png',
       data: 'AAA',
@@ -74,13 +74,13 @@ describe('hooks/useFavicons', () => {
     expect(readProbe(container, 0)).toContain('"data":"AAA"');
     expect(readProbe(container, 2)).toBe('null');
 
-    // 再次渲染（同 hosts）：命中与负缓存都不再请求
+    // Render again (same hosts): neither hits nor negative-cache entries trigger a request
     mockGetFavicons.mockClear();
     rerender(<Probe urls={urls} />);
     await act(async () => {});
     expect(mockGetFavicons).not.toHaveBeenCalled();
 
-    // faviconFor 对缺失 url 恒 null
+    // faviconFor is always null for a missing url
     expect(readProbe(container, 3)).toBe('null');
   });
 
@@ -94,7 +94,7 @@ describe('hooks/useFavicons', () => {
     expect(useAppStore.getState().faviconCache).toEqual({});
     expect(useAppStore.getState().faviconMisses).toEqual({});
 
-    // 失败未落负缓存 → 下一次渲染自然重试
+    // A failure does not land in the negative cache → the next render retries naturally
     mockGetFavicons.mockResolvedValueOnce({
       success: true,
       data: [{ host: 'a.com', mime_type: 'image/png', data: 'AAA' }],

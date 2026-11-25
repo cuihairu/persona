@@ -43,7 +43,7 @@ describe('components/TravelPassphraseModal', () => {
       '两次输入的口令不一致',
     );
 
-    // 修正后可提交
+    // Submittable once corrected
     type('travel-passphrase-confirm-input', 'travel-pw');
     fireEvent.submit(screen.getByTestId('travel-passphrase-submit').closest('form')!);
     expect(onSubmit).toHaveBeenCalledWith('travel-pw');

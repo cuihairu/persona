@@ -5,16 +5,16 @@ import i18n from '@/i18n';
 import { personaAPI } from '@/utils/api';
 import type { SshApprovalRequest } from '@/types';
 
-/** 后端 SSH 审批事件通道名（与 Rust 侧 DesktopApprovalHandler 一致） */
+/** Backend SSH approval event channel name (matches Rust's DesktopApprovalHandler) */
 export const SSH_APPROVAL_EVENT = 'persona://ssh-approval';
 
 /**
- * 订阅内嵌 SSH agent 的签名审批请求：
- * - 请求进入先进先出队列，一次弹一个（后端每个请求独立 oneshot 等待）
- * - Allow/Deny 回传 `ssh_approval_respond`；未应答的请求由后端
- *   120s 超时自动拒绝，不会挂死 agent 连接
+ * Subscribes to signing approval requests from the embedded SSH agent:
+ * - Requests enter a FIFO queue, one surfaced at a time (the backend awaits each request on its own oneshot)
+ * - Allow/Deny is sent back over `ssh_approval_respond`; unanswered requests are auto-denied by the
+ *   backend 120s timeout, so agent connections never hang
  *
- * 仅在解锁 + agent 运行期间挂监听（由调用方通过 enabled 控制）。
+ * The listener is only attached while unlocked and the agent is running (callers gate this via enabled).
  */
 export const useSshApprovals = (enabled: boolean) => {
   const [queue, setQueue] = useState<SshApprovalRequest[]>([]);
@@ -34,7 +34,7 @@ export const useSshApprovals = (enabled: boolean) => {
           ? prev
           : [...prev, event.payload],
       );
-      // 窗口失焦时用系统通知提醒（modal 看不见）
+      // Alert via a system notification when the window is unfocused (the modal would not be visible)
       if (document.hidden) {
         import('@tauri-apps/plugin-notification')
           .then(({ isPermissionGranted, requestPermission, sendNotification }) =>
@@ -52,7 +52,7 @@ export const useSshApprovals = (enabled: boolean) => {
             ),
           )
           .catch(() => {
-            // 通知不可用不影响审批流
+            // Notifications being unavailable does not affect the approval flow
           });
       }
     }).then((fn) => {
@@ -66,9 +66,10 @@ export const useSshApprovals = (enabled: boolean) => {
     };
   }, [enabled]);
 
-  /** 应答队首请求（重复 id / 未知 id 由后端按拒绝处理）。
-   *  队列移除以服务端确认为准：应答失败时请求留在队列里可重试，
-   *  失败走 toast——Allow 静默丢失会让 agent 连接挂到后端 120s 超时。 */
+  /** Responds to the head-of-queue request (duplicate or unknown ids are treated as deny by the backend).
+   *  Queue removal follows server confirmation: when the response fails the request stays queued for retry,
+   *  and the failure goes to a toast—a silently lost Allow would leave the agent connection hanging
+   *  until the backend 120s timeout. */
   const respond = useCallback(async (requestId: string, allow: boolean) => {
     try {
       const response = await personaAPI.sshApprovalRespond(requestId, allow);
@@ -83,9 +84,9 @@ export const useSshApprovals = (enabled: boolean) => {
   }, []);
 
   return {
-    /** 当前待审批请求（队首），无则为 null */
+    /** The request currently awaiting approval (head of queue), or null if none */
     pending: queue[0] ?? null,
-    /** 后端还在等待应答的请求总数 */
+    /** Total number of requests the backend is still waiting on */
     pendingCount: queue.length,
     respond,
   };

@@ -1,11 +1,14 @@
 import { invoke as tauriInvoke } from '@tauri-apps/api/core';
 
 /**
- * SERVICE_LOCKED 引导解锁：后端 auto-lock 是惰性判定（操作时才检查
- * 超时），不发 locked 事件——前端 isUnlocked 仍 true，操作直接撞
- * 「Session is auto-locked」把用户堵死。gate 在统一 invoke 出口拦截
- * 该错误码：弹解锁框挂起当前操作，解锁成功自动重试一次；取消则
- * 原样返回错误。解锁/状态查询类命令本身不走 gate（会递归）。
+ * Unlock gate for SERVICE_LOCKED: the backend's auto-lock is decided lazily
+ * (the timeout is only checked when an operation runs), and no locked event is
+ * emitted — the frontend's isUnlocked is still true, so the operation just hits
+ * "Session is auto-locked" and dead-ends the user. The gate intercepts that
+ * error code at the shared invoke exit: it pops the unlock dialog and suspends
+ * the current operation, retries once on a successful unlock, and returns the
+ * error as-is when cancelled. Unlock / status-query commands bypass the gate
+ * (they would recurse).
  */
 const UNLOCK_GATE_BYPASS = new Set([
   'init_service',
@@ -21,7 +24,7 @@ const UNLOCK_GATE_BYPASS = new Set([
 
 let unlockGate: Promise<boolean> | null = null;
 
-/** 请求一次引导解锁（幂等并发合并）：resolve(true)=解锁成功，false=用户取消。 */
+/** Requests a guided unlock (idempotent, concurrent calls coalesce): resolves true on a successful unlock, false when the user cancels. */
 export function requestUnlockGate(): Promise<boolean> {
   if (!unlockGate) {
     unlockGate = new Promise<boolean>((resolve) => {
@@ -36,16 +39,16 @@ export function requestUnlockGate(): Promise<boolean> {
 }
 
 /**
- * 统一 invoke 出口：Tauri 2 的命令错误（命令层 Err(String)、
- * "invalid args ... missing required key" 等 IPC 层失败）以字符串
- * reject promise，不是 Error 实例——调用方的
- * `err instanceof Error ? err.message : 通用文案` 会拿不到底层原因，
- * 只剩一句"保存失败"。这里把任何 rejection 归一成 Error，让全部
- * 调用点都能透出真实错误文本。
+ * Shared invoke exit: Tauri 2 rejects the promise with a plain string rather
+ * than an Error instance for command errors (Err(String) at the command layer,
+ * IPC-layer failures such as "invalid args ... missing required key"). Callers
+ * writing `err instanceof Error ? err.message : generic message` never see the
+ * underlying cause and are left with a bare "save failed". This normalizes any
+ * rejection into an Error so every call site can surface the real error text.
  */
 export async function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
   try {
-    // 无参调用不传第二个参数：保持与直调 tauriInvoke 相同的实参形态
+    // An argless call omits the second parameter: keeps the same argument shape as calling tauriInvoke directly
     let res =
       args === undefined ? await tauriInvoke<T>(cmd) : await tauriInvoke<T>(cmd, args);
     const envelope = res as { success?: boolean; error_code?: string } | null;
