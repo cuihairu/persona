@@ -80,8 +80,8 @@ webauthn-rs = "0.6"
 # formatting are delegated to the audited ssh-key; the p256 feature supports
 # ECDSA P-256 generation/conversion (the ecdsa feature only provides types);
 # rsa supports the agent's rsa-sha2-* signatures
-ssh-key = { version = "0.7.0-rc.11", features = ["ed25519", "rsa", "ecdsa", "p256", "encryption", "rand_core"] }
-rsa = { version = "0.9", features = ["sha2"] }
+ssh-key = { version = "0.7.0-rc.12", features = ["ed25519", "rsa", "ecdsa", "p256", "encryption", "rand_core"] }
+rsa = { version = "0.10", features = ["pkcs1v15"] }
 # PEM-family private key import (PKCS#8/PKCS#1/SEC1, see core/src/crypto/ssh_import_pem.rs):
 # field-level decoding is delegated to pkcs1/pkcs8 (same RustCrypto family);
 # pkcs8's encryption feature unlocks encrypted PKCS#8 (PBES2); ed25519-dalek's

@@ -11,7 +11,7 @@ pub enum SigningKeyMaterial {
     Ed25519 { seed: [u8; 32] },
     /// RSA (PKCS#1 v1.5; rsa-sha2-256/512 selected by the RFC 8332 client
     /// flags).
-    Rsa(Arc<rsa::RsaPrivateKey>),
+    Rsa(Arc<rsa::PrivateKey>),
     /// ECDSA NIST P-256 (ecdsa-sha2-nistp256, deterministic RFC 6979
     /// signatures).
     EcdsaP256(p256::ecdsa::SigningKey),
@@ -116,18 +116,19 @@ pub(super) fn parse_signing_key(private_key: &str) -> Result<SigningKeyMaterial>
             seed: kp.private.to_bytes(),
         }),
         KeypairData::Rsa(kp) => {
-            let mpint_to_biguint = |m: &ssh_key::Mpint| -> Result<rsa::BigUint> {
-                m.as_positive_bytes()
-                    .map(rsa::BigUint::from_bytes_be)
-                    .ok_or_else(|| anyhow!("negative RSA component is not valid"))
+            let mpint_to_uint = |m: &ssh_key::Mpint| -> Result<rsa::BoxedUint> {
+                let bytes = m
+                    .as_positive_bytes()
+                    .ok_or_else(|| anyhow!("negative RSA component is not valid"))?;
+                Ok(rsa::BoxedUint::from_be_slice_vartime(bytes))
             };
-            let n = mpint_to_biguint(kp.public().n())?;
-            let e = mpint_to_biguint(kp.public().e())?;
-            let d = mpint_to_biguint(kp.private().d())?;
-            let p = mpint_to_biguint(kp.private().p())?;
-            let q = mpint_to_biguint(kp.private().q())?;
-            let mut private = rsa::RsaPrivateKey::from_components(n, e, d, vec![p, q])?;
-            private.precompute()?;
+            let n = mpint_to_uint(kp.public().n())?;
+            let e = mpint_to_uint(kp.public().e())?;
+            let d = mpint_to_uint(kp.private().d())?;
+            let p = mpint_to_uint(kp.private().p())?;
+            let q = mpint_to_uint(kp.private().q())?;
+            // rsa 0.10's from_components validates and precomputes internally.
+            let private = rsa::PrivateKey::from_components(n, e, d, vec![p, q])?;
             Ok(SigningKeyMaterial::Rsa(Arc::new(private)))
         }
         KeypairData::Ecdsa(ssh_key::private::EcdsaKeypair::NistP256 { private, .. }) => {
@@ -157,8 +158,8 @@ fn public_blob_from_signing_key(signing_key: &SigningKeyMaterial) -> Result<Vec<
             let public = private.to_public_key();
             let mut blob = Vec::new();
             write_ssh_string(&mut blob, b"ssh-rsa")?;
-            write_mpint(&mut blob, &public.n().to_bytes_be());
-            write_mpint(&mut blob, &public.e().to_bytes_be());
+            write_mpint(&mut blob, &public.n().to_be_bytes());
+            write_mpint(&mut blob, &public.e().to_be_bytes());
             Ok(blob)
         }
         SigningKeyMaterial::EcdsaP256(signing) => {
@@ -224,7 +225,7 @@ pub(super) fn build_signature_blob(key: &AgentKey, data: &[u8], flags: u32) -> R
 /// PKCS#1 v1.5 signature (deterministic, no RNG), returns the raw signature
 /// bytes.
 fn rsa_sign<D>(
-    private: &rsa::RsaPrivateKey,
+    private: &rsa::PrivateKey,
     algo: &'static str,
     data: &[u8],
 ) -> Result<(&'static str, Vec<u8>)>

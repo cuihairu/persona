@@ -37,9 +37,10 @@ async fn pem_rsa_credential_loads_and_signs_rsa_sha2() {
     // Independent referee: rebuild the rsa public key from the PEM's n/e and
     // verify
     let kp = key.key_data().rsa().unwrap();
-    let to_big = |m: &ssh_key::Mpint| rsa::BigUint::from_bytes_be(m.as_positive_bytes().unwrap());
+    let to_uint =
+        |m: &ssh_key::Mpint| rsa::BoxedUint::from_be_slice_vartime(m.as_positive_bytes().unwrap());
     let rsa_public =
-        rsa::RsaPublicKey::new(to_big(kp.public().n()), to_big(kp.public().e())).unwrap();
+        rsa::PublicKey::new(to_uint(kp.public().n()), to_uint(kp.public().e())).unwrap();
 
     let pkt = agent
         .sign_response(&sign_payload_for(&loaded, b"rsa-data"))
