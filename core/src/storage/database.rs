@@ -149,6 +149,31 @@ mod tests {
     use super::*;
     use sqlx::Row;
 
+    /// Migration 21 was published with this checksum. sqlx verifies the whole
+    /// file (comments included) against the value recorded in existing vaults,
+    /// so even a comment-only edit makes every existing database fail to open
+    /// with "migration 21 was previously applied but has been modified".
+    /// Keep this pin in sync ONLY by adding a new migration, never by editing 21.
+    #[test]
+    fn published_migration_21_checksum_is_unchanged() {
+        const PUBLISHED: [u8; 48] = [
+            0x95, 0x01, 0x71, 0x39, 0x87, 0x2d, 0xb8, 0xe3, 0x2b, 0x40, 0xdd, 0x01, 0x88, 0x9e,
+            0xf7, 0xc0, 0xda, 0x9b, 0x98, 0x96, 0xb6, 0xb2, 0x27, 0x22, 0x35, 0x97, 0x28, 0xd4,
+            0xea, 0x62, 0xfb, 0x55, 0x0f, 0x15, 0x85, 0x8a, 0x85, 0x54, 0x88, 0xc4, 0x9d, 0x6a,
+            0x6e, 0xd9, 0xd2, 0xa0, 0x76, 0x9b,
+        ];
+        let migrator = sqlx::migrate!("./migrations");
+        let migration = migrator
+            .iter()
+            .find(|m| m.version == 21)
+            .expect("migration 21 must exist");
+        assert_eq!(
+            migration.checksum.as_ref(),
+            PUBLISHED,
+            "migration 21 was modified; existing vaults will refuse to open"
+        );
+    }
+
     #[tokio::test]
     async fn test_in_memory_database() {
         let db = Database::in_memory().await.unwrap();
