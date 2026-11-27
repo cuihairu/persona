@@ -207,7 +207,7 @@
 ### A. 发布与验收闭环
 - [ ] EXT-1P-000 Phase2/3 nightly 发布面验收：CI `46049564327`（22c896e）绿后按既定模式 workflow_dispatch 触发 desktop-build（schedule/手动触发均属允许面），产物验四点——zip 含 `dist/popupDetail.js`+`dist/popupNav.js`；`dist/content.js` 含 `.p-panel` 类注入；紫渐变残留=0（`grep -c 6366f1` 为 0）；popup.html 分类/详情标记随包。证据回填本行
 ### B. Popup 面收尾（纯前端）
-- [ ] EXT-1P-001 popup 分类导航条：Vault card 顶部 kind 过滤 chips（All items / Logins / 2FA / Bank cards + 各自计数，按 `SnapshotMeta.credential_type` 前端过滤；与顶部搜索叠加生效=AND；空态文案；chips 复用 `.chip` 件+aria-pressed；jest 断言过滤/计数/叠加）
+- [x] EXT-1P-001 popup 分类导航条（`1efb7b5`，2026-11-28）：新 `popupFilter.ts` 纯逻辑（normalizeKind 大小写/变体归一、未知 kind 落 login 桶=行 glyph 默认口径、matchesKind、countByKind、rowVisible=类别 AND 文本组合谓词）；popup.ts Vault card 顶部 chips（All items/Logins/2FA/Bank cards + 各自计数）由 `refreshKindBar` 按 live 项重建（连接前即渲染 0 计数），`applyVaultFilters` 单遍组合过滤（kind chip AND 搜索词，conflict 子行随父行同隐、filter-empty 提示仅在有行被滤空时显示），搜索 listener 把 vault card 从通用文本过滤剥离走组合通道（无查询词但 chip 滤空时 card 保留+提示接管）；popup.html 加 `#kindBar`（role=group）+`#filterEmpty` 空态，popup.css `.kindbar` 复用 `.chip` + `aria-pressed` 按下态（accent-tint 底+accent 边）+focus-visible 环。门禁：typecheck 干净 + jest 18 套件 227 全绿（新增 popupFilter 11 断言：归一/匹配/计数/AND 组合/空查询直通）+ build 绿 + demo 页真渲染截图（chips 计数/按下态/glyph 逐项核对，T=2 C=1 L=3）
 - [ ] EXT-1P-002 收藏显示与过滤（只读）：vault/suggestion 行 tail 加 ★ glyph 按 `meta.is_favorite`，分类条加 Favorites chip；写路径（set favorite）等 native 命令**不在本条**，本条只读展示不立依赖
 - [ ] EXT-1P-003 生成器强度条：genResult 下方 0-100 熵估算条（本地启发式：长度×字符集多样性×重复惩罚，纯前端不入库）+ weak/fair/strong/excellent 四档文案色（令牌 --ok/--warn/--accent/--danger 口径反向映射）；纯函数抽 `genStrength.ts` + jest 边界（空/全同字符/满档）
 - [ ] EXT-1P-004 popup 开启即聚焦搜索 + Esc 终级关窗：load 后 autofocus `#searchInput`（1P 打开即搜索口径）；Esc 三级回退走完仍无处置时 `window.close()`（原逻辑止于 blur，补终级）；headless 截图验焦点态
