@@ -17,6 +17,7 @@ import {
     accountLogin,
     accountStatus,
     accountLogout,
+    healthScan,
     setNativeHost,
     type NativeBridgeResponse
 } from './nativeBridge';
@@ -400,6 +401,19 @@ describe('account domain (protocol v7)', () => {
 
         const call = authedCall('account_logout');
         expect(call.message.payload).toEqual({ account_id: 'acct-1', user_gesture: true });
+    });
+});
+
+describe('vault health scan (protocol v8)', () => {
+    it('healthScan signs an empty payload over the authed channel', async () => {
+        await mock.seedPairing('sess-8', Date.now() + 3_600_000);
+
+        const response = await healthScan();
+
+        expect(response.ok).toBe(true);
+        const call = authedCall('health_scan');
+        expect(call.message.payload).toEqual({});
+        expect(call.message.auth.session_id).toBe('sess-8');
     });
 });
 

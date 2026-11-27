@@ -38,7 +38,7 @@ async fn passkey_bridge_protocol_cases() {
     .unwrap();
     assert!(resp.ok, "hello must succeed: {:?}", resp.error);
     let payload = resp.payload.unwrap();
-    assert_eq!(payload["protocol_version"], 7);
+    assert_eq!(payload["protocol_version"], 8);
     for capability in [
         "passkey_list",
         "passkey_create",

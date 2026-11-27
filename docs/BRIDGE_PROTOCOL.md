@@ -914,6 +914,65 @@ winner in the vault, and the remaining copies are dropped from the view. Same co
   (assembly failure), `sync_resolve_failed` (the adopted copy does not exist — most likely already
   resolved elsewhere, or not a Credential kind), `locked:`
 
+### 21. health_scan - Vault health scan (protocol v8)
+
+Runs the core Watchtower rules over the unlocked vault and returns a bucketed,
+**metadata-only** report (the same engine behind CLI `persona watchtower` and
+the desktop `health_scan` command). The decrypted secret material never leaves
+the scan frame on the host; the reply carries item ids, display names and
+issue facts only. Breach-corpus consultation is not performed here (it is a
+network call the host does not make on the bridge path): `breach_status` is
+always `"skipped"`.
+
+**Request:**
+
+```json
+{
+  "type": "health_scan",
+  "payload": {}
+}
+```
+
+- Gates: paired-session HMAC (session-authenticated, **not** gesture-gated —
+  read-only, no secret in the reply, same class as `get_suggestions`)
+- Requires an unlocked vault: a locked master password yields `locked:`
+  (bridge lock state comes from `PERSONA_MASTER_PASSWORD`)
+- Response `health_scan_response`:
+
+```json
+{
+  "scanned_at": "2026-11-28T00:00:00+00:00",
+  "total_credentials": 12,
+  "weak": [
+    { "item_id": "018f…", "name": "Repo admin", "severity": "high",
+      "detail": "password scores 0/4", "score": 0 }
+  ],
+  "reused": [
+    { "item_id": "018f…", "name": "Repo admin", "severity": "high",
+      "detail": "shared by 2 credentials", "group_size": 2 }
+  ],
+  "no_totp": [
+    { "item_id": "018f…", "name": "Repo admin", "severity": "low",
+      "detail": "github.com offers two-factor authentication", "site": "github.com" }
+  ],
+  "stale": [
+    { "item_id": "018f…", "name": "Old portal", "severity": "low",
+      "detail": "unchanged for 400 days", "days": 400 }
+  ],
+  "counts": { "high": 4, "medium": 0, "low": 3 },
+  "breach_status": "skipped"
+}
+```
+
+- Bucket rules: `weak` = zxcvbn score below the configured threshold (default
+  < 3); `reused` = the same plaintext secret shared by more than one
+  credential (one entry per member, `group_size` = group cardinality);
+  `no_totp` = a login on a directory site (offline curated subset of
+  2fa.directory) with no TOTP-like credential covering that site;
+  `stale` = untouched longer than the staleness window (default 365 days).
+  Expiry/breach findings surface in `counts` only — no dedicated bucket.
+- The host writes one aggregate `SecurityScanPerformed` audit entry per scan.
+
 ## Security Mechanisms
 
 ### Origin binding
@@ -1186,6 +1245,7 @@ Example manifest file contents:
 | 5                | 0.1.0+      | everything in v4 + generate_password (password generation, §16) + the hello response carries connect_available/connect_port                                                                                                    |
 | 6                | 0.1.0+      | everything in v5 + sync_connect (cloud sync bootstrap, §17): the extension fetches the connection parameters through the bridge and then talks to the data plane over HTTP directly                                            |
 | 7                | 0.1.0+      | everything in v6 + account_login/status/logout (the account-domain trio, §18) + sync_push_now (sync now, §19) + sync_resolve_conflict (conflict adjudication, §20): tokens land only in the keyring and never cross the bridge |
+| 8                | 0.1.0+      | everything in v7 + health_scan (vault health scan, §21): bucketed metadata-only Watchtower report, offline rules only (`breach_status: skipped`)                                                                                                                                                |
 
 > From v2 onward the frame format and the HMAC signing rules are unchanged; only new message types were added and `protocol_version` was bumped. Older extensions still get `unknown_type` for messages the bridge does not know, so compatibility is preserved.
 

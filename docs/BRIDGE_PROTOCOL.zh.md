@@ -916,6 +916,61 @@ materialize → push 周期，把主库（含经 `save_credential` 落库的扩�
   （装配失败）、`sync_resolve_failed`（采纳的副本不存在——多半已被
   别处裁决，或非 Credential kind）、`locked:`
 
+### 21. health_scan - 保险库健康扫描（协议 v8）
+
+对已解锁的保险库运行核心 Watchtower 规则引擎，返回分桶的、**仅元数据**
+的报告（与 CLI `persona watchtower`、桌面端 `health_scan` 命令同一引擎）。
+解密后的秘密材料从不离开宿主侧的扫描栈帧；应答只携带条目 id、显示名与
+问题事实。桥路径不做泄露库比对（那是联网调用，宿主不代发）：
+`breach_status` 恒为 `"skipped"`。
+
+**请求：**
+
+```json
+{
+  "type": "health_scan",
+  "payload": {}
+}
+```
+
+- 门禁：成对会话 HMAC（会话认证，**不**要求 user_gesture——只读、应答
+  无秘密，与 `get_suggestions` 同类）
+- 要求保险库已解锁：锁定态报 `locked:`（桥的锁状态来自
+  `PERSONA_MASTER_PASSWORD`）
+- 应答 `health_scan_response`：
+
+```json
+{
+  "scanned_at": "2026-11-28T00:00:00+00:00",
+  "total_credentials": 12,
+  "weak": [
+    { "item_id": "018f…", "name": "Repo admin", "severity": "high",
+      "detail": "password scores 0/4", "score": 0 }
+  ],
+  "reused": [
+    { "item_id": "018f…", "name": "Repo admin", "severity": "high",
+      "detail": "shared by 2 credentials", "group_size": 2 }
+  ],
+  "no_totp": [
+    { "item_id": "018f…", "name": "Repo admin", "severity": "low",
+      "detail": "github.com offers two-factor authentication", "site": "github.com" }
+  ],
+  "stale": [
+    { "item_id": "018f…", "name": "Old portal", "severity": "low",
+      "detail": "unchanged for 400 days", "days": 400 }
+  ],
+  "counts": { "high": 4, "medium": 0, "low": 3 },
+  "breach_status": "skipped"
+}
+```
+
+- 分桶规则：`weak` = zxcvbn 分低于阈值（默认 <3）；`reused` = 同一明文
+  秘密被多于一条凭据共享（每成员一条，`group_size` = 组大小）；`no_totp`
+  = 目录站（2fa.directory 离线子集）上的登录没有 TOTP 类凭据覆盖该站；
+  `stale` = 超过陈旧窗口（默认 365 天）未更新。过期/泄露类发现只进
+  `counts`，无独立桶。
+- 宿主每次扫描写一条聚合的 `SecurityScanPerformed` 审计。
+
 ## 安全机制
 
 ### Origin 绑定
@@ -1188,6 +1243,7 @@ manifest 文件内容示例：
 | 5        | 0.1.0+   | v4 全部 + generate_password（密码生成，§16）+ hello 响应携带 connect_available/connect_port                                                                 |
 | 6        | 0.1.0+   | v5 全部 + sync_connect（云端同步引导，§17）：扩展经桥取连接参数后 HTTP 直连数据面                                                                           |
 | 7        | 0.1.0+   | v6 全部 + account_login/status/logout（账号域三件套，§18）+ sync_push_now（立即同步，§19）+ sync_resolve_conflict（冲突裁决，§20）：令牌只落 keyring 不过桥 |
+| 8        | 0.1.0+   | v7 全部 + health_scan（保险库健康扫描，§21）：分桶仅元数据 Watchtower 报告，仅离线规则（`breach_status: skipped`） |
 
 > v2 起未改变帧格式与 HMAC 签名规则，只是新增消息类型并升级 `protocol_version`；旧扩展对桥接发送的未知消息仍会得到 `unknown_type`，向后兼容。
 

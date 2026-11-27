@@ -30,6 +30,7 @@ use persona_core::{Database, PersonaError, PersonaService, Repository};
 mod account;
 mod approval;
 mod clipboard;
+mod health;
 mod pairing;
 mod passkey;
 mod paths;
@@ -43,6 +44,7 @@ mod totp;
 use self::account::*;
 use self::approval::*;
 use self::clipboard::*;
+use self::health::*;
 use self::pairing::*;
 use self::passkey::*;
 use self::paths::*;
@@ -151,8 +153,8 @@ async fn handle_request(
 
             let payload = serde_json::json!({
                 "server_version": "0.1.0",
-                "protocol_version": 7,
-                "capabilities": ["status", "pairing_request", "pairing_finalize", "get_suggestions", "request_fill", "get_totp", "copy", "passkey_list", "passkey_create", "passkey_assert", "passkey_credential_provider_list", "passkey_credential_provider_assert", "find_for_save", "save_credential", "generate_password", "sync_connect", "account_login", "account_status", "account_logout", "sync_push_now", "sync_resolve_conflict"],
+                "protocol_version": 8,
+                "capabilities": ["status", "pairing_request", "pairing_finalize", "get_suggestions", "request_fill", "get_totp", "copy", "passkey_list", "passkey_create", "passkey_assert", "passkey_credential_provider_list", "passkey_credential_provider_assert", "find_for_save", "save_credential", "generate_password", "sync_connect", "account_login", "account_status", "account_logout", "sync_push_now", "sync_resolve_conflict", "health_scan"],
                 "pairing_required": require_pairing && session.is_none(),
                 "paired": session.is_some(),
                 "session_id": session.as_ref().map(|s| s.session_id.clone()),
@@ -586,6 +588,12 @@ async fn handle_request(
             let parsed: GeneratePasswordPayload = serde_json::from_value(req.payload)
                 .context("invalid payload for generate_password")?;
             run_generate_password(db_path, req.request_id, parsed).await
+        }
+        "health_scan" => {
+            require_authenticated_session(state_dir, &req)?;
+            let _: HealthScanPayload =
+                serde_json::from_value(req.payload).context("invalid payload for health_scan")?;
+            run_health_scan(db_path, req.request_id).await
         }
         "passkey_list" => {
             require_authenticated_session(state_dir, &req)?;

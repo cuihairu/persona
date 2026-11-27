@@ -409,3 +409,55 @@ pub(super) struct PasskeyAssertResponse {
     pub(super) signature_der_b64: String,
     pub(super) user_handle_b64: String,
 }
+
+// ---- Vault health scan (bridge protocol v8) ----
+
+/// No request fields today: the scan runs with core defaults (zxcvbn score
+/// < 3 = weak, stale after 365 days, expiry warning 30 days). A
+/// payload is still sent (`{}`) so the frame shape stays uniform.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) struct HealthScanPayload {}
+
+/// One flagged credential. Metadata only — item id, display name and the
+/// issue facts (score / group size / site key / days); never the secret.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) struct HealthScanIssue {
+    pub(super) item_id: String,
+    pub(super) name: String,
+    pub(super) severity: String,
+    pub(super) detail: String,
+    /// WeakPassword only: the zxcvbn score (0-4) the password scored.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) score: Option<u8>,
+    /// ReusedPassword only: how many credentials share the secret.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) group_size: Option<usize>,
+    /// TwoFactorAvailable only: normalized site key (TLD+1).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) site: Option<String>,
+    /// StaleUnchanged only: days since the last update.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) days: Option<i64>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) struct HealthScanResponse {
+    pub(super) scanned_at: String,
+    pub(super) total_credentials: usize,
+    /// zxcvbn score below the configured threshold.
+    pub(super) weak: Vec<HealthScanIssue>,
+    /// Same plaintext secret shared by more than one credential.
+    pub(super) reused: Vec<HealthScanIssue>,
+    /// Directory site whose login has no TOTP-like credential covering it.
+    pub(super) no_totp: Vec<HealthScanIssue>,
+    /// Untouched longer than the staleness window.
+    pub(super) stale: Vec<HealthScanIssue>,
+    /// Issue counts keyed by severity ("high"/"medium"/"low").
+    pub(super) counts: std::collections::HashMap<String, usize>,
+    /// `skipped`: the bridge runs offline rules only (no breach corpus
+    /// consultation — that is a network call the host does not make).
+    pub(super) breach_status: String,
+}

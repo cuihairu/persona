@@ -10,6 +10,7 @@ import {
     findForSave,
     saveCredential,
     generatePassword,
+    healthScan,
     type BridgeStatus,
     type SuggestionItem,
     type SuggestionsPayload,
@@ -23,7 +24,8 @@ import {
     type SaveCredentialRequest,
     type SaveCredentialResponsePayload,
     type GeneratePasswordRequest,
-    type GeneratePasswordResponsePayload
+    type GeneratePasswordResponsePayload,
+    type HealthScanResponsePayload
 } from './nativeBridge.js';
 import {
     evaluateDomain,
@@ -256,6 +258,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
     if (message?.type === 'persona_generate_password') {
         handleGeneratePassword(message.request).then(sendResponse);
+        return true;
+    }
+
+    // ============ Vault health scan (bridge protocol v8) ============
+
+    if (message?.type === 'persona_health_scan') {
+        handleHealthScan().then(sendResponse);
         return true;
     }
 
@@ -828,6 +837,23 @@ async function handleGeneratePassword(
         const response = await generatePassword(request);
         if (!response.ok) {
             return { success: false, error: response.error ?? 'Generation failed' };
+        }
+        return { success: true, data: response.payload };
+    } catch (error) {
+        return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
+    }
+}
+
+/**
+ * Vault health scan (Watchtower). Metadata-only reply, no origin scoping —
+ * same trust level as the popup's vault listing, so no domain policy gate;
+ * the host still requires an authenticated, unlocked session.
+ */
+async function handleHealthScan(): Promise<AutofillResult<HealthScanResponsePayload>> {
+    try {
+        const response = await healthScan();
+        if (!response.ok) {
+            return { success: false, error: response.error ?? 'Health scan failed' };
         }
         return { success: true, data: response.payload };
     } catch (error) {

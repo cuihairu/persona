@@ -168,6 +168,36 @@ export interface GeneratePasswordResponsePayload {
     password: string;
 }
 
+// ============ Vault health scan (bridge protocol v8) ============
+
+/** One flagged credential. Metadata only — no secret material. */
+export interface HealthScanIssue {
+    item_id: string;
+    name: string;
+    severity: 'high' | 'medium' | 'low';
+    detail: string;
+    /** WeakPassword only: the zxcvbn score (0-4) the password scored. */
+    score?: number;
+    /** ReusedPassword only: how many credentials share the secret. */
+    group_size?: number;
+    /** TwoFactorAvailable only: normalized site key (TLD+1). */
+    site?: string;
+    /** StaleUnchanged only: days since the last update. */
+    days?: number;
+}
+
+export interface HealthScanResponsePayload {
+    scanned_at: string;
+    total_credentials: number;
+    weak: HealthScanIssue[];
+    reused: HealthScanIssue[];
+    no_totp: HealthScanIssue[];
+    stale: HealthScanIssue[];
+    counts: Record<string, number>;
+    /** `skipped`: the bridge runs offline rules only (no breach corpus). */
+    breach_status: string;
+}
+
 // ============ Cloud sync bootstrap (bridge protocol v6, M5 batch 1) ============
 
 export interface SyncConnectRequest {
@@ -831,4 +861,15 @@ export async function generatePassword(
     host = defaultNativeHost()
 ): Promise<NativeBridgeResponse<GeneratePasswordResponsePayload>> {
     return sendAuthedNativeMessage<GeneratePasswordResponsePayload>('generate_password', request, host);
+}
+
+/**
+ * Run the vault health scan (Watchtower) via the bridge and return the
+ * bucketed, metadata-only report. Requires an authenticated, unlocked
+ * session; the reply never contains secret material.
+ */
+export async function healthScan(
+    host = defaultNativeHost()
+): Promise<NativeBridgeResponse<HealthScanResponsePayload>> {
+    return sendAuthedNativeMessage<HealthScanResponsePayload>('health_scan', {}, host);
 }

@@ -173,7 +173,7 @@ async fn bridge_hello_bad_payload_and_pairing_disabled() {
     assert_eq!(payload["paired"], false);
     assert!(payload["session_id"].is_null());
     assert!(payload["session_expires_at_ms"].is_null());
-    assert_eq!(payload["protocol_version"], 7);
+    assert_eq!(payload["protocol_version"], 8);
     assert!(payload["server_version"].is_string());
     let caps = payload["capabilities"].as_array().unwrap();
     for capability in [
@@ -186,6 +186,7 @@ async fn bridge_hello_bad_payload_and_pairing_disabled() {
         "copy",
         "find_for_save",
         "save_credential",
+        "health_scan",
     ] {
         assert!(
             caps.iter().any(|c| c == capability),
