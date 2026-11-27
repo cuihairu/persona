@@ -31,6 +31,17 @@ import { hideOverlay, toggleOverlay } from './overlay.js';
 import { requestFill, requestTotp } from './fillRequests.js';
 import { maybeRememberDefault } from './suggestions.js';
 
+// Inline marks matching the product's viewfinder logo family: stroke-drawn,
+// currentColor, so they inherit the shadow-root tokens in both themes.
+const BRAND_MARK_SVG = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">' +
+    '<path d="M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>' +
+    '<circle cx="12" cy="10.5" r="2.6" stroke="currentColor" stroke-width="2"/>' +
+    '<path d="M7.5 18c.7-2.4 2.5-3.6 4.5-3.6s3.8 1.2 4.5 3.6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>';
+
+const KEY_SVG = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">' +
+    '<circle cx="8" cy="12" r="4" stroke="currentColor" stroke-width="2"/>' +
+    '<path d="M12 12h9M17.5 12v3.5M20.5 12v2.5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>';
+
 
 export function isLikelyTotpInput(input: HTMLInputElement, cachedFieldName?: string): boolean {
     if (input.autocomplete === 'one-time-code') return true;
@@ -66,9 +77,8 @@ export function showInlineIcon(input: HTMLInputElement, mode: 'password' | 'totp
     // Create icon element
     const icon = document.createElement('div');
     icon.className = 'persona-inline-icon p-badge';
-    icon.innerHTML = '🛡️';
+    icon.innerHTML = BRAND_MARK_SVG;
     icon.title = 'Click to autofill with Persona';
-    icon.style.fontSize = '16px';
 
     // Position the icon
     const rect = input.getBoundingClientRect();
@@ -110,9 +120,8 @@ export function showGeneratorIcon(input: HTMLInputElement) {
     // Create icon element
     const icon = document.createElement('div');
     icon.className = 'persona-generator-icon p-badge';
-    icon.innerHTML = '🔑';
+    icon.innerHTML = KEY_SVG;
     icon.title = 'Generate a secure password';
-    icon.style.fontSize = '16px';
 
     // Position the icon
     const rect = input.getBoundingClientRect();
@@ -162,7 +171,7 @@ export function showGeneratorDropdown(input: HTMLInputElement, genIcon: HTMLElem
     // Header
     const header = document.createElement('div');
     header.className = 'p-plain-head';
-    header.textContent = '🔑 Generate Password';
+    header.innerHTML = `${KEY_SVG}<span>Generate Password</span>`;
     dropdown.appendChild(header);
 
     // Quick generate button (default settings)
@@ -172,9 +181,11 @@ export function showGeneratorDropdown(input: HTMLInputElement, genIcon: HTMLElem
         padding: 12px 14px;
         font-size: 14px;
         font-weight: 500;
-        text-align: left;
+        display: flex;
+        align-items: center;
+        gap: 8px;
     `;
-    quickBtn.textContent = '🎲 Generate (16 chars, all sets)';
+    quickBtn.innerHTML = `${KEY_SVG}<span>Generate (16 chars, all sets)</span>`;
     dropdown.appendChild(quickBtn);
 
     // Separator
@@ -329,7 +340,7 @@ export function showSuggestionsDropdown(input: HTMLInputElement, mode: 'password
     // Add header
     const header = document.createElement('div');
     header.className = 'p-plain-head';
-    header.innerHTML = '🛡️ Persona';
+    header.innerHTML = `${BRAND_MARK_SVG}<span>Persona</span>`;
     dropdown.appendChild(header);
 
     // Add suggestions

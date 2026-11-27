@@ -87,4 +87,15 @@ describe('legacy inline palettes removed from sources', () => {
             expect(src).not.toContain('linear-gradient');
         }
     });
+
+    it('field badges and headers use inline SVG marks, not emoji', () => {
+        const fs = require('fs');
+        const path = require('path');
+        const src = fs.readFileSync(path.join(__dirname, 'icons.ts'), 'utf8');
+        for (const emoji of ['🛡️', '🔑', '🎲']) {
+            expect(src).not.toContain(emoji);
+        }
+        expect(src).toContain('BRAND_MARK_SVG');
+        expect(src).toContain('stroke="currentColor"');
+    });
 });
