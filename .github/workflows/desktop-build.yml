@@ -319,8 +319,13 @@ jobs:
           test -f manifest.json
           test -f dist/background.js
           test -f public/popup.html
-          zip -qr "$GITHUB_WORKSPACE/persona-extension.zip" manifest.json public dist
+          # default_locale in the manifest makes _locales/ load-bearing: without
+          # it Chromium refuses to install the package.
+          test -f _locales/en/messages.json
+          test -f _locales/zh_CN/messages.json
+          zip -qr "$GITHUB_WORKSPACE/persona-extension.zip" manifest.json public dist _locales
           unzip -l "$GITHUB_WORKSPACE/persona-extension.zip" | awk '{print $4}' | grep -qx 'manifest.json'
+          unzip -l "$GITHUB_WORKSPACE/persona-extension.zip" | awk '{print $4}' | grep -qx '_locales/en/messages.json'
 
       - name: Upload extension artifact
         uses: actions/upload-artifact@v7.0.2

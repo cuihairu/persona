@@ -3,6 +3,7 @@
   "name": "Persona Autofill",
   "description": "Preview extension for switching Persona identities, autofilling credentials, and initiating SSH workflows.",
   "version": "0.2.0",
+  "default_locale": "en",
   "action": {
     "default_title": "Persona",
     "default_popup": "public/popup.html"
@@ -32,15 +33,23 @@
   },
   "content_scripts": [
     {
-      "matches": ["<all_urls>"],
-      "js": ["dist/webauthnHook.js"],
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "dist/webauthnHook.js"
+      ],
       "run_at": "document_start",
       "world": "MAIN",
       "all_frames": false
     },
     {
-      "matches": ["<all_urls>"],
-      "js": ["dist/content.js"],
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "dist/content.js"
+      ],
       "run_at": "document_idle",
       "all_frames": true,
       "match_about_blank": true
@@ -50,4 +59,3 @@
     "128": "public/icons/icon128.png"
   }
 }
-

@@ -56,7 +56,7 @@ export function showSuggestionsOverlay(suggestions: SuggestionItem[]) {
     const header = document.createElement('div');
     header.className = 'p-head';
     header.innerHTML = `
-        <div class="p-title">🛡️ Persona</div>
+        <div class="p-title">🛡️ ${chrome.i18n.getMessage('overlayBrandTitle')}</div>
         <button id="persona-close" class="p-x">×</button>
     `;
     overlay.appendChild(header);
@@ -68,7 +68,7 @@ export function showSuggestionsOverlay(suggestions: SuggestionItem[]) {
     if (suggestions.length === 0) {
         const empty = document.createElement('div');
         empty.className = 'p-empty';
-        empty.textContent = 'No saved credentials for this site';
+        empty.textContent = chrome.i18n.getMessage('overlayNoCredentials');
         content.appendChild(empty);
     } else {
         suggestions.forEach((suggestion) => {
@@ -130,12 +130,12 @@ export function showSearchOverlay() {
 
     const title = document.createElement('div');
     title.className = 'p-title';
-    title.textContent = '🔍 Persona Search';
+    title.innerHTML = `🔍 ${chrome.i18n.getMessage('overlaySearchTitle')}`;
     header.appendChild(title);
 
     const searchInput = document.createElement('input');
     searchInput.type = 'text';
-    searchInput.placeholder = 'Search credentials…';
+    searchInput.placeholder = chrome.i18n.getMessage('overlaySearchPlaceholder');
     searchInput.className = 'p-searchbox';
     header.appendChild(searchInput);
 
@@ -165,7 +165,7 @@ export function showSearchOverlay() {
         if (filtered.length === 0) {
             const empty = document.createElement('div');
             empty.className = 'p-empty';
-            empty.textContent = q ? 'No matches' : 'No saved credentials';
+            empty.textContent = q ? chrome.i18n.getMessage('overlayNoMatches') : chrome.i18n.getMessage('overlayNoCredentialsAny');
             content.appendChild(empty);
             return;
         }

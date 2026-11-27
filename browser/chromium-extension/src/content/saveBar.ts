@@ -227,7 +227,9 @@ export function renderSaveBar(proposal: SaveProposal, updateTarget: { item_id: s
 
     const title = document.createElement('div');
     title.className = 'p-save-title';
-    title.textContent = updateTarget ? '更新 Persona 中的登录？' : '保存登录到 Persona？';
+    title.textContent = updateTarget
+        ? chrome.i18n.getMessage('saveBarTitleUpdate')
+        : chrome.i18n.getMessage('saveBarTitleSave');
     bar.appendChild(title);
 
     const detail = document.createElement('div');
@@ -243,7 +245,7 @@ export function renderSaveBar(proposal: SaveProposal, updateTarget: { item_id: s
     usernameInput.className = 'p-input';
     usernameInput.type = 'text';
     usernameInput.value = proposal.username ?? '';
-    usernameInput.placeholder = 'username';
+    usernameInput.placeholder = chrome.i18n.getMessage('saveBarUsernamePlaceholder');
     usernameInput.setAttribute('aria-label', 'Username');
     usernameInput.style.marginBottom = '10px';
     usernameInput.addEventListener('input', () => {
@@ -258,12 +260,12 @@ export function renderSaveBar(proposal: SaveProposal, updateTarget: { item_id: s
 
     const confirmBtn = document.createElement('button');
     confirmBtn.className = 'p-btn';
-    confirmBtn.textContent = updateTarget ? '更新' : '保存';
+    confirmBtn.textContent = updateTarget ? chrome.i18n.getMessage('saveBarUpdate') : chrome.i18n.getMessage('saveBarSave');
     row.appendChild(confirmBtn);
 
     const neverBtn = document.createElement('button');
     neverBtn.className = 'p-btn secondary';
-    neverBtn.textContent = '此站永不';
+    neverBtn.textContent = chrome.i18n.getMessage('saveBarNever');
     row.appendChild(neverBtn);
 
     const closeBtn = document.createElement('button');
@@ -303,7 +305,7 @@ export function renderSaveBar(proposal: SaveProposal, updateTarget: { item_id: s
     confirmBtn.addEventListener('click', () => {
         confirmBtn.disabled = true;
         neverBtn.disabled = true;
-        confirmBtn.textContent = '保存中…';
+        confirmBtn.textContent = chrome.i18n.getMessage('saveBarSaving');
         statusLine.classList.add('show');
         statusLine.textContent = '';
 
@@ -321,7 +323,7 @@ export function renderSaveBar(proposal: SaveProposal, updateTarget: { item_id: s
         })
             .then((response) => {
                 if (response?.success) {
-                    title.textContent = updateTarget ? '已更新 ✓' : '已保存 ✓';
+                    title.textContent = updateTarget ? chrome.i18n.getMessage('saveBarUpdated') : chrome.i18n.getMessage('saveBarSaved');
                     detail.textContent = response.data?.name || '';
                     void chrome.runtime.sendMessage({ type: 'persona_clear_pending_save' }).catch(() => null);
                     statusLine.classList.remove('show');
@@ -331,14 +333,14 @@ export function renderSaveBar(proposal: SaveProposal, updateTarget: { item_id: s
                 } else {
                     confirmBtn.disabled = false;
                     neverBtn.disabled = false;
-                    confirmBtn.textContent = updateTarget ? '更新' : '保存';
-                    statusLine.textContent = response?.error || '保存失败';
+                    confirmBtn.textContent = updateTarget ? chrome.i18n.getMessage('saveBarUpdate') : chrome.i18n.getMessage('saveBarSave');
+                    statusLine.textContent = response?.error || chrome.i18n.getMessage('saveBarFailed');
                 }
             })
             .catch((error) => {
                 confirmBtn.disabled = false;
-                confirmBtn.textContent = updateTarget ? '更新' : '保存';
-                statusLine.textContent = error instanceof Error ? error.message : '保存失败';
+                confirmBtn.textContent = updateTarget ? chrome.i18n.getMessage('saveBarUpdate') : chrome.i18n.getMessage('saveBarSave');
+                statusLine.textContent = error instanceof Error ? error.message : chrome.i18n.getMessage('saveBarFailed');
             });
     });
 

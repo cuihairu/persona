@@ -9,6 +9,19 @@ import { state } from './state.js';
 
 type SendHandler = (message: { type?: string; request?: { username?: string } }) => unknown;
 
+const EN_STRINGS: Record<string, string> = {
+    saveBarTitleSave: 'Save login to Persona?',
+    saveBarTitleUpdate: 'Update login in Persona?',
+    saveBarSave: 'Save',
+    saveBarUpdate: 'Update',
+    saveBarNever: 'Never for this site',
+    saveBarSaving: 'Saving…',
+    saveBarSaved: 'Saved ✓',
+    saveBarUpdated: 'Updated ✓',
+    saveBarFailed: 'Save failed',
+    saveBarUsernamePlaceholder: 'username'
+};
+
 describe('renderSaveBar username editing', () => {
     let sendMessage: jest.Mock;
     let handler: SendHandler;
@@ -20,7 +33,8 @@ describe('renderSaveBar username editing', () => {
         handler = () => Promise.resolve({ success: true, data: { name: 'saved item' } });
         sendMessage = jest.fn((message: { type?: string; request?: { username?: string } }) => handler(message));
         (globalThis as { chrome?: unknown }).chrome = {
-            runtime: { sendMessage }
+            runtime: { sendMessage },
+            i18n: { getMessage: (key: string) => EN_STRINGS[key] ?? '' }
         };
     });
 
