@@ -32,10 +32,11 @@ ignore = [
     # serialization of trusted in-memory values. Revisit when migrating off
     # serde_yaml.
     "RUSTSEC-2024-0449",
-    # Marvin Attack timing sidechannel in rsa (via ssh-key + ssh-agent rsa-sha2-*
-    # signing); upstream has published no patched release (Solution: none), so
-    # there is nothing to upgrade to. Revisit when RustCrypto/RSA ships a fix.
-    "RUSTSEC-2023-0071",
+    # RUSTSEC-2023-0071 (rsa Marvin Attack) ignore removed 2026-11-27: the lock
+    # migrated to stable rsa 0.10.0 (patched >= 0.10.0) on 2026-11-26 (a24e304),
+    # and cargo-deny itself reported the entry as advisory-not-detected. With the
+    # ignore gone, a future regression to rsa <0.10 fails this check instead of
+    # being silenced.
     # zbus 5.19.0 pulled in via keyring -> zbus-secret-service-keyring-store;
     # zbus_names only carries a maintenance-status advisory, and the advisory
     # states there is no security upgrade path. Remove this ignore once
@@ -50,15 +51,12 @@ ignore = [
     # advisory has no security patch, and the macros are folded into zbus 6.
     # Remove and re-check together when the keyring backend moves to zbus 6.
     "RUSTSEC-2026-0372",
-    # Bundled SQLite CVE-2026-119375 (a local WAL page-size confusion can read
-    # uninitialized memory): the patched libsqlite3-sys 0.39 (SQLite 3.54)
-    # shipped with rusqlite 0.41, but the latest sqlx-sqlite 0.9.0 still pins
-    # libsqlite3-sys <0.38, so there is no upgrade path in the dependency tree.
-    # persona only opens its own self-built vault database (it never reads
-    # untrusted third-party db+wal files), so exposure is low.
-    # Upgrade and remove this ignore once sqlx-sqlite ships a version using
-    # libsqlite3-sys >=0.39.
-    "RUSTSEC-2026-0459",
+    # RUSTSEC-2026-0459 (bundled SQLite CVE-2026-119375) ignore removed
+    # 2026-11-27: resolved 2026-11-23 (d7b10eb) — sqlx-sqlite 0.9.1 relaxed the
+    # pin to <0.41 and all three lockfiles carry libsqlite3-sys 0.40.0
+    # (SQLite 3.54.x, >= patched 0.39); cargo-deny reported the entry as
+    # advisory-not-detected. A downgrade to a vulnerable libsqlite3-sys now
+    # fails this check instead of being silenced.
     # Every chrono 0.4 version is marked unmaintained (migrating to jiff/time is
     # advised); there is no security patch and no upgrade path. The advisory
     # carries no vulnerability content, only maintenance status. Remove this

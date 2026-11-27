@@ -1,28 +1,20 @@
-# cargo-audit config: unfixable advisories as of 2026-11-03 (rationale corrected 2026-11-05)
-# RUSTSEC-2023-0071 (rsa Marvin Attack): resolved 2026-11-26 by migrating rsa 0.9.10/0.10.0-rc.18
-#   -> stable 0.10.0 (crypto-glue 0.2.3 + ssh-key 0.7.0-rc.12, commit a24e304); this file's ignore
-#   entry is retained only as a defensive marker for rsa < 0.10.
+# cargo-audit config (root workspace only; desktop/src-tauri and fuzz audit without this file).
+# RUSTSEC-2023-0071 (rsa Marvin Attack): resolved 2026-11-26 — the lock migrated to stable
+#   rsa 0.10.0 (crypto-glue 0.2.3 + ssh-key 0.7.0-rc.12, commit a24e304). Its ignore entry was
+#   dropped 2026-11-27: with rsa >=0.10 pinned in the lock the advisory cannot hit, and removing
+#   the ignore makes a future rsa <0.10 regression fail the audit instead of being silenced.
 # RUSTSEC-2026-0387 (crypto-bigint timing variability): patched = >=0.7.6. The tree's own
 #   crypto-bigint consumers moved to 0.7.x (k256/p256 on elliptic-curve 0.14; lock now 0.7.10).
-#   A residual crypto-bigint 0.5.5 instance EXISTS IN THE LOCK GRAPH via
-#   alloy-consensus 2.6.1 -> k256 0.13 -> elliptic-curve 0.13 -> crypto-bigint 0.5.5.
-#   An additional lock-graph edge via alloy-primitives -> k256 0.13 also exists (alloy-primitives
-#   is a direct core dependency). Caveat (evidence downgraded 2026-11-06 after independent
-#   review): the lock graph is NOT proof of runtime reachability. On the desktop workspace,
-#   `cargo tree --offline --locked --target all -i crypto-bigint@0.5.5` prints nothing
-#   ("nothing to print"), so whether the default build actually enables this chain is
-#   UNVERIFIED in either direction. k256 0.14 (elliptic-curve 0.14 / crypto-bigint 0.7) exists
-#   upstream (2026-07), but no alloy release adopts it. Whether an upstream version bump,
-#   feature adjustment, or dependency replacement can zero this ID out has not been verified
-#   with reproducible evidence. Re-check when alloy ships a k256-0.14-based release.
-#   Same lock-graph observations hold in the desktop/src-tauri and fuzz workspaces (their
-#   audits run per-workspace without this file).
+#   A residual crypto-bigint 0.5.5 instance EXISTS IN THE LOCKFILE — cargo-audit is lockfile-level
+#   and flags it via alloy-consensus 2.6.1 -> k256 0.13 -> elliptic-curve 0.13 -> crypto-bigint
+#   0.5.5, plus a lock-graph edge alloy-primitives -> k256 0.13 (alloy-primitives is a direct core
+#   dependency). The buildable graph does NOT enable the chain (closed 2026-11-09 with evidence,
+#   see todo.md VULN-PERSONA-001 for the dated recheck trail): cargo-deny (graph-level, this
+#   check's CI companion) and `cargo tree --offline --locked --target all -i crypto-bigint@0.5.5`
+#   in all three workspaces print nothing, so no default build reaches the vulnerable version.
+#   k256 0.14 (elliptic-curve 0.14 / crypto-bigint 0.7) exists upstream (2026-07), but no alloy
+#   release adopts it. Re-check when alloy ships a k256-0.14-based release.
 [advisories]
 ignore = [
-    "RUSTSEC-2023-0071", # rsa < 0.10 only; repo lock migrated to stable 0.10.0 (a24e304)
-    "RUSTSEC-2026-0387", # crypto-bigint 0.5.5: present in the lock graph (alloy -> k256 0.13 chain); runtime enablement unverified
-    # Bundled SQLite CVE-2026-119375 resolved 2026-11-23 (d7b10eb): sqlx-sqlite 0.9.1 relaxed
-    # libsqlite3-sys to <0.41, and all three lockfiles now carry 0.40.0 (SQLite 3.54.x).
-    # Ignore retained as a defensive marker only.
-    "RUSTSEC-2026-0459",
+    "RUSTSEC-2026-0387", # crypto-bigint 0.5.5: lockfile-level hit only (alloy -> k256 0.13); graph-level unreachable, blocked on upstream alloy
 ]
