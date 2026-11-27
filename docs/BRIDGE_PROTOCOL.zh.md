@@ -944,20 +944,40 @@ materialize → push 周期，把主库（含经 `save_credential` 落库的扩�
   "scanned_at": "2026-11-28T00:00:00+00:00",
   "total_credentials": 12,
   "weak": [
-    { "item_id": "018f…", "name": "Repo admin", "severity": "high",
-      "detail": "password scores 0/4", "score": 0 }
+    {
+      "item_id": "018f…",
+      "name": "Repo admin",
+      "severity": "high",
+      "detail": "password scores 0/4",
+      "score": 0
+    }
   ],
   "reused": [
-    { "item_id": "018f…", "name": "Repo admin", "severity": "high",
-      "detail": "shared by 2 credentials", "group_size": 2 }
+    {
+      "item_id": "018f…",
+      "name": "Repo admin",
+      "severity": "high",
+      "detail": "shared by 2 credentials",
+      "group_size": 2
+    }
   ],
   "no_totp": [
-    { "item_id": "018f…", "name": "Repo admin", "severity": "low",
-      "detail": "github.com offers two-factor authentication", "site": "github.com" }
+    {
+      "item_id": "018f…",
+      "name": "Repo admin",
+      "severity": "low",
+      "detail": "github.com offers two-factor authentication",
+      "site": "github.com"
+    }
   ],
   "stale": [
-    { "item_id": "018f…", "name": "Old portal", "severity": "low",
-      "detail": "unchanged for 400 days", "days": 400 }
+    {
+      "item_id": "018f…",
+      "name": "Old portal",
+      "severity": "low",
+      "detail": "unchanged for 400 days",
+      "days": 400
+    }
   ],
   "counts": { "high": 4, "medium": 0, "low": 3 },
   "breach_status": "skipped"
@@ -1243,7 +1263,7 @@ manifest 文件内容示例：
 | 5        | 0.1.0+   | v4 全部 + generate_password（密码生成，§16）+ hello 响应携带 connect_available/connect_port                                                                 |
 | 6        | 0.1.0+   | v5 全部 + sync_connect（云端同步引导，§17）：扩展经桥取连接参数后 HTTP 直连数据面                                                                           |
 | 7        | 0.1.0+   | v6 全部 + account_login/status/logout（账号域三件套，§18）+ sync_push_now（立即同步，§19）+ sync_resolve_conflict（冲突裁决，§20）：令牌只落 keyring 不过桥 |
-| 8        | 0.1.0+   | v7 全部 + health_scan（保险库健康扫描，§21）：分桶仅元数据 Watchtower 报告，仅离线规则（`breach_status: skipped`） |
+| 8        | 0.1.0+   | v7 全部 + health_scan（保险库健康扫描，§21）：分桶仅元数据 Watchtower 报告，仅离线规则（`breach_status: skipped`）                                          |
 
 > v2 起未改变帧格式与 HMAC 签名规则，只是新增消息类型并升级 `protocol_version`；旧扩展对桥接发送的未知消息仍会得到 `unknown_type`，向后兼容。
 

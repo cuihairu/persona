@@ -944,20 +944,40 @@ always `"skipped"`.
   "scanned_at": "2026-11-28T00:00:00+00:00",
   "total_credentials": 12,
   "weak": [
-    { "item_id": "018f…", "name": "Repo admin", "severity": "high",
-      "detail": "password scores 0/4", "score": 0 }
+    {
+      "item_id": "018f…",
+      "name": "Repo admin",
+      "severity": "high",
+      "detail": "password scores 0/4",
+      "score": 0
+    }
   ],
   "reused": [
-    { "item_id": "018f…", "name": "Repo admin", "severity": "high",
-      "detail": "shared by 2 credentials", "group_size": 2 }
+    {
+      "item_id": "018f…",
+      "name": "Repo admin",
+      "severity": "high",
+      "detail": "shared by 2 credentials",
+      "group_size": 2
+    }
   ],
   "no_totp": [
-    { "item_id": "018f…", "name": "Repo admin", "severity": "low",
-      "detail": "github.com offers two-factor authentication", "site": "github.com" }
+    {
+      "item_id": "018f…",
+      "name": "Repo admin",
+      "severity": "low",
+      "detail": "github.com offers two-factor authentication",
+      "site": "github.com"
+    }
   ],
   "stale": [
-    { "item_id": "018f…", "name": "Old portal", "severity": "low",
-      "detail": "unchanged for 400 days", "days": 400 }
+    {
+      "item_id": "018f…",
+      "name": "Old portal",
+      "severity": "low",
+      "detail": "unchanged for 400 days",
+      "days": 400
+    }
   ],
   "counts": { "high": 4, "medium": 0, "low": 3 },
   "breach_status": "skipped"
@@ -1245,7 +1265,7 @@ Example manifest file contents:
 | 5                | 0.1.0+      | everything in v4 + generate_password (password generation, §16) + the hello response carries connect_available/connect_port                                                                                                    |
 | 6                | 0.1.0+      | everything in v5 + sync_connect (cloud sync bootstrap, §17): the extension fetches the connection parameters through the bridge and then talks to the data plane over HTTP directly                                            |
 | 7                | 0.1.0+      | everything in v6 + account_login/status/logout (the account-domain trio, §18) + sync_push_now (sync now, §19) + sync_resolve_conflict (conflict adjudication, §20): tokens land only in the keyring and never cross the bridge |
-| 8                | 0.1.0+      | everything in v7 + health_scan (vault health scan, §21): bucketed metadata-only Watchtower report, offline rules only (`breach_status: skipped`)                                                                                                                                                |
+| 8                | 0.1.0+      | everything in v7 + health_scan (vault health scan, §21): bucketed metadata-only Watchtower report, offline rules only (`breach_status: skipped`)                                                                               |
 
 > From v2 onward the frame format and the HMAC signing rules are unchanged; only new message types were added and `protocol_version` was bumped. Older extensions still get `unknown_type` for messages the bridge does not know, so compatibility is preserved.
 
