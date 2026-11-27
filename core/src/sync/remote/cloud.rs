@@ -11,11 +11,11 @@
 //! source as the backup chain).
 //!
 //! **Semantic differences from the HTTP transport (honestly documented)**:
-//! - **Oplog shards are never physically pruned.** After a snapshot upload, the server deletes `seq ≤ S`
-//!   ops in the same transaction (compaction); the cloud drive has no such compaction mechanism — shards are
-//!   append-only and snapshots are logical checkpoints (a new device can still replay everything after
-//!   installing the snapshot, so no data is lost to pruning).
-//!   `put_library_snapshot` always returns 0 (this implementation does not physically compact).
+//! - **Oplog shards are physically compacted only up to a group-wide safe watermark.** After a snapshot
+//!   upload, the server deletes `seq ≤ S` ops in the same transaction (compaction); the cloud drive has no
+//!   cross-device transaction, so it rewrites each shard locally, dropping only the prefix every registered
+//!   device has reported consumed (a device with no committed watermark blocks compaction — fail-closed).
+//!   When no safe prefix exists `put_library_snapshot` returns 0 (shards unchanged).
 //! - **The cursor is a per-shard row-count watermark** (`{"<device>": rows, …}`), not a global rank.
 //!   A rank cursor would skip "late-arriving ops with a smaller lamport" (device B comes back offline and
 //!   writes ops with lower lamport that land before an already-consumed rank) — the row-count watermark
@@ -57,6 +57,18 @@ const ENV_PREFIX: &str = "env-";
 const ENV_SUFFIX: &str = ".bin";
 /// Device registry filename.
 const REGISTRY_FILE: &str = "registry.json";
+/// Per-device committed pull watermark filename (`watermark-<device_id>.json`). Published by a device only
+/// after its pull cycle has **persisted** the ops (the engine commits the cursor after landing ops), so a
+/// watermark is a durable "I have consumed the first N rows of every shard" claim.
+const WATERMARK_PREFIX: &str = "watermark-";
+const WATERMARK_SUFFIX: &str = ".json";
+/// Per-shard compaction base (`base-<device_id>.json`): the number of leading rows
+/// physically removed from a shard. Cursor watermarks are expressed in **logical**
+/// coordinates (original row numbers, never decreased), so a compaction can drop
+/// physical rows without shifting any device's cursor — the base is subtracted
+/// only when indexing the physical file.
+const BASE_PREFIX: &str = "base-";
+const BASE_SUFFIX: &str = ".json";
 
 /// [`SyncRemote`] over a cloud-drive directory. `device_id` is this device (it decides which
 /// shard push writes to). Every file operation is a local atomic write (temp + fsync + rename), so the
@@ -295,6 +307,7 @@ impl CloudGroupKeyStore {
         for name in [
             format!("{ENV_PREFIX}{device_id}{ENV_SUFFIX}"),
             format!("{ENV_PREFIX}{device_id}.meta.json"),
+            watermark_name(device_id),
         ] {
             if let Err(e) = tokio::fs::remove_file(self.dir.join(&name)).await {
                 if e.kind() != std::io::ErrorKind::NotFound {
@@ -467,6 +480,188 @@ fn merge_sort_key(op: &SyncOp) -> (u64, Uuid, Uuid) {
     (op.lamport, op.device_id, op.op_id)
 }
 
+// ---------------------------------------------------------------------------
+// Per-device committed watermarks + shard-rewrite GC
+// ---------------------------------------------------------------------------
+
+/// One device's committed pull position, published into the cloud directory.
+///
+/// `watermarks` maps every shard to the number of its rows this device has
+/// **consumed** (landed in the local oplog and recorded in the local cursor).
+/// It is only ever written from a persisted cursor, never from an in-flight
+/// page — otherwise a crash after the write but before the local commit would
+/// have advertised rows as consumed that were in fact never stored.
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+struct CommittedWatermark {
+    device_id: Uuid,
+    watermarks: Watermarks,
+}
+
+fn watermark_name(device_id: Uuid) -> String {
+    format!("{WATERMARK_PREFIX}{device_id}{WATERMARK_SUFFIX}")
+}
+
+fn base_name(device_id: Uuid) -> String {
+    format!("{BASE_PREFIX}{device_id}{BASE_SUFFIX}")
+}
+
+/// Reads the compaction base of one shard (leading rows physically removed): 0
+/// when no base file exists or it is unreadable.
+async fn read_base(dir: &Path, device_id: Uuid) -> u64 {
+    let path = dir.join(base_name(device_id));
+    match tokio::fs::read(&path).await {
+        Ok(bytes) => serde_json::from_slice::<serde_json::Value>(&bytes)
+            .ok()
+            .and_then(|v| v.get("dropped").and_then(|x| x.as_u64()))
+            .unwrap_or(0),
+        Err(_) => 0,
+    }
+}
+
+async fn write_base(dir: &Path, device_id: Uuid, dropped: u64) -> Result<()> {
+    let body = serde_json::json!({ "dropped": dropped }).to_string();
+    atomic_write(dir, &base_name(device_id), body.as_bytes()).await
+}
+
+/// Writes this device's committed watermark file (atomic; the cloud agent only
+/// ever sees a complete file).
+async fn write_committed_watermark(dir: &Path, watermark: &CommittedWatermark) -> Result<()> {
+    let text = serde_json::to_vec(watermark)
+        .map_err(|e| PersonaError::Io(format!("encode pull watermark failed: {e}")))?;
+    atomic_write(dir, &watermark_name(watermark.device_id), &text).await
+}
+
+/// Collects every committed watermark file in the directory. An unreadable or
+/// malformed file is skipped: it merely keeps its device blocking compaction
+/// (fail-closed), never advances it.
+async fn committed_watermarks(dir: &Path) -> Result<Vec<CommittedWatermark>> {
+    let mut out = Vec::new();
+    let mut entries = match tokio::fs::read_dir(dir).await {
+        Ok(e) => e,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(out),
+        Err(e) => {
+            return Err(PersonaError::Io(format!("read cloud drive dir failed: {e}")).into());
+        }
+    };
+    while let Some(entry) = entries
+        .next_entry()
+        .await
+        .map_err(|e| PersonaError::Io(format!("read cloud drive dir entry failed: {e}")))?
+    {
+        let name = entry.file_name().to_string_lossy().to_string();
+        let Some(id_text) = name
+            .strip_prefix(WATERMARK_PREFIX)
+            .and_then(|r| r.strip_suffix(WATERMARK_SUFFIX))
+        else {
+            continue;
+        };
+        let Ok(claimed_id) = Uuid::parse_str(id_text) else {
+            continue;
+        };
+        let Ok(text) = tokio::fs::read_to_string(entry.path()).await else {
+            continue;
+        };
+        // The filename is the identity: a file whose JSON claims a different
+        // device must not be able to advance that device's boundary.
+        if let Ok(w) = serde_json::from_str::<CommittedWatermark>(&text) {
+            if w.device_id == claimed_id {
+                out.push(w);
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// The **safe logical watermark** of a shard: the highest logical row number
+/// every registered device has committed as consumed — the compaction boundary.
+///
+/// `None` means "do not touch this shard" (fail-closed): no registered devices,
+/// or some registered device has no committed watermark file (never pulled /
+/// offline), or some device's count is at/below the current compaction base
+/// (nothing new to drop).
+fn safe_watermark(
+    device_ids: &[Uuid],
+    target: Uuid,
+    committed: &[CommittedWatermark],
+    base: u64,
+) -> Option<u64> {
+    if device_ids.is_empty() {
+        return None;
+    }
+    let mut safe = u64::MAX;
+    for device_id in device_ids {
+        let w = committed.iter().find(|w| w.device_id == *device_id)?; // no file at all -> None
+        let count = w.watermarks.get(&target).copied().unwrap_or(0);
+        safe = safe.min(count);
+    }
+    if safe <= base {
+        None
+    } else {
+        Some(safe)
+    }
+}
+
+/// Shard-rewrite GC (§4): drop the rows below the safe watermark of every shard
+/// by rewriting that shard locally (temp + fsync + rename). Cursor watermarks
+/// stay in logical coordinates; the compaction base records what was physically
+/// dropped, so no device's cursor is invalidated. Returns the number of rows
+/// rewritten away.
+async fn compact_shards(dir: &Path) -> Result<u64> {
+    let device_ids: Vec<Uuid> = read_registry(dir)
+        .await?
+        .devices
+        .iter()
+        .filter_map(|d| d.device_id.parse::<Uuid>().ok())
+        .collect();
+    let shards = list_shards(dir).await?;
+    let committed = committed_watermarks(dir).await?;
+    let mut compacted = 0u64;
+    for (device_id, path) in &shards {
+        let base = read_base(dir, *device_id).await;
+        let ops = read_shard_ops(path).await?;
+        let Some(safe) = safe_watermark(&device_ids, *device_id, &committed, base) else {
+            continue; // a device is offline / never pulled -> keep everything
+        };
+        let physical_safe = (safe - base) as usize;
+        if physical_safe == 0 || physical_safe > ops.len() {
+            continue; // nothing to drop (over-length means the cursor is already past the file)
+        }
+        let mut buf = Vec::new();
+        for op in &ops[physical_safe..] {
+            let line = serde_json::to_string(op)
+                .map_err(|e| PersonaError::Io(format!("encode op line failed: {e}")))?;
+            buf.extend_from_slice(line.as_bytes());
+            buf.push(b'\n');
+        }
+        atomic_write(dir, &shard_name(*device_id), &buf).await?;
+        write_base(dir, *device_id, safe).await?;
+        compacted += physical_safe as u64;
+        tracing::info!(device = %device_id, dropped = physical_safe, kept = ops.len() - physical_safe, "compacted cloud shard");
+    }
+    Ok(compacted)
+}
+
+fn shard_name(device_id: Uuid) -> String {
+    format!("{SHARD_PREFIX}{device_id}{SHARD_SUFFIX}")
+}
+
+impl CloudDriveRemote {
+    /// Publishes this device's pull position into the cloud folder after the local
+    /// cursor has been **persisted** (the engine commits it after landing ops).
+    /// Called from `pull_ops` only after the cursor is computed; the file is
+    /// atomic, so other devices never see a partial watermark.
+    async fn publish_committed_watermark(&self, watermarks: &Watermarks) -> Result<()> {
+        write_committed_watermark(
+            &self.dir,
+            &CommittedWatermark {
+                device_id: self.device_id,
+                watermarks: watermarks.clone(),
+            },
+        )
+        .await
+    }
+}
+
 #[async_trait]
 impl SyncRemote for CloudDriveRemote {
     async fn push_ops(&self, ops: &[SyncOp]) -> Result<(u64, u64)> {
@@ -527,13 +722,25 @@ impl SyncRemote for CloudDriveRemote {
         let mut next = watermarks.clone();
         for (device_id, path) in &shards {
             let ops = read_shard_ops(path).await?;
-            let start = watermarks.get(device_id).copied().unwrap_or(0) as usize;
+            // Cursor watermarks are logical row numbers; the compaction base is
+            // the number of leading rows physically gone. Subtracting gives the
+            // index into the current file (saturating so an over-consumed cursor
+            // never panics — it just reads nothing from that shard).
+            let base = read_base(&self.dir, *device_id).await;
+            let logical = watermarks.get(device_id).copied().unwrap_or(0);
+            let start = logical.saturating_sub(base) as usize;
             if start < ops.len() {
                 new_ops.extend(ops[start..].iter().cloned());
-                next.insert(*device_id, ops.len() as u64);
             }
+            // Next logical position = base + current physical row count.
+            next.insert(*device_id, base + ops.len() as u64);
         }
         if new_ops.is_empty() {
+            // Publish even on an empty page: a device that just finished its
+            // first full read has a non-empty *committed* map (decoded from
+            // `since`) that other devices must be able to see, otherwise the
+            // gc boundary stalls at that device's stale position forever.
+            self.publish_committed_watermark(&watermarks).await?;
             return Ok((Vec::new(), None));
         }
         // Deterministic merge + op_id deduplication (a re-read safety net: the same op across pages/replays is kept once).
@@ -542,16 +749,29 @@ impl SyncRemote for CloudDriveRemote {
         new_ops.retain(|op| seen.insert(op.op_id));
         let total: u64 = next.values().sum();
         let cursor = crate::sync::cursor::encode_cursor(total as i64, &encode_watermarks(&next));
+        // Publish the **previously committed** position, not `next`: the engine
+        // persists the returned cursor only after it has landed the ops, so
+        // advertising `next` here would over-report on a crash between this
+        // write and that commit. Using `watermarks` (decoded from `since`, i.e.
+        // this device's persisted cursor) gives a one-cycle lag: every row count
+        // that becomes visible to other devices is already durable in this
+        // device's oplog (fail-closed across crashes).
+        self.publish_committed_watermark(&watermarks).await?;
         Ok((new_ops, Some(cursor)))
     }
 
     async fn head_seq(&self) -> Result<i64> {
-        // The group's newest version = the total row count of all shards (op_id is globally unique across
-        // shards, so row count is exactly the deduplicated op count).
+        // The group's newest version = the total **logical** row count of all
+        // shards (physical rows plus the compacted base of each shard). Using
+        // logical counts keeps the version monotonic across compactions —
+        // `local_watermark`/`behind` read this same coordinate space. op_id is
+        // globally unique across shards, so this equals the deduplicated op
+        // count.
         let shards = list_shards(&self.dir).await?;
         let mut total = 0i64;
-        for (_, path) in &shards {
-            total += read_shard_ops(path).await?.len() as i64;
+        for (device_id, path) in &shards {
+            let base = read_base(&self.dir, *device_id).await;
+            total += (base as i64) + read_shard_ops(path).await?.len() as i64;
         }
         Ok(total)
     }
@@ -564,14 +784,15 @@ impl SyncRemote for CloudDriveRemote {
     ) -> Result<u64> {
         // The filename is content-addressed by `(seq, device_id)`: different devices never write the same
         // file, and re-sending the same (seq, device) is idempotent (skipped, immutable — a snapshot file is
-        // never modified once written). Always returns 0: cloud shards are not physically pruned (see the
-        // semantic differences in the module docs).
+        // never modified once written).
         let name = format!("{SNAPSHOT_PREFIX}{seq}-{device_id}{SNAPSHOT_SUFFIX}");
-        if self.dir.join(&name).exists() {
-            return Ok(0);
+        let mut pruned = 0;
+        if !self.dir.join(&name).exists() {
+            atomic_write(&self.dir, &name, ciphertext).await?;
+            // Only the snapshot that actually introduces new coverage triggers GC.
+            pruned = compact_shards(&self.dir).await?;
         }
-        atomic_write(&self.dir, &name, ciphertext).await?;
-        Ok(0)
+        Ok(pruned)
     }
 
     async fn get_library_snapshot(&self) -> Result<Option<(i64, Vec<u8>)>> {

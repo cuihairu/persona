@@ -488,3 +488,297 @@ async fn open_cloud_two_devices_converge() {
 fn no_travel() -> Box<dyn Fn() -> bool + Send + Sync> {
     Box::new(|| false)
 }
+
+// ---- CloudDriveRemote: shard-rewrite GC (§9.3) ----
+
+/// Registers `device_id` in the cloud registry so GC treats it as a member whose
+/// committed watermark gates compaction.
+async fn register(dir: &std::path::Path, device_id: Uuid) {
+    let store = CloudGroupKeyStore::new(dir);
+    let identity = crate::sync::device::DeviceIdentity::generate(device_id.to_string())
+        .unwrap()
+        .with_device_id(device_id);
+    store.register_device(&identity).await.unwrap();
+}
+
+/// Writes a device's committed watermark file directly (simulating what
+/// `pull_ops` publishes once the engine has persisted the cursor).
+async fn commit_watermark(dir: &std::path::Path, device_id: Uuid, counts: &[(Uuid, u64)]) {
+    let wm: std::collections::HashMap<Uuid, u64> = counts.iter().copied().collect();
+    let path = dir.join(format!("watermark-{device_id}.json"));
+    tokio::fs::write(&path, serde_json::json!({
+        "device_id": device_id,
+        "watermarks": wm.iter().map(|(k, v)| (k.to_string(), *v)).collect::<std::collections::HashMap<_, _>>(),
+    }).to_string())
+    .await
+    .unwrap();
+}
+
+async fn shard_len(dir: &std::path::Path, device_id: Uuid) -> usize {
+    let path = dir.join(format!("dev-{device_id}.jsonl"));
+    let text = tokio::fs::read_to_string(path).await.unwrap_or_default();
+    text.lines().filter(|l| !l.trim().is_empty()).count()
+}
+
+#[tokio::test]
+async fn gc_is_blocked_until_every_device_commits() {
+    let dir = tempfile::tempdir().unwrap();
+    let a = Uuid::new_v4();
+    let b = Uuid::new_v4();
+    register(dir.path(), a).await;
+    register(dir.path(), b).await;
+
+    // A pushes 5 ops to its own shard.
+    let ra = CloudDriveRemote::new(dir.path(), a);
+    let item = Uuid::new_v4();
+    ra.push_ops(&[
+        op(a, 1, item),
+        op(a, 2, item),
+        op(a, 3, item),
+        op(a, 4, item),
+        op(a, 5, item),
+    ])
+    .await
+    .unwrap();
+
+    // Only A commits a watermark; B never pulled (no file) -> GC must not drop anything.
+    commit_watermark(dir.path(), a, &[(a, 5)]).await;
+    let pruned = ra
+        .put_library_snapshot(5, &a.to_string(), b"snap")
+        .await
+        .unwrap();
+    assert_eq!(
+        pruned, 0,
+        "an un-pulled registered device blocks compaction"
+    );
+    assert_eq!(shard_len(dir.path(), a).await, 5, "shard untouched");
+}
+
+#[tokio::test]
+async fn gc_drops_only_the_common_consumed_prefix() {
+    let dir = tempfile::tempdir().unwrap();
+    let a = Uuid::new_v4();
+    let b = Uuid::new_v4();
+    register(dir.path(), a).await;
+    register(dir.path(), b).await;
+
+    let ra = CloudDriveRemote::new(dir.path(), a);
+    let item = Uuid::new_v4();
+    ra.push_ops(&[
+        op(a, 1, item),
+        op(a, 2, item),
+        op(a, 3, item),
+        op(a, 4, item),
+        op(a, 5, item),
+    ])
+    .await
+    .unwrap();
+
+    // Both devices have durably consumed the first 3 rows of A's shard.
+    commit_watermark(dir.path(), a, &[(a, 3)]).await;
+    commit_watermark(dir.path(), b, &[(a, 3)]).await;
+
+    let pruned = ra
+        .put_library_snapshot(5, &a.to_string(), b"snap")
+        .await
+        .unwrap();
+    assert_eq!(pruned, 3, "only the common consumed prefix is dropped");
+    assert_eq!(
+        shard_len(dir.path(), a).await,
+        2,
+        "the unconsumed suffix stays"
+    );
+
+    // The surviving rows are the last two (lamport 4, 5), and both can be re-read.
+    let (ops, _cursor) = ra.pull_ops(None, 200).await.unwrap();
+    assert_eq!(ops.len(), 2);
+    assert_eq!(
+        ops.iter().map(|o| o.lamport).collect::<Vec<_>>(),
+        vec![4, 5]
+    );
+}
+
+#[tokio::test]
+async fn gc_blocks_beyond_a_lagging_device() {
+    let dir = tempfile::tempdir().unwrap();
+    let a = Uuid::new_v4();
+    let b = Uuid::new_v4();
+    register(dir.path(), a).await;
+    register(dir.path(), b).await;
+
+    let ra = CloudDriveRemote::new(dir.path(), a);
+    let item = Uuid::new_v4();
+    ra.push_ops(&[op(a, 1, item), op(a, 2, item), op(a, 3, item)])
+        .await
+        .unwrap();
+
+    // A consumed all 3, but B only consumed 1 (B is behind, maybe offline mid-sync).
+    commit_watermark(dir.path(), a, &[(a, 3)]).await;
+    commit_watermark(dir.path(), b, &[(a, 1)]).await;
+
+    let pruned = ra
+        .put_library_snapshot(3, &a.to_string(), b"snap")
+        .await
+        .unwrap();
+    assert_eq!(pruned, 1, "boundary is the min across devices");
+    assert_eq!(shard_len(dir.path(), a).await, 2, "rows 2-3 remain for B");
+
+    // B pulls from its committed position (1) and still gets rows 2 and 3.
+    let cursor = crate::sync::cursor::encode_cursor(4, &format!("{{\"{a}\":{n}}}", n = 1));
+    let (ops, _) = CloudDriveRemote::new(dir.path(), b)
+        .pull_ops(Some(&cursor), 200)
+        .await
+        .unwrap();
+    assert_eq!(
+        ops.len(),
+        2,
+        "the lagging device never loses unconsumed rows"
+    );
+}
+
+#[tokio::test]
+async fn gc_never_loses_late_lower_lamport_ops() {
+    let dir = tempfile::tempdir().unwrap();
+    let a = Uuid::new_v4();
+    let b = Uuid::new_v4();
+    register(dir.path(), a).await;
+    register(dir.path(), b).await;
+
+    let ra = CloudDriveRemote::new(dir.path(), a);
+    let rb = CloudDriveRemote::new(dir.path(), b);
+    let item = Uuid::new_v4();
+
+    // A pushes 4 ops; B consumes the first 2 then goes offline.
+    ra.push_ops(&[
+        op(a, 9, item),
+        op(a, 8, item),
+        op(a, 7, item),
+        op(a, 6, item),
+    ])
+    .await
+    .unwrap();
+    commit_watermark(dir.path(), b, &[(a, 2)]).await;
+    // A itself has only consumed 2 as well (it does not pull its own tail yet).
+    commit_watermark(dir.path(), a, &[(a, 2)]).await;
+
+    // While both are at 2, B writes a late op with a lower lamport that lands
+    // *before* the consumed rank — the exact op a rank cursor would skip.
+    rb.push_ops(&[op(b, 1, item)]).await.unwrap();
+
+    // GC runs: A's shard boundary is min(2,2)=2 -> drop the first 2 rows of A's shard.
+    let pruned = ra
+        .put_library_snapshot(6, &a.to_string(), b"snap")
+        .await
+        .unwrap();
+    assert_eq!(pruned, 2);
+    assert_eq!(shard_len(dir.path(), a).await, 2, "lamport 7,8 survive");
+
+    // B (committed 2) pulls and must still see the late low-lamport op from B's
+    // own shard, plus A's unconsumed rows — nothing was lost.
+    let cursor = crate::sync::cursor::encode_cursor(
+        4,
+        &format!("{{\"{a}\":{ca},\"{b}\":{cb}}}", ca = 2, cb = 0),
+    );
+    let (ops, _) = rb.pull_ops(Some(&cursor), 200).await.unwrap();
+    assert!(
+        ops.iter().any(|o| o.device_id == b && o.lamport == 1),
+        "late low-lamport op is never dropped by gc"
+    );
+}
+
+#[tokio::test]
+async fn gc_re_read_after_compaction_dedups() {
+    // After GC drops the consumed prefix, a device that already landed those ops
+    // re-reads them (its committed watermark is below the boundary) and must
+    // dedup by op_id rather than produce duplicates.
+    let dir = tempfile::tempdir().unwrap();
+    let a = Uuid::new_v4();
+    let b = Uuid::new_v4();
+    register(dir.path(), a).await;
+    register(dir.path(), b).await;
+
+    let ra = CloudDriveRemote::new(dir.path(), a);
+    let item = Uuid::new_v4();
+    ra.push_ops(&[op(a, 1, item), op(a, 2, item), op(a, 3, item)])
+        .await
+        .unwrap();
+    commit_watermark(dir.path(), a, &[(a, 3)]).await;
+    commit_watermark(dir.path(), b, &[(a, 3)]).await;
+
+    let pruned = ra
+        .put_library_snapshot(3, &a.to_string(), b"snap")
+        .await
+        .unwrap();
+    assert_eq!(pruned, 3);
+    assert_eq!(
+        shard_len(dir.path(), a).await,
+        0,
+        "fully consumed shard empties"
+    );
+
+    // A re-pulls from its old committed position (0): nothing is left to read.
+    let cursor = crate::sync::cursor::encode_cursor(3, &format!("{{\"{a}\":{n}}}", n = 0));
+    let (ops, _) = ra.pull_ops(Some(&cursor), 200).await.unwrap();
+    assert!(ops.is_empty(), "no rows left after full compaction");
+}
+
+#[tokio::test]
+async fn gc_does_not_run_when_snapshot_already_exists() {
+    // Re-sending the same (seq, device) snapshot is idempotent and must not
+    // re-trigger GC (which would double-drop rows).
+    let dir = tempfile::tempdir().unwrap();
+    let a = Uuid::new_v4();
+    let b = Uuid::new_v4();
+    register(dir.path(), a).await;
+    register(dir.path(), b).await;
+
+    let ra = CloudDriveRemote::new(dir.path(), a);
+    let item = Uuid::new_v4();
+    ra.push_ops(&[op(a, 1, item), op(a, 2, item), op(a, 3, item)])
+        .await
+        .unwrap();
+    commit_watermark(dir.path(), a, &[(a, 3)]).await;
+    commit_watermark(dir.path(), b, &[(a, 3)]).await;
+
+    ra.put_library_snapshot(3, &a.to_string(), b"snap")
+        .await
+        .unwrap();
+    assert_eq!(shard_len(dir.path(), a).await, 0);
+
+    // A second upload of the same (seq, device) returns 0 and touches nothing.
+    let pruned = ra
+        .put_library_snapshot(3, &a.to_string(), b"other")
+        .await
+        .unwrap();
+    assert_eq!(pruned, 0, "immutable snapshot never re-runs gc");
+}
+
+#[tokio::test]
+async fn gc_ignores_removed_devices() {
+    // A device that left the registry no longer gates compaction.
+    let dir = tempfile::tempdir().unwrap();
+    let a = Uuid::new_v4();
+    let b = Uuid::new_v4();
+    register(dir.path(), a).await;
+    register(dir.path(), b).await;
+
+    let ra = CloudDriveRemote::new(dir.path(), a);
+    let item = Uuid::new_v4();
+    ra.push_ops(&[op(a, 1, item), op(a, 2, item)])
+        .await
+        .unwrap();
+    commit_watermark(dir.path(), a, &[(a, 2)]).await;
+    // B committed 0 (never consumed); after removal it must not block GC.
+    commit_watermark(dir.path(), b, &[(a, 0)]).await;
+
+    assert!(CloudGroupKeyStore::new(dir.path())
+        .remove_device(b)
+        .await
+        .unwrap());
+
+    let pruned = ra
+        .put_library_snapshot(2, &a.to_string(), b"snap")
+        .await
+        .unwrap();
+    assert_eq!(pruned, 2, "a removed device no longer gates compaction");
+}

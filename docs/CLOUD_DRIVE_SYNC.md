@@ -44,7 +44,9 @@ stance as the cross-device mode).
 ├── snapshot-<seq>-<device_id>.bin  # immutable whole-vault snapshot (ciphertext)
 ├── env-<device_id>.bin             # group-key envelope (X25519-sealed)
 ├── env-<device_id>.meta.json       # {sealed_by, created_at} for display
-└── registry.json                   # device registry {device_id, name, pubkey}
+├── registry.json                   # device registry {device_id, name, pubkey}
+├── watermark-<device_id>.json      # committed per-shard pull positions (GC gate)
+└── base-<device_id>.json           # rows physically compacted from a shard (cursor coordinate shift)
 ```
 
 - **`dev-<device_id>.jsonl`**: one JSON `SyncOp` per line, appended by that
@@ -120,12 +122,13 @@ Appends to the device's own shard. Dedup by `op_id` against what's already in
 the shard (idempotent — a crash between push and ack is harmless). Writes
 atomically.
 
-## 4. Library snapshots: immutable, no physical compaction
+## 4. Library snapshots: immutable, safe shard-rewrite compaction
 
 The server prunes ops covered by a snapshot (`seq ≤ S`) in the same transaction
-— real compaction. A cloud folder has **no such mechanism** (you can't
-transactionally delete lines out of a shard while other devices still hold
-older watermarks).
+— real compaction. A cloud folder has **no cross-device transaction**, so the
+cloud transport rewrites each shard **locally** (temp + fsync + rename) during
+a *new* snapshot upload, dropping only rows every registered device has
+durably consumed.
 
 So the cloud transport:
 
@@ -133,15 +136,48 @@ So the cloud transport:
   (never overwritten; content-addressed by `(seq, device_id)`);
 - `get_library_snapshot` returns the **max-seq** file (deterministic convergence
   point when several devices upload);
-- returns **0** from `put_library_snapshot` — the shards are never physically
-  pruned. A snapshot is a **logical** checkpoint: a new device can install it
-  and then pull only the incremental delta, but the shards retain full history
-  as a safety net.
+- on a new snapshot, runs **shard-rewrite GC**: returns the number of rows
+  dropped (0 when nothing is safe to drop), and only the covered prefix is
+  removed — no cross-device delete.
 
-**Honest trade-off**: cloud shards grow without bound (the server's compaction
-doesn't happen here). For typical vaults this is acceptable; if it ever matters,
-a follow-up could add a shard-rewrite GC that rewrites only lines above a
-snapshot's watermark (a local rewrite, not a cross-device delete).
+### Safe watermark (fail-closed)
+
+Each device publishes a `watermark-<device_id>.json` file containing its
+**committed** per-shard row counts — the positions decoded from the pull cursor
+the engine has already persisted (landed ops + cursor write). Publishing lags
+one pull cycle behind, so a crash between pull and cursor commit can never
+advertise rows as consumed that were never stored locally.
+
+For a given shard, the compaction boundary is the **minimum consumed count
+across every device in `registry.json`**:
+
+- a device with **no watermark file** (never pulled / offline before its first
+  cycle) → **no compaction at all** for that shard;
+- a device whose count lags → the boundary stops at its position, so its
+  unconsumed rows survive;
+- a removed device no longer gates compaction (its watermark file is deleted
+  on removal).
+
+Because all devices must agree on the boundary, a single offline device holds
+the line — the conservative direction. Once it comes back and completes a pull
+cycle, the next snapshot upload reclaims the common prefix. The rewritten lines
+are reserialized from parsed `SyncOp`s (malformed lines are skipped at read time
+and not reintroduced) and the rewrite is atomic, so the cloud agent never sees
+a half-shard.
+
+**Cursor coordinates**: cursor watermarks are **logical** row numbers that never
+decrease. Each shard has a `base-<device_id>.json` recording how many leading
+rows were physically dropped. `pull_ops` subtracts the base when indexing the
+physical file, so compaction never invalidates a device's cursor — a lagging
+device resumes from its logical position and reads exactly the rows still
+present. `head_seq` adds back the base, keeping the group version number (and
+`local_watermark`/`behind`) monotonic across compactions.
+
+**Honest trade-off**: compaction requires every registered device to be caught
+up; an offline device blocks reclamation of the shared prefix indefinitely.
+The snapshot is still a logical checkpoint for new devices (install it, then
+pull only the delta), and the shards are the safety net until the boundary is
+safe.
 
 ## 5. Group-key envelopes (`CloudGroupKeyStore`)
 
@@ -237,8 +273,9 @@ folder picker (`@tauri-apps/plugin-dialog`), backed by these fields.
    feedback loop (its own push writes the shards, which would re-trigger) by
    refreshing the baseline fingerprint to the post-cycle state. Core stays
    dependency-free (`notify` is a desktop-only dependency).
-3. **Shard growth**: no physical compaction (§4); a shard-rewrite GC is the
-   eventual fix if a vault's history grows large.
+3. **Shard growth** (landed): shard-rewrite GC (§4) compacts the common consumed
+   prefix on each new snapshot upload. An offline device blocks compaction
+   (fail-closed); once it catches up the next snapshot reclaims the prefix.
 4. **Cloud folder availability** (landed): sync only works when the folder is
    reachable and the OS agent has propagated changes. The host classifies the
    cycle failure structurally — a transport-layer I/O failure under the cloud
