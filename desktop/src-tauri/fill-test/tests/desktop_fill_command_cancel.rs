@@ -4,9 +4,9 @@
 //! recheck closure injected by the test itself — the `slot_recheck_for` closure
 //! built by the command layer (`desktop_fill_credential`) had never been executed
 //! by the real command path. This suite covers that layer: **it drives the real
-//! command end to end** (mock runtime `State<AppState>` + real service decryption
-//! + a real cross-process target window), with cancellation instrumented
-//! deterministically via the host process's **pause hook** —
+//! command end to end** (mock runtime `State<AppState>` + real service
+//! decryption + a real cross-process target window), with cancellation
+//! instrumented deterministically via the host process's **pause hook** —
 //!
 //! 1. the injection thread blocks on the cross-process `SendMessageW` for
 //!    username;
