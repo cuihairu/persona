@@ -907,12 +907,87 @@ bindSettings();
 const shortcutsEl = document.getElementById('shortcuts');
 if (shortcutsEl) {
     shortcutsEl.innerHTML = `
-        <details style="margin-top: 16px;">
-            <summary style="cursor: pointer; color: #6b7280; font-size: 13px;">Keyboard shortcuts</summary>
-            <div style="margin-top: 8px; font-size: 12px; color: #6b7280; line-height: 1.8;">
-                <div><kbd style="background:#f3f4f6;padding:2px 6px;border-radius:4px;font-family:monospace;">Ctrl+Shift+P</kbd> Toggle overlay</div>
-                <div><kbd style="background:#f3f4f6;padding:2px 6px;border-radius:4px;font-family:monospace;">Ctrl+Shift+Y</kbd> Mini search (global)</div>
-            </div>
-        </details>
+        <div class="tiny" style="line-height:1.9;">
+            <div><kbd>Ctrl+Shift+P</kbd> Toggle overlay</div>
+            <div><kbd>Ctrl+Shift+Y</kbd> Mini search (global)</div>
+            <div><kbd>/</kbd> Focus search (popup)</div>
+        </div>
     `;
+}
+
+// ============ Popup shell: theme, console pane, search filter ============
+// Pure presentation-layer wiring on top of the operator logic above; every
+// element it touches outside its own ids is optional and null-guarded.
+
+const rootEl = document.documentElement;
+
+function applyTheme(theme: 'light' | 'dark' | null): void {
+    if (theme) rootEl.setAttribute('data-theme', theme);
+    else rootEl.removeAttribute('data-theme');
+}
+
+const themeBtn = document.getElementById('themeBtn');
+
+async function initTheme(): Promise<void> {
+    try {
+        const stored = await chrome.storage.local.get('popupTheme');
+        const theme = stored.popupTheme as 'light' | 'dark' | undefined;
+        if (theme === 'light' || theme === 'dark') applyTheme(theme);
+        // no stored preference: leave the authored attribute (and the system
+        // media query) in charge
+    } catch {
+        // storage unavailable: keep whatever the document already declares
+    }
+    themeBtn?.addEventListener('click', async () => {
+        const current = rootEl.getAttribute('data-theme')
+            ?? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+        const next = current === 'dark' ? 'light' : 'dark';
+        applyTheme(next);
+        try {
+            await chrome.storage.local.set({ popupTheme: next });
+        } catch {
+            // storage unavailable (e.g. devtools preview): theme still applies for the session
+        }
+    });
+}
+
+void initTheme();
+
+const consoleBtn = document.getElementById('consoleBtn');
+consoleBtn?.addEventListener('click', () => {
+    const collapsed = document.body.classList.toggle('pane-collapsed');
+    consoleBtn.setAttribute('aria-pressed', collapsed ? 'false' : 'true');
+});
+
+const searchInput = document.getElementById('searchInput') as HTMLInputElement | null;
+if (searchInput) {
+    window.addEventListener('keydown', (e) => {
+        if (e.key === '/' && document.activeElement !== searchInput
+            && (!(document.activeElement instanceof HTMLInputElement)
+                && !(document.activeElement instanceof HTMLTextAreaElement))) {
+            e.preventDefault();
+            searchInput.focus();
+        }
+    });
+
+    const sections = Array.from(document.querySelectorAll<HTMLElement>('.pane-left .card'));
+    searchInput.addEventListener('input', () => {
+        const q = searchInput.value.trim().toLowerCase();
+        for (const section of sections) {
+            const items = Array.from(section.querySelectorAll<HTMLElement>('.item'));
+            const controls = Array.from(section.querySelectorAll<HTMLElement>('button, input, .gen-result'));
+            const textMatch = (el: HTMLElement) => (el.textContent ?? '').toLowerCase().includes(q);
+            let visible = true;
+            if (q) {
+                const itemsVisible = items.filter(textMatch);
+                const controlsVisible = controls.filter(textMatch);
+                visible = itemsVisible.length > 0 || controlsVisible.length > 0
+                    || textMatch(section);
+                items.forEach((it) => { it.style.display = itemsVisible.includes(it) ? '' : 'none'; });
+            } else {
+                items.forEach((it) => { it.style.display = ''; });
+            }
+            section.style.display = visible ? '' : 'none';
+        }
+    });
 }

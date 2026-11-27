@@ -4,130 +4,133 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Persona</title>
-    <style>
-      body {
-        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-        margin: 0;
-        padding: 16px;
-        width: 320px;
-      }
-      .status {
-        font-size: 0.875rem;
-        color: #555;
-      }
-      button {
-        display: block;
-        width: 100%;
-        padding: 10px 12px;
-        margin-top: 12px;
-        background: #0a84ff;
-        border: none;
-        border-radius: 6px;
-        color: white;
-        cursor: pointer;
-        font-weight: 600;
-      }
-      button.secondary {
-        background: #6b7280;
-      }
-      button.danger {
-        background: #dc2626;
-      }
-      button:disabled {
-        opacity: 0.5;
-        cursor: not-allowed;
-      }
-      pre {
-        background: #f4f4f5;
-        padding: 8px;
-        border-radius: 6px;
-        white-space: pre-wrap;
-      }
-    </style>
+    <link href="popup.css" rel="stylesheet" />
     <script type="module" src="../dist/popup.js"></script>
   </head>
   <body>
-    <h2>Persona</h2>
-    <label for="endpoint">Bridge endpoint</label>
-    <input id="endpoint" type="text" value="native:com.persona.native" style="width:100%;padding:6px;margin-bottom:12px;" />
-    <p class="status" id="status">Bridge not contacted yet</p>
-    <button id="toggle">Connect to bridge</button>
+    <header class="topbar">
+      <div class="brand">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <path d="M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+          <circle cx="12" cy="10.5" r="2.6" stroke="currentColor" stroke-width="2"/>
+          <path d="M7.5 18c.7-2.4 2.5-3.6 4.5-3.6s3.8 1.2 4.5 3.6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+        </svg>
+        Persona
+      </div>
+      <span class="chip" id="status" title="Bridge status">Bridge not contacted yet</span>
+      <span class="chip" id="accountStatus" title="Account status">Unknown</span>
+      <span class="spacer"></span>
+      <button class="iconbtn" id="themeBtn" title="Toggle theme" aria-label="Toggle theme">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M20 12.5A8 8 0 1 1 11.5 4a6.5 6.5 0 0 0 8.5 8.5Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
+      </button>
+      <button class="iconbtn" id="consoleBtn" title="Toggle console pane" aria-label="Toggle console pane" aria-pressed="true">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m5 7 5 5-5 5M12 17h7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+    </header>
 
-    <h3 style="margin-top:16px;">Pairing</h3>
-    <p id="pairingStatus" class="status">Pairing status unknown</p>
-    <button id="requestPairing" class="secondary">Request pairing code</button>
-    <label for="pairingCode" style="display:block;margin-top:12px;">Pairing code</label>
-    <input id="pairingCode" type="text" placeholder="123-456" style="width:100%;padding:6px;" />
-    <pre id="pairingHint">Run `persona bridge --approve-code <CODE>` then click Finalize.</pre>
-    <button id="finalizePairing">Finalize pairing</button>
+    <div class="panes">
+      <main class="pane-left">
+        <div class="searchbox">
+          <svg class="glass" width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="11" cy="11" r="7" stroke="currentColor" stroke-width="2"/><path d="m20 20-3.5-3.5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+          <input id="searchInput" type="text" placeholder="Search items and actions" autocomplete="off" spellcheck="false" />
+          <kbd>/</kbd>
+        </div>
 
-    <h3 style="margin-top:16px;">Autofill</h3>
-    <p id="autofillStatus" class="status">Suggestions unavailable</p>
-    <div id="suggestions" style="display:flex;flex-direction:column;gap:8px;"></div>
+        <section class="card">
+          <h2>For this site <span class="inline-status" id="autofillStatus">Suggestions unavailable</span></h2>
+          <div class="itemlist" id="suggestions"></div>
+        </section>
 
-    <h3 style="margin-top:16px;">Cloud vault</h3>
-    <p id="cloudStatus" class="status">Not connected</p>
-    <button id="cloudConnect" class="secondary">Connect via local bridge</button>
-    <button id="cloudRefresh" class="secondary" disabled>Pull from server</button>
-    <button id="cloudPush" class="secondary" disabled>Push local changes</button>
-    <div id="cloudItems" style="display:flex;flex-direction:column;gap:8px;"></div>
+        <section class="card">
+          <h2>Vault <span class="inline-status" id="cloudStatus">Not connected</span></h2>
+          <div class="itemlist" id="cloudItems"></div>
+          <div class="row wrap" style="margin-top:8px;">
+            <button id="cloudConnect" class="action secondary">Connect via local bridge</button>
+            <button id="cloudRefresh" class="action secondary" disabled>Pull</button>
+            <button id="cloudPush" class="action secondary" disabled>Push</button>
+          </div>
+        </section>
 
-    <h3 style="margin-top:16px;">Account</h3>
-    <p id="accountStatus" class="status">Unknown</p>
-    <label for="accountId" style="display:block;margin-top:8px;">Account ID</label>
-    <input id="accountId" type="text" placeholder="acct-…" style="width:100%;padding:6px;" />
-    <label for="accountPassword" style="display:block;margin-top:8px;">Password</label>
-    <input id="accountPassword" type="password" style="width:100%;padding:6px;" />
-    <button id="accountLoginBtn">Sign in</button>
-    <button id="accountLogoutBtn" class="danger">Sign out</button>
+        <section class="card">
+          <h2>Generator</h2>
+          <div class="row wrap" style="margin-bottom:8px;">
+            <label class="muted">Length <input id="genLength" type="number" min="8" max="128" value="20" style="width:70px;" /></label>
+            <label class="muted">Words <input id="genWords" type="number" min="0" max="20" value="0" style="width:60px;" /></label>
+          </div>
+          <div class="row wrap" style="margin-bottom:8px;">
+            <label class="check"><input id="genUpper" type="checkbox" checked /> AZ</label>
+            <label class="check"><input id="genLower" type="checkbox" checked /> az</label>
+            <label class="check"><input id="genDigits" type="checkbox" checked /> 09</label>
+            <label class="check"><input id="genSymbols" type="checkbox" /> #$%</label>
+            <label class="check"><input id="genPronounceable" type="checkbox" /> Pronounceable</label>
+          </div>
+          <button id="genGenerate" class="action">Generate</button>
+          <div class="gen-result" id="genResult">—</div>
+        </section>
+      </main>
 
-    <h3 style="margin-top:16px;">Autofill settings</h3>
-    <div style="display:flex;flex-direction:column;gap:8px;">
-      <label style="display:flex;gap:8px;align-items:center;">
-        <input id="autoFillLoginOnFocus" type="checkbox" />
-        Auto-fill login when focusing inputs
-      </label>
-      <label style="display:flex;gap:8px;align-items:center;">
-        <input id="autoFillLoginOnLoad" type="checkbox" />
-        Auto-fill login on page load
-      </label>
-      <label style="display:flex;gap:8px;align-items:center;">
-        <input id="autoFillTotpOnFocus" type="checkbox" />
-        Auto-fill 2FA/OTP when focusing code field
-      </label>
-      <label style="display:flex;gap:8px;align-items:center;">
-        <input id="autoFillTotpAfterLogin" type="checkbox" />
-        Chain-fill 2FA/OTP after login fill
-      </label>
-      <label style="display:flex;gap:8px;align-items:center;">
-        <input id="requireTrustedDomain" type="checkbox" />
-        Only auto-fill on trusted domains
-      </label>
-      <label style="display:flex;gap:8px;align-items:center;">
-        <input id="savePromptEnabled" type="checkbox" />
-        Offer to save logins after sign-in / registration
-      </label>
-      <label style="display:flex;gap:8px;align-items:center;justify-content:space-between;">
-        Min match (login)
-        <input id="minMatchStrengthLogin" type="number" min="0" max="100" step="10" style="width:84px;padding:6px;" />
-      </label>
-      <label style="display:flex;gap:8px;align-items:center;justify-content:space-between;">
-        Min match (2FA)
-        <input id="minMatchStrengthTotp" type="number" min="0" max="100" step="10" style="width:84px;padding:6px;" />
-      </label>
-      <p class="status" style="margin:0;">Tip: mark a domain as trusted before enabling aggressive auto-fill.</p>
+      <aside class="pane-right console">
+        <details>
+          <summary>Bridge &amp; pairing</summary>
+          <div class="sec">
+            <label for="endpoint">Bridge endpoint</label>
+            <input id="endpoint" type="text" value="native:com.persona.native" />
+            <button id="toggle" class="action secondary">Connect to bridge</button>
+            <span class="tiny" id="pairingStatus">Pairing status unknown</span>
+            <button id="requestPairing" class="action secondary">Request pairing code</button>
+            <label for="pairingCode">Pairing code</label>
+            <input id="pairingCode" type="text" placeholder="123-456" />
+            <pre class="value" id="pairingHint">Run `persona bridge --approve-code <CODE>` then click Finalize.</pre>
+            <button id="finalizePairing" class="action">Finalize pairing</button>
+          </div>
+        </details>
+
+        <details>
+          <summary>Account</summary>
+          <div class="sec">
+            <label for="accountId">Account ID</label>
+            <input id="accountId" type="text" placeholder="acct-…" />
+            <label for="accountPassword">Password</label>
+            <input id="accountPassword" type="password" />
+            <button id="accountLoginBtn" class="action">Sign in</button>
+            <button id="accountLogoutBtn" class="danger">Sign out</button>
+          </div>
+        </details>
+
+        <details>
+          <summary>Autofill settings</summary>
+          <div class="sec">
+            <label class="check"><input id="autoFillLoginOnFocus" type="checkbox" /> Fill login on input focus</label>
+            <label class="check"><input id="autoFillLoginOnLoad" type="checkbox" /> Fill login on page load</label>
+            <label class="check"><input id="autoFillTotpOnFocus" type="checkbox" /> Fill 2FA/OTP on code-field focus</label>
+            <label class="check"><input id="autoFillTotpAfterLogin" type="checkbox" /> Chain-fill 2FA after login</label>
+            <label class="check"><input id="requireTrustedDomain" type="checkbox" /> Only fill on trusted domains</label>
+            <label class="check"><input id="savePromptEnabled" type="checkbox" /> Offer to save logins</label>
+            <label>Min match (login) <input id="minMatchStrengthLogin" type="number" min="0" max="100" step="10" /></label>
+            <label>Min match (2FA) <input id="minMatchStrengthTotp" type="number" min="0" max="100" step="10" /></label>
+            <span class="tiny">Tip: mark a domain as trusted before enabling aggressive auto-fill.</span>
+          </div>
+        </details>
+
+        <details>
+          <summary>Domain security</summary>
+          <div class="sec">
+            <span class="tiny" id="domainStatus">No domain data yet</span>
+            <pre class="value" id="domainReasons">Waiting for form detection…</pre>
+            <button id="trustDomain" class="action secondary">Mark domain as trusted</button>
+            <button id="blockDomain" class="danger">Block domain</button>
+            <button id="clearDomainPolicy" class="action secondary">Clear manual policy</button>
+          </div>
+        </details>
+
+        <details>
+          <summary>Diagnostics</summary>
+          <div class="sec">
+            <pre class="value" id="forms">No forms detected yet</pre>
+            <div id="shortcuts"></div>
+          </div>
+        </details>
+      </aside>
     </div>
-
-    <h3 style="margin-top:16px;">Domain security</h3>
-    <p id="domainStatus" class="status">No domain data yet</p>
-    <pre id="domainReasons">Waiting for form detection…</pre>
-    <button id="trustDomain">Mark domain as trusted</button>
-    <button id="blockDomain" class="danger">Block domain</button>
-    <button id="clearDomainPolicy" class="secondary">Clear manual policy</button>
-
-    <h3 style="margin-top:16px;">Detected forms</h3>
-    <pre id="forms">No forms detected yet</pre>
-
-    <div id="shortcuts"></div>
   </body>
 </html>
