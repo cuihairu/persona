@@ -40,6 +40,47 @@
   --radius: 8px;
   --radius-sm: 6px;
   --mono: ui-monospace, 'SF Mono', 'Cascadia Code', Menlo, Consolas, monospace;
+
+  /* density knobs: spacing/sizing rules bind to these so the compact tier
+     below re-binds variables instead of touching component rules */
+  --bar-pad-y: 8px;
+  --kindbar-m: 6px;
+  --pane-pad: 10px;
+  --pane-gap: 10px;
+  --input-pad-y: 8px;
+  --card-pad: 10px;
+  --card-head-gap: 8px;
+  --row-pad-y: 7px;
+  --row-gap: 9px;
+  --glyph-size: 26px;
+  --glyph-font: 12px;
+  --minibtn-size: 24px;
+  /* glyph(26) + row gap(9) + row pad-x(8) — conflict rows align under text */
+  --conflict-indent: 43px;
+}
+
+/* compact density: when the popup window is clamped short by the screen,
+   spacing tightens one notch through the knobs above (plus bounding body
+   height to the real viewport). Threshold covers the common small-popup
+   and short-screen range. */
+@media (max-height: 479px) {
+  :root {
+    --bar-pad-y: 5px;
+    --kindbar-m: 3px;
+    --pane-pad: 6px;
+    --pane-gap: 6px;
+    --input-pad-y: 5px;
+    --card-pad: 6px;
+    --card-head-gap: 4px;
+    --row-pad-y: 4px;
+    --row-gap: 6px;
+    --glyph-size: 20px;
+    --glyph-font: 10px;
+    --minibtn-size: 20px;
+    --conflict-indent: 34px;
+  }
+
+  body { height: 100vh; }
 }
 
 /* Dark palette applies when the system prefers dark (and no light override)
@@ -126,7 +167,7 @@ body {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 8px 10px;
+  padding: var(--bar-pad-y) 10px;
   background: var(--surface);
   border-bottom: 1px solid var(--border-01);
   flex: 0 0 auto;
@@ -164,7 +205,7 @@ body {
   display: flex;
   flex-wrap: wrap;
   gap: 4px;
-  margin: 6px 0;
+  margin: var(--kindbar-m) 0;
 }
 
 .kindbar .chip {
@@ -214,10 +255,10 @@ body {
   flex: 1 1 auto;
   min-width: 0;
   overflow-y: auto;
-  padding: 10px;
+  padding: var(--pane-pad);
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: var(--pane-gap);
 }
 
 .pane-right {
@@ -241,7 +282,7 @@ body.mode-console .pane-right .detail { display: none; }
 
 .searchbox input {
   width: 100%;
-  padding: 8px 10px 8px 30px;
+  padding: var(--input-pad-y) 10px var(--input-pad-y) 30px;
   border: 1px solid var(--border-02);
   border-radius: var(--radius);
   background: var(--surface);
@@ -281,12 +322,12 @@ body.mode-console .pane-right .detail { display: none; }
   border: 1px solid var(--border-01);
   border-radius: var(--radius);
   box-shadow: var(--elevation-01);
-  padding: 10px;
+  padding: var(--card-pad);
   flex: 0 0 auto;
 }
 
 .card h2 {
-  margin: 0 0 8px;
+  margin: 0 0 var(--card-head-gap);
   font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.06em;
@@ -309,8 +350,8 @@ body.mode-console .pane-right .detail { display: none; }
 .item {
   display: flex;
   align-items: center;
-  gap: 9px;
-  padding: 7px 8px;
+  gap: var(--row-gap);
+  padding: var(--row-pad-y) 8px;
   border-radius: var(--radius-sm);
   border: none;
   background: transparent;
@@ -325,8 +366,8 @@ body.mode-console .pane-right .detail { display: none; }
 .item.selected { background: var(--accent-tint); }
 
 .item .minibtn {
-  width: 24px;
-  height: 24px;
+  width: var(--minibtn-size);
+  height: var(--minibtn-size);
   border: none;
   border-radius: var(--radius-sm);
   background: transparent;
@@ -350,7 +391,7 @@ body.mode-console .pane-right .detail { display: none; }
   gap: 8px;
   font-size: 12px;
   color: var(--warn);
-  padding: 4px 8px 4px 43px;
+  padding: 4px 8px 4px var(--conflict-indent);
 }
 
 .conflict .action { padding: 3px 8px; font-size: 11.5px; white-space: nowrap; }
@@ -358,8 +399,8 @@ body.mode-console .pane-right .detail { display: none; }
 .itemlist .item + .conflict { margin-top: -2px; }
 
 .item .glyph {
-  width: 26px;
-  height: 26px;
+  width: var(--glyph-size);
+  height: var(--glyph-size);
   border-radius: var(--radius-sm);
   background: var(--accent-tint);
   color: var(--accent);
@@ -367,7 +408,7 @@ body.mode-console .pane-right .detail { display: none; }
   align-items: center;
   justify-content: center;
   font-weight: 700;
-  font-size: 12px;
+  font-size: var(--glyph-font);
   flex: 0 0 auto;
 }
 
