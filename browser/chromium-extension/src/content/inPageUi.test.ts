@@ -45,6 +45,13 @@ describe('PERSONA_SHARED_CSS', () => {
         const foreign = decls.filter((name) => !name.startsWith('--p-'));
         expect(foreign).toEqual([]);
     });
+
+    it('ships reduced-motion and focus-visible guards for accessibility', () => {
+        expect(PERSONA_SHARED_CSS).toContain('@media (prefers-reduced-motion: reduce)');
+        expect(PERSONA_SHARED_CSS).toContain('.p-item:focus-visible');
+        expect(PERSONA_SHARED_CSS).toContain('.p-btn:focus-visible');
+        expect(PERSONA_SHARED_CSS).toContain('box-shadow: 0 0 0 2px var(--p-border-focus)');
+    });
 });
 
 describe('in-page widget markup hooks', () => {

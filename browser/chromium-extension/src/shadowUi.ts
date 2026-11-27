@@ -269,6 +269,23 @@ export const PERSONA_SHARED_CSS = `
 }
 
 .p-badge:hover { border-color: var(--p-accent); }
+
+/* Motion-sensitive operators: keep the entrance but skip the slide. */
+@media (prefers-reduced-motion: reduce) {
+  .p-toast { animation: none; }
+  .p-btn { transition: none; }
+}
+
+/* Keyboard focus must stay visible on every interactive surface. */
+.p-item:focus-visible,
+.p-btn:focus-visible,
+.p-x:focus-visible,
+.p-badge:focus-visible,
+.p-check input:focus-visible {
+  outline: none;
+  border-color: var(--p-border-focus);
+  box-shadow: 0 0 0 2px var(--p-border-focus);
+}
 `;
 
 const SHARED_CSS = PERSONA_SHARED_CSS;
