@@ -127,7 +127,7 @@ atomically.
 The server prunes ops covered by a snapshot (`seq ≤ S`) in the same transaction
 — real compaction. A cloud folder has **no cross-device transaction**, so the
 cloud transport rewrites each shard **locally** (temp + fsync + rename) during
-a *new* snapshot upload, dropping only rows every registered device has
+a _new_ snapshot upload, dropping only rows every registered device has
 durably consumed.
 
 So the cloud transport:
