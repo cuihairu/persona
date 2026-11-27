@@ -2,7 +2,7 @@
 //
 // The content script captures the fields of a submitted form and hands them
 // here as plain data; everything testable lives in this module so the DOM
-// wiring in content.ts stays thin. Heuristics mirror 1Password's bar:
+// wiring in content.ts stays thin. Heuristics follow the usual bar pattern:
 // autocomplete attributes win, field count and naming break ties, and the
 // final create-vs-update decision always rides the host's find_for_save
 // answer plus an explicit user click — an imperfect scenario label only

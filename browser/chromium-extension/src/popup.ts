@@ -1,6 +1,8 @@
 import type { BridgeStatus } from './nativeBridge.js';
 import type { DomainAssessment } from './domainPolicy.js';
-import { hello, requestPairingCode, finalizePairing, getPairingState, generatePassword, accountLogin, accountStatus, accountLogout, syncPushNow, syncResolveConflict } from './nativeBridge.js';
+import { hello, requestPairingCode, finalizePairing, getPairingState, generatePassword, accountLogin, accountStatus, accountLogout, syncPushNow, syncResolveConflict, getTotp } from './nativeBridge.js';
+import { renderDetail, type DetailTarget, type CopyOutcome, type TotpPayload } from './popupDetail.js';
+import { activatableRows, steppedIndex, isNavKey, type NavRow } from './popupNav.js';
 import { getAutofillSettings, setAutofillSettings } from './settings.js';
 import { getAutofillDefaultsForOrigin, setAutofillDefaultsForOrigin, type OriginAutofillDefaults } from './autofillDefaults.js';
 import { contextHintLine, suggestionMetaLine } from './autofillUx.js';
@@ -50,6 +52,10 @@ const minMatchStrengthTotpEl = document.getElementById('minMatchStrengthTotp') a
 
 let currentAssessment: DomainAssessment | undefined;
 let currentHost: string | undefined;
+
+const detailPaneEl = document.getElementById('detailPane');
+let navList: (NavRow & { el: HTMLElement })[] = [];
+let navIndex = -1;
 
 function describeStatus(status?: BridgeStatus | null) {
     if (!status) return 'Bridge unavailable';
@@ -335,7 +341,7 @@ async function renderCloudItems(items: CloudListItem[], views: CloudItemView[], 
 
     if (!live.length) {
         const empty = document.createElement('div');
-        empty.className = 'status';
+        empty.className = 'empty';
         empty.textContent = items.length ? 'All items deleted upstream.' : 'Vault is empty.';
         cloudItemsEl.appendChild(empty);
         return;
@@ -344,47 +350,67 @@ async function renderCloudItems(items: CloudListItem[], views: CloudItemView[], 
     for (let i = 0; i < items.length; i++) {
         const item = items[i];
         if (item.deleted) continue;
-        const row = document.createElement('div');
-        row.style.cssText =
-            'border:1px solid #e5e7eb;border-radius:8px;padding:10px;display:flex;flex-direction:column;gap:6px;';
 
-        const title = document.createElement('div');
-        title.style.cssText = 'font-weight:600;color:#111827;';
-        title.textContent = item.meta?.name ?? item.item_id;
+        const row = document.createElement('div');
+        row.className = 'item';
+        row.dataset.action = 'detail';
+        row.dataset.kind = item.meta?.credential_type ?? item.kind;
+
+        const glyph = document.createElement('div');
+        glyph.className = 'glyph';
+        const kind = (item.meta?.credential_type ?? '').toLowerCase();
+        glyph.textContent = kind.includes('totp') || kind.includes('otp') ? 'T' : kind.includes('card') ? 'C' : 'L';
 
         const meta = document.createElement('div');
-        meta.style.cssText = 'font-size:12px;color:#6b7280;';
+        meta.className = 'meta';
+        const t = document.createElement('div');
+        t.className = 't';
+        t.textContent = item.meta?.name ?? item.item_id;
+        const s = document.createElement('div');
+        s.className = 's';
         if (item.decrypt_error) {
-            meta.textContent = `decrypt failed (${item.decrypt_error})`;
+            s.textContent = `decrypt failed (${item.decrypt_error})`;
         } else if (item.meta) {
             const bits = [item.meta.credential_type, item.meta.security_level];
             if (item.meta.username) bits.push(item.meta.username);
             if (item.conflict_count > 0) bits.push(`${item.conflict_count} in conflict`);
-            meta.textContent = bits.join(' • ');
+            s.textContent = bits.join(' • ');
         } else {
-            meta.textContent = item.kind;
+            s.textContent = item.kind;
         }
+        meta.appendChild(t);
+        meta.appendChild(s);
 
-        row.appendChild(title);
+        const tail = document.createElement('div');
+        tail.className = 'tail';
+        const host = hostFromMeta(item.meta?.url);
+        if (host) tail.textContent = host;
+
+        row.addEventListener('click', () => {
+            cloudItemsEl.querySelectorAll('.item.selected').forEach((el) => el.classList.remove('selected'));
+            row.classList.add('selected');
+            void openVaultDetail(item);
+        });
+
+        row.appendChild(glyph);
         row.appendChild(meta);
+        row.appendChild(tail);
+        cloudItemsEl.appendChild(row);
 
         if (item.conflict_count > 0) {
             const copies = await conflictCopyViews(views[i], conn.groupKeyHex);
             for (const copy of copies) {
                 const copyRow = document.createElement('div');
-                copyRow.style.cssText =
-                    'display:flex;justify-content:space-between;align-items:center;gap:8px;font-size:12px;';
+                copyRow.className = 'conflict';
 
                 const label = document.createElement('span');
-                label.style.cssText = 'color:#92400e;';
                 const bits = [`↳ ${copy.meta?.name ?? copy.op_id}`, `device ${copy.device_id.slice(0, 8)}`];
                 if (copy.deleted) bits.push('tombstone');
                 if (copy.decrypt_error) bits.push(`decrypt failed (${copy.decrypt_error})`);
                 label.textContent = bits.join(' • ');
 
                 const keepBtn = document.createElement('button');
-                keepBtn.className = 'secondary';
-                keepBtn.style.width = 'auto';
+                keepBtn.className = 'action secondary';
                 keepBtn.textContent = 'Keep this version';
                 keepBtn.addEventListener('click', async () => {
                     keepBtn.toggleAttribute('disabled', true);
@@ -404,12 +430,92 @@ async function renderCloudItems(items: CloudListItem[], views: CloudItemView[], 
 
                 copyRow.appendChild(label);
                 copyRow.appendChild(keepBtn);
-                row.appendChild(copyRow);
+                cloudItemsEl.appendChild(copyRow);
             }
         }
-
-        cloudItemsEl.appendChild(row);
     }
+}
+
+// ---- item detail (right pane) ----
+
+function originFromMeta(url?: string | null): string | undefined {
+    if (!url) return undefined;
+    try {
+        return new URL(url).origin;
+    } catch {
+        return undefined;
+    }
+}
+
+function hostFromMeta(url?: string | null): string {
+    if (!url) return '';
+    try {
+        return new URL(url).host;
+    } catch {
+        return '';
+    }
+}
+
+function buildVaultTarget(item: CloudListItem): DetailTarget {
+    return {
+        itemId: item.item_id,
+        title: item.meta?.name ?? item.item_id,
+        subtitle: item.meta?.username ?? undefined,
+        credentialType: item.meta?.credential_type ?? item.kind,
+        url: originFromMeta(item.meta?.url),
+        source: 'vault'
+    };
+}
+
+async function openVaultDetail(item: CloudListItem) {
+    const target = buildVaultTarget(item);
+    const active = await getActiveTabOrigin().catch(() => null);
+    const kind = (target.credentialType ?? '').toLowerCase();
+    const fill = active
+        ? () => void fillFromDetail(item.item_id, kind.includes('totp') ? 'totp' : 'password')
+        : undefined;
+    showDetail(target, { fill, fillLabel: fill ? 'Fill on page' : undefined });
+}
+
+async function fillFromDetail(itemId: string, kind: 'password' | 'totp') {
+    const active = await getActiveTabOrigin();
+    if (!active) return;
+    const type = kind === 'totp' ? 'persona_popup_fill_totp' : 'persona_popup_fill_password';
+    await chrome.tabs.sendMessage(active.tabId, { type, itemId }).catch(() => null);
+}
+
+async function copyFromDetail(origin: string | undefined, itemId: string, field: 'username' | 'password' | 'totp'): Promise<CopyOutcome> {
+    if (!origin) return { ok: false, error: 'no known origin for this item' };
+    const resp = await chrome.runtime
+        .sendMessage({ type: 'persona_copy', origin, itemId, field, userGesture: true })
+        .catch(() => null);
+    if (!resp?.success) return { ok: false, error: resp?.error ?? 'copy failed' };
+    if (!resp?.data?.copied) return { ok: false, error: 'native side refused the copy' };
+    return { ok: true, clearAfterSeconds: resp?.data?.clear_after_seconds };
+}
+
+async function loadTotpFor(origin: string | undefined, itemId: string): Promise<TotpPayload | { error: string }> {
+    if (!origin) return { error: 'no known origin for this item' };
+    const resp = await getTotp(origin, itemId, true).catch(() => null);
+    if (!resp?.ok) return { error: resp?.error ?? 'bridge unavailable' };
+    const payload = resp.payload as { code?: string; remaining_seconds?: number; period?: number } | undefined;
+    if (!payload?.code) return { error: 'no 2FA secret stored for this item' };
+    return {
+        code: payload.code,
+        remainingSeconds: payload.remaining_seconds ?? 30,
+        period: payload.period ?? 30
+    };
+}
+
+function showDetail(target: DetailTarget, opts?: { fill?: () => void; fillLabel?: string }) {
+    if (!detailPaneEl) return;
+    renderDetail(detailPaneEl, target, {
+        copyField: (field) => copyFromDetail(target.url, target.itemId, field),
+        loadTotp: () => loadTotpFor(target.url, target.itemId),
+        fill: opts?.fill,
+        fillLabel: opts?.fillLabel
+    });
+    setConsoleMode(false);
 }
 
 async function pullAndRender(conn: CloudConn) {
@@ -643,14 +749,14 @@ function renderSuggestions(
     const hint = contextHintLine(context);
     if (hint) {
         const banner = document.createElement('div');
-        banner.style.cssText = 'font-size:12px;color:#2563eb;';
+        banner.className = 'context-hint';
         banner.textContent = hint;
         suggestionsEl.appendChild(banner);
     }
 
     if (!items?.length) {
         const empty = document.createElement('div');
-        empty.className = 'status';
+        empty.className = 'empty';
         empty.textContent = 'No suggestions for this page.';
         suggestionsEl.appendChild(empty);
         return;
@@ -666,48 +772,37 @@ function renderSuggestions(
             kind === 'totp'
                 ? defaults?.totpItemId === item.item_id
                 : defaults?.passwordItemId === item.item_id;
-        const row = document.createElement('div');
-        row.style.cssText =
-            'border:1px solid #e5e7eb;border-radius:8px;padding:10px;display:flex;flex-direction:column;gap:6px;';
 
-        const title = document.createElement('div');
-        title.style.cssText = 'font-weight:600;color:#111827;';
-        title.textContent = `${item.title ?? item.item_id}${isDefault ? ' (Default)' : ''}`;
+        const row = document.createElement('div');
+        row.className = 'item';
+        row.dataset.action = 'fill';
+        row.dataset.kind = kind;
+
+        const glyph = document.createElement('div');
+        glyph.className = 'glyph';
+        glyph.textContent = kind === 'totp' ? 'T' : 'L';
 
         const meta = document.createElement('div');
-        meta.style.cssText = 'font-size:12px;color:#6b7280;display:flex;justify-content:space-between;gap:8px;';
-        meta.textContent = suggestionMetaLine(item);
+        meta.className = 'meta';
+        const t = document.createElement('div');
+        t.className = 't';
+        t.textContent = `${item.title ?? item.item_id}${isDefault ? ' (Default)' : ''}`;
+        const s = document.createElement('div');
+        s.className = 's';
+        s.textContent = suggestionMetaLine(item);
+        meta.appendChild(t);
+        meta.appendChild(s);
 
-        const actions = document.createElement('div');
-        actions.style.cssText = 'display:flex;gap:8px;flex-wrap:wrap;';
+        const tail = document.createElement('div');
+        tail.className = 'tail';
 
-        const fillBtn = document.createElement('button');
-        fillBtn.className = 'secondary';
-        fillBtn.style.width = 'auto';
-        fillBtn.textContent = kind === 'totp' ? 'Fill 2FA code' : 'Fill login';
-        fillBtn.addEventListener('click', async () => {
-            const messageType = kind === 'totp' ? 'persona_popup_fill_totp' : 'persona_popup_fill_password';
-            await chrome.tabs.sendMessage(tabId, { type: messageType, itemId: item.item_id }).catch(() => null);
-        });
-
-        const copyBtn = document.createElement('button');
-        copyBtn.className = 'secondary';
-        copyBtn.style.width = 'auto';
-        copyBtn.textContent = kind === 'totp' ? 'Copy 2FA code' : 'Copy password';
-        copyBtn.addEventListener('click', async () => {
-            const active = await getActiveTabOrigin();
-            if (!active) return;
-            await requestCopy(active.origin, item.item_id, kind === 'totp' ? 'totp' : 'password');
-        });
-
-        actions.appendChild(fillBtn);
-        actions.appendChild(copyBtn);
-
-        const defaultBtn = document.createElement('button');
-        defaultBtn.className = 'secondary';
-        defaultBtn.style.width = 'auto';
-        defaultBtn.textContent = isDefault ? 'Clear default' : 'Set default';
-        defaultBtn.addEventListener('click', async () => {
+        const star = document.createElement('button');
+        star.className = 'minibtn';
+        star.textContent = isDefault ? '★' : '☆';
+        star.title = isDefault ? 'Clear default for this site' : 'Set as default for this site';
+        star.setAttribute('aria-pressed', String(isDefault));
+        star.addEventListener('click', async (ev) => {
+            ev.stopPropagation();
             const patch =
                 kind === 'totp'
                     ? { totpItemId: isDefault ? undefined : item.item_id }
@@ -715,24 +810,42 @@ function renderSuggestions(
             await setAutofillDefaultsForOrigin(origin, patch as any).catch(() => null);
             await refreshAutofill().catch(() => null);
         });
-        actions.appendChild(defaultBtn);
+        tail.appendChild(star);
+
+        const copyBtn = document.createElement('button');
+        copyBtn.className = 'minibtn';
+        copyBtn.textContent = '⧉';
+        copyBtn.title = kind === 'totp' ? 'Copy 2FA code' : 'Copy password';
+        copyBtn.addEventListener('click', async (ev) => {
+            ev.stopPropagation();
+            const active = await getActiveTabOrigin();
+            if (!active) return;
+            await requestCopy(active.origin, item.item_id, kind === 'totp' ? 'totp' : 'password');
+        });
+        tail.appendChild(copyBtn);
 
         if (kind !== 'totp' && item.username_hint) {
             const copyUserBtn = document.createElement('button');
-            copyUserBtn.className = 'secondary';
-            copyUserBtn.style.width = 'auto';
-            copyUserBtn.textContent = 'Copy username';
-            copyUserBtn.addEventListener('click', async () => {
+            copyUserBtn.className = 'minibtn';
+            copyUserBtn.textContent = '@';
+            copyUserBtn.title = 'Copy username';
+            copyUserBtn.addEventListener('click', async (ev) => {
+                ev.stopPropagation();
                 const active = await getActiveTabOrigin();
                 if (!active) return;
                 await requestCopy(active.origin, item.item_id, 'username');
             });
-            actions.appendChild(copyUserBtn);
+            tail.appendChild(copyUserBtn);
         }
 
-        row.appendChild(title);
+        row.addEventListener('click', async () => {
+            const messageType = kind === 'totp' ? 'persona_popup_fill_totp' : 'persona_popup_fill_password';
+            await chrome.tabs.sendMessage(tabId, { type: messageType, itemId: item.item_id }).catch(() => null);
+        });
+
+        row.appendChild(glyph);
         row.appendChild(meta);
-        row.appendChild(actions);
+        row.appendChild(tail);
         suggestionsEl.appendChild(row);
     }
 }
@@ -744,26 +857,49 @@ function renderSuggestions(
  */
 function renderCardRow(item: any) {
     if (!suggestionsEl) return;
-    const row = document.createElement('div');
-    row.style.cssText =
-        'border:1px solid #e5e7eb;border-radius:8px;padding:10px;display:flex;flex-direction:column;gap:6px;';
 
-    const title = document.createElement('div');
-    title.style.cssText = 'font-weight:600;color:#111827;';
-    title.textContent = item.title ?? item.item_id;
+    const row = document.createElement('div');
+    row.className = 'item';
+    row.dataset.action = 'fill';
+    row.dataset.kind = 'bank_card';
+
+    const glyph = document.createElement('div');
+    glyph.className = 'glyph';
+    glyph.textContent = 'C';
 
     const meta = document.createElement('div');
-    meta.style.cssText = 'font-size:12px;color:#6b7280;display:flex;justify-content:space-between;gap:8px;';
-    meta.textContent = suggestionMetaLine(item);
+    meta.className = 'meta';
+    const t = document.createElement('div');
+    t.className = 't';
+    t.textContent = item.title ?? item.item_id;
+    const s = document.createElement('div');
+    s.className = 's';
+    s.textContent = suggestionMetaLine(item);
+    meta.appendChild(t);
+    meta.appendChild(s);
 
-    const actions = document.createElement('div');
-    actions.style.cssText = 'display:flex;gap:8px;flex-wrap:wrap;';
+    const tail = document.createElement('div');
+    tail.className = 'tail';
+    // CVV is copy-only by design (never filled), so it stays a copy action.
+    for (const [glyphText, field, label] of [
+        ['#', 'card_number', 'Copy card number'],
+        ['E', 'expiry_date', 'Copy expiry date'],
+        ['✱', 'cvv', 'Copy CVV (copy-only, never filled)']
+    ] as Array<[string, CopyField, string]>) {
+        const copyBtn = document.createElement('button');
+        copyBtn.className = 'minibtn';
+        copyBtn.textContent = glyphText;
+        copyBtn.title = label;
+        copyBtn.addEventListener('click', async (ev) => {
+            ev.stopPropagation();
+            const active = await getActiveTabOrigin();
+            if (!active) return;
+            await requestCopy(active.origin, item.item_id, field);
+        });
+        tail.appendChild(copyBtn);
+    }
 
-    const fillBtn = document.createElement('button');
-    fillBtn.className = 'secondary';
-    fillBtn.style.width = 'auto';
-    fillBtn.textContent = 'Fill card';
-    fillBtn.addEventListener('click', async () => {
+    row.addEventListener('click', async () => {
         const active = await getActiveTabOrigin();
         if (!active) return;
         await chrome.tabs
@@ -771,28 +907,10 @@ function renderCardRow(item: any) {
             .catch(() => null);
         window.close();
     });
-    actions.appendChild(fillBtn);
 
-    for (const [label, field] of [
-        ['Copy number', 'card_number'],
-        ['Copy expiry', 'expiry_date'],
-        ['Copy CVV', 'cvv']
-    ] as Array<[string, CopyField]>) {
-        const copyBtn = document.createElement('button');
-        copyBtn.className = 'secondary';
-        copyBtn.style.width = 'auto';
-        copyBtn.textContent = label;
-        copyBtn.addEventListener('click', async () => {
-            const active = await getActiveTabOrigin();
-            if (!active) return;
-            await requestCopy(active.origin, item.item_id, field);
-        });
-        actions.appendChild(copyBtn);
-    }
-
-    row.appendChild(title);
+    row.appendChild(glyph);
     row.appendChild(meta);
-    row.appendChild(actions);
+    row.appendChild(tail);
     suggestionsEl.appendChild(row);
 }
 
@@ -953,20 +1071,95 @@ async function initTheme(): Promise<void> {
 
 void initTheme();
 
+function setConsoleMode(on: boolean) {
+    document.body.classList.toggle('mode-console', on);
+    consoleBtn?.setAttribute('aria-pressed', on ? 'true' : 'false');
+}
+
 const consoleBtn = document.getElementById('consoleBtn');
 consoleBtn?.addEventListener('click', () => {
-    const collapsed = document.body.classList.toggle('pane-collapsed');
-    consoleBtn.setAttribute('aria-pressed', collapsed ? 'false' : 'true');
+    setConsoleMode(!document.body.classList.contains('mode-console'));
 });
+
+function collectNavRows() {
+    const els = Array.from(document.querySelectorAll<HTMLElement>('.pane-left .item'));
+    navList = els
+        .filter((el) => el.getClientRects().length > 0)
+        .map((el, i) => ({ key: String(i), visible: true, isFill: el.dataset.action === 'fill', el }));
+}
+
+function applyNavSelection() {
+    for (const el of document.querySelectorAll<HTMLElement>('.pane-left .item.selected')) {
+        el.classList.remove('selected');
+    }
+    const current = activatableRows(navList)[navIndex];
+    if (current) {
+        current.el.classList.add('selected');
+        current.el.scrollIntoView({ block: 'nearest' });
+    }
+}
+
+function clearNavSelection() {
+    navIndex = -1;
+    applyNavSelection();
+}
 
 const searchInput = document.getElementById('searchInput') as HTMLInputElement | null;
 if (searchInput) {
     window.addEventListener('keydown', (e) => {
-        if (e.key === '/' && document.activeElement !== searchInput
-            && (!(document.activeElement instanceof HTMLInputElement)
-                && !(document.activeElement instanceof HTMLTextAreaElement))) {
+        const active = document.activeElement;
+        const searchFocused = active === searchInput;
+        const inText = active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement;
+
+        if (e.key === '/' && !inText) {
             e.preventDefault();
             searchInput.focus();
+            return;
+        }
+        // arrows/enter/esc stay out of the way while typing in form inputs
+        if (inText && !searchFocused) return;
+        if (!isNavKey(e.key)) return;
+
+        if (e.key === 'Escape') {
+            if (document.body.classList.contains('mode-console')) {
+                setConsoleMode(false);
+                return;
+            }
+            if (navIndex >= 0) {
+                clearNavSelection();
+                return;
+            }
+            if (searchInput.value) {
+                searchInput.value = '';
+                searchInput.dispatchEvent(new Event('input'));
+                return;
+            }
+            searchInput.blur();
+            return;
+        }
+
+        if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+            e.preventDefault();
+            collectNavRows();
+            const visible = activatableRows(navList);
+            navIndex = steppedIndex(visible.length, navIndex, e.key === 'ArrowDown' ? 1 : -1);
+            applyNavSelection();
+            return;
+        }
+
+        // Enter activates the selected row; with nothing selected it takes
+        // the first visible row (the top suggestion when searching).
+        e.preventDefault();
+        collectNavRows();
+        const visible = activatableRows(navList);
+        if (!visible.length) return;
+        if (navIndex < 0 || navIndex >= visible.length) {
+            navIndex = steppedIndex(visible.length, navIndex, 1);
+        }
+        const target = visible[navIndex];
+        if (target) {
+            target.el.classList.add('selected');
+            target.el.click();
         }
     });
 

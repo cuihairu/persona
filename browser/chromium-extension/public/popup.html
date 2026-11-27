@@ -23,7 +23,7 @@
       <button class="iconbtn" id="themeBtn" title="Toggle theme" aria-label="Toggle theme">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M20 12.5A8 8 0 1 1 11.5 4a6.5 6.5 0 0 0 8.5 8.5Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
       </button>
-      <button class="iconbtn" id="consoleBtn" title="Toggle console pane" aria-label="Toggle console pane" aria-pressed="true">
+      <button class="iconbtn" id="consoleBtn" title="Toggle operator console" aria-label="Toggle operator console" aria-pressed="false">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m5 7 5 5-5 5M12 17h7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
       </button>
     </header>
@@ -69,67 +69,73 @@
         </section>
       </main>
 
-      <aside class="pane-right console">
-        <details>
-          <summary>Bridge &amp; pairing</summary>
-          <div class="sec">
-            <label for="endpoint">Bridge endpoint</label>
-            <input id="endpoint" type="text" value="native:com.persona.native" />
-            <button id="toggle" class="action secondary">Connect to bridge</button>
-            <span class="tiny" id="pairingStatus">Pairing status unknown</span>
-            <button id="requestPairing" class="action secondary">Request pairing code</button>
-            <label for="pairingCode">Pairing code</label>
-            <input id="pairingCode" type="text" placeholder="123-456" />
-            <pre class="value" id="pairingHint">Run `persona bridge --approve-code <CODE>` then click Finalize.</pre>
-            <button id="finalizePairing" class="action">Finalize pairing</button>
-          </div>
-        </details>
+      <aside class="pane-right">
+        <div class="detail" id="detailPane">
+          <div class="detail-empty">Select a credential to see its details.</div>
+        </div>
 
-        <details>
-          <summary>Account</summary>
-          <div class="sec">
-            <label for="accountId">Account ID</label>
-            <input id="accountId" type="text" placeholder="acct-…" />
-            <label for="accountPassword">Password</label>
-            <input id="accountPassword" type="password" />
-            <button id="accountLoginBtn" class="action">Sign in</button>
-            <button id="accountLogoutBtn" class="danger">Sign out</button>
-          </div>
-        </details>
+        <div class="console" id="consolePane">
+          <details>
+            <summary>Bridge &amp; pairing</summary>
+            <div class="sec">
+              <label for="endpoint">Bridge endpoint</label>
+              <input id="endpoint" type="text" value="native:com.persona.native" />
+              <button id="toggle" class="action secondary">Connect to bridge</button>
+              <span class="tiny" id="pairingStatus">Pairing status unknown</span>
+              <button id="requestPairing" class="action secondary">Request pairing code</button>
+              <label for="pairingCode">Pairing code</label>
+              <input id="pairingCode" type="text" placeholder="123-456" />
+              <pre class="value" id="pairingHint">Run `persona bridge --approve-code <CODE>` then click Finalize.</pre>
+              <button id="finalizePairing" class="action">Finalize pairing</button>
+            </div>
+          </details>
 
-        <details>
-          <summary>Autofill settings</summary>
-          <div class="sec">
-            <label class="check"><input id="autoFillLoginOnFocus" type="checkbox" /> Fill login on input focus</label>
-            <label class="check"><input id="autoFillLoginOnLoad" type="checkbox" /> Fill login on page load</label>
-            <label class="check"><input id="autoFillTotpOnFocus" type="checkbox" /> Fill 2FA/OTP on code-field focus</label>
-            <label class="check"><input id="autoFillTotpAfterLogin" type="checkbox" /> Chain-fill 2FA after login</label>
-            <label class="check"><input id="requireTrustedDomain" type="checkbox" /> Only fill on trusted domains</label>
-            <label class="check"><input id="savePromptEnabled" type="checkbox" /> Offer to save logins</label>
-            <label>Min match (login) <input id="minMatchStrengthLogin" type="number" min="0" max="100" step="10" /></label>
-            <label>Min match (2FA) <input id="minMatchStrengthTotp" type="number" min="0" max="100" step="10" /></label>
-            <span class="tiny">Tip: mark a domain as trusted before enabling aggressive auto-fill.</span>
-          </div>
-        </details>
+          <details>
+            <summary>Account</summary>
+            <div class="sec">
+              <label for="accountId">Account ID</label>
+              <input id="accountId" type="text" placeholder="acct-…" />
+              <label for="accountPassword">Password</label>
+              <input id="accountPassword" type="password" />
+              <button id="accountLoginBtn" class="action">Sign in</button>
+              <button id="accountLogoutBtn" class="danger">Sign out</button>
+            </div>
+          </details>
 
-        <details>
-          <summary>Domain security</summary>
-          <div class="sec">
-            <span class="tiny" id="domainStatus">No domain data yet</span>
-            <pre class="value" id="domainReasons">Waiting for form detection…</pre>
-            <button id="trustDomain" class="action secondary">Mark domain as trusted</button>
-            <button id="blockDomain" class="danger">Block domain</button>
-            <button id="clearDomainPolicy" class="action secondary">Clear manual policy</button>
-          </div>
-        </details>
+          <details>
+            <summary>Autofill settings</summary>
+            <div class="sec">
+              <label class="check"><input id="autoFillLoginOnFocus" type="checkbox" /> Fill login on input focus</label>
+              <label class="check"><input id="autoFillLoginOnLoad" type="checkbox" /> Fill login on page load</label>
+              <label class="check"><input id="autoFillTotpOnFocus" type="checkbox" /> Fill 2FA/OTP on code-field focus</label>
+              <label class="check"><input id="autoFillTotpAfterLogin" type="checkbox" /> Chain-fill 2FA after login</label>
+              <label class="check"><input id="requireTrustedDomain" type="checkbox" /> Only fill on trusted domains</label>
+              <label class="check"><input id="savePromptEnabled" type="checkbox" /> Offer to save logins</label>
+              <label>Min match (login) <input id="minMatchStrengthLogin" type="number" min="0" max="100" step="10" /></label>
+              <label>Min match (2FA) <input id="minMatchStrengthTotp" type="number" min="0" max="100" step="10" /></label>
+              <span class="tiny">Tip: mark a domain as trusted before enabling aggressive auto-fill.</span>
+            </div>
+          </details>
 
-        <details>
-          <summary>Diagnostics</summary>
-          <div class="sec">
-            <pre class="value" id="forms">No forms detected yet</pre>
-            <div id="shortcuts"></div>
-          </div>
-        </details>
+          <details>
+            <summary>Domain security</summary>
+            <div class="sec">
+              <span class="tiny" id="domainStatus">No domain data yet</span>
+              <pre class="value" id="domainReasons">Waiting for form detection…</pre>
+              <button id="trustDomain" class="action secondary">Mark domain as trusted</button>
+              <button id="blockDomain" class="danger">Block domain</button>
+              <button id="clearDomainPolicy" class="action secondary">Clear manual policy</button>
+            </div>
+          </details>
+
+          <details>
+            <summary>Diagnostics</summary>
+            <div class="sec">
+              <pre class="value" id="forms">No forms detected yet</pre>
+              <div id="shortcuts"></div>
+            </div>
+          </details>
+        </div>
       </aside>
     </div>
   </body>

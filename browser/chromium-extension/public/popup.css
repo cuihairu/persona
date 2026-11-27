@@ -1,7 +1,8 @@
-/* Persona popup — token system modeled on the 1Password teardown
-   (DESIGN-1PASSWORD.md): tiered borders, ring+shadow elevation, shading
-   steps, light/dark via prefers-color-scheme with a data-theme override.
-   All values original; brand accent from the viewfinder logo (hsl 214). */
+/* Persona popup — token system: tiered borders, ring+shadow elevation,
+   shading steps, light/dark via prefers-color-scheme with a data-theme
+   override. All values original; brand accent from the viewfinder logo
+   (hsl 214). Double-pane layout with an item-detail right pane and a
+   collapsible operator console. */
 
 :root {
   /* accent family */
@@ -201,6 +202,11 @@ body {
 
 body.pane-collapsed .pane-right { display: none; }
 
+/* right pane dual mode: item detail (default) vs operator console */
+.pane-right .console { display: none; }
+body.mode-console .pane-right .console { display: block; }
+body.mode-console .pane-right .detail { display: none; }
+
 /* ---- search ---- */
 
 .searchbox { position: relative; flex: 0 0 auto; }
@@ -288,6 +294,40 @@ body.pane-collapsed .pane-right { display: none; }
 }
 
 .item:hover { background: var(--surface-alt); }
+.item.selected { background: var(--accent-tint); }
+
+.item .minibtn {
+  width: 24px;
+  height: 24px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-sub);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  padding: 0;
+  flex: 0 0 auto;
+}
+
+.item .minibtn:hover { background: var(--surface); color: var(--accent); }
+.item .minibtn[aria-pressed='true'] { color: var(--warn); }
+
+.conflict {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--warn);
+  padding: 4px 8px 4px 43px;
+}
+
+.conflict .action { padding: 3px 8px; font-size: 11.5px; white-space: nowrap; }
+
+.itemlist .item + .conflict { margin-top: -2px; }
 
 .item .glyph {
   width: 26px;
@@ -307,9 +347,11 @@ body.pane-collapsed .pane-right { display: none; }
 .item .meta .t { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .item .meta .s { font-size: 11.5px; color: var(--text-sub); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
-.item .tail { margin-left: auto; color: var(--text-faint); font-size: 11px; flex: 0 0 auto; }
+.item .tail { margin-left: auto; color: var(--text-faint); font-size: 11px; flex: 0 0 auto; display: flex; align-items: center; gap: 2px; }
 
 .empty { color: var(--text-sub); font-size: 12px; padding: 6px 2px; }
+
+.context-hint { font-size: 12px; color: var(--accent-readable); padding: 2px; }
 
 /* ---- controls ---- */
 
@@ -427,8 +469,128 @@ pre.value {
 
 .console label { font-size: 12px; color: var(--text-sub); display: block; margin-top: 2px; }
 
-/* scrollbar */
-::-webkit-scrollbar { width: 10px; }
+/* ---- right pane: item detail ---- */
+
+.detail { display: flex; flex-direction: column; }
+
+.detail-empty {
+  color: var(--text-sub);
+  font-size: 12px;
+  padding: 24px 10px;
+  text-align: center;
+}
+
+.detail-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.detail-head { display: flex; align-items: center; gap: 9px; }
+
+.detail-head .glyph {
+  width: 34px;
+  height: 34px;
+  border-radius: var(--radius);
+  background: var(--accent-tint);
+  color: var(--accent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 15px;
+  flex: 0 0 auto;
+}
+
+.detail-head .meta { min-width: 0; flex: 1 1 auto; }
+.detail-head .meta .t { font-weight: 700; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.detail-head .meta .s { font-size: 11.5px; color: var(--text-sub); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+.detail-head .chip { flex: 0 0 auto; }
+
+.detail-rows {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border-01);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  overflow: hidden;
+}
+
+.drow {
+  display: grid;
+  grid-template-columns: 58px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+}
+
+.drow + .drow { border-top: 1px solid var(--border-01); }
+
+.drow .dlabel {
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+
+.drow .dvalue {
+  font: 12.5px var(--mono);
+  color: var(--text);
+  word-break: break-all;
+  min-width: 0;
+}
+
+.drow .dvalue.dots { letter-spacing: 2px; white-space: nowrap; }
+
+.drow .action { padding: 4px 10px; font-size: 12px; }
+
+.drow .dvalue.totp { font-size: 17px; font-weight: 600; letter-spacing: 1px; }
+
+.totp-bar {
+  grid-column: 1 / -1;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--surface-alt);
+  overflow: hidden;
+}
+
+.totp-fill {
+  height: 100%;
+  width: 100%;
+  background: var(--accent);
+  transition: width 1s linear;
+}
+
+.detail-status { min-height: 16px; font-size: 12px; color: var(--ok); }
+.detail-status:empty { min-height: 0; }
+.detail-status.err { color: var(--danger); }
+
+.detail-note { font-size: 11px; color: var(--text-faint); }
+
+.detail-hints {
+  margin-top: auto;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-01);
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+.detail-hints kbd {
+  font: 10.5px var(--mono);
+  color: var(--text-sub);
+  border: 1px solid var(--border-01);
+  border-radius: 4px;
+  padding: 0 4px;
+  background: var(--surface-alt);
+  margin-right: 4px;
+}
+
+/* ---- right pane: operator console (native collapsibles, zero JS) ---- */
 ::-webkit-scrollbar-thumb { background: var(--border-02); border-radius: 5px; border: 2px solid transparent; background-clip: content-box; }
 ::-webkit-scrollbar-thumb:hover { background: var(--border-03); background-clip: content-box; }
 
