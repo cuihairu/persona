@@ -3,6 +3,7 @@ import type { DomainAssessment } from './domainPolicy.js';
 import { hello, requestPairingCode, finalizePairing, getPairingState, generatePassword, accountLogin, accountStatus, accountLogout, syncPushNow, syncResolveConflict, getTotp } from './nativeBridge.js';
 import { renderDetail, type DetailTarget, type CopyOutcome, type TotpPayload } from './popupDetail.js';
 import { activatableRows, steppedIndex, isNavKey, type NavRow } from './popupNav.js';
+import { KIND_FILTERS, countByKind, rowVisible, type KindFilter } from './popupFilter.js';
 import { getAutofillSettings, setAutofillSettings } from './settings.js';
 import { getAutofillDefaultsForOrigin, setAutofillDefaultsForOrigin, type OriginAutofillDefaults } from './autofillDefaults.js';
 import { contextHintLine, suggestionMetaLine } from './autofillUx.js';
@@ -315,6 +316,73 @@ const cloudConnectButton = document.getElementById('cloudConnect') as HTMLButton
 const cloudRefreshButton = document.getElementById('cloudRefresh') as HTMLButtonElement | null;
 const cloudPushButton = document.getElementById('cloudPush') as HTMLButtonElement | null;
 const cloudItemsEl = document.getElementById('cloudItems');
+const kindBarEl = document.getElementById('kindBar');
+const filterEmptyEl = document.getElementById('filterEmpty');
+
+// ============ Vault kind filter (chips + combined search) ============
+// Filter state is module-level so the chip bar and the search box both feed
+// one combined pass (category AND text); rows carry their kind on data-kind.
+
+let kindFilter: KindFilter = 'all';
+
+const KIND_LABELS: Record<KindFilter, string> = {
+    all: 'All items',
+    password: 'Logins',
+    totp: '2FA',
+    bank_card: 'Bank cards'
+};
+
+function refreshKindBar(kinds: Array<string | null | undefined>): void {
+    if (!kindBarEl) return;
+    const counts = countByKind(kinds);
+    kindBarEl.textContent = '';
+    for (const filter of KIND_FILTERS) {
+        const chip = document.createElement('button');
+        chip.type = 'button';
+        chip.className = 'chip';
+        chip.textContent = `${KIND_LABELS[filter]} (${counts[filter]})`;
+        chip.setAttribute('aria-pressed', String(kindFilter === filter));
+        chip.addEventListener('click', () => {
+            kindFilter = filter;
+            for (const other of kindBarEl.querySelectorAll('button')) {
+                other.setAttribute('aria-pressed', String(other === chip));
+            }
+            applyVaultFilters();
+        });
+        kindBarEl.appendChild(chip);
+    }
+}
+
+/** Combined category+text visibility for the vault list. Hides conflict
+ * sub-rows together with their parent item; toggles the filter empty-state
+ * hint when rows exist but the current filters match none. Returns the
+ * number of rows left visible. */
+function applyVaultFilters(): number {
+    if (!cloudItemsEl) return 0;
+    const query = searchInput?.value ?? '';
+    let visible = 0;
+    let rows = 0;
+    let parentVisible = true;
+    for (const child of Array.from(cloudItemsEl.children)) {
+        const el = child as HTMLElement;
+        if (el.classList.contains('item')) {
+            rows += 1;
+            parentVisible = rowVisible(el.dataset.kind, el.textContent ?? '', kindFilter, query);
+            el.style.display = parentVisible ? '' : 'none';
+            if (parentVisible) visible += 1;
+        } else {
+            // conflict copies ride along with their parent row
+            el.style.display = parentVisible ? '' : 'none';
+        }
+    }
+    const filtered = visible === 0 && rows > 0 && (kindFilter !== 'all' || query.trim() !== '');
+    if (filterEmptyEl) filterEmptyEl.hidden = !filtered;
+    return visible;
+}
+
+function vaultSection(): HTMLElement | null {
+    return cloudItemsEl ? cloudItemsEl.closest('.card') : null;
+}
 
 function cloudErrorText(error: unknown): string {
     return error instanceof Error ? error.message : String(error);
@@ -338,12 +406,14 @@ async function renderCloudItems(items: CloudListItem[], views: CloudItemView[], 
     if (!cloudItemsEl) return;
     cloudItemsEl.textContent = '';
     const live = items.filter((item) => !item.deleted);
+    refreshKindBar(live.map((item) => item.meta?.credential_type ?? item.kind));
 
     if (!live.length) {
         const empty = document.createElement('div');
         empty.className = 'empty';
         empty.textContent = items.length ? 'All items deleted upstream.' : 'Vault is empty.';
         cloudItemsEl.appendChild(empty);
+        applyVaultFilters();
         return;
     }
 
@@ -434,6 +504,8 @@ async function renderCloudItems(items: CloudListItem[], views: CloudItemView[], 
             }
         }
     }
+
+    applyVaultFilters();
 }
 
 // ---- item detail (right pane) ----
@@ -1164,9 +1236,11 @@ if (searchInput) {
     });
 
     const sections = Array.from(document.querySelectorAll<HTMLElement>('.pane-left .card'));
+    const vaultCard = vaultSection();
+    const otherSections = sections.filter((section) => section !== vaultCard);
     searchInput.addEventListener('input', () => {
         const q = searchInput.value.trim().toLowerCase();
-        for (const section of sections) {
+        for (const section of otherSections) {
             const items = Array.from(section.querySelectorAll<HTMLElement>('.item'));
             const controls = Array.from(section.querySelectorAll<HTMLElement>('button, input, .gen-result'));
             const textMatch = (el: HTMLElement) => (el.textContent ?? '').toLowerCase().includes(q);
@@ -1182,5 +1256,15 @@ if (searchInput) {
             }
             section.style.display = visible ? '' : 'none';
         }
+        // vault card rides the combined kind+text filter; it stays visible
+        // without a query even when a kind chip matches nothing (the
+        // filter empty-state hint takes over)
+        const vaultVisible = applyVaultFilters();
+        if (vaultCard) {
+            vaultCard.style.display = vaultVisible > 0 || !q ? '' : 'none';
+        }
     });
+
+    refreshKindBar([]);
+    applyVaultFilters();
 }

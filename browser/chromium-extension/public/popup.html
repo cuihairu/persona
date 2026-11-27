@@ -43,7 +43,9 @@
 
         <section class="card">
           <h2>Vault <span class="inline-status" id="cloudStatus">Not connected</span></h2>
+          <div class="kindbar" id="kindBar" role="group" aria-label="Filter vault by type"></div>
           <div class="itemlist" id="cloudItems"></div>
+          <div class="empty" id="filterEmpty" hidden>No items match the current filters.</div>
           <div class="row wrap" style="margin-top:8px;">
             <button id="cloudConnect" class="action secondary">Connect via local bridge</button>
             <button id="cloudRefresh" class="action secondary" disabled>Pull</button>

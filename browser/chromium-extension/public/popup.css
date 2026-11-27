@@ -160,6 +160,34 @@ body {
 .chip.warn { color: var(--warn); border-color: hsla(36, 80%, 45%, 0.35); }
 .chip.err { color: var(--danger); border-color: hsla(0, 62%, 48%, 0.35); }
 
+.kindbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 6px 0;
+}
+
+.kindbar .chip {
+  cursor: pointer;
+  user-select: none;
+  max-width: none;
+}
+
+.kindbar .chip:hover { border-color: var(--border-02); }
+
+.kindbar .chip[aria-pressed="true"] {
+  background: var(--accent-tint);
+  color: var(--accent-readable);
+  border-color: var(--accent);
+  font-weight: 600;
+}
+
+.kindbar .chip:focus-visible {
+  outline: none;
+  border-color: var(--border-focus);
+  box-shadow: 0 0 0 2px var(--border-focus);
+}
+
 .topbar .spacer { flex: 1; }
 
 .iconbtn {
