@@ -2,6 +2,7 @@ import type { BridgeStatus } from './nativeBridge.js';
 import type { DomainAssessment } from './domainPolicy.js';
 import { hello, requestPairingCode, finalizePairing, getPairingState, generatePassword, accountLogin, accountStatus, accountLogout, syncPushNow, syncResolveConflict, getTotp } from './nativeBridge.js';
 import { renderDetail, type DetailTarget, type CopyOutcome, type TotpPayload } from './popupDetail.js';
+import { renderWatchtower, type WatchtowerIssue, type WatchtowerReport } from './popupWatchtower.js';
 import { activatableRows, steppedIndex, isNavKey, type NavRow } from './popupNav.js';
 import { KIND_FILTERS, countByFacts, rowVisible, type KindFilter, type RowFacts } from './popupFilter.js';
 import { estimatePasswordStrength, pushRecent } from './genStrength.js';
@@ -849,7 +850,42 @@ document.addEventListener('DOMContentLoaded', () => {
     refreshSettings().catch(() => null);
     initCloudVault().catch(() => null);
     refreshAccountStatus().catch(() => null);
+    refreshWatchtower().catch(() => null);
 });
+
+// ============ Watchtower card (bridge protocol v8) ============
+
+const watchtowerCard = document.getElementById('watchtowerCard');
+const watchtowerBody = document.getElementById('watchtowerBody');
+
+/**
+ * Fetch the health report through the background and fill the card. Any
+ * failure (bridge asleep, locked vault, old protocol) leaves the card
+ * hidden — an unavailable scan must not look like a clean vault.
+ */
+async function refreshWatchtower() {
+    if (!watchtowerCard || !watchtowerBody) return;
+    const response = (await chrome.runtime.sendMessage({ type: 'persona_health_scan' }).catch(() => null)) as
+        | { success: boolean; data?: WatchtowerReport; error?: string }
+        | null;
+    if (!response?.success || !response.data) return;
+
+    renderWatchtower(watchtowerBody, response.data, {
+        onOpen: (issue: WatchtowerIssue) => {
+            // Metadata-only detail: the report carries no username/kind, so
+            // the pane shows the issue facts; copy/fill inside degrade
+            // honestly if the item is out of scope for the bridge call.
+            const target: DetailTarget = {
+                itemId: issue.item_id,
+                title: issue.name,
+                subtitle: issue.detail,
+                source: 'vault'
+            };
+            showDetail(target);
+        }
+    });
+    watchtowerCard.hidden = false;
+}
 
 async function getActiveTabOrigin(): Promise<{ tabId: number; origin: string } | null> {
     const tabs = await chrome.tabs.query({ active: true, currentWindow: true });

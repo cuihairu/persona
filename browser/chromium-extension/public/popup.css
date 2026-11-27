@@ -729,3 +729,25 @@ pre.value {
 @media (prefers-reduced-motion: reduce) {
   * { transition: none !important; animation: none !important; }
 }
+
+/* ---- watchtower card ---- */
+
+.wt-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 6px;
+}
+
+.wt-chips .chip.dim { opacity: 0.55; }
+
+.wt-chips .chip {
+  cursor: pointer;
+  border: 1px solid var(--border-02);
+  background: var(--surface-alt);
+  font: inherit;
+  font-size: 11px;
+  padding: 2px 8px;
+}
+
+.wt-toggle { margin-top: 2px; }

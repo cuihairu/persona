@@ -1,37 +1,128 @@
 {
-  "saveBarTitleSave": { "message": "保存登录到 Persona？" },
-  "saveBarTitleUpdate": { "message": "更新 Persona 中的登录？" },
-  "saveBarSave": { "message": "保存" },
-  "saveBarUpdate": { "message": "更新" },
-  "saveBarNever": { "message": "此站永不" },
-  "saveBarSaving": { "message": "保存中…" },
-  "saveBarSaved": { "message": "已保存 ✓" },
-  "saveBarUpdated": { "message": "已更新 ✓" },
-  "saveBarFailed": { "message": "保存失败" },
-  "saveBarUsernamePlaceholder": { "message": "用户名" },
-
-  "overlayNoCredentials": { "message": "此站无已存凭据" },
-  "overlayNoCredentialsAny": { "message": "无已存凭据" },
-  "overlayNoMatches": { "message": "无匹配项" },
-  "overlaySearchPlaceholder": { "message": "搜索凭据…" },
-  "overlayBrandTitle": { "message": "Persona" },
-  "overlaySearchTitle": { "message": "Persona 搜索" },
-
-  "popupSearchPlaceholder": { "message": "搜索条目和操作" },
-  "popupForThisSite": { "message": "本站" },
-  "popupSuggestionsUnavailable": { "message": "建议不可用" },
-  "popupVault": { "message": "保险库" },
-  "popupNotConnected": { "message": "未连接" },
-  "popupBridgeNotContacted": { "message": "尚未联系桥接" },
-  "popupUnknown": { "message": "未知" },
-  "popupBridgeStatusTitle": { "message": "桥接状态" },
-  "popupAccountStatusTitle": { "message": "账户状态" },
-  "popupGenerator": { "message": "生成器" },
-  "popupLength": { "message": "长度" },
-  "popupWords": { "message": "词数" },
-  "popupPronounceable": { "message": "可发音" },
-  "popupGenerate": { "message": "生成" },
-  "popupDetailEmpty": { "message": "选择一条凭据查看详情。" },
-  "popupFilterEmpty": { "message": "没有符合当前筛选的条目。" },
-  "popupThemeToggleTitle": { "message": "切换主题" }
+  "saveBarTitleSave": {
+    "message": "保存登录到 Persona？"
+  },
+  "saveBarTitleUpdate": {
+    "message": "更新 Persona 中的登录？"
+  },
+  "saveBarSave": {
+    "message": "保存"
+  },
+  "saveBarUpdate": {
+    "message": "更新"
+  },
+  "saveBarNever": {
+    "message": "此站永不"
+  },
+  "saveBarSaving": {
+    "message": "保存中…"
+  },
+  "saveBarSaved": {
+    "message": "已保存 ✓"
+  },
+  "saveBarUpdated": {
+    "message": "已更新 ✓"
+  },
+  "saveBarFailed": {
+    "message": "保存失败"
+  },
+  "saveBarUsernamePlaceholder": {
+    "message": "用户名"
+  },
+  "overlayNoCredentials": {
+    "message": "此站无已存凭据"
+  },
+  "overlayNoCredentialsAny": {
+    "message": "无已存凭据"
+  },
+  "overlayNoMatches": {
+    "message": "无匹配项"
+  },
+  "overlaySearchPlaceholder": {
+    "message": "搜索凭据…"
+  },
+  "overlayBrandTitle": {
+    "message": "Persona"
+  },
+  "overlaySearchTitle": {
+    "message": "Persona 搜索"
+  },
+  "popupSearchPlaceholder": {
+    "message": "搜索条目和操作"
+  },
+  "popupForThisSite": {
+    "message": "本站"
+  },
+  "popupSuggestionsUnavailable": {
+    "message": "建议不可用"
+  },
+  "popupVault": {
+    "message": "保险库"
+  },
+  "popupNotConnected": {
+    "message": "未连接"
+  },
+  "popupBridgeNotContacted": {
+    "message": "尚未联系桥接"
+  },
+  "popupUnknown": {
+    "message": "未知"
+  },
+  "popupBridgeStatusTitle": {
+    "message": "桥接状态"
+  },
+  "popupAccountStatusTitle": {
+    "message": "账户状态"
+  },
+  "popupGenerator": {
+    "message": "生成器"
+  },
+  "popupLength": {
+    "message": "长度"
+  },
+  "popupWords": {
+    "message": "词数"
+  },
+  "popupPronounceable": {
+    "message": "可发音"
+  },
+  "popupGenerate": {
+    "message": "生成"
+  },
+  "popupDetailEmpty": {
+    "message": "选择一条凭据查看详情。"
+  },
+  "popupFilterEmpty": {
+    "message": "没有符合当前筛选的条目。"
+  },
+  "popupThemeToggleTitle": {
+    "message": "切换主题"
+  },
+  "popupWatchtower": {
+    "message": "安全体检"
+  },
+  "popupWatchtowerWeak": {
+    "message": "弱口令"
+  },
+  "popupWatchtowerReused": {
+    "message": "重用"
+  },
+  "popupWatchtowerNoTotp": {
+    "message": "缺 2FA"
+  },
+  "popupWatchtowerStale": {
+    "message": "陈旧"
+  },
+  "popupWatchtowerUnavailable": {
+    "message": "体检不可用——请连接并解锁桥接。"
+  },
+  "popupWatchtowerAllClear": {
+    "message": "未发现问题。"
+  },
+  "popupWatchtowerShow": {
+    "message": "展开问题"
+  },
+  "popupWatchtowerHide": {
+    "message": "收起问题"
+  }
 }
