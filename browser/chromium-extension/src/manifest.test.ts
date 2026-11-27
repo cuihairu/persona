@@ -80,7 +80,7 @@ describe('manifest — host wiring', () => {
         expect(manifest.background?.service_worker).toBe('dist/background.js');
         expect(manifest.background?.type).toBe('module');
         expect(manifest.permissions).toEqual(
-            expect.arrayContaining(['nativeMessaging', 'storage', 'scripting', 'activeTab'])
+            expect.arrayContaining(['nativeMessaging', 'storage', 'scripting', 'activeTab', 'contextMenus'])
         );
     });
 

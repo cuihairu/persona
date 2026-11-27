@@ -39,6 +39,13 @@ import {
     type PendingSaveEntry
 } from './pendingSave.js';
 import { AUTOFILL_SETTINGS_KEY, DEFAULT_AUTOFILL_SETTINGS } from './settings.js';
+import {
+    buildMenuEntries,
+    parseMenuAction,
+    MENU_ROOT_ID,
+    MENU_SUGGESTION_CAP,
+    type MenuSuggestion
+} from './contextMenu.js';
 
 const STORAGE_KEY = 'persona_bridge_status';
 const FORMS_KEY = 'persona_forms';
@@ -63,7 +70,89 @@ chrome.runtime.onInstalled.addListener(() => {
         if (value?.[AUTOFILL_SETTINGS_KEY]) return;
         chrome.storage.local.set({ [AUTOFILL_SETTINGS_KEY]: DEFAULT_AUTOFILL_SETTINGS });
     });
+
+    refreshContextMenu(buildMenuEntries([]));
 });
+
+// ============ Right-click menu (contextMenus) ============
+// The MV3 service worker is not resident, but contextMenus entries are
+// browser-global and survive worker restarts. Strategy: seed the root on
+// install; on every worker start rebuild the children from the cached
+// suggestion pools; after each fresh suggestions fetch, rebuild again.
+// Remove-all + recreate (rather than incremental updates) sidesteps the
+// duplicate-id errors a restarted worker would otherwise hit mid-flight.
+
+interface CachedSuggestionPool {
+    origin: string;
+    suggestions: SuggestionsPayload;
+    timestamp: number;
+}
+
+function cachedMenuSuggestions(): Promise<MenuSuggestion[]> {
+    return new Promise((resolve) => {
+        chrome.storage.local.get([`${SUGGESTIONS_KEY}:login`, `${SUGGESTIONS_KEY}:card`], (value) => {
+            const login = value?.[`${SUGGESTIONS_KEY}:login`] as CachedSuggestionPool | undefined;
+            const card = value?.[`${SUGGESTIONS_KEY}:card`] as CachedSuggestionPool | undefined;
+            const items = [...(login?.suggestions?.items ?? []), ...(card?.suggestions?.items ?? [])];
+            resolve(items.slice(0, MENU_SUGGESTION_CAP));
+        });
+    });
+}
+
+function refreshContextMenu(entries: ReturnType<typeof buildMenuEntries>): void {
+    if (!chrome.contextMenus) return;
+    chrome.contextMenus.removeAll(() => {
+        for (const entry of entries) {
+            chrome.contextMenus.create(
+                {
+                    id: entry.id,
+                    title: entry.title,
+                    parentId: entry.parentId,
+                    contexts: ['all']
+                },
+                () => void chrome.runtime.lastError // swallow duplicate-id races; the next rebuild wins
+            );
+        }
+    });
+}
+
+async function rebuildContextMenuFromCache(): Promise<void> {
+    refreshContextMenu(buildMenuEntries(await cachedMenuSuggestions()));
+}
+
+chrome.contextMenus.onClicked.addListener((info, tab) => {
+    const action = parseMenuAction(typeof info.menuItemId === 'string' ? info.menuItemId : '');
+    if (!action || !tab?.id) return;
+    const origin = tab.url ?? info.pageUrl ?? '';
+
+    if (action.action === 'popup') {
+        // openPopup is Chrome 127+; on older builds fall back to the in-page
+        // search overlay so the entry never dead-ends
+        const openPopup = (chrome.action as { openPopup?: () => void }).openPopup;
+        if (typeof openPopup === 'function') {
+            openPopup.call(chrome.action);
+        } else {
+            chrome.tabs.sendMessage(tab.id, { type: 'persona_open_search' }).catch(() => {});
+        }
+        return;
+    }
+
+    if (action.action === 'fill') {
+        const type = action.kind === 'totp'
+            ? 'persona_popup_fill_totp'
+            : action.kind === 'card'
+                ? 'persona_popup_fill_card'
+                : 'persona_popup_fill_password';
+        chrome.tabs.sendMessage(tab.id, { type, itemId: action.itemId }).catch(() => {});
+        return;
+    }
+
+    // copy rides the same native clipboard path as the popup copy button
+    // (right-click is a user gesture)
+    void handleCopy(origin, action.itemId, action.kind, true);
+});
+
+void rebuildContextMenuFromCache();
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message?.type === 'persona_ping') {
@@ -442,6 +531,9 @@ async function handleGetSuggestions(origin: string, formType = 'login'): Promise
                 timestamp: Date.now()
             }
         });
+
+        // fresh pools landed: the right-click children follow them
+        void rebuildContextMenuFromCache();
 
         return {
             success: true,
