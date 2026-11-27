@@ -470,6 +470,48 @@ pre.value {
   user-select: all;
 }
 
+/* generator strength estimate (local heuristic, display only) */
+.gen-strength {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.gen-strength .gs-bar {
+  flex: 1;
+  height: 5px;
+  border-radius: 3px;
+  background: var(--surface-alt);
+  border: 1px solid var(--border-01);
+  overflow: hidden;
+}
+
+.gen-strength .gs-fill {
+  height: 100%;
+  width: 0;
+  border-radius: 3px;
+  transition: width 0.2s ease;
+}
+
+.gen-strength .gs-label {
+  flex: 0 0 auto;
+  font-size: 11px;
+  color: var(--text-sub);
+  min-width: 62px;
+  text-align: right;
+}
+
+.gen-strength.band-weak .gs-fill { width: 25%; background: var(--danger); }
+.gen-strength.band-fair .gs-fill { width: 50%; background: var(--warn); }
+.gen-strength.band-strong .gs-fill { width: 75%; background: var(--accent); }
+.gen-strength.band-excellent .gs-fill { width: 100%; background: var(--ok); }
+
+.gen-strength.band-weak .gs-label { color: var(--danger); }
+.gen-strength.band-fair .gs-label { color: var(--warn); }
+.gen-strength.band-strong .gs-label { color: var(--accent-readable); }
+.gen-strength.band-excellent .gs-label { color: var(--ok); }
+
 /* ---- right pane: operator console (native collapsibles, zero JS) ---- */
 
 .console details {

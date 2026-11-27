@@ -4,6 +4,7 @@ import { hello, requestPairingCode, finalizePairing, getPairingState, generatePa
 import { renderDetail, type DetailTarget, type CopyOutcome, type TotpPayload } from './popupDetail.js';
 import { activatableRows, steppedIndex, isNavKey, type NavRow } from './popupNav.js';
 import { KIND_FILTERS, countByFacts, rowVisible, type KindFilter, type RowFacts } from './popupFilter.js';
+import { estimatePasswordStrength } from './genStrength.js';
 import { getAutofillSettings, setAutofillSettings } from './settings.js';
 import { getAutofillDefaultsForOrigin, setAutofillDefaultsForOrigin, type OriginAutofillDefaults } from './autofillDefaults.js';
 import { contextHintLine, suggestionMetaLine } from './autofillUx.js';
@@ -283,12 +284,29 @@ const genPronounceableEl = document.getElementById('genPronounceable') as HTMLIn
 const genWordsEl = document.getElementById('genWords') as HTMLInputElement | null;
 const genGenerateButton = document.getElementById('genGenerate');
 const genResultEl = document.getElementById('genResult');
+const genStrengthEl = document.getElementById('genStrength');
+
+function renderGenStrength(password: string | null): void {
+    if (!genStrengthEl) return;
+    if (!password) {
+        genStrengthEl.hidden = true;
+        return;
+    }
+    const { score, band } = estimatePasswordStrength(password);
+    genStrengthEl.hidden = false;
+    genStrengthEl.className = `gen-strength band-${band}`;
+    const fill = genStrengthEl.querySelector<HTMLElement>('.gs-fill');
+    if (fill) fill.style.width = `${Math.max(4, score)}%`;
+    const label = genStrengthEl.querySelector<HTMLElement>('.gs-label');
+    if (label) label.textContent = `${band} · ${score}`;
+}
 
 if (genGenerateButton) {
     genGenerateButton.addEventListener('click', async () => {
         if (!genResultEl) return;
         genGenerateButton.toggleAttribute('disabled', true);
         genResultEl.textContent = 'Generating…';
+        renderGenStrength(null);
         const wordsRaw = genWordsEl?.value?.trim();
         const words = wordsRaw ? Number.parseInt(wordsRaw, 10) : undefined;
         const response = await generatePassword({
@@ -302,8 +320,10 @@ if (genGenerateButton) {
         }).catch((e: unknown) => ({ ok: false, error: String(e) }) as any);
         if (response?.ok && response.payload?.password) {
             genResultEl.textContent = response.payload.password;
+            renderGenStrength(response.payload.password);
         } else {
             genResultEl.textContent = `Error: ${response?.error ?? 'generation failed'}`;
+            renderGenStrength(null);
         }
         genGenerateButton.toggleAttribute('disabled', false);
     });
