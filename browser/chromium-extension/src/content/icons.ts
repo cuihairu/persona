@@ -26,7 +26,7 @@ import { isTrustedPasskeyOrigin } from '../passkeyOrigin.js';
 
 import { state } from './state.js';
 import type { SuggestionItem, FillCredential, CardFillData, PasskeyCandidate, PasskeyBridgeReply } from './types.js';
-import { escapeHtml, fillInput, hasValue } from './util.js';
+import { fillInput, hasValue } from './util.js';
 import { hideOverlay, toggleOverlay } from './overlay.js';
 import { requestFill, requestTotp } from './fillRequests.js';
 import { maybeRememberDefault } from './suggestions.js';
@@ -65,23 +65,10 @@ export function showInlineIcon(input: HTMLInputElement, mode: 'password' | 'totp
 
     // Create icon element
     const icon = document.createElement('div');
-    icon.className = 'persona-inline-icon';
+    icon.className = 'persona-inline-icon p-badge';
     icon.innerHTML = '🛡️';
     icon.title = 'Click to autofill with Persona';
-    icon.style.cssText = `
-        position: absolute;
-        width: 24px;
-        height: 24px;
-        cursor: pointer;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        font-size: 16px;
-        z-index: 999999;
-        background: white;
-        border-radius: 4px;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.15);
-    `;
+    icon.style.fontSize = '16px';
 
     // Position the icon
     const rect = input.getBoundingClientRect();
@@ -122,23 +109,10 @@ export function showGeneratorIcon(input: HTMLInputElement) {
 
     // Create icon element
     const icon = document.createElement('div');
-    icon.className = 'persona-generator-icon';
+    icon.className = 'persona-generator-icon p-badge';
     icon.innerHTML = '🔑';
     icon.title = 'Generate a secure password';
-    icon.style.cssText = `
-        position: absolute;
-        width: 24px;
-        height: 24px;
-        cursor: pointer;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        font-size: 16px;
-        z-index: 999999;
-        background: white;
-        border-radius: 4px;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.15);
-    `;
+    icon.style.fontSize = '16px';
 
     // Position the icon
     const rect = input.getBoundingClientRect();
@@ -173,16 +147,11 @@ export function showGeneratorDropdown(input: HTMLInputElement, genIcon: HTMLElem
     hideOverlay();
 
     const dropdown = document.createElement('div');
-    dropdown.className = 'persona-generator-dropdown';
+    dropdown.className = 'persona-generator-dropdown p-panel';
     dropdown.style.cssText = `
         position: absolute;
-        background: white;
-        border: 1px solid #e2e8f0;
-        border-radius: 8px;
-        box-shadow: 0 4px 20px rgba(0,0,0,0.15);
         z-index: 999999;
         width: 280px;
-        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
     `;
 
     // Position dropdown
@@ -192,78 +161,60 @@ export function showGeneratorDropdown(input: HTMLInputElement, genIcon: HTMLElem
 
     // Header
     const header = document.createElement('div');
-    header.style.cssText = `
-        padding: 12px 16px;
-        border-bottom: 1px solid #e2e8f0;
-        font-weight: 600;
-        color: #1a1a1a;
-        display: flex;
-        align-items: center;
-        gap: 8px;
-    `;
-    header.innerHTML = '🔑 Generate Password';
+    header.className = 'p-plain-head';
+    header.textContent = '🔑 Generate Password';
     dropdown.appendChild(header);
 
     // Quick generate button (default settings)
     const quickBtn = document.createElement('button');
+    quickBtn.className = 'p-btn block';
     quickBtn.style.cssText = `
-        width: 100%;
-        padding: 12px 16px;
-        border: none;
-        border-radius: 0;
-        background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
-        color: white;
-        cursor: pointer;
+        padding: 12px 14px;
         font-size: 14px;
         font-weight: 500;
         text-align: left;
     `;
-    quickBtn.innerHTML = '🎲 Generate (16 chars, all sets)';
+    quickBtn.textContent = '🎲 Generate (16 chars, all sets)';
     dropdown.appendChild(quickBtn);
 
     // Separator
     const sep = document.createElement('div');
-    sep.style.cssText = 'height: 1px; background: #e2e8f0; margin: 8px 0;';
+    sep.className = 'p-sep';
     dropdown.appendChild(sep);
 
     // Custom options
     const optionsDiv = document.createElement('div');
-    optionsDiv.style.cssText = 'padding: 12px 16px;';
+    optionsDiv.className = 'p-pad';
+    const numInput = (id: string, extra: string) =>
+        `<input type="number" id="${id}" class="p-input" style="width: 60px; margin-left: 8px; padding: 4px 6px;" ${extra}>`;
     optionsDiv.innerHTML = `
-        <label style="display: block; margin-bottom: 8px; font-size: 13px; color: #374151;">
-            Length: <input type="number" id="gen-length" value="16" min="4" max="128" style="width: 60px; margin-left: 8px; padding: 4px 8px; border: 1px solid #d1d5db; border-radius: 4px;">
+        <label class="p-label">
+            Length: ${numInput('gen-length', 'value="16" min="4" max="128"')}
         </label>
-        <label style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px; font-size: 13px; color: #374151;">
-            <input type="checkbox" id="gen-lower" checked> Lowercase
+        <label class="p-label p-check"><input type="checkbox" id="gen-lower" checked> Lowercase</label>
+        <label class="p-label p-check"><input type="checkbox" id="gen-upper" checked> Uppercase</label>
+        <label class="p-label p-check"><input type="checkbox" id="gen-digits" checked> Digits</label>
+        <label class="p-label p-check"><input type="checkbox" id="gen-symbols" checked> Symbols</label>
+        <label class="p-label p-check"><input type="checkbox" id="gen-pronounceable"> Pronounceable</label>
+        <label class="p-label">
+            Passphrase (words): ${numInput('gen-words', 'value="" min="3" max="10" placeholder="3-10"')}
         </label>
-        <label style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px; font-size: 13px; color: #374151;">
-            <input type="checkbox" id="gen-upper" checked> Uppercase
-        </label>
-        <label style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px; font-size: 13px; color: #374151;">
-            <input type="checkbox" id="gen-digits" checked> Digits
-        </label>
-        <label style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px; font-size: 13px; color: #374151;">
-            <input type="checkbox" id="gen-symbols" checked> Symbols
-        </label>
-        <label style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px; font-size: 13px; color: #374151;">
-            <input type="checkbox" id="gen-pronounceable"> Pronounceable
-        </label>
-        <label style="display: block; margin-bottom: 8px; font-size: 13px; color: #374151;">
-            Passphrase (words): <input type="number" id="gen-words" value="" min="3" max="10" placeholder="3-10 (overrides above)" style="width: 60px; margin-left: 8px; padding: 4px 8px; border: 1px solid #d1d5db; border-radius: 4px;">
-        </label>
-        <button id="gen-custom" style="width: 100%; padding: 10px; border: 1px solid #e2e8f0; border-radius: 6px; background: white; color: #374151; cursor: pointer; font-size: 13px; font-weight: 500;">Generate Custom</button>
+        <button id="gen-custom" class="p-btn secondary block">Generate Custom</button>
     `;
     dropdown.appendChild(optionsDiv);
 
     // Status line
     const statusLine = document.createElement('div');
-    statusLine.style.cssText = 'padding: 8px 16px; color: #64748b; font-size: 12px; display: none;';
+    statusLine.className = 'p-save-status';
+    statusLine.style.padding = '8px 14px';
+    statusLine.style.fontSize = '12px';
     dropdown.appendChild(statusLine);
 
     const generateAndFill = async (request: any) => {
         quickBtn.disabled = true;
         (dropdown.querySelector('#gen-custom') as HTMLButtonElement).disabled = true;
-        statusLine.style.display = 'block';
+        statusLine.classList.add('show');
+        statusLine.classList.remove('p-ok-text', 'p-err-text');
         statusLine.textContent = 'Generating…';
 
         try {
@@ -286,18 +237,18 @@ export function showGeneratorDropdown(input: HTMLInputElement, genIcon: HTMLElem
                     }
                 }
                 statusLine.textContent = 'Generated & filled!';
-                statusLine.style.color = '#22c55e';
+                statusLine.classList.add('p-ok-text');
                 setTimeout(() => {
                     dropdown.remove();
                     if (state.generatorIcon === genIcon) state.generatorIcon = null;
                 }, 1500);
             } else {
                 statusLine.textContent = response?.error || 'Generation failed';
-                statusLine.style.color = '#ef4444';
+                statusLine.classList.add('p-err-text');
             }
         } catch (error) {
             statusLine.textContent = error instanceof Error ? error.message : 'Generation failed';
-            statusLine.style.color = '#ef4444';
+            statusLine.classList.add('p-err-text');
         } finally {
             quickBtn.disabled = false;
             (dropdown.querySelector('#gen-custom') as HTMLButtonElement).disabled = false;
@@ -361,18 +312,13 @@ export function showSuggestionsDropdown(input: HTMLInputElement, mode: 'password
     }
 
     const dropdown = document.createElement('div');
-    dropdown.className = 'persona-dropdown';
+    dropdown.className = 'persona-dropdown p-panel';
     dropdown.style.cssText = `
         position: absolute;
-        background: white;
-        border: 1px solid #e2e8f0;
-        border-radius: 8px;
-        box-shadow: 0 4px 20px rgba(0,0,0,0.15);
         z-index: 999999;
         min-width: 280px;
         max-height: 300px;
         overflow-y: auto;
-        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
     `;
 
     // Position dropdown
@@ -382,38 +328,22 @@ export function showSuggestionsDropdown(input: HTMLInputElement, mode: 'password
 
     // Add header
     const header = document.createElement('div');
-    header.style.cssText = `
-        padding: 12px 16px;
-        border-bottom: 1px solid #e2e8f0;
-        font-weight: 600;
-        color: #1a1a1a;
-        display: flex;
-        align-items: center;
-        gap: 8px;
-    `;
+    header.className = 'p-plain-head';
     header.innerHTML = '🛡️ Persona';
     dropdown.appendChild(header);
 
     // Add suggestions
     filtered.forEach((suggestion) => {
         const item = document.createElement('div');
-        item.style.cssText = `
-            padding: 12px 16px;
-            cursor: pointer;
-            border-bottom: 1px solid #f1f5f9;
-            transition: background 0.15s;
-        `;
-        item.innerHTML = `
-            <div style="font-weight: 500; color: #1a1a1a; margin-bottom: 2px;">${escapeHtml(suggestion.title)}</div>
-            <div style="font-size: 13px; color: #64748b;">${escapeHtml(suggestion.username_hint || '')}</div>
-        `;
-
-        item.addEventListener('mouseenter', () => {
-            item.style.background = '#f8fafc';
-        });
-        item.addEventListener('mouseleave', () => {
-            item.style.background = 'white';
-        });
+        item.className = 'p-item';
+        const t = document.createElement('div');
+        t.className = 't';
+        t.textContent = suggestion.title;
+        const s = document.createElement('div');
+        s.className = 's';
+        s.textContent = suggestion.username_hint || '';
+        item.appendChild(t);
+        item.appendChild(s);
 
         item.addEventListener('click', () => {
             if ((suggestion.credential_type ?? 'password') === 'totp') {

@@ -223,81 +223,44 @@ export function renderSaveBar(proposal: SaveProposal, updateTarget: { item_id: s
     hideSaveBar();
 
     const bar = document.createElement('div');
-    bar.className = 'persona-save-bar';
-    bar.style.cssText = `
-        position: fixed;
-        right: 16px;
-        bottom: 16px;
-        z-index: 2147483647;
-        width: 320px;
-        background: white;
-        border: 1px solid #e2e8f0;
-        border-radius: 10px;
-        box-shadow: 0 8px 30px rgba(0,0,0,0.18);
-        padding: 14px;
-        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-        font-size: 13px;
-        color: #1a1a1a;
-    `;
+    bar.className = 'persona-save-bar p-save';
 
     const title = document.createElement('div');
-    title.style.cssText = 'font-weight: 600; margin-bottom: 4px; display: flex; align-items: center; gap: 6px;';
+    title.className = 'p-save-title';
     title.textContent = updateTarget ? '更新 Persona 中的登录？' : '保存登录到 Persona？';
     bar.appendChild(title);
 
     const detail = document.createElement('div');
-    detail.style.cssText = 'color: #64748b; margin-bottom: 10px; word-break: break-all;';
+    detail.className = 'p-save-detail';
     detail.textContent = updateTarget
         ? `${updateTarget.name}${proposal.username ? ` · ${proposal.username}` : ''}`
         : `${proposal.nameHint || location.host}${proposal.username ? ` · ${proposal.username}` : ''}`;
     bar.appendChild(detail);
 
     const row = document.createElement('div');
-    row.style.cssText = 'display: flex; gap: 8px; align-items: center;';
+    row.className = 'p-row';
     bar.appendChild(row);
 
     const confirmBtn = document.createElement('button');
-    confirmBtn.style.cssText = `
-        padding: 8px 14px;
-        border: none;
-        border-radius: 8px;
-        background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
-        color: white;
-        cursor: pointer;
-        font-size: 13px;
-        font-weight: 500;
-    `;
+    confirmBtn.className = 'p-btn';
     confirmBtn.textContent = updateTarget ? '更新' : '保存';
     row.appendChild(confirmBtn);
 
     const neverBtn = document.createElement('button');
-    neverBtn.style.cssText = `
-        padding: 8px 12px;
-        border: 1px solid #e2e8f0;
-        border-radius: 8px;
-        background: white;
-        cursor: pointer;
-        font-size: 13px;
-    `;
+    neverBtn.className = 'p-btn secondary';
     neverBtn.textContent = '此站永不';
     row.appendChild(neverBtn);
 
     const closeBtn = document.createElement('button');
-    closeBtn.style.cssText = `
-        margin-left: auto;
-        padding: 4px 8px;
-        border: none;
-        background: transparent;
-        cursor: pointer;
-        font-size: 14px;
-        color: #64748b;
-    `;
+    closeBtn.className = 'p-x';
+    closeBtn.style.marginLeft = 'auto';
+    closeBtn.style.fontSize = '14px';
     closeBtn.textContent = '×';
     closeBtn.title = 'Dismiss';
     row.appendChild(closeBtn);
 
     const statusLine = document.createElement('div');
-    statusLine.style.cssText = 'margin-top: 8px; color: #64748b; display: none;';
+    statusLine.className = 'p-save-status';
     bar.appendChild(statusLine);
 
     const decline = () => {
@@ -326,7 +289,7 @@ export function renderSaveBar(proposal: SaveProposal, updateTarget: { item_id: s
         confirmBtn.disabled = true;
         neverBtn.disabled = true;
         confirmBtn.textContent = '保存中…';
-        statusLine.style.display = 'block';
+        statusLine.classList.add('show');
         statusLine.textContent = '';
 
         void chrome.runtime.sendMessage({
@@ -345,7 +308,7 @@ export function renderSaveBar(proposal: SaveProposal, updateTarget: { item_id: s
                     title.textContent = updateTarget ? '已更新 ✓' : '已保存 ✓';
                     detail.textContent = response.data?.name || '';
                     void chrome.runtime.sendMessage({ type: 'persona_clear_pending_save' }).catch(() => null);
-                    statusLine.style.display = 'none';
+                    statusLine.classList.remove('show');
                     confirmBtn.style.display = 'none';
                     neverBtn.style.display = 'none';
                     setTimeout(hideSaveBar, 2500);
