@@ -101,7 +101,7 @@ pub(super) fn decode(
                 })?
                 .1;
             build_rsa(
-                <pkcs1::RsaPrivateKey as pkcs1::der::Decode>::from_der(der.as_bytes()).map_err(
+                <pkcs1::RsaPrivateKeyRef as pkcs1::der::Decode>::from_der(der.as_bytes()).map_err(
                     |e| PersonaError::InvalidInput(format!("Failed to decode RSA PKCS#1 key: {e}")),
                 )?,
             )
@@ -176,13 +176,13 @@ fn decode_pkcs8(pem: &str, password: Option<&str>) -> PersonaResult<PrivateKey> 
                 })?;
             Ok(build_ecdsa_p256(secret))
         }
-        // pkcs1 0.7 stays on der 0.7 (pkcs8 0.11 is already der 0.8), so from_der resolves
-        // each crate's own Decode trait; the pkcs1 side is specified explicitly here to avoid ambiguity
+        // pkcs1 0.8 and pkcs8 0.11 both resolve to the same der 0.8 crate, so the Decode
+        // trait is unambiguous; the pkcs1 side stays explicitly qualified for symmetry
         OID_RSA_ENCRYPTION => build_rsa(
-            <pkcs1::RsaPrivateKey as pkcs1::der::Decode>::from_der(pki.private_key.as_bytes())
+            <pkcs1::RsaPrivateKeyRef as pkcs1::der::Decode>::from_der(pki.private_key.as_bytes())
                 .map_err(|e| {
-                    PersonaError::InvalidInput(format!("Failed to decode RSA private key: {e}"))
-                })?,
+                PersonaError::InvalidInput(format!("Failed to decode RSA private key: {e}"))
+            })?,
         ),
         other => Err(PersonaError::InvalidInput(format!(
             "Unsupported private key algorithm OID: {other}"
@@ -213,7 +213,7 @@ fn build_ecdsa_p256(secret: p256::SecretKey) -> PrivateKey {
 /// RSA (PKCS#8 / PKCS#1 unified here): pkcs1's field-level structure exposes n/e/d/p/q/
 /// dp/dq/iqmp; the SSH wire format needs exactly d/iqmp/p/q + n/e, the coefficient is
 /// iqmp, and no big-number is computed by hand. Multi-prime RSA (>2 primes) is rejected explicitly.
-fn build_rsa(der_key: pkcs1::RsaPrivateKey<'_>) -> PersonaResult<PrivateKey> {
+fn build_rsa(der_key: pkcs1::RsaPrivateKeyRef<'_>) -> PersonaResult<PrivateKey> {
     if der_key.other_prime_infos.is_some() {
         return Err(PersonaError::InvalidInput(
             "Multi-prime RSA private keys are not supported".to_string(),
