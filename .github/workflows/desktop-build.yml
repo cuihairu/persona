@@ -649,19 +649,32 @@ jobs:
         # mv.
         run: |
           cd dist
-          find . -type f -printf '%P\0' | sort -z \
-            | xargs -0 sha256sum > ../SHA256SUMS.tmp
+          # Release assets upload flat (the release action keeps only basenames),
+          # so both manifests must reference flat names too: a bundler-prefixed
+          # entry (deb/, nsis/, rpm/, appimage/, dmg/) would make a consumer's
+          # `sha256sum -c` fail with "No such file or directory" for exactly the
+          # desktop bundles this pipeline ships.
+          find . -type f -printf '%P\0' | sort -z > ../manifest-paths.tmp
+          dup=$(tr '\0' '\n' < ../manifest-paths.tmp | awk -F/ 'seen[$NF]++ { print $NF }')
+          if [ -n "$dup" ]; then
+            echo "::error::basename collision under dist/ (release assets upload flat): $dup"
+            exit 1
+          fi
+          xargs -0 sha256sum < ../manifest-paths.tmp \
+            | sed 's#\(^[0-9a-fA-F]\{64\}  \).*/#\1#' > ../SHA256SUMS.tmp
           {
             echo "# persona nightly assets — $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+            echo "# all names flat: GitHub release assets cannot carry subdirectories"
             echo "# extension-chrome/edge are the same package under two names"
             echo "# extension .crx is the CRX3 drag-install package (pinned extension id)"
             echo "# Safari is not shipped in nightly (needs Xcode conversion + signing)"
-            while IFS= read -r f; do
-              printf '%-64s %10s\n' "$f" "$(du -h "$f" | cut -f1)"
-            done < <(find . -type f -printf '%P\n' | sort)
+            while IFS= read -r -d '' f; do
+              printf '%-64s %10s\n' "${f##*/}" "$(du -h "$f" | cut -f1)"
+            done < ../manifest-paths.tmp
           } > ../ASSETS.tmp
           mv ../SHA256SUMS.tmp SHA256SUMS
           mv ../ASSETS.tmp ASSETS.txt
+          rm -f ../manifest-paths.tmp
 
       - name: Compute release target
         id: rel
