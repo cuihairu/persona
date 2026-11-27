@@ -207,7 +207,7 @@ export function showPasskeyDialog(dialog: {
     const header = document.createElement('div');
     header.style.cssText = `
         padding: 14px 16px;
-        background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
+        background: linear-gradient(135deg, hsl(214, 65%, 47%) 0%, hsl(214, 75%, 56%) 100%);
         color: white;
         font-weight: 600;
         display: flex;
@@ -285,7 +285,7 @@ export function showPasskeyDialog(dialog: {
             padding: 8px 14px;
             border: none;
             border-radius: 8px;
-            background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
+            background: linear-gradient(135deg, hsl(214, 65%, 47%) 0%, hsl(214, 75%, 56%) 100%);
             color: white;
             cursor: pointer;
             font-size: 13px;
