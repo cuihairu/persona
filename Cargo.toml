@@ -86,7 +86,7 @@ rsa = { version = "0.10", features = ["pkcs1v15"] }
 # field-level decoding is delegated to pkcs1/pkcs8 (same RustCrypto family);
 # pkcs8's encryption feature unlocks encrypted PKCS#8 (PBES2); ed25519-dalek's
 # pkcs8 feature provides the PKCS#8 → SigningKey conversion
-pkcs1 = { version = "0.7", features = ["std", "pem"] }
+pkcs1 = { version = "0.8", features = ["std", "pem"] }
 pkcs8 = { version = "0.11", features = ["std", "pem", "encryption"] }
 rand_core = "0.10"
 
