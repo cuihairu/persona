@@ -1236,7 +1236,12 @@ if (searchInput) {
                 searchInput.dispatchEvent(new Event('input'));
                 return;
             }
-            searchInput.blur();
+            if (document.activeElement === searchInput) {
+                searchInput.blur();
+                return;
+            }
+            // cascade exhausted: the popup itself is the remaining layer
+            window.close();
             return;
         }
 
@@ -1297,4 +1302,8 @@ if (searchInput) {
 
     refreshKindBar([]);
     applyVaultFilters();
+
+    // open-into-search: the popup's primary action is finding a credential
+    // (mirrors the reference managers' open-to-search behavior)
+    searchInput.focus({ preventScroll: true });
 }
