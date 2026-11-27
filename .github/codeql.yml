@@ -1,0 +1,10 @@
+# CodeQL default-setup path filters.
+# Test code and fuzz harnesses generate a flood of hard-coded-secret /
+# cleartext-logging alerts on fixture literals; they are not shipped code.
+# Production files with inline test modules keep their test-code alerts
+# dismissed per-alert (used_in_tests) instead of being excluded here.
+paths-ignore:
+  - "**/tests/**"
+  - "**/tests.rs"
+  - "**/*_tests/**"
+  - "fuzz/**"
