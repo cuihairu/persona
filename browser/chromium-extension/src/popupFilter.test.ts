@@ -1,9 +1,10 @@
 import {
     KIND_FILTERS,
-    countByKind,
-    matchesKind,
+    countByFacts,
+    matchesFilter,
     normalizeKind,
-    rowVisible
+    rowVisible,
+    type RowFacts
 } from './popupFilter.js';
 
 describe('normalizeKind', () => {
@@ -27,53 +28,74 @@ describe('normalizeKind', () => {
     });
 });
 
-describe('matchesKind', () => {
-    const kinds = ['password', 'totp', 'bank_card', 'weird'];
+describe('matchesFilter', () => {
+    const rows: RowFacts[] = [
+        { kind: 'password' },
+        { kind: 'totp' },
+        { kind: 'bank_card' },
+        { kind: 'weird' },
+        { kind: 'totp', favorite: true }
+    ];
 
     it('keeps everything under the all filter', () => {
-        expect(kinds.filter((k) => matchesKind(k, 'all'))).toEqual(kinds);
+        expect(rows.filter((r) => matchesFilter(r, 'all'))).toHaveLength(5);
     });
 
-    it('selects exactly one bucket per concrete filter', () => {
-        expect(kinds.filter((k) => matchesKind(k, 'password'))).toEqual(['password', 'weird']);
-        expect(kinds.filter((k) => matchesKind(k, 'totp'))).toEqual(['totp']);
-        expect(kinds.filter((k) => matchesKind(k, 'bank_card'))).toEqual(['bank_card']);
+    it('selects one kind bucket per concrete filter', () => {
+        expect(rows.filter((r) => matchesFilter(r, 'password'))).toEqual([{ kind: 'password' }, { kind: 'weird' }]);
+        expect(rows.filter((r) => matchesFilter(r, 'totp'))).toEqual([{ kind: 'totp' }, { kind: 'totp', favorite: true }]);
+        expect(rows.filter((r) => matchesFilter(r, 'bank_card'))).toEqual([{ kind: 'bank_card' }]);
+    });
+
+    it('selects only favorites regardless of kind', () => {
+        expect(rows.filter((r) => matchesFilter(r, 'favorite'))).toEqual([{ kind: 'totp', favorite: true }]);
+    });
+
+    it('treats missing favorite flag as not favorite', () => {
+        expect(matchesFilter({ kind: 'password', favorite: false }, 'favorite')).toBe(false);
+        expect(matchesFilter({}, 'favorite')).toBe(false);
     });
 });
 
-describe('countByKind', () => {
-    it('counts each bucket with the all total', () => {
-        expect(countByKind(['password', 'totp', 'totp', 'bank_card'])).toEqual({
-            all: 4,
-            password: 1,
-            totp: 2,
-            bank_card: 1
-        });
+describe('countByFacts', () => {
+    it('counts each bucket plus favorites with the all total', () => {
+        expect(countByFacts([
+            { kind: 'password', favorite: true },
+            { kind: 'totp' },
+            { kind: 'totp', favorite: true },
+            { kind: 'bank_card' }
+        ])).toEqual({ all: 4, favorite: 2, password: 1, totp: 2, bank_card: 1 });
     });
 
     it('returns zeros for an empty list', () => {
-        expect(countByKind([])).toEqual({ all: 0, password: 0, totp: 0, bank_card: 0 });
+        expect(countByFacts([])).toEqual({ all: 0, favorite: 0, password: 0, totp: 0, bank_card: 0 });
     });
 });
 
 describe('rowVisible', () => {
     it('combines category and text with AND semantics', () => {
-        expect(rowVisible('totp', 'GitHub auth', 'totp', 'git')).toBe(true);
-        expect(rowVisible('totp', 'GitHub auth', 'password', 'git')).toBe(false);
-        expect(rowVisible('totp', 'GitHub auth', 'all', 'nomatch')).toBe(false);
+        expect(rowVisible({ kind: 'totp' }, 'GitHub auth', 'totp', 'git')).toBe(true);
+        expect(rowVisible({ kind: 'totp' }, 'GitHub auth', 'password', 'git')).toBe(false);
+        expect(rowVisible({ kind: 'totp' }, 'GitHub auth', 'all', 'nomatch')).toBe(false);
+    });
+
+    it('layers the favorite filter over text search', () => {
+        expect(rowVisible({ kind: 'totp', favorite: true }, 'GitHub', 'favorite', '')).toBe(true);
+        expect(rowVisible({ kind: 'totp', favorite: true }, 'GitHub', 'favorite', 'mail')).toBe(false);
+        expect(rowVisible({ kind: 'password' }, 'GitHub', 'favorite', '')).toBe(false);
     });
 
     it('matches text case-insensitively and trims the query', () => {
-        expect(rowVisible('password', 'GitHub', 'all', '  GIT ')).toBe(true);
+        expect(rowVisible({ kind: 'password' }, 'GitHub', 'all', '  GIT ')).toBe(true);
     });
 
     it('treats an empty query as pass-through for the text half', () => {
-        expect(rowVisible('bank_card', '', 'bank_card', '')).toBe(true);
+        expect(rowVisible({ kind: 'bank_card' }, '', 'bank_card', '')).toBe(true);
     });
 });
 
 describe('KIND_FILTERS', () => {
-    it('lists the four shipped filters in display order', () => {
-        expect(KIND_FILTERS).toEqual(['all', 'password', 'totp', 'bank_card']);
+    it('lists the five shipped filters in display order', () => {
+        expect(KIND_FILTERS).toEqual(['all', 'favorite', 'password', 'totp', 'bank_card']);
     });
 });

@@ -3,7 +3,7 @@ import type { DomainAssessment } from './domainPolicy.js';
 import { hello, requestPairingCode, finalizePairing, getPairingState, generatePassword, accountLogin, accountStatus, accountLogout, syncPushNow, syncResolveConflict, getTotp } from './nativeBridge.js';
 import { renderDetail, type DetailTarget, type CopyOutcome, type TotpPayload } from './popupDetail.js';
 import { activatableRows, steppedIndex, isNavKey, type NavRow } from './popupNav.js';
-import { KIND_FILTERS, countByKind, rowVisible, type KindFilter } from './popupFilter.js';
+import { KIND_FILTERS, countByFacts, rowVisible, type KindFilter, type RowFacts } from './popupFilter.js';
 import { getAutofillSettings, setAutofillSettings } from './settings.js';
 import { getAutofillDefaultsForOrigin, setAutofillDefaultsForOrigin, type OriginAutofillDefaults } from './autofillDefaults.js';
 import { contextHintLine, suggestionMetaLine } from './autofillUx.js';
@@ -327,14 +327,15 @@ let kindFilter: KindFilter = 'all';
 
 const KIND_LABELS: Record<KindFilter, string> = {
     all: 'All items',
+    favorite: 'Favorites',
     password: 'Logins',
     totp: '2FA',
     bank_card: 'Bank cards'
 };
 
-function refreshKindBar(kinds: Array<string | null | undefined>): void {
+function refreshKindBar(rows: RowFacts[]): void {
     if (!kindBarEl) return;
-    const counts = countByKind(kinds);
+    const counts = countByFacts(rows);
     kindBarEl.textContent = '';
     for (const filter of KIND_FILTERS) {
         const chip = document.createElement('button');
@@ -367,7 +368,8 @@ function applyVaultFilters(): number {
         const el = child as HTMLElement;
         if (el.classList.contains('item')) {
             rows += 1;
-            parentVisible = rowVisible(el.dataset.kind, el.textContent ?? '', kindFilter, query);
+            const facts: RowFacts = { kind: el.dataset.kind, favorite: el.dataset.favorite === 'true' };
+            parentVisible = rowVisible(facts, el.textContent ?? '', kindFilter, query);
             el.style.display = parentVisible ? '' : 'none';
             if (parentVisible) visible += 1;
         } else {
@@ -406,7 +408,7 @@ async function renderCloudItems(items: CloudListItem[], views: CloudItemView[], 
     if (!cloudItemsEl) return;
     cloudItemsEl.textContent = '';
     const live = items.filter((item) => !item.deleted);
-    refreshKindBar(live.map((item) => item.meta?.credential_type ?? item.kind));
+    refreshKindBar(live.map((item) => ({ kind: item.meta?.credential_type ?? item.kind, favorite: item.meta?.is_favorite === true })));
 
     if (!live.length) {
         const empty = document.createElement('div');
@@ -425,6 +427,7 @@ async function renderCloudItems(items: CloudListItem[], views: CloudItemView[], 
         row.className = 'item';
         row.dataset.action = 'detail';
         row.dataset.kind = item.meta?.credential_type ?? item.kind;
+        row.dataset.favorite = String(item.meta?.is_favorite === true);
 
         const glyph = document.createElement('div');
         glyph.className = 'glyph';
@@ -453,8 +456,15 @@ async function renderCloudItems(items: CloudListItem[], views: CloudItemView[], 
 
         const tail = document.createElement('div');
         tail.className = 'tail';
+        if (item.meta?.is_favorite === true) {
+            const star = document.createElement('span');
+            star.className = 'fav-star';
+            star.textContent = '★';
+            star.title = 'Favorite';
+            tail.appendChild(star);
+        }
         const host = hostFromMeta(item.meta?.url);
-        if (host) tail.textContent = host;
+        if (host) tail.appendChild(document.createTextNode(host));
 
         row.addEventListener('click', () => {
             cloudItemsEl.querySelectorAll('.item.selected').forEach((el) => el.classList.remove('selected'));
