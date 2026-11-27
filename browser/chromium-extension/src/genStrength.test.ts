@@ -1,4 +1,4 @@
-import { bandFor, estimatePasswordStrength } from './genStrength.js';
+import { bandFor, estimatePasswordStrength, pushRecent } from './genStrength.js';
 
 describe('estimatePasswordStrength', () => {
     it('scores empty input at zero', () => {
@@ -56,5 +56,27 @@ describe('bandFor', () => {
         expect(bandFor(84)).toBe('strong');
         expect(bandFor(85)).toBe('excellent');
         expect(bandFor(100)).toBe('excellent');
+    });
+});
+
+describe('pushRecent', () => {
+    it('prepends the newest entry', () => {
+        expect(pushRecent(['a'], 'b')).toEqual(['b', 'a']);
+    });
+
+    it('collapses duplicates to the front', () => {
+        expect(pushRecent(['a', 'b', 'c'], 'b')).toEqual(['b', 'a', 'c']);
+    });
+
+    it('caps the list at five entries', () => {
+        const list = pushRecent(['1', '2', '3', '4'], '5');
+        expect(list).toEqual(['5', '1', '2', '3', '4']);
+        expect(pushRecent(list, '6')).toEqual(['6', '5', '1', '2', '3']);
+    });
+
+    it('does not mutate the input list', () => {
+        const list = ['a'];
+        pushRecent(list, 'b');
+        expect(list).toEqual(['a']);
     });
 });

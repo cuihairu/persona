@@ -44,3 +44,13 @@ export function bandFor(score: number): StrengthBand {
     if (score < 85) return 'strong';
     return 'excellent';
 }
+
+/**
+ * Session-scoped generator history: newest first, duplicates collapsed to
+ * the front, capped. Lives in module memory only — nothing persists past
+ * popup close.
+ */
+export function pushRecent(list: string[], item: string, cap = 5): string[] {
+    const next = [item, ...list.filter((existing) => existing !== item)];
+    return next.slice(0, cap);
+}

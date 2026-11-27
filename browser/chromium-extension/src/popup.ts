@@ -4,7 +4,7 @@ import { hello, requestPairingCode, finalizePairing, getPairingState, generatePa
 import { renderDetail, type DetailTarget, type CopyOutcome, type TotpPayload } from './popupDetail.js';
 import { activatableRows, steppedIndex, isNavKey, type NavRow } from './popupNav.js';
 import { KIND_FILTERS, countByFacts, rowVisible, type KindFilter, type RowFacts } from './popupFilter.js';
-import { estimatePasswordStrength } from './genStrength.js';
+import { estimatePasswordStrength, pushRecent } from './genStrength.js';
 import { getAutofillSettings, setAutofillSettings } from './settings.js';
 import { getAutofillDefaultsForOrigin, setAutofillDefaultsForOrigin, type OriginAutofillDefaults } from './autofillDefaults.js';
 import { contextHintLine, suggestionMetaLine } from './autofillUx.js';
@@ -285,6 +285,31 @@ const genWordsEl = document.getElementById('genWords') as HTMLInputElement | nul
 const genGenerateButton = document.getElementById('genGenerate');
 const genResultEl = document.getElementById('genResult');
 const genStrengthEl = document.getElementById('genStrength');
+const genHistoryEl = document.getElementById('genHistory');
+
+// session-scoped: lives only while the popup is open
+let genHistory: string[] = [];
+
+function renderGenHistory(): void {
+    if (!genHistoryEl) return;
+    genHistoryEl.textContent = '';
+    genHistoryEl.hidden = genHistory.length === 0;
+    for (const password of genHistory) {
+        const row = document.createElement('div');
+        row.className = 'item gh-row';
+        const text = document.createElement('span');
+        text.className = 'gh-pw';
+        text.textContent = password;
+        row.appendChild(text);
+        row.title = 'Restore this generated password';
+        row.addEventListener('click', () => {
+            if (!genResultEl) return;
+            genResultEl.textContent = password;
+            renderGenStrength(password);
+        });
+        genHistoryEl.appendChild(row);
+    }
+}
 
 function renderGenStrength(password: string | null): void {
     if (!genStrengthEl) return;
@@ -321,6 +346,8 @@ if (genGenerateButton) {
         if (response?.ok && response.payload?.password) {
             genResultEl.textContent = response.payload.password;
             renderGenStrength(response.payload.password);
+            genHistory = pushRecent(genHistory, response.payload.password);
+            renderGenHistory();
         } else {
             genResultEl.textContent = `Error: ${response?.error ?? 'generation failed'}`;
             renderGenStrength(null);

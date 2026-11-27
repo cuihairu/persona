@@ -512,6 +512,25 @@ pre.value {
 .gen-strength.band-strong .gs-label { color: var(--accent-readable); }
 .gen-strength.band-excellent .gs-label { color: var(--ok); }
 
+/* generator session history (memory only, cleared on popup close) */
+.gen-history { margin-top: 6px; }
+
+.gen-history .gh-row {
+  padding: 5px 10px;
+  cursor: pointer;
+  border: 1px solid var(--border-01);
+  border-radius: var(--radius-sm);
+}
+
+.gen-history .gh-row:hover { background: var(--surface-alt); }
+
+.gen-history .gh-pw {
+  font: 12px var(--mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* ---- right pane: operator console (native collapsibles, zero JS) ---- */
 
 .console details {
