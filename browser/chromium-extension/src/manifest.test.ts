@@ -32,11 +32,13 @@ interface Manifest {
 }
 
 const manifest: Manifest = JSON.parse(
-    readFileSync(join(__dirname, '..', 'public', 'manifest.json'), 'utf8')
+    readFileSync(join(__dirname, '..', 'manifest.json'), 'utf8')
 );
 
 function entryFor(file: string): ContentScriptEntry {
-    const entry = manifest.content_scripts?.find((candidate) => candidate.js?.includes(file));
+    const entry = manifest.content_scripts?.find((candidate) =>
+        candidate.js?.some((script) => script.endsWith(file))
+    );
     if (!entry) throw new Error(`no content_scripts entry injects ${file}`);
     return entry;
 }
@@ -75,7 +77,7 @@ describe('manifest — content script (autofill + save bar)', () => {
 describe('manifest — host wiring', () => {
     it('is MV3 with the module service worker and the native-messaging permission', () => {
         expect(manifest.manifest_version).toBe(3);
-        expect(manifest.background?.service_worker).toBe('background.js');
+        expect(manifest.background?.service_worker).toBe('dist/background.js');
         expect(manifest.background?.type).toBe('module');
         expect(manifest.permissions).toEqual(
             expect.arrayContaining(['nativeMessaging', 'storage', 'scripting', 'activeTab'])
@@ -83,6 +85,6 @@ describe('manifest — host wiring', () => {
     });
 
     it('keeps the action popup wired', () => {
-        expect(manifest.action?.default_popup).toBe('popup.html');
+        expect(manifest.action?.default_popup).toBe('public/popup.html');
     });
 });
