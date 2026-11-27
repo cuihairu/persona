@@ -237,6 +237,21 @@ export function renderSaveBar(proposal: SaveProposal, updateTarget: { item_id: s
         : `${proposal.nameHint || location.host}${proposal.username ? ` · ${proposal.username}` : ''}`;
     bar.appendChild(detail);
 
+    // Editable username: detection guesses, the operator confirms. Saving
+    // uses whatever stands in the field at confirm time.
+    const usernameInput = document.createElement('input');
+    usernameInput.className = 'p-input';
+    usernameInput.type = 'text';
+    usernameInput.value = proposal.username ?? '';
+    usernameInput.placeholder = 'username';
+    usernameInput.setAttribute('aria-label', 'Username');
+    usernameInput.style.marginBottom = '10px';
+    usernameInput.addEventListener('input', () => {
+        // the dedupe key must track what a confirm would actually save
+        state.visibleSaveKey = `${usernameInput.value}|${proposal.password}`;
+    });
+    bar.appendChild(usernameInput);
+
     const row = document.createElement('div');
     row.className = 'p-row';
     bar.appendChild(row);
@@ -292,13 +307,14 @@ export function renderSaveBar(proposal: SaveProposal, updateTarget: { item_id: s
         statusLine.classList.add('show');
         statusLine.textContent = '';
 
+        const editedUsername = usernameInput.value;
         void chrome.runtime.sendMessage({
             type: 'persona_save_credential',
             request: {
                 origin: location.origin,
                 user_gesture: true,
                 item_id: updateTarget?.item_id,
-                username: proposal.username,
+                username: editedUsername === '' ? undefined : editedUsername,
                 password: proposal.password,
                 name_hint: proposal.nameHint
             }
