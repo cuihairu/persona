@@ -60,16 +60,20 @@
 
         <section class="card">
           <h2><span id="titleGenerator">Generator</span></h2>
-          <div class="row wrap" style="margin-bottom:8px;">
-            <label class="muted"><span id="labelLength">Length</span> <input id="genLength" type="number" min="8" max="128" value="20" style="width:70px;" /></label>
-            <label class="muted"><span id="labelWords">Words</span> <input id="genWords" type="number" min="0" max="20" value="0" style="width:60px;" /></label>
+          <div class="seg" id="genModeSeg" role="group" aria-label="Generator mode">
+            <button id="genModeChars" class="seg-btn" aria-pressed="true" title="Random characters with charset switches">Characters</button>
+            <button id="genModeWords" class="seg-btn" aria-pressed="false" title="Memorable word group (3-10 words)">Passphrase</button>
           </div>
-          <div class="row wrap" style="margin-bottom:8px;">
+          <div class="row wrap" id="genCharsOptions" style="margin-bottom:8px;">
+            <label class="muted"><span id="labelLength">Length</span> <input id="genLength" type="number" min="8" max="128" value="20" style="width:70px;" /></label>
             <label class="check"><input id="genUpper" type="checkbox" checked /> AZ</label>
             <label class="check"><input id="genLower" type="checkbox" checked /> az</label>
             <label class="check"><input id="genDigits" type="checkbox" checked /> 09</label>
             <label class="check"><input id="genSymbols" type="checkbox" /> #$%</label>
             <label class="check"><input id="genPronounceable" type="checkbox" /> <span id="labelPronounceable">Pronounceable</span></label>
+          </div>
+          <div class="row wrap" id="genWordsOptions" hidden style="margin-bottom:8px;">
+            <label class="muted"><span id="labelWords">Words</span> <input id="genWords" type="number" min="3" max="10" value="5" style="width:60px;" /></label>
           </div>
           <button id="genGenerate" class="action">Generate</button>
           <div class="gen-result" id="genResult">—</div>

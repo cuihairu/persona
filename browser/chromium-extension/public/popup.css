@@ -751,3 +751,34 @@ pre.value {
 }
 
 .wt-toggle { margin-top: 2px; }
+
+/* generator mode segmented control (Characters / Passphrase) */
+.seg {
+  display: inline-flex;
+  border: 1px solid var(--border-02);
+  border-radius: 6px;
+  overflow: hidden;
+  margin-bottom: 8px;
+}
+
+.seg-btn {
+  font: inherit;
+  font-size: 12px;
+  padding: 4px 12px;
+  border: none;
+  background: var(--surface-alt);
+  color: inherit;
+  cursor: pointer;
+}
+
+.seg-btn + .seg-btn { border-left: 1px solid var(--border-02); }
+
+.seg-btn[aria-pressed="true"] {
+  background: var(--accent, #2f6feb);
+  color: #fff;
+}
+
+.seg-btn:focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 2px var(--focus-ring, rgba(47, 111, 235, 0.6));
+}

@@ -6,6 +6,7 @@ import { renderWatchtower, type WatchtowerIssue, type WatchtowerReport } from '.
 import { activatableRows, steppedIndex, isNavKey, type NavRow } from './popupNav.js';
 import { KIND_FILTERS, countByFacts, rowVisible, type KindFilter, type RowFacts } from './popupFilter.js';
 import { estimatePasswordStrength, pushRecent } from './genStrength.js';
+import { buildGenRequest, type GenMode } from './genMode.js';
 import { getAutofillSettings, setAutofillSettings } from './settings.js';
 import { getAutofillDefaultsForOrigin, setAutofillDefaultsForOrigin, type OriginAutofillDefaults } from './autofillDefaults.js';
 import { contextHintLine, suggestionMetaLine } from './autofillUx.js';
@@ -289,6 +290,28 @@ const genDigitsEl = document.getElementById('genDigits') as HTMLInputElement | n
 const genSymbolsEl = document.getElementById('genSymbols') as HTMLInputElement | null;
 const genPronounceableEl = document.getElementById('genPronounceable') as HTMLInputElement | null;
 const genWordsEl = document.getElementById('genWords') as HTMLInputElement | null;
+const genModeCharsButton = document.getElementById('genModeChars') as HTMLButtonElement | null;
+const genModeWordsButton = document.getElementById('genModeWords') as HTMLButtonElement | null;
+const genCharsOptionsEl = document.getElementById('genCharsOptions');
+const genWordsOptionsEl = document.getElementById('genWordsOptions');
+
+// Generator mode segmented control (Characters / Passphrase)
+let genMode: GenMode = 'characters';
+function applyGenMode(mode: GenMode): void {
+    genMode = mode;
+    const passphrase = mode === 'passphrase';
+    genCharsOptionsEl?.toggleAttribute('hidden', passphrase);
+    genWordsOptionsEl?.toggleAttribute('hidden', !passphrase);
+    genModeCharsButton?.setAttribute('aria-pressed', String(!passphrase));
+    genModeWordsButton?.setAttribute('aria-pressed', String(passphrase));
+}
+if (genModeCharsButton) {
+    genModeCharsButton.addEventListener('click', () => applyGenMode('characters'));
+}
+if (genModeWordsButton) {
+    genModeWordsButton.addEventListener('click', () => applyGenMode('passphrase'));
+}
+applyGenMode('characters'); // sync aria-pressed with the markup default
 const genGenerateButton = document.getElementById('genGenerate');
 const genResultEl = document.getElementById('genResult');
 const genCopyButton = document.getElementById('genCopy') as HTMLButtonElement | null;
@@ -354,17 +377,15 @@ if (genGenerateButton) {
         genResultEl.textContent = 'Generating…';
         hideGenerated();
         renderGenStrength(null);
-        const wordsRaw = genWordsEl?.value?.trim();
-        const words = wordsRaw ? Number.parseInt(wordsRaw, 10) : undefined;
-        const response = await generatePassword({
+        const response = await generatePassword(buildGenRequest(genMode, {
             length: Number.parseInt(genLengthEl?.value ?? '16', 10),
-            include_lowercase: genLowerEl?.checked ?? true,
-            include_uppercase: genUpperEl?.checked ?? true,
-            include_digits: genDigitsEl?.checked ?? true,
-            include_symbols: genSymbolsEl?.checked ?? true,
-            pronounceable: genPronounceableEl?.checked ?? false,
-            words
-        }).catch((e: unknown) => ({ ok: false, error: String(e) }) as any);
+            words: Number.parseInt(genWordsEl?.value ?? '5', 10),
+            includeLowercase: genLowerEl?.checked ?? true,
+            includeUppercase: genUpperEl?.checked ?? true,
+            includeDigits: genDigitsEl?.checked ?? true,
+            includeSymbols: genSymbolsEl?.checked ?? true,
+            pronounceable: genPronounceableEl?.checked ?? false
+        })).catch((e: unknown) => ({ ok: false, error: String(e) }) as any);
         if (response?.ok && response.payload?.password) {
             showGenerated(response.payload.password);
             renderGenStrength(response.payload.password);

@@ -110,6 +110,21 @@
   "popupGenNoField": {
     "message": "无密码框"
   },
+  "popupGenModeLabel": {
+    "message": "生成模式"
+  },
+  "popupModeCharacters": {
+    "message": "字符"
+  },
+  "popupModeCharactersTitle": {
+    "message": "随机字符，可用字符集开关"
+  },
+  "popupModePassphrase": {
+    "message": "词组"
+  },
+  "popupModePassphraseTitle": {
+    "message": "易记词组（3-10 个词）"
+  },
   "popupDetailEmpty": {
     "message": "选择一条凭据查看详情。"
   },

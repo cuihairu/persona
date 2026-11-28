@@ -110,6 +110,21 @@
   "popupGenNoField": {
     "message": "No field"
   },
+  "popupGenModeLabel": {
+    "message": "Generator mode"
+  },
+  "popupModeCharacters": {
+    "message": "Characters"
+  },
+  "popupModeCharactersTitle": {
+    "message": "Random characters with charset switches"
+  },
+  "popupModePassphrase": {
+    "message": "Passphrase"
+  },
+  "popupModePassphraseTitle": {
+    "message": "Memorable word group (3-10 words)"
+  },
   "popupDetailEmpty": {
     "message": "Select a credential to see its details."
   },
