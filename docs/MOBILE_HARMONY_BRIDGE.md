@@ -14,10 +14,10 @@ The three platforms must share one native contract. That contract already exists
 `extern "C"` functions (lifecycle `PersonaResult` + business `{"ok",...}` JSON envelopes;
 Android's JNI layer just forwards them; iOS links the staticlib directly).
 
-| Option | Rust side | New deps | ABI consistency |
-| --- | --- | --- | --- |
-| **A. napi-rs (ohos backend)** | `#[napi]` re-wrapping of every function | heavy proc-macro chain into `mobile/rust` | second re-wrapping layer drifts from iOS/Android |
-| **B. raw N-API C shim (chosen)** | none | DevEco template's default `cpp/` dir only | shim forwards the *same* extern "C" symbols, like jni_android.rs |
+| Option                           | Rust side                               | New deps                                  | ABI consistency                                                  |
+| -------------------------------- | --------------------------------------- | ----------------------------------------- | ---------------------------------------------------------------- |
+| **A. napi-rs (ohos backend)**    | `#[napi]` re-wrapping of every function | heavy proc-macro chain into `mobile/rust` | second re-wrapping layer drifts from iOS/Android                 |
+| **B. raw N-API C shim (chosen)** | none                                    | DevEco template's default `cpp/` dir only | shim forwards the _same_ extern "C" symbols, like jni_android.rs |
 
 Option B keeps `mobile/rust` free of napi dependencies and makes the HarmonyOS layer a
 sibling of `jni_android.rs` (thin forwarder, identical envelope semantics). The shim is

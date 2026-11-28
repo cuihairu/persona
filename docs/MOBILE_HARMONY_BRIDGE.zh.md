@@ -12,10 +12,10 @@ DevEco/OpenHarmony SDK，实现等该环境到位。**
 `mobile/rust/src/remote.rs` 导出平台无关的 `extern "C"` 函数（生命周期 `PersonaResult` +
 业务层 `{"ok",...}` JSON 信封；Android 的 JNI 层只是转发；iOS 直接链静态库）。
 
-| 方案 | Rust 侧 | 新依赖 | ABI 一致性 |
-| --- | --- | --- | --- |
-| **A. napi-rs（ohos 后端）** | 每个函数 `#[napi]` 重包一层 | 重 proc-macro 链进入 `mobile/rust` | 多出第二层重包装，易与 iOS/Android 漂移 |
-| **B. 裸 N-API C shim（选定）** | 零改动 | 仅 DevEco 模板自带的 `cpp/` 目录 | shim 转发*同一批* extern "C" 符号，与 jni_android.rs 同构 |
+| 方案                           | Rust 侧                     | 新依赖                             | ABI 一致性                                                |
+| ------------------------------ | --------------------------- | ---------------------------------- | --------------------------------------------------------- |
+| **A. napi-rs（ohos 后端）**    | 每个函数 `#[napi]` 重包一层 | 重 proc-macro 链进入 `mobile/rust` | 多出第二层重包装，易与 iOS/Android 漂移                   |
+| **B. 裸 N-API C shim（选定）** | 零改动                      | 仅 DevEco 模板自带的 `cpp/` 目录   | shim 转发*同一批* extern "C" 符号，与 jni_android.rs 同构 |
 
 方案 B 让 `mobile/rust` 保持零 napi 依赖，鸿蒙层成为 `jni_android.rs` 的兄弟层（薄转发、
 信封语义完全一致）。shim 是机械式的：每个函数——解析 N-API 字符串入参、调 C 函数、把返回
@@ -53,7 +53,7 @@ DevEco/OpenHarmony SDK，实现等该环境到位。**
 ## 构建与验证链
 
 - **现有 Linux 舰队机可做**：两个 ohos target 的 rust 交叉构建 + `cargo test -p
-  persona-mobile`（宿主机）+ shim 无关单测。CI 可仿照 Android job 并列接入。
+persona-mobile`（宿主机）+ shim 无关单测。CI 可仿照 Android job 并列接入。
 - **需 DevEco Studio（仅 Windows/macOS）**：`hvigorw assembleHap`、模拟器、`hdc install`
   与真机走查。验收配方同 Android P0 轮：init → 解锁 → 锁定 → 再解锁 → 凭据列表 →
   注册 → SRP 登录 → 设备清单，再用第二台设备登录触发 herald NOTICE。
