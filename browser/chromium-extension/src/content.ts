@@ -27,6 +27,7 @@ import { isTrustedPasskeyOrigin } from './passkeyOrigin.js';
 import { state } from './content/state.js';
 import { refreshOriginDefaults, fetchSuggestions, getDomainAssessmentCached } from './content/suggestions.js';
 import { maybeAutoFillLogin, handleKeydown, handleInputFocus } from './content/fill.js';
+import { fillGeneratedPassword, trackPasswordFocus } from './content/genFill.js';
 import { handleFillCommand } from './content/fillRequests.js';
 import { requestFill, requestTotp } from './content/fillRequests.js';
 import { showSearchOverlay, showSuggestionsOverlay } from './content/overlay.js';
@@ -78,6 +79,13 @@ function init() {
             sendResponse({ ok: true });
         }
 
+        // Generated password from the popup generator: write it into the
+        // password field the user focused last (or the first usable one).
+        if (message?.type === 'persona_fill_generated') {
+            const filled = fillGeneratedPassword(String(message.value ?? ''));
+            sendResponse({ ok: true, filled });
+        }
+
         // Handle show suggestions command
         if (message?.type === 'persona_show_suggestions') {
             showSuggestionsOverlay(message.suggestions);
@@ -115,6 +123,8 @@ function init() {
 
     // Add focus listener for input fields
     document.addEventListener('focusin', handleInputFocus);
+    // Track password fields for the popup generator's fill-into-page target
+    document.addEventListener('focusin', trackPasswordFocus, true);
 
     // Save/update bar capture (bridge protocol v4). Capture phase so
     // preventDefault()-style SPA handlers can't swallow the signal; the

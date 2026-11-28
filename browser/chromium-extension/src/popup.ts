@@ -292,21 +292,24 @@ const genWordsEl = document.getElementById('genWords') as HTMLInputElement | nul
 const genGenerateButton = document.getElementById('genGenerate');
 const genResultEl = document.getElementById('genResult');
 const genCopyButton = document.getElementById('genCopy') as HTMLButtonElement | null;
+const genFillButton = document.getElementById('genFill') as HTMLButtonElement | null;
 const genStrengthEl = document.getElementById('genStrength');
 const genHistoryEl = document.getElementById('genHistory');
 
 // session-scoped: lives only while the popup is open
 let genHistory: string[] = [];
 
-/** Put a generated password in the result slot and expose the copy action. */
+/** Put a generated password in the result slot and expose the copy/fill actions. */
 function showGenerated(password: string): void {
     if (!genResultEl) return;
     genResultEl.textContent = password;
     genCopyButton?.removeAttribute('hidden');
+    genFillButton?.removeAttribute('hidden');
 }
 
 function hideGenerated(): void {
     genCopyButton?.setAttribute('hidden', '');
+    genFillButton?.setAttribute('hidden', '');
 }
 
 function renderGenHistory(): void {
@@ -395,6 +398,30 @@ if (genCopyButton) {
         genCopyResetTimer = setTimeout(() => {
             if (genCopyButton) {
                 genCopyButton.textContent = chrome.i18n.getMessage('popupGenCopy') || 'Copy';
+            }
+        }, 1500);
+    });
+}
+
+// Fill the generated password into the current page's last-focused password
+// field via the background → content-script relay. Feedback rides the same
+// label-flip pattern as the copy action ("Filled" / "No field").
+let genFillResetTimer: ReturnType<typeof setTimeout> | null = null;
+if (genFillButton) {
+    genFillButton.addEventListener('click', async () => {
+        const password = genResultEl?.textContent ?? '';
+        if (!password || password === '—' || password.startsWith('Error:')) return;
+        const response = await chrome.runtime
+            .sendMessage({ type: 'persona_fill_generated', value: password })
+            .catch(() => null);
+        const filled = Boolean(response?.ok && response?.filled);
+        genFillButton.textContent =
+            chrome.i18n.getMessage(filled ? 'popupGenFilled' : 'popupGenNoField') ||
+            (filled ? 'Filled' : 'No field');
+        if (genFillResetTimer !== null) clearTimeout(genFillResetTimer);
+        genFillResetTimer = setTimeout(() => {
+            if (genFillButton) {
+                genFillButton.textContent = chrome.i18n.getMessage('popupGenFill') || 'Fill in page';
             }
         }, 1500);
     });

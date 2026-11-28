@@ -98,6 +98,18 @@
   "popupGenCopyTitle": {
     "message": "复制生成的口令（无自动清除：生成口令不是库内条目）"
   },
+  "popupGenFill": {
+    "message": "填入页面"
+  },
+  "popupGenFillTitle": {
+    "message": "把生成的口令填入当前页聚焦过的密码框"
+  },
+  "popupGenFilled": {
+    "message": "已填入"
+  },
+  "popupGenNoField": {
+    "message": "无密码框"
+  },
   "popupDetailEmpty": {
     "message": "选择一条凭据查看详情。"
   },

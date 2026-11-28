@@ -98,6 +98,18 @@
   "popupGenCopyTitle": {
     "message": "Copy the generated password (no auto-clear: generated passwords are not vault items)"
   },
+  "popupGenFill": {
+    "message": "Fill in page"
+  },
+  "popupGenFillTitle": {
+    "message": "Fill the generated password into the focused password field on the current page"
+  },
+  "popupGenFilled": {
+    "message": "Filled"
+  },
+  "popupGenNoField": {
+    "message": "No field"
+  },
   "popupDetailEmpty": {
     "message": "Select a credential to see its details."
   },

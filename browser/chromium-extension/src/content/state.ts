@@ -27,4 +27,6 @@ export const state = {
     currentOriginDefaults: null as OriginAutofillDefaults | null,
     passkeyOverlay: null as HTMLElement | null,
     passkeyOverlayRequestId: null as string | null,
+    /** most recent focused password input (genFill target tracking) */
+    lastPasswordInput: null as HTMLInputElement | null,
 };

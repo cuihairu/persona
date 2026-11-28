@@ -38,6 +38,8 @@ export const POPUP_I18N: PopupI18nEntry[] = [
     { id: 'genGenerate', key: 'popupGenerate' },
     { id: 'genCopy', key: 'popupGenCopyTitle', attr: 'title' },
     { id: 'genCopy', key: 'popupGenCopy' },
+    { id: 'genFill', key: 'popupGenFillTitle', attr: 'title' },
+    { id: 'genFill', key: 'popupGenFill' },
     { id: 'detailEmpty', key: 'popupDetailEmpty' },
 ];
 

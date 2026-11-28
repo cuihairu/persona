@@ -268,6 +268,31 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return true;
     }
 
+    // Generated password fill-into-page: relay the value to the active tab's
+    // content script, which writes it into the password field the user
+    // focused last. Extension-internal only — the value never leaves the
+    // browser process.
+    if (message?.type === 'persona_fill_generated') {
+        chrome.tabs.query({ active: true, currentWindow: true }).then(async (tabs) => {
+            const tabId = tabs[0]?.id;
+            if (!tabId) {
+                sendResponse({ ok: false, filled: false });
+                return;
+            }
+            try {
+                const res = await chrome.tabs.sendMessage(tabId, {
+                    type: 'persona_fill_generated',
+                    value: message.value
+                });
+                sendResponse(res ?? { ok: false, filled: false });
+            } catch {
+                // no content script in that tab (chrome://, store, …)
+                sendResponse({ ok: false, filled: false });
+            }
+        });
+        return true;
+    }
+
     // Pending-save hand-off across navigations (memory-backed session area).
     if (message?.type === 'persona_stash_pending_save') {
         handleStashPendingSave(message.entry)
