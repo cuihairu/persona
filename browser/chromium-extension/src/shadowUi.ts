@@ -119,6 +119,9 @@ export const PERSONA_SHARED_CSS = `
 }
 
 .p-item:hover { background: var(--p-surface-alt); }
+/* keyboard-active item of the inline menu (aria-activedescendant target):
+   distinct from the grey hover so the two highlight sources don't blur */
+.p-item-active { background: var(--p-accent-tint); }
 .p-item .t { font-weight: 600; }
 .p-item .s {
   font-size: 12px;

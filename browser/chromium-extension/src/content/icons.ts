@@ -23,6 +23,7 @@ import { extractSaveProposal, type SaveProposal, type SaveScanInput } from '../s
 import { planLoginStep } from '../loginSteps.js';
 import { mountPersonaUi } from '../shadowUi.js';
 import { isTrustedPasskeyOrigin } from '../passkeyOrigin.js';
+import { renderInlineMenu } from '../inlineMenuUi.js';
 
 import { state } from './state.js';
 import type { SuggestionItem, FillCredential, CardFillData, PasskeyCandidate, PasskeyBridgeReply } from './types.js';
@@ -322,41 +323,17 @@ export function showSuggestionsDropdown(input: HTMLInputElement, mode: 'password
         return;
     }
 
-    const dropdown = document.createElement('div');
-    dropdown.className = 'persona-dropdown p-panel';
-    dropdown.style.cssText = `
-        position: absolute;
-        z-index: 999999;
-        min-width: 280px;
-        max-height: 300px;
-        overflow-y: auto;
-    `;
-
-    // Position dropdown
     const rect = input.getBoundingClientRect();
-    dropdown.style.left = `${rect.left + window.scrollX}px`;
-    dropdown.style.top = `${rect.bottom + window.scrollY + 4}px`;
-
-    // Add header
-    const header = document.createElement('div');
-    header.className = 'p-plain-head';
-    header.innerHTML = `${BRAND_MARK_SVG}<span>Persona</span>`;
-    dropdown.appendChild(header);
-
-    // Add suggestions
-    filtered.forEach((suggestion) => {
-        const item = document.createElement('div');
-        item.className = 'p-item';
-        const t = document.createElement('div');
-        t.className = 't';
-        t.textContent = suggestion.title;
-        const s = document.createElement('div');
-        s.className = 's';
-        s.textContent = suggestion.username_hint || '';
-        item.appendChild(t);
-        item.appendChild(s);
-
-        item.addEventListener('click', () => {
+    const menu = renderInlineMenu(filtered, {
+        field: {
+            top: rect.top + window.scrollY,
+            bottom: rect.bottom + window.scrollY,
+            left: rect.left + window.scrollX,
+            height: rect.height
+        },
+        mount: mountPersonaUi(document).root,
+        fieldEl: input,
+        onPick: (suggestion) => {
             if ((suggestion.credential_type ?? 'password') === 'totp') {
                 void maybeRememberDefault('totp', suggestion.item_id);
                 requestTotp(suggestion.item_id, input);
@@ -364,28 +341,14 @@ export function showSuggestionsDropdown(input: HTMLInputElement, mode: 'password
                 void maybeRememberDefault('password', suggestion.item_id);
                 requestFill(suggestion.item_id, input);
             }
-            dropdown.remove();
-        });
-
-        dropdown.appendChild(item);
+        }
     });
-
-    mountPersonaUi(document).root.appendChild(dropdown);
-    state.autofillOverlay = dropdown;
-
-    // Close on click outside. Clicks inside the shadow root never reach this
-    // document listener (shadowUi stops them at the root), so every click
-    // observed here is a genuine outside click even though the event target
-    // of anything under the closed root is retargeted away from the dropdown.
-    setTimeout(() => {
-        document.addEventListener('click', function closeDropdown(e) {
-            if (!dropdown.contains(e.target as Node)) {
-                dropdown.remove();
-                state.autofillOverlay = null;
-                document.removeEventListener('click', closeDropdown);
-            }
-        });
-    }, 100);
+    state.autofillOverlay = menu.el;
+    const previousClose = menu.close;
+    menu.close = () => {
+        previousClose();
+        if (state.autofillOverlay === menu.el) state.autofillOverlay = null;
+    };
 }
 
 // Request fill from background
