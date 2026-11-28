@@ -228,3 +228,30 @@
 ## 数据库版本元信息（2026-11-28，源 imac checksum 事故）
 来源：imac 实跑报 `migration 21 was previously applied but has been modified`——三方 checksum 对比定位失配侧（imac 库=canonical `95017139…`，设备装的是 833f11e→d88b306 窗口期编译的旧 nightly，内嵌 `05e2e773…`；报错不分谁对谁错）。设备已升级 2026-11-28 nightly（本机 scp 安装包→`powershell Start-Process -Verb RunAs '/S'` UAC 静默装，exe mtime 09:37）收口，库无需手术。用户令「是不是应该在数据库中设置版本，至少知道兼容的版本」→ 落地：
 - [x] CORE-META-001 vault 版本元信息（`d024610`，2026-11-28）：migration 022 `meta` 表（key/value，注释注明=诊断溯源非 schema 真相、无秘密材料）；`Database::migrate()` 成功路径落双章——`app_version_created`（ON CONFLICT DO NOTHING=首建版本冻结）+`app_version_last_open`（upsert=每次打开刷新），值=CARGO_PKG_VERSION；失败路径 `migration_failure_context` 富化报错：库侧全量指纹（`_sqlx_migrations` 逐条 `v{n}=`+checksum 前 8 字节 hex）vs 本构建嵌入指纹 + meta 双章（表不存在时 `.ok().flatten()` 跳过，旧库未跑 022 也能出指纹）+ 尾部人话「两指纹不一致=vault 与此构建来自不同构建时代，升级应用（绝不改已应用迁移文件）」——今后同类报错文本自带双方指纹与版本章，谁旧谁新一眼可判。测试 2 条：双章落值+重跑 migrate 不改 created 章；zeroblob 污染 v21 checksum→断言双指纹/`95017139`/双溯源章/era 文案全在报错内（既有 v21 checksum 钉住测试不受影响）。兼容口径：新版开旧库=补 022+落章；旧版开新库=sqlx 只遍历自身清单，多余已应用版本被忽略不报错（仅报错时少两段章）。门禁：core lib 1200 全绿 + clippy -D warnings 0 + fmt 双 workspace 干净 + desktop/src-tauri cargo check 干净 + persona-cli 全套件绿（exit 0，末套件 integration 19 过）
+
+## 浏览器扩展对标 1Password：剩余差距细拆（2026-11-28 二轮）
+一轮拆解（上方 EXT-1P-000..014）已全勾：popup 换皮/分类/收藏位/强度条/键盘导航/上下文菜单/保存条/i18n/密度/Watchtower 桥全落地。本段是**下一波差距**的逐条细拆，基准仍 `browser/chromium-extension/DESIGN-1PASSWORD.md` §3–§5 + `docs/ONEPASSWORD_FEATURES.md`，逐行附 1Password 对照点与现状锚点。
+**范围外（既有裁决不重开）**：SSO/devtools/全页 vault/tooltip/密码显隐/passkey 页内 toast（一轮已裁决）；**本轮新增裁决**：口令短语分隔符选项（native generate_password v5 无此参数，前端自制拼接=与 native 语义分叉，不做）；多 vault/collections、条目历史、附件（native 无此模型，超扩展面）；生物解锁（桌面面已有独立设计文档，扩展无独立工作）；SSH key 条目在扩展内展示（persona 已有 ssh-agent 面，低价值）。
+**每行通用门禁**：typecheck + jest 全绿 + 涉及面真渲染截图（页内面加 CDP 走查/zip 仿真）；涉 native 的行加 cargo 门禁（check/fmt/clippy）+ BRIDGE_PROTOCOL.md 双语版本表；绿才 push；commit 英文无 AI 痕迹；按序清。
+
+### F. Popup 收尾（纯前端，无 native 改动）
+- [ ] EXT-1P-015 生成器复制按钮：genResult（popup.ts:287）只展示无复制动作——1Password 生成器有 copy。做法：popup 内 `navigator.clipboard.writeText`（user gesture、popup 上下文合法），复制后 toast + 按钮title 诚实注明「无自动清除」（native copy 的 clear_after_seconds 只覆盖库内凭据路径，生成串不在库）；顺手补「再生成」就地刷新语义核对。门禁：jest（popup 侧现有模式）+ 截图
+- [ ] EXT-1P-016 生成器「填入页面」：1Password 可把生成结果直接填进页内聚焦框。链路：popup 生成成功后按钮 → background 新消息 `persona_fill_generated`{value} → tabs.sendMessage → content 侧把值写入焦点追踪里的最近 password 输入（无焦点记录则 toast 指引）；与页内 generator dropdown（icons.ts:154，quick 固定 16 位+自定义）互补不互替。门禁：jest + CDP 真页填充走查
+- [ ] EXT-1P-017 口令短语模式分段开关：1Password 生成器 Words/Characters 两模式分段控件。现状 genWords=0 即字符模式、>0 即词组但 max=20 超 native 校验（words 3–10 → invalid_payload）。做法：popup.html 分段控件（Characters/Passphrase）切 genLength 与 genWords 输入组显隐，词组档 words 收口 min=3 max=10+档内长度输入禁用；popup.ts 提交 payload 按档组装（words=null|3..10）。i18n 双语键。门禁：jest（payload 组装纯函数）+ 截图双模式
+### G. 快捷键与私密窗口
+- [ ] EXT-1P-018 `_execute_action` 快捷键开 popup：manifest commands 现只有 open_search（Ctrl+Shift+Y 开页内搜索）——1Password 有全局键开面板。加 `_execute_action`（建议 Ctrl+Shift+L，用户可在 chrome://extensions/shortcuts 改）+ manifest.test 契约同步 + Diagnostics shortcuts 面补提示行
+- [ ] EXT-1P-019 私密窗口行为：现状零 incognito 处理（全库 grep 无命中）——1Password 支持私密模式。做法：saveBar 路径判 sender tab incognito 即跳过（私密窗不弹保存提示=不泄漏浏览意图）；填充保留 + 状态条 incognito 标注；设置面显示 `chrome.extension.isAllowedIncognitoAccess` 状态与开启指引（用户须手动授权）。门禁：jest（incognito 判定纯函数）+ CDP 私密窗走查
+### H. inline menu（对标 DESIGN §3 inline/menu/——1Password 核心交互面）
+- [ ] EXT-1P-020 inline menu 触发与候选纯逻辑：新 `inlineMenu.ts`——login/password 字段 focus 触发模型（去抖、同字段会话期不重复弹、域策略门复用、设置门 `inlineMenuOnFocus`）、候选择取（复用 get_suggestions 池按 kind 过滤，**永不静默填**——1Password 口径=聚焦出菜单、点击才填）。现状锚点：icons.ts:316 `showSuggestionsDropdown` 只在 totp 歧义（fill.ts:252）与 icon 点击时弹，login 聚焦路径只有静默填。jest 纯逻辑先行
+- [ ] EXT-1P-021 inline menu UI 升级：现有 dropdown 骨架升级——键盘 ↑↓/Enter/Esc（popupNav 语义复用）、选中态 aria-activedescendant、字段邻近定位（getBoundingClientRect 已有）+ 视口越界翻转、与 generator icon 共存避让、关闭规则补 blur/Escape/滚动。真渲染截图（菜单上脸+键盘选中态）
+- [ ] EXT-1P-022 inline menu 接线与设置语义：新 setting `inlineMenuOnFocus`（默认 on，对齐 1Password 默认）；开启时静默自动填 `autoFillLoginOnFocus` 退位（设置面互斥 UI：inline menu 开则静默填 checkbox 禁用+注明）；关则回退现行为。**行为变更如实标注**。门禁：jest + CDP 真浏览器走查（focus 弹菜单/点击填充/Esc 关）
+### I. 详情面与搜索
+- [ ] EXT-1P-023 卡片详情面（native 前置）：popupDetail Role 只有 username/password/totp（popupDetail.ts:75）——bank_card 项详情无卡号/持卡人/有效期行。前置=native 新命令 `get_item_detail`（协议 v9；现协议 21 方法无一能读单条目字段，copy 只出不改）。实现：popupDetail 加 card 字段行 + copy 各字段（协议 §8 field 已支持 BankCard fields）；CVV 保持 copy-only 不显示（既有语义）；行值获取走 get_item_detail。native 行与扩展行同票
+- [ ] EXT-1P-024 搜索命中面拓宽（popup 侧）：rowText 现为行 DOM 文本（title+username_hint）——1Password 搜 title/username/URL/notes。popup 侧能做的：核对 rowText 拼装覆盖两字段、kind glyph 行加 match_strength 弱命中淡显（1Password 排序口径）；URL/notes 字段 native 缺口归 EXT-1P-026 承接。门禁：jest
+### J. Native 依赖（协议 v9+，跨仓库面——每行先 native 后扩展，票内含 BRIDGE_PROTOCOL 双语版本表）
+- [ ] EXT-1P-025 favorites 端到端：EXT-1P-002 登记的边界收口——协议 v9 `SuggestionItem.is_favorite` + 新命令 `set_favorite`（写路径、gesture 门）+ popup 详情/行 ★ toggle 真数据通路（现 Favorites 过滤只吃 suggestion 假 flag）
+- [ ] EXT-1P-026 搜索字段扩展：协议 v9 `SuggestionItem` 增 `website`/`urls`（native 侧条目已有站点字段，桥出即可）→ popup rowText 含 URL、建议卡副行显示域、EXT-1P-024 的搜索缺口收口
+- [ ] EXT-1P-027 tags：core 考古先行（CredentialData 是否已有 tags 字段）→ 缺则 core 模型+迁移 → 协议 v9 列出+写路径 → popup tag chips（1Password Tags 导航位）+按 tag 过滤（popupFilter 扩一维）
+- [ ] EXT-1P-028 更多 item kinds：identity/secure note/api credential 三类——core 模型→协议 kind 值→popup glyph/详情面/kindbar 档（popupFilter KIND_FILTERS 扩表）。大件，按「一类一验」拆步推进，先 identity
+- [ ] EXT-1P-029 Watchtower 泄露检查走桥：health_scan `breach_status` 恒 `skipped`（桥路径不联网）——native 提供 k-匿名泄露查询命令（HIBP range API 或本地泄露库），popup watchtower 面已有桶位承接（EXT-1P-014 渲染就绪）；域泄露告警同源
+- [ ] EXT-1P-030 锁定按钮：1Password 顶栏常驻锁钮。协议现无 lock 命令（21 方法清单无）——native 新增 `lock_now`（若 CLI 已有对应内部能力则纯桥出）+ popup topbar 锁 icon + 锁后状态条/建议面联动（locked 态既有渲染承接）
