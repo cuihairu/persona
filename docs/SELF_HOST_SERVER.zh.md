@@ -85,12 +85,27 @@ UCI 只存非密路径与开关（`/etc/config/persona`）；令牌规格放在 
 | `PERSONA_SERVER_BACKUP_MAX_VERSIONS`          | `0`（不限）           | 超出删最旧（全局跨设备）                                                                |
 | `PERSONA_SERVER_OPS_RETENTION_DAYS`           | `0`（不清理）         | 同步 oplog 窗口：开窗 = 放弃向离线超窗设备补发历史；窗口须 ≥ 最慢设备的离线周期         |
 | `PERSONA_SERVER_EVENTS_RETENTION_DAYS`        | `0`（不清理）         | 审计事件副本保留，按 SIEM 摘取周期定                                                    |
+| `PERSONA_HERALD_URL`                          | —（未设）             | Herald 网关 base URL（如 `http://127.0.0.1:8080`）；未设 = 登录感知台账照常，通知关闭                 |
+| `PERSONA_HERALD_CHANNELS`                     | `log`                 | 登录 NOTICE/ALERT 外发目标的 Herald 渠道，逗号分隔                                                    |
+| `PERSONA_HERALD_API_KEY`                      | —                     | Herald 开启鉴权时随 `x-api-key` 头发送的 API key                                                      |
 
 ## 客户端接线
 
 备份链（CLI）：`PERSONA_SERVER_URL` + `PERSONA_SERVER_TOKEN` 都非空才启用（fail-closed）；`persona backup push/list/pull/restore/delete`。push 不要求解锁；restore 先确认后输口令、staged 复验成功才换库、旧库留 `.bak`。
 
 同步（桌面）：设置页同步 pane 填 URL + token（token 真值进 OS keyring，库里只留占位）→ 设备管理区 join/authorize/revoke → `sync_now` 推拉。第一台设备 join 时空组自动建组（`bootstrap_group_if_empty`）；被吊销设备的短期令牌即刻失效（等 TTL 之外），历史密文前向安全靠手动「轮换组密钥」。
+
+登录感知（新设备/异地，PERSONA-DEVALERT-001）：每次 SRP 登录尝试（设备域与账户域）
+都进内存台账并分级 INFO / NOTICE / ALERT——已知设备换新址或新设备落在已见址发
+NOTICE（`warning`）；新设备落在全库未见址或失败突增（5 分钟内 ≥3 次错误证明）发
+ALERT（`critical`）；其余只落台账不外发。台账刻意只在内存：重启后首见判定重新
+武装（对安全信号是保守方向）。设了 `PERSONA_HERALD_URL` 时 NOTICE/ALERT 以
+fire-and-forget 外发到 Herald；通知只带设备/IP/位置/时间/结果，绝不含 vault
+内容，网关不可达绝不阻塞登录。`GET /api/v1/auth/devices`（Bearer）返回设备
+清单：设备名、首末次时间、最近 IP 与位置标签、分位置计数、成功/失败计数。
+对端 IP 取自 socket 地址；反代部署下看到的是代理地址（位置信号退化为设备级
+——请在威胁模型里登记该部署形态）。空库的首次 sighting 是 INFO 引导：零历史
+时不存在「惯常地」可偏离。
 
 设备认证（SRP，DR-2）：`POST /api/v1/auth/register` 需既有 Bearer 作引导链（客户端本地生成 salt/verifier 上传，密码永不出机）→ `challenge` → `verify` 换 15 分钟短期 token；连续 5 次失败锁 15 分钟。静态令牌路径保留共存（备份链与事件上报不打断）。
 
@@ -103,6 +118,7 @@ UCI 只存非密路径与开关（`/etc/config/persona`）；令牌规格放在 
 - `/api/v1/sync/status`（GET）：同步状态。
 - `/api/v1/sync/group-keys`（GET/PUT）：设备信封取/传；`/api/v1/sync/group-key/rotate-begin` 以 epoch 乐观锁抢写信封窗口（409 = 后到者重读重试）。
 - `/api/v1/sync/oplog`（POST/GET）：push ≤500 条/批幂等（`op_id`），pull 游标增量。服务器不排序不合并（DR-4，裁决在客户端 LWW + 冲突双版本）。
+- `/api/v1/auth/devices`（GET）：登录感知设备清单（内存态，重启即重置）。
 - `/api/v1/accounts/*`：账号体系（M2）。`register`、`{id}/srp/register|challenge|verify`（SRP 密码认证，见上文 DR-2 之外的第二套账号域）、`{id}/passkeys/create-options|register|login-options`（WebAuthn 仪式）、`{id}/recovery-codes`（生成/验证一次性恢复码）、`{id}/devices`（POST/GET/DELETE 设备授权与吊销）、`{id}/sessions`（POST 建/DELETE 吊销账号会话）。带 Bearer 门禁的写路径：srp/register、recovery-codes 生成、devices、sessions。
 - `/api/v1/pairing/*`：同步组动态密码配对的无账号信箱（S1，`docs/sync-group-mode.md`；**不要求 Bearer**）。`POST sessions`（建会话，TTL 600s）、`GET|DELETE sessions/{id}`（回读 salt/队列水位/删会话）、`POST|GET messages/to-host`、`POST|GET messages/to-guest`（GET 即消费；单方向队列 ≤4、payload ≤4KiB、404 合并存在性）。中转不解释 payload。
 

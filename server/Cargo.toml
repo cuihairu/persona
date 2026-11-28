@@ -61,6 +61,10 @@ tokio-util.workspace = true
 # Environment variables (.env)
 dotenvy = "0.15"
 
+# Login awareness (PERSONA-DEVALERT-001): NOTICE/ALERT fan-out to a Herald
+# notification gateway over its REST surface
+reqwest = { workspace = true, features = ["json"] }
+
 [dev-dependencies]
 # Cross-crate integration tests: OplogCapture's item_key parameter is Zeroizing<[u8; 32]>
 zeroize.workspace = true

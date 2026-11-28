@@ -164,6 +164,7 @@ pub struct VerifyResponse {
 /// accounting both happen here.
 pub async fn verify(
     State(state): State<AppState>,
+    axum::Extension(peer): axum::Extension<super::PeerIp>,
     Json(req): Json<VerifyRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
     let srp_state = state.srp.as_ref().ok_or_else(ApiError::disabled)?;
@@ -194,6 +195,9 @@ pub async fn verify(
             srp_state.clear_failures(&entry.device_name);
             let token = srp_state.issue_token(&entry.device_name);
             tracing::info!(device = %entry.device_name, "SRP login OK");
+            state
+                .login_watch
+                .record_login(&entry.device_name, true, &peer.0);
             Ok(Json(VerifyResponse {
                 server_proof: B64.encode(outcome.server_proof),
                 token,
@@ -202,9 +206,21 @@ pub async fn verify(
         }
         Err(_) => {
             srp_state.register_failure(&entry.device_name);
+            state
+                .login_watch
+                .record_login(&entry.device_name, false, &peer.0);
             Err(ApiError::unauthorized())
         }
     }
+}
+
+/// GET /api/v1/auth/devices — the login-awareness device registry
+/// (PERSONA-DEVALERT-001): device name, first/last sighting, last IP and
+/// location label, per-location sighting counts, success/failure counters.
+/// In-memory by design (a restart re-arms first-sighting detection).
+pub async fn devices(State(state): State<AppState>) -> impl IntoResponse {
+    let devices: Vec<crate::login_watch::DeviceRecord> = state.login_watch.snapshot_devices();
+    axum::Json(serde_json::json!({ "devices": devices }))
 }
 
 /// The device-name rules align with `PERSONA_SERVER_TOKENS`'s name constraints
@@ -518,6 +534,104 @@ mod tests {
         // Within the lockout period the correct password is likewise 423 Locked
         let (status, body) = attempt_login(&router, PASSWORD).await;
         assert_eq!(status, StatusCode::LOCKED, "{body}");
+    }
+
+    /// One full handshake with a spoofable client IP (the login-awareness
+    /// ledger reads X-Forwarded-For when no ConnectInfo exists — exactly
+    /// what a reverse-proxy deployment and this oneshot harness share).
+    async fn attempt_login_from(
+        router: &axum::Router,
+        password: &str,
+        forwarded_for: Option<&str>,
+    ) -> (StatusCode, serde_json::Value) {
+        let login = srp::SrpClientLogin::new().unwrap();
+        let a_pub = login.public_ephemeral().to_vec();
+        let body = format!(
+            r#"{{"device_name":"{DEVICE}","client_public":"{}"}}"#,
+            B64.encode(&a_pub)
+        );
+        let (status, resp) = send(
+            router.clone(),
+            request(
+                "POST",
+                "/api/v1/auth/challenge",
+                None,
+                Some("application/json"),
+                &body,
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{resp}");
+        let salt = B64.decode(resp["salt"].as_str().unwrap()).unwrap();
+        let server_public = B64.decode(resp["server_public"].as_str().unwrap()).unwrap();
+        let session_id = resp["session_id"].as_str().unwrap().to_owned();
+
+        let proof = login
+            .process(DEVICE, password, &salt, &server_public)
+            .unwrap();
+        let body = format!(
+            r#"{{"session_id":"{session_id}","client_proof":"{}"}}"#,
+            B64.encode(proof.client_proof())
+        );
+        let mut builder = axum::http::Request::builder()
+            .method("POST")
+            .uri("/api/v1/auth/verify")
+            .header("content-type", "application/json");
+        if let Some(ip) = forwarded_for {
+            builder = builder.header("x-forwarded-for", ip);
+        }
+        let req = builder.body(body).unwrap();
+        send(router.clone(), req).await
+    }
+
+    // ---- Login awareness (PERSONA-DEVALERT-001) ----
+
+    #[tokio::test]
+    async fn login_attempts_are_ledgered_and_devices_endpoint_lists_them() {
+        let (router, app_state) = setup(Some(BOOTSTRAP)).await;
+        register_device(&router).await;
+
+        // Success from a routable address -> the registry knows the device.
+        let (status, _) = attempt_login_from(&router, PASSWORD, Some("203.0.113.7")).await;
+        assert_eq!(status, StatusCode::OK);
+        // Failure (wrong password) -> ledgered with the failure counter.
+        let (status, _) = attempt_login_from(&router, "wrong-password", Some("203.0.113.7")).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+        let devices = app_state.login_watch.snapshot_devices();
+        assert_eq!(devices.len(), 1);
+        let laptop = &devices[0];
+        assert_eq!(laptop.device, DEVICE);
+        assert_eq!(laptop.ok_count, 1);
+        assert_eq!(laptop.fail_count, 1);
+        assert_eq!(laptop.last_geo, "v4-203.0.113");
+        assert_eq!(laptop.geo_counts.get("v4-203.0.113"), Some(&2));
+
+        // Bearer-gated registry read over the wire shape.
+        let (status, body) = send(
+            router.clone(),
+            request(
+                "GET",
+                "/api/v1/auth/devices",
+                Some(&format!("Bearer {BOOTSTRAP}")),
+                None,
+                "",
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["devices"][0]["device"], DEVICE);
+        assert_eq!(body["devices"][0]["last_geo"], "v4-203.0.113");
+        assert_eq!(body["devices"][0]["ok_count"], 1);
+        assert_eq!(body["devices"][0]["fail_count"], 1);
+
+        let (status, body) = send(
+            router,
+            request("GET", "/api/v1/auth/devices", None, None, ""),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        assert_eq!(body["error"]["code"], "unauthorized");
     }
 
     #[tokio::test]

@@ -30,6 +30,11 @@ pub struct AppState {
     /// Account WebAuthn pending challenges (passkey registration/login ceremonies), in-memory with TTL 120s.
     /// Constructed unconditionally (not gated by `auth`): the account registration flow itself is Bearer-exempt.
     pub account_webauthn: Arc<crate::api::AccountWebauthnState>,
+    /// Login awareness (PERSONA-DEVALERT-001): in-memory login ledger +
+    /// tiered new-device/unusual-location detection + optional Herald
+    /// fan-out. Constructed unconditionally so the ledger works even when
+    /// notifications are unconfigured.
+    pub login_watch: Arc<crate::login_watch::LoginWatch>,
     /// Directory where backup files are written (POST writes, GET downloads; `{dir}/{id}.persenc`).
     pub backup_dir: PathBuf,
     /// Max number of retained versions; 0 = unlimited (PERSONA_SERVER_BACKUP_MAX_VERSIONS).
@@ -66,6 +71,7 @@ impl AppState {
             auth,
             srp,
             account_webauthn: Arc::new(crate::api::AccountWebauthnState::new()),
+            login_watch: Arc::new(crate::login_watch::LoginWatch::new(None)),
             backup_dir: PathBuf::from("./backups"),
             backup_max_versions: 0,
             max_backup_bytes: MAX_BACKUP_BYTES,
@@ -87,6 +93,28 @@ impl AppState {
     pub fn with_retention_settings(mut self, oplog_days: u32, events_days: u32) -> Self {
         self.oplog_retention_days = oplog_days;
         self.events_retention_days = events_days;
+        self
+    }
+
+    /// Attaches a Herald gateway to the login watch (main reads
+    /// PERSONA_HERALD_URL/CHANNELS/API_KEY from env; tests inject fakes via
+    /// [`with_login_watch`]).
+    pub fn with_herald(
+        mut self,
+        base_url: &str,
+        channels: Vec<String>,
+        api_key: Option<String>,
+    ) -> Self {
+        self.login_watch = Arc::new(crate::login_watch::LoginWatch::new(Some(Arc::new(
+            crate::login_watch::HeraldNotifier::new(base_url, channels, api_key),
+        ))));
+        self
+    }
+
+    /// Replaces the whole login watch (test wiring with injected
+    /// resolver/clock; prod wiring uses [`with_herald`]).
+    pub fn with_login_watch(mut self, watch: Arc<crate::login_watch::LoginWatch>) -> Self {
+        self.login_watch = watch;
         self
     }
 }

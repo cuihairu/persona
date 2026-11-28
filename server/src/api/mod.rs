@@ -19,7 +19,10 @@ pub use accounts::{
     passkey_login_options, passkey_register, register_account, revoke_account_device,
     revoke_account_session, verify_recovery_code, AccountWebauthnState,
 };
-pub use auth::{challenge as auth_challenge, register as auth_register, verify as auth_verify};
+pub use auth::{
+    challenge as auth_challenge, devices as auth_login_devices, register as auth_register,
+    verify as auth_verify,
+};
 pub use backups::{delete, download, list, size_guard, upload};
 pub use events::{ingest, query};
 pub use pairing::{
@@ -64,6 +67,40 @@ pub async fn payload_size_guard(req: Request, next: Next) -> Response {
     } else {
         next.run(req).await
     }
+}
+
+/// The peer IP as seen by the login-awareness ledger (PERSONA-DEVALERT-001):
+/// the real connection address when the server was started with connect
+/// info, else the reverse-proxy headers (`X-Forwarded-For` first entry /
+/// `X-Real-IP`), else the literal `unknown`. Inserted as a request extension
+/// by [`peer_ip_guard`] so handlers read it without failing when the server
+/// runs without connect info (router.oneshot tests).
+#[derive(Clone, Debug)]
+pub struct PeerIp(pub std::sync::Arc<String>);
+
+pub async fn peer_ip_guard(mut req: Request, next: Next) -> Response {
+    let ip = req
+        .extensions()
+        .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
+        .map(|info| info.0.ip().to_string())
+        .or_else(|| {
+            req.headers()
+                .get("x-forwarded-for")
+                .and_then(|v| v.to_str().ok())
+                .and_then(|v| v.split(',').next())
+                .map(|v| v.trim().to_string())
+                .filter(|v| !v.is_empty())
+        })
+        .or_else(|| {
+            req.headers()
+                .get("x-real-ip")
+                .and_then(|v| v.to_str().ok())
+                .map(|v| v.trim().to_string())
+                .filter(|v| !v.is_empty())
+        })
+        .unwrap_or_else(|| "unknown".to_string());
+    req.extensions_mut().insert(PeerIp(std::sync::Arc::new(ip)));
+    next.run(req).await
 }
 
 /// Unified error shape: `{"error":{"code","message","items":[...]}}`.

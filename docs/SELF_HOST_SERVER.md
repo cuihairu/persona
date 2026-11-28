@@ -97,6 +97,9 @@ leaves the service fail-closed (the process still starts and `/api/v1` answers
 | `PERSONA_SERVER_BACKUP_MAX_VERSIONS`          | `0` (unlimited)       | Deletes the oldest once exceeded (global, across devices)                                                                                                               |
 | `PERSONA_SERVER_OPS_RETENTION_DAYS`           | `0` (no cleanup)      | Sync oplog window: opening one means giving up replaying history to devices that were offline past the window; the window must be ≥ the slowest device's offline period |
 | `PERSONA_SERVER_EVENTS_RETENTION_DAYS`        | `0` (no cleanup)      | Retention for the audit event copy, sized to your SIEM ingestion cadence                                                                                                |
+| `PERSONA_HERALD_URL`                          | — (unset)             | Herald gateway base URL (e.g. `http://127.0.0.1:8080`); unset = login-awareness ledger active, notifications off                                                        |
+| `PERSONA_HERALD_CHANNELS`                     | `log`                 | Comma-separated Herald channels the login NOTICE/ALERT fan-out targets                                                                                                  |
+| `PERSONA_HERALD_API_KEY`                      | —                     | API key sent as `x-api-key` when Herald auth is enabled                                                                                                                 |
 
 ## Client wiring
 
@@ -114,6 +117,25 @@ the first device joins, an empty group is created automatically
 invalid immediately (beyond waiting out the TTL), and forward secrecy for
 historical ciphertext relies on manually "rotating the group key".
 
+Login awareness (new-device / unusual-location): every SRP login attempt
+(device and account domains) is ledgered in memory and classified INFO /
+NOTICE / ALERT — a new device from a seen location or an established device
+from a new location pages NOTICE (`warning`), a new device from a
+never-seen location or a failure burst (≥3 wrong proofs in 5 minutes)
+pages ALERT (`critical`); everything else stays in the ledger only. The
+registry is in-memory by design: a server restart re-arms first-sighting
+detection (the conservative direction for a security signal). NOTICE/ALERT
+fan out fire-and-forget to a Herald gateway when `PERSONA_HERALD_URL` is
+set; notifications carry device/IP/location/time/outcome only, never vault
+content, and a dead gateway never blocks a login. `GET /api/v1/auth/devices`
+(Bearer) returns the registry: device, first/last sighting, last IP and
+location label, per-location counts, success/failure counters. Peer IP comes
+from the socket address; reverse-proxy deployments see the proxy's address
+(the location signal then degrades to device-level — record the proxy
+deployment in your threat model). The very first sighting on an empty
+registry is INFO bootstrap: with zero history there is no "usual" to deviate
+from.
+
 Device authentication (SRP, DR-2): `POST /api/v1/auth/register` requires an
 existing Bearer as the bootstrap chain (the client generates salt/verifier
 locally and uploads them; the password never leaves the machine) → `challenge` →
@@ -130,6 +152,7 @@ and event reporting are not interrupted).
 - `/api/v1/sync/status` (GET): sync status.
 - `/api/v1/sync/group-keys` (GET/PUT): device envelope fetch/store; `/api/v1/sync/group-key/rotate-begin` grabs the envelope write window with an epoch optimistic lock (409 = the latecomer re-reads and retries).
 - `/api/v1/sync/oplog` (POST/GET): push ≤500 entries/batch idempotent (`op_id`), pull cursor-based incremental. The server neither sorts nor merges (DR-4; adjudication happens client-side with LWW + conflicting dual versions).
+- `/api/v1/auth/devices` (GET): login-awareness device registry (in-memory; resets on restart).
 - `/api/v1/accounts/*`: account system (M2). `register`, `{id}/srp/register|challenge|verify` (SRP password authentication, the second account domain beyond DR-2 above), `{id}/passkeys/create-options|register|login-options` (WebAuthn ceremonies), `{id}/recovery-codes` (generate/verify one-time recovery codes), `{id}/devices` (POST/GET/DELETE device authorization and revocation), `{id}/sessions` (POST to create/DELETE to revoke account sessions). Write paths behind a Bearer gate: srp/register, recovery-codes generation, devices, sessions.
 - `/api/v1/pairing/*`: accountless mailbox for sync-group dynamic password pairing (S1, `docs/sync-group-mode.md`; **Bearer not required**). `POST sessions` (create a session, TTL 600s), `GET|DELETE sessions/{id}` (read back salt/queue watermark/delete a session), `POST|GET messages/to-host`, `POST|GET messages/to-guest` (GET consumes; per-direction queue ≤4, payload ≤4KiB, 404 merges existence). The relay does not interpret payloads.
 

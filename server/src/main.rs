@@ -107,6 +107,32 @@ async fn main() {
     .with_backup_settings(backup_dir, backup_max_versions)
     .with_retention_settings(oplog_retention_days, events_retention_days);
 
+    // Login awareness (PERSONA-DEVALERT-001): an optional Herald gateway for
+    // NOTICE/ALERT fan-out. URL unset = ledger only, notifications off.
+    let app_state = match std::env::var("PERSONA_HERALD_URL") {
+        Ok(url) if !url.trim().is_empty() => {
+            let channels = std::env::var("PERSONA_HERALD_CHANNELS")
+                .unwrap_or_else(|_| "log".to_string())
+                .split(',')
+                .map(|c| c.trim().to_string())
+                .filter(|c| !c.is_empty())
+                .collect::<Vec<_>>();
+            let api_key = std::env::var("PERSONA_HERALD_API_KEY")
+                .ok()
+                .filter(|k| !k.trim().is_empty());
+            info!(
+                herald = %url.trim(),
+                channels = ?channels,
+                "login-awareness notifications enabled (NOTICE/ALERT fan-out)"
+            );
+            app_state.with_herald(url.trim(), channels, api_key)
+        }
+        _ => {
+            info!("PERSONA_HERALD_URL unset: login ledger active, notifications off");
+            app_state
+        }
+    };
+
     // Configurable bind address (0.0.0.0 for containers, 127.0.0.1 for local dev)
     let host = std::env::var("PERSONA_SERVER_HOST").unwrap_or_else(|_| "0.0.0.0".into());
     let port: u16 = std::env::var("PERSONA_SERVER_PORT")
@@ -121,7 +147,13 @@ async fn main() {
     info!("Persona server listening on {}", addr);
 
     let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
-    axum::serve(listener, build_router(app_state))
-        .await
-        .unwrap();
+    // ConnectInfo makes the login-awareness ledger record the real peer
+    // address; reverse-proxy deployments are covered by the
+    // X-Forwarded-For / X-Real-IP fallback inside the server's peer guard.
+    axum::serve(
+        listener,
+        build_router(app_state).into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .await
+    .unwrap();
 }

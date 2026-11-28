@@ -11,6 +11,7 @@
 
 mod api;
 pub mod auth;
+pub mod login_watch;
 pub mod metrics;
 pub mod state;
 
@@ -96,7 +97,19 @@ fn full_api(state: &AppState) -> Router<AppState> {
                 )
                 .route("/challenge", post(api::auth_challenge))
                 .route("/verify", post(api::auth_verify))
-                .layer(DefaultBodyLimit::max(64 * 1024)),
+                // Device registry of the login-awareness surface (PERSONA-
+                // DEVALERT-001): Bearer-gated like /auth/register.
+                .route(
+                    "/devices",
+                    get(api::auth_login_devices).route_layer(middleware::from_fn_with_state(
+                        state.clone(),
+                        auth::require_bearer,
+                    )),
+                )
+                .layer(DefaultBodyLimit::max(64 * 1024))
+                // Peer-IP capture for the login-awareness ledger (matches
+                // ConnectInfo first, X-Forwarded-For/X-Real-IP second).
+                .layer(middleware::from_fn(api::peer_ip_guard)),
         )
         // Account system (M2): registration/login (passkey + SRP fallback), recovery
         // codes, device authorization. Account registration is unauthenticated; everything
@@ -177,7 +190,10 @@ fn full_api(state: &AppState) -> Router<AppState> {
                         middleware::from_fn_with_state(state.clone(), auth::require_account_bearer),
                     ),
                 )
-                .layer(DefaultBodyLimit::max(api::MAX_BODY_BYTES)),
+                .layer(DefaultBodyLimit::max(api::MAX_BODY_BYTES))
+                // Peer-IP capture so account SRP logins land in the
+                // login-awareness ledger too.
+                .layer(middleware::from_fn(api::peer_ip_guard)),
         )
         .nest("/sync", sync_routes(state))
         .nest("/pairing", pairing_routes())

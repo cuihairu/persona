@@ -142,6 +142,7 @@ pub struct AccountSrpVerifyResponse {
 /// a 15-minute account session token.
 pub async fn account_srp_verify(
     State(state): State<AppState>,
+    axum::Extension(peer): axum::Extension<crate::api::PeerIp>,
     Path(account_id): Path<String>,
     payload: Result<Json<AccountSrpVerifyRequest>, JsonRejection>,
 ) -> Result<impl IntoResponse, ApiError> {
@@ -198,6 +199,11 @@ pub async fn account_srp_verify(
             .map_err(ApiError::internal)?;
 
             tracing::info!(account = %account_id, "account SRP login OK");
+            // Ledger key carries the account prefix so the login-awareness
+            // registry keeps account and device domains separate.
+            state
+                .login_watch
+                .record_login(&entry.device_name, true, &peer.0);
             Ok(Json(AccountSrpVerifyResponse {
                 server_proof: B64.encode(outcome.server_proof),
                 token: session_token,
@@ -206,6 +212,9 @@ pub async fn account_srp_verify(
         }
         Err(_) => {
             srp_state.register_failure(&entry.device_name);
+            state
+                .login_watch
+                .record_login(&entry.device_name, false, &peer.0);
             Err(ApiError::unauthorized())
         }
     }

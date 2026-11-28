@@ -167,6 +167,22 @@ verifier — the password and the Argon2-derived value never leave the device). 
 - **Explicitly not claimed**: does not protect against a server operator **offline brute-forcing the verifier in the `auth_devices` table** (the verifier is in the server's hands; cost = Argon2 + master password strength — same class as the local vault being dragged off, and master password strength remains the core risk); does not protect against **unauthenticated challenge flooding** (the in-memory session cache has no rate limit — a known DoS surface, mitigated by a deployment-side reverse proxy); does not protect against the server **refusing service / deleting registration records** (a device has no second copy; simply re-register, but this is an availability loss); the SRP math is implemented inline in `core/src/auth/srp.rs` (the RustCrypto `srp` crate was not adopted due to digest-ecosystem drift and is no longer a dependency) — the implementation is pinned by RFC 5054 official test vectors, with a seam isolated so it can be swapped.
 - **Known limitations**: device revocation/removal has landed (2026-09 revocation closed loop): revoking a synced device (`DELETE /sync/devices/:id`) cascade-deletes the same-named `auth_devices` row (SRP registration is keyed by device name) and immediately revokes its in-memory short-term token and pending handshake (`SrpAuthState::revoke_device` — a revoked device's existing credentials no longer work, pinned by real TCP tests); but the revocation granularity is the **device** — there is no independent "revoke the token only, not the device" operation, and a token leaving the device still expires naturally by TTL (15 minutes); no audit beyond the change threshold — registration/login appear only in server logs (`tracing`), not in the event store.
 
+## Login Awareness (PERSONA-DEVALERT-001, 2026-11-28)
+
+In-memory login awareness on the SRP login surfaces (`/api/v1/auth/verify`,
+`/api/v1/accounts/{id}/srp/verify`): every attempt is ledgered and classified
+INFO / NOTICE / ALERT (new device from a seen location or an established
+device from a new location → NOTICE; new device from a never-seen location
+or a failure burst ≥3 wrong proofs in 5 minutes → ALERT; the first sighting
+on an empty registry is INFO bootstrap). NOTICE/ALERT fan out fire-and-forget
+to an optional Herald gateway (`PERSONA_HERALD_URL`); `GET /api/v1/auth/devices`
+(Bearer) serves the registry.
+
+- **Data scope**: device name (or the account-domain lock key), IP, coarse location label, timestamps, outcome — all **in-memory only** (no new persistence surface; a restart re-arms first-sighting detection, the conservative direction). Notification bodies carry the same fields plus nothing — **never any vault content**.
+- **Location signal**: P0 uses a network-prefix proxy (/24 v4, /48 v6), not a GeoIP database — nothing leaves the box and no third-party dependency, at the cost of coarse labels; the resolver is a trait (P2: ASN/GeoIP). **Peer IP comes from the socket address**; behind a reverse proxy every login attributes to the proxy's address, so location deviation degrades to device-level (registrable limitation, see below).
+- **Authentication**: the devices registry read is Bearer-gated like the rest of `/auth`; the ledger itself is write-only from the login handlers and never gates a login (a dead gateway or misclassification never locks the owner out).
+- **Explicitly not claimed**: does not protect against **header spoofing-bypass via proxy misdirection** — a direct client cannot forge the socket address, but a deployment that trusts `X-Forwarded-For` from untrusted clients would let an attacker shape their apparent location (the server prefers the socket address precisely for this reason; the header fallback exists only for embedded/oneshot harnesses without connect info); does not protect against an attacker who **first compromises an established device** (known device + known location = INFO by design — the signal models new-device/new-location events, not device theft); does not protect against **registry amnesia attacks** (an attacker who can crash/restart the server resets first-sighting state — availability loss, not a new exposure); the in-memory registry is unbounded per distinct device name (bounded by `auth_devices` names in practice; the event deque is capped at 512 entries).
+
 ## E2EE Sync Relay (`/api/v1/sync/*`, 2026-09, E2EE sync track phase 2)
 
 Ciphertext relay for end-to-end encrypted sync between devices: the oplog (per-entry `SyncOp`: item UUID, kind,
