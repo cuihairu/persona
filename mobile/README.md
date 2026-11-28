@@ -70,9 +70,10 @@ open Persona.xcodeproj
 ### 鸿蒙
 
 需 DevEco Studio / 命令行工具链（hvigor）。ArkTS 工程在 `harmony/`（`hvigorw assembleHap` 构建）。
-**接线状态**：UI 骨架与桥接口边界已就位；napi 包装层（Rust 侧 napi-rs ohos 后端 →
-`libpersona_mobile_napi.so`）待接，`PersonaBridge.ets` stub 按同签名返回桥未接入错误——
-真机验收需鸿蒙实机/模拟器 + napi 层落地。
+**接线状态**：UI 骨架与桥接口边界已就位；napi 包装层设计已定稿
+（docs/MOBILE_HARMONY_BRIDGE：裸 N-API C shim 转发既有 C ABI，不用 napi-rs），
+`PersonaBridge.ets` stub 按同签名返回桥未接入错误——实现与真机验收需鸿蒙实机/模拟器
++ DevEco 环境。
 
 ## 历史
 
