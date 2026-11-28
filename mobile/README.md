@@ -14,19 +14,45 @@ iOS（Swift）/ Android（Kotlin）/ 鸿蒙（ArkTS）三端**原生**开发。*
 - 出参：除 `persona_init`（int）、`persona_version`（字符串）、`persona_service_is_unlocked`（bool）外，一律 JSON `{"success":bool,"error":string|null}`。
 - 生命周期：`service_init`（打开 vault → 迁移 → 首次建户或认证，成功即解锁）→ `service_unlock` / `service_lock` / `service_is_unlocked` → `shutdown`。
 - 同步上报：`configure_sync`（config 一半即 fail-closed，url+token 都非空才启用）。
+- 业务层（`{"ok":bool,"error"?,"data"?}` 信封，与生命周期层的 `success` 键名不同，用 `parseBusiness` 解析）：
+  `persona_credential_search`（凭据全文检索，仅元数据）。
+- 远程登录感知层（同样 `{"ok",...}` 信封，PERSONA-MOBILE-002 / DEVALERT-001 联动；远程函数不触碰本地 vault 服务）：
+  - `persona_remote_register_device(base_url, bearer, device_name, password)` — 引导令牌注册 SRP 设备；
+  - `persona_remote_login(base_url, device_name, password)` — SRP 登录，**登录本身即设备指纹上报**（设备名 + 对端 IP + 时间落服务器台账）；`data` 含 `token`（15 分钟 TTL，仅内存持有）/`expires_in_secs`/`session_key_fingerprint`（裸 session_key 不过桥）；
+  - `persona_remote_devices(base_url, token)` — 设备清单（服务器 JSON 原样透传在 `data`）。
+
+## 与 desktop 的功能基线（PERSONA-MOBILE-002，2026-11-28）
+
+| 功能 | desktop | Android | iOS | 鸿蒙 |
+|---|---|---|---|---|
+| vault 初始化/解锁/锁定 | ✅ | ✅（模拟器实测） | ✅（桥同语义） | ❌ stub |
+| 凭据列表（元数据浏览） | ✅ | ✅（仅 search+列表，无增删改 UI） | ⚠️ 桥就位、UI 简版 | ❌ |
+| 凭据增删改/密码生成 | ✅ | ❌（business FFI 未暴露） | ❌ | ❌ |
+| 服务器登录感知（注册/SRP 登录/设备清单） | ✅（CLI/服务器侧） | ✅（模拟器实测，herald 告警闭环） | ❌ | ❌ |
+| 同步上报（configure_sync） | ✅ | ✅（桥就位） | ✅ | ❌ |
+| 自动锁定/超时策略 | ✅ | ❌ | ❌ | ❌ |
+
+iOS 构建走 imac（P1）；鸿蒙 napi 层 P2 设计先行。
 
 ## 各端构建
 
 ### Android
 
 ```bash
-cargo ndk -t arm64-v8a build -p persona-mobile --release   # libpersona_mobile.so
+export ANDROID_NDK_HOME=/home/cui/android-sdk/ndk/28.2.13676358   # cargo ndk 需要
+cargo ndk -t arm64-v8a -t x86_64 build -p persona-mobile --release
 cp target/aarch64-linux-android/release/libpersona_mobile.so \
    mobile/android/app/src/main/jniLibs/arm64-v8a/
-cd mobile/android && ./gradlew :app:assembleRelease
+cp target/x86_64-linux-android/release/libpersona_mobile.so \
+   mobile/android/app/src/main/jniLibs/x86_64/        # x86_64 供模拟器实测
+cd mobile/android && ./gradlew :app:assembleDebug
+# 模拟器 E2E（2026-11-28 实测配方）：AVD 无设备配置直建；宿主机服务从模拟器
+# 内以 10.0.2.2 访问；软键盘会顶滚 ScrollView，逐字段 dump 后再取坐标点击；
+# 全新服务器上第一台设备按设计不告警（视为操作者本人），第二台新设备触发
+# [warning] New device login。
 ```
 
-CI：`desktop-build.yml` android job（cargo ndk → jniLibs → gradle assembleRelease，arm64-v8a 单 ABI）。
+CI：`desktop-build.yml` android job（cargo ndk → jniLibs → gradle assembleRelease，abiFilters arm64-v8a + x86_64，CI 仅产出 arm64）。
 
 ### iOS
 

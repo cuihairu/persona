@@ -46,6 +46,25 @@ object PersonaBridge {
     /** Full-text credential search (metadata only, payloads are not decrypted; empty string = all). May be null (both JVM layers down) */
     external fun personaCredentialSearch(query: String): String?
 
+    // ---- Remote auth FFI (business envelope, parse with parseBusiness) — the
+    // mobile side of the server's login-awareness surface: `deviceName` is the
+    // fingerprint the server ledger keys on, so the default should identify
+    // this phone (e.g. "android-<model>"). ----
+
+    /** Bootstrap SRP registration (needs the server's bootstrap Bearer); the password chosen here is the login password */
+    external fun personaRemoteRegisterDevice(
+        baseUrl: String,
+        bearer: String,
+        deviceName: String,
+        password: String,
+    ): String?
+
+    /** SRP login: reports this device's fingerprint to the server ledger and returns the short-lived Bearer token */
+    external fun personaRemoteLogin(baseUrl: String, deviceName: String, password: String): String?
+
+    /** Login-awareness device registry (server JSON passed through verbatim inside data) */
+    external fun personaRemoteDevices(baseUrl: String, token: String): String?
+
     /** Lightweight unwrap of the business envelope: returns (ok, error, the whole response object); null / non-JSON always lands in the failure arm */
     fun parseBusiness(json: String?): Triple<Boolean, String?, org.json.JSONObject?> {
         if (json == null) return Triple(false, "Native bridge returned null", null)

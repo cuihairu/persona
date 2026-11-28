@@ -253,3 +253,105 @@ pub extern "system" fn Java_com_persona_mobile_PersonaBridge_personaCredentialSe
         business_json_to_jstring(env, json)
     })
 }
+
+// ---------------------------------------------------------------------------
+// Remote auth (PERSONA-MOBILE-002 P0: the mobile side of the server's
+// login-awareness surface — same business envelope semantics as above)
+// ---------------------------------------------------------------------------
+
+/// Business-envelope error JSON for an unparseable argument (same shape as
+/// the personaCredentialSearch forward so Kotlin parses one business format).
+fn remote_arg_error(env: &mut Env, e: &str) -> jstring {
+    let degraded = format!(
+        "{{\"ok\":false,\"error\":{}}}",
+        serde_json::to_string(&e).unwrap_or_else(|_| "\"error\"".to_string())
+    );
+    env.new_string(&degraded)
+        .map(|s| s.into_raw())
+        .unwrap_or(std::ptr::null_mut())
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_persona_mobile_PersonaBridge_personaRemoteRegisterDevice(
+    mut env: EnvUnowned,
+    _class: JClass,
+    base_url: JString,
+    bearer: JString,
+    device_name: JString,
+    password: JString,
+) -> jstring {
+    run_in_env(&mut env, |env| {
+        let (base_url, bearer, device_name, password) = match (
+            jstring_to_cstring(env, &base_url),
+            jstring_to_cstring(env, &bearer),
+            jstring_to_cstring(env, &device_name),
+            jstring_to_cstring(env, &password),
+        ) {
+            (Ok(a), Ok(b), Ok(c), Ok(d)) => (a, b, c, d),
+            (Err(e), _, _, _) | (_, Err(e), _, _) | (_, _, Err(e), _) | (_, _, _, Err(e)) => {
+                return remote_arg_error(env, &e)
+            }
+        };
+        // SAFETY: the CStrings live to the end of the call; the pointers are valid inside persona_remote_register_device.
+        let json = unsafe {
+            super::remote::persona_remote_register_device(
+                base_url.as_ptr(),
+                bearer.as_ptr(),
+                device_name.as_ptr(),
+                password.as_ptr(),
+            )
+        };
+        business_json_to_jstring(env, json)
+    })
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_persona_mobile_PersonaBridge_personaRemoteLogin(
+    mut env: EnvUnowned,
+    _class: JClass,
+    base_url: JString,
+    device_name: JString,
+    password: JString,
+) -> jstring {
+    run_in_env(&mut env, |env| {
+        let (base_url, device_name, password) = match (
+            jstring_to_cstring(env, &base_url),
+            jstring_to_cstring(env, &device_name),
+            jstring_to_cstring(env, &password),
+        ) {
+            (Ok(a), Ok(b), Ok(c)) => (a, b, c),
+            (Err(e), _, _) | (_, Err(e), _) | (_, _, Err(e)) => return remote_arg_error(env, &e),
+        };
+        // SAFETY: the CStrings live to the end of the call; the pointers are valid inside persona_remote_login.
+        let json = unsafe {
+            super::remote::persona_remote_login(
+                base_url.as_ptr(),
+                device_name.as_ptr(),
+                password.as_ptr(),
+            )
+        };
+        business_json_to_jstring(env, json)
+    })
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_persona_mobile_PersonaBridge_personaRemoteDevices(
+    mut env: EnvUnowned,
+    _class: JClass,
+    base_url: JString,
+    token: JString,
+) -> jstring {
+    run_in_env(&mut env, |env| {
+        let (base_url, token) = match (
+            jstring_to_cstring(env, &base_url),
+            jstring_to_cstring(env, &token),
+        ) {
+            (Ok(a), Ok(b)) => (a, b),
+            (Err(e), _) | (_, Err(e)) => return remote_arg_error(env, &e),
+        };
+        // SAFETY: the CStrings live to the end of the call; the pointers are valid inside persona_remote_devices.
+        let json =
+            unsafe { super::remote::persona_remote_devices(base_url.as_ptr(), token.as_ptr()) };
+        business_json_to_jstring(env, json)
+    })
+}

@@ -13,11 +13,12 @@ android {
         targetSdk = 36
         versionCode = 1
         versionName = "0.1.0"
-        // jniLibs 只由 CI 注入 arm64 的 libpersona_mobile.so（desktop-build.yml
-        // android job：cargo ndk 产出后拷入 src/main/jniLibs/arm64-v8a），
-        // 限定单 ABI 防非 arm64 设备运行时 UnsatisfiedLinkError
+        // jniLibs 由 CI 注入 arm64 的 libpersona_mobile.so（desktop-build.yml
+        // android job：cargo ndk 产出后拷入 src/main/jniLibs/arm64-v8a）；
+        // x86_64 供模拟器实测（jniLibs/x86_64 本地构建，CI 不产出）。
+        // 限定这两个 ABI 防其余设备运行时 UnsatisfiedLinkError
         ndk {
-            abiFilters += listOf("arm64-v8a")
+            abiFilters += listOf("arm64-v8a", "x86_64")
         }
     }
 

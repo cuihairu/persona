@@ -29,7 +29,7 @@ use crate::{runtime, state};
 // JSON envelope helpers
 // ---------------------------------------------------------------------------
 
-fn to_c_char(value: &serde_json::Value) -> *mut c_char {
+pub(crate) fn to_c_char(value: &serde_json::Value) -> *mut c_char {
     // serde_json serialization never emits a bare NUL (it is escaped as
     // \u0000), so CString::new always succeeds; the null-pointer arm exists
     // only for type completeness
@@ -39,11 +39,11 @@ fn to_c_char(value: &serde_json::Value) -> *mut c_char {
     }
 }
 
-fn ok_envelope<T: serde::Serialize>(data: &T) -> *mut c_char {
+pub(crate) fn ok_envelope<T: serde::Serialize>(data: &T) -> *mut c_char {
     to_c_char(&json!({ "ok": true, "data": data }))
 }
 
-fn err_envelope(message: &str) -> *mut c_char {
+pub(crate) fn err_envelope(message: &str) -> *mut c_char {
     to_c_char(&json!({ "ok": false, "error": message }))
 }
 

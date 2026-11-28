@@ -5015,6 +5015,7 @@ dependencies = [
 name = "persona-mobile"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "jni",
  "libc",
  "persona-core",

@@ -1,5 +1,6 @@
 package com.persona.mobile
 
+import android.os.Build
 import android.os.Bundle
 import android.view.View
 import android.widget.Button
@@ -35,6 +36,17 @@ class MainActivity : AppCompatActivity() {
     private lateinit var settingsVersion: TextView
     private lateinit var settingsVault: TextView
     private lateinit var settingsCount: TextView
+    private lateinit var remoteServer: EditText
+    private lateinit var remoteBootstrap: EditText
+    private lateinit var remoteDevice: EditText
+    private lateinit var remotePassword: EditText
+    private lateinit var remoteStatus: TextView
+    private lateinit var remoteDeviceList: LinearLayout
+
+    /** Short-lived Bearer from the last SRP login (server TTL 15 min; held in
+     * memory only — a process restart just logs in again). */
+    @Volatile
+    private var remoteToken: String? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -55,6 +67,20 @@ class MainActivity : AppCompatActivity() {
         settingsVersion = findViewById(R.id.settings_version_value)
         settingsVault = findViewById(R.id.settings_vault_value)
         settingsCount = findViewById(R.id.settings_count_value)
+        remoteServer = findViewById(R.id.remote_server)
+        remoteBootstrap = findViewById(R.id.remote_bootstrap)
+        remoteDevice = findViewById(R.id.remote_device)
+        remotePassword = findViewById(R.id.remote_password)
+        remoteStatus = findViewById(R.id.remote_status)
+        remoteDeviceList = findViewById(R.id.remote_device_list)
+
+        // Default device name identifies this phone: the server's login-awareness
+        // ledger keys on it (PERSONA-DEVALERT-001). Sanitized to the charset the
+        // server's device-name validator accepts.
+        remoteDevice.setText(
+            "android-" + Build.MODEL.orEmpty().replace(Regex("[^A-Za-z0-9._-]"), "-")
+                .trim('-').take(48)
+        )
 
         status.text = runCatching {
             PersonaBridge.personaInit()
@@ -77,6 +103,39 @@ class MainActivity : AppCompatActivity() {
         reloadButton.setOnClickListener {
             refreshDataTab()
             status.text = "凭据列表已刷新"
+        }
+
+        // Remote-auth wiring (Settings tab): widget text is read here on the
+        // UI thread, then the bridge call runs on its own thread — the UI
+        // thread must never wait on the network (the native side blocks on
+        // its tokio runtime).
+        findViewById<Button>(R.id.remote_register_button).setOnClickListener { view ->
+            view.isEnabled = false
+            Thread {
+                remoteRegister(
+                    remoteServer.text.toString().trim().trimEnd('/'),
+                    remoteBootstrap.text.toString().trim(),
+                    remoteDevice.text.toString().trim(),
+                    remotePassword.text.toString(),
+                    view,
+                )
+            }.start()
+        }
+        findViewById<Button>(R.id.remote_login_button).setOnClickListener { view ->
+            view.isEnabled = false
+            Thread {
+                remoteLogin(
+                    remoteServer.text.toString().trim().trimEnd('/'),
+                    remoteDevice.text.toString().trim(),
+                    remotePassword.text.toString(),
+                    view,
+                )
+            }.start()
+        }
+        findViewById<Button>(R.id.remote_devices_button).setOnClickListener { _ ->
+            Thread {
+                refreshRemoteDevices(remoteServer.text.toString().trim().trimEnd('/'))
+            }.start()
         }
 
         for (label in listOf(R.string.tab_data, R.string.tab_tools, R.string.tab_settings)) {
@@ -165,6 +224,95 @@ class MainActivity : AppCompatActivity() {
             ).filterNotNull().joinToString(" · ")
             row.findViewById<TextView>(R.id.row_meta).text = meta
             credentialList.addView(row)
+        }
+    }
+
+    // ---- Remote auth (Settings tab): the mobile side of the server's
+    // login-awareness surface — an SRP login IS the fingerprint report
+    // (device name + peer IP + time land in the server ledger). ----
+
+    private fun requireRemoteButton(button: View, enabled: Boolean) {
+        runOnUiThread { button.isEnabled = enabled }
+    }
+
+    private fun remoteStatusText(text: String) {
+        runOnUiThread { remoteStatus.text = text }
+    }
+
+    private fun remoteRegister(base: String, bearer: String, name: String, pass: String, button: View) {
+        if (base.isEmpty() || bearer.isEmpty() || name.isEmpty() || pass.isEmpty()) {
+            remoteStatusText("请填写服务器地址、引导令牌、设备名与设备密码")
+            requireRemoteButton(button, true)
+            return
+        }
+        val (ok, error, payload) =
+            PersonaBridge.parseBusiness(PersonaBridge.personaRemoteRegisterDevice(base, bearer, name, pass))
+        runOnUiThread {
+            // payload is the whole envelope; the business value lives under data
+            val device = payload?.optJSONObject("data")?.optString("device")
+                ?.takeIf { it.isNotEmpty() } ?: name
+            remoteStatus.text = if (ok) {
+                "设备已注册：$device（密码即 SRP 登录密码）"
+            } else {
+                "注册失败：$error"
+            }
+            button.isEnabled = true
+        }
+    }
+
+    private fun remoteLogin(base: String, name: String, pass: String, button: View) {
+        if (base.isEmpty() || name.isEmpty() || pass.isEmpty()) {
+            remoteStatusText("请填写服务器地址、设备名与设备密码")
+            requireRemoteButton(button, true)
+            return
+        }
+        val (ok, error, payload) =
+            PersonaBridge.parseBusiness(PersonaBridge.personaRemoteLogin(base, name, pass))
+        if (!ok) {
+            remoteStatusText("登录失败：$error")
+            requireRemoteButton(button, true)
+            return
+        }
+        // payload is the whole envelope; the business value lives under data
+        val data = payload?.optJSONObject("data")
+        remoteToken = data?.optString("token")?.takeIf { it.isNotEmpty() }
+        val expires = data?.optLong("expires_in_secs") ?: 0L
+        val fingerprint = data?.optString("session_key_fingerprint").orEmpty().take(12)
+        remoteStatusText("SRP 登录成功：$name（指纹已上报 · 令牌 ${expires}s · 会话 ${fingerprint}…）")
+        requireRemoteButton(button, true)
+        refreshRemoteDevices(base)
+    }
+
+    private fun refreshRemoteDevices(base: String) {
+        val token = remoteToken
+        if (base.isEmpty() || token == null) {
+            remoteStatusText("先 SRP 登录拿到令牌，再刷新设备清单")
+            return
+        }
+        val (ok, error, payload) =
+            PersonaBridge.parseBusiness(PersonaBridge.personaRemoteDevices(base, token))
+        if (!ok) {
+            remoteStatusText("设备清单获取失败：$error")
+            return
+        }
+        val devices = payload?.optJSONObject("data")?.optJSONArray("devices")
+            ?: org.json.JSONArray()
+        runOnUiThread {
+            remoteDeviceList.removeAllViews()
+            for (i in 0 until devices.length()) {
+                val d = devices.optJSONObject(i) ?: continue
+                val row = layoutInflater.inflate(R.layout.credential_row, remoteDeviceList, false)
+                row.findViewById<TextView>(R.id.row_name).text = d.optString("device")
+                val meta = listOf(
+                    d.optString("last_ip", "").takeIf { it.isNotBlank() && it != "null" },
+                    d.optString("last_geo", "").takeIf { it.isNotBlank() && it != "null" },
+                    "ok=${d.optLong("ok_count", 0)}",
+                    "fail=${d.optLong("fail_count", 0)}",
+                ).filterNotNull().joinToString(" · ")
+                row.findViewById<TextView>(R.id.row_meta).text = meta
+                remoteDeviceList.addView(row)
+            }
+            remoteStatus.text = "设备清单（${devices.length()} 台）"
         }
     }
 }

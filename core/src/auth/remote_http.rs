@@ -102,6 +102,30 @@ impl HttpRemoteAuthProvider {
         ensure_success(resp, "register").await.map(|_| ())
     }
 
+    /// Login-awareness device registry reader: `GET /api/v1/auth/devices`
+    /// with the login Bearer. Returns the server's JSON verbatim
+    /// (`{"devices":[...]}`); the shape is the server's contract, not a
+    /// local model — mobile/host UIs render it as-is.
+    pub async fn devices(&self, bearer: &str) -> Result<serde_json::Value> {
+        let resp = self
+            .http
+            .get(format!("{}/api/v1/auth/devices", self.base_url))
+            .bearer_auth(bearer)
+            .send()
+            .await
+            .map_err(|e| {
+                PersonaError::AuthenticationFailed(format!("devices request failed: {e}"))
+            })?;
+        let value = ensure_success(resp, "devices")
+            .await?
+            .json::<serde_json::Value>()
+            .await
+            .map_err(|e| {
+                PersonaError::AuthenticationFailed(format!("devices body decode failed: {e}"))
+            })?;
+        Ok(value)
+    }
+
     /// Login step one: generates the ephemeral key pair locally, requests the
     /// challenge with public value `A`, and the server replies with salt and
     /// `B`. The server-side handshake cache lasts 120s and is one-shot — the
@@ -443,6 +467,31 @@ mod tests {
         assert!(msg.contains("register"), "{msg}");
         assert!(msg.contains("HTTP 401"), "{msg}");
         assert!(msg.contains("no such device"), "{msg}");
+    }
+
+    /// `devices` is a plain authenticated GET: path + Bearer header on the
+    /// wire, server JSON passed through verbatim (the shape is the server's
+    /// contract).
+    #[tokio::test(flavor = "multi_thread")]
+    async fn devices_registry_round_trips_verbatim() {
+        let base = spawn_mock(Arc::new(|req| {
+            assert_eq!(req.path, "/api/v1/auth/devices", "{:?}", req.path);
+            assert!(
+                req.headers.to_lowercase().contains("authorization: bearer"),
+                "{}",
+                req.headers
+            );
+            (
+                200,
+                r#"{"devices":[{"device":"laptop","fail_count":1}]}"#.to_string(),
+            )
+        }))
+        .await;
+        let provider = HttpRemoteAuthProvider::new(base).unwrap();
+
+        let value = provider.devices("tok").await.unwrap();
+        assert_eq!(value["devices"][0]["device"], "laptop");
+        assert_eq!(value["devices"][0]["fail_count"], 1);
     }
 
     /// 423 (locked account) is called out separately for the upper layer to decide whether to suggest waiting — the server message is not passed through.

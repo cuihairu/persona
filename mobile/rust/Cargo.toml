@@ -10,7 +10,9 @@ description = "Mobile bindings for Persona"
 crate-type = ["cdylib", "staticlib"]
 
 [dependencies]
-persona-core = { path = "../../core" }
+# remote-auth: SRP device-login HTTP client (auth/remote_http.rs) — the mobile
+# side of the server's login-awareness surface (PERSONA-MOBILE-002 P0)
+persona-core = { path = "../../core", features = ["remote-auth"] }
 
 # Async runtime (block_on bridge at the FFI boundary + sqlx pool / Emitter background task hosting)
 tokio.workspace = true
@@ -22,6 +24,9 @@ uuid.workspace = true
 
 # FFI
 libc = "0.2"
+
+# Error type of the core remote-auth client's returns (remote.rs box-free mapping)
+anyhow.workspace = true
 
 # JNI export layer for the Android host (jni_android.rs; compiled for the
 # Android target only, consumed by Kotlin via System.loadLibrary + external

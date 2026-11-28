@@ -15,4 +15,12 @@
     <string name="settings_version_label">桥版本</string>
     <string name="settings_vault_label">保险库路径</string>
     <string name="settings_count_label">凭据数</string>
+    <string name="settings_remote_label">服务器登录感知（登录即上报设备指纹）</string>
+    <string name="remote_server_hint">服务器地址（如 http://10.0.2.2:18903）</string>
+    <string name="remote_bootstrap_hint">引导令牌（服务器 TOKENS 表）</string>
+    <string name="remote_device_hint">设备名（指纹载体，默认 android-机型）</string>
+    <string name="remote_password_hint">设备密码（注册时自定，登录时校验）</string>
+    <string name="remote_register_action">注册设备</string>
+    <string name="remote_login_action">SRP 登录</string>
+    <string name="remote_devices_action">刷新设备清单</string>
 </resources>

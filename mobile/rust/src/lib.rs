@@ -17,6 +17,7 @@
 //! the C boundary; the build must use unwind, see their docs).
 
 mod business;
+mod remote;
 mod runtime;
 mod state;
 

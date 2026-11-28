@@ -192,6 +192,92 @@
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:textSize="15sp" />
+
+                <!-- 服务器登录感知区：SRP 登录即向服务器上报设备指纹（PERSONA-DEVALERT-001 联动） -->
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="24dp"
+                    android:textSize="13sp"
+                    android:textColor="?android:attr/textColorSecondary"
+                    android:text="@string/settings_remote_label" />
+
+                <com.google.android.material.textfield.TextInputEditText
+                    android:id="@+id/remote_server"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:hint="@string/remote_server_hint"
+                    android:inputType="textUri" />
+
+                <com.google.android.material.textfield.TextInputEditText
+                    android:id="@+id/remote_bootstrap"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:hint="@string/remote_bootstrap_hint"
+                    android:inputType="text" />
+
+                <com.google.android.material.textfield.TextInputEditText
+                    android:id="@+id/remote_device"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:hint="@string/remote_device_hint"
+                    android:inputType="text" />
+
+                <com.google.android.material.textfield.TextInputEditText
+                    android:id="@+id/remote_password"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:hint="@string/remote_password_hint"
+                    android:inputType="textPassword" />
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:orientation="horizontal">
+
+                    <Button
+                        android:id="@+id/remote_register_button"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:text="@string/remote_register_action" />
+
+                    <Button
+                        android:id="@+id/remote_login_button"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="8dp"
+                        android:layout_weight="1"
+                        android:text="@string/remote_login_action" />
+
+                    <Button
+                        android:id="@+id/remote_devices_button"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="8dp"
+                        android:layout_weight="1"
+                        android:text="@string/remote_devices_action" />
+                </LinearLayout>
+
+                <TextView
+                    android:id="@+id/remote_status"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="12dp"
+                    android:textSize="14sp"
+                    android:textColor="?android:attr/textColorSecondary" />
+
+                <LinearLayout
+                    android:id="@+id/remote_device_list"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:orientation="vertical" />
             </LinearLayout>
         </ScrollView>
     </FrameLayout>
