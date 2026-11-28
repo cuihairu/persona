@@ -28,7 +28,7 @@ iOS（Swift）/ Android（Kotlin）/ 鸿蒙（ArkTS）三端**原生**开发。*
 | vault 初始化/解锁/锁定 | ✅ | ✅（模拟器实测） | ✅（桥同语义） | ❌ stub |
 | 凭据列表（元数据浏览） | ✅ | ✅（仅 search+列表，无增删改 UI） | ⚠️ 桥就位、UI 简版 | ❌ |
 | 凭据增删改/密码生成 | ✅ | ❌（business FFI 未暴露） | ❌ | ❌ |
-| 服务器登录感知（注册/SRP 登录/设备清单） | ✅（CLI/服务器侧） | ✅（模拟器实测，herald 告警闭环） | ❌ | ❌ |
+| 服务器登录感知（注册/SRP 登录/设备清单） | ✅（CLI/服务器侧） | ✅（模拟器实测，herald 告警闭环） | ⚠️ 桥+UI 已就位（`Persona.h`/`PersonaBridge.swift`/`ContentView.swift`，待 macOS 构建验收） | ❌ |
 | 同步上报（configure_sync） | ✅ | ✅（桥就位） | ✅ | ❌ |
 | 自动锁定/超时策略 | ✅ | ❌ | ❌ | ❌ |
 
@@ -56,7 +56,9 @@ CI：`desktop-build.yml` android job（cargo ndk → jniLibs → gradle assemble
 
 ### iOS
 
-需 macOS + Xcode（Linux 无法构建验证）：
+需 macOS + Xcode（Linux 无法构建验证；**注意 imac 是 Windows+WSL2 主机，不能构建 iOS**——
+需真正的 macOS 环境。Swift 桥/UI/信封测试已就位，静态库链接与 `xcodebuild test`
+验收待 macOS 硬件）：
 
 ```bash
 rustup target add aarch64-apple-ios

@@ -38,6 +38,30 @@ bool persona_service_is_unlocked(void);
 
 PersonaResult persona_shutdown(void);
 
+/* ---- Remote auth FFI (PERSONA-MOBILE-002): business envelope
+ * {"ok":bool,"error"?,"data"?} — a different key name from the lifecycle
+ * layer's "success", parse accordingly.
+ * Each call returns a heap JSON string owned by the caller (release with
+ * persona_free_string; may be NULL when serialization fails). Remote calls
+ * block on an internal tokio runtime — never invoke them on the UI thread.
+ * They never touch the local vault service. */
+
+/* Bootstrap SRP registration (needs the server's bootstrap Bearer); the
+ * password chosen here is the login password. data: {"device": ...}. */
+const char *persona_remote_register_device(const char *base_url, const char *bearer,
+                                           const char *device_name, const char *password);
+
+/* SRP login: reports this device's fingerprint to the server ledger
+ * (PERSONA-DEVALERT-001). data: {"device","token" (15-min TTL),
+ * "expires_in_secs","session_key_fingerprint"} — the raw session key never
+ * crosses the bridge. */
+const char *persona_remote_login(const char *base_url, const char *device_name,
+                                 const char *password);
+
+/* Login-awareness device registry (server JSON passed through verbatim
+ * inside data). */
+const char *persona_remote_devices(const char *base_url, const char *token);
+
 #ifdef __cplusplus
 }
 #endif

@@ -18,4 +18,33 @@ final class BridgeSmokeTests: XCTestCase {
         }
         // Locking while uninitialized may fail or succeed (idempotent); both are legal, just assert no crash
     }
+
+    // ---- Business envelope parsing (PERSONA-MOBILE-002 remote FFI out-shape).
+    // Pure Swift: no bridge calls, runs anywhere the test bundle compiles. ----
+
+    func testParseBusinessReadsSuccessEnvelope() {
+        let envelope = PersonaBridge.parseBusiness(#"{"ok":true,"data":{"token":"t1","expires_in_secs":900}}"#)
+        XCTAssertTrue(envelope.ok)
+        XCTAssertNil(envelope.error)
+        XCTAssertEqual(envelope.data?["token"] as? String, "t1")
+        XCTAssertEqual(envelope.data?["expires_in_secs"] as? Int, 900)
+    }
+
+    func testParseBusinessReadsErrorEnvelope() {
+        let envelope = PersonaBridge.parseBusiness(#"{"ok":false,"error":"login failed"}"#)
+        XCTAssertFalse(envelope.ok)
+        XCTAssertEqual(envelope.error, "login failed")
+        XCTAssertNil(envelope.data)
+    }
+
+    func testParseBusinessNullLandsInFailureArm() {
+        let envelope = PersonaBridge.parseBusiness(nil)
+        XCTAssertFalse(envelope.ok)
+        XCTAssertNotNil(envelope.error)
+    }
+
+    func testParseBusinessNonJsonLandsInFailureArm() {
+        let envelope = PersonaBridge.parseBusiness("not json at all")
+        XCTAssertFalse(envelope.ok)
+    }
 }
