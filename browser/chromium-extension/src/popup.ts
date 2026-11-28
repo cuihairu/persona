@@ -1284,6 +1284,7 @@ if (shortcutsEl) {
         <div class="tiny" style="line-height:1.9;">
             <div><kbd>Ctrl+Shift+P</kbd> Toggle overlay</div>
             <div><kbd>Ctrl+Shift+Y</kbd> Mini search (global)</div>
+            <div><kbd>Ctrl+Shift+X</kbd> Open popup (global)</div>
             <div><kbd>/</kbd> Focus search (popup)</div>
         </div>
     `;

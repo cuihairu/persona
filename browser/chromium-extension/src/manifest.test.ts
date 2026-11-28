@@ -22,12 +22,18 @@ interface ContentScriptEntry {
     match_about_blank?: boolean;
 }
 
+interface CommandSpec {
+    suggested_key?: { default?: string; mac?: string };
+    description?: string;
+}
+
 interface Manifest {
     manifest_version: number;
     version: string;
     permissions?: string[];
     background?: { service_worker?: string; type?: string };
     action?: { default_popup?: string };
+    commands?: Record<string, CommandSpec>;
     content_scripts?: ContentScriptEntry[];
 }
 
@@ -86,5 +92,18 @@ describe('manifest — host wiring', () => {
 
     it('keeps the action popup wired', () => {
         expect(manifest.action?.default_popup).toBe('public/popup.html');
+    });
+});
+
+describe('manifest — keyboard shortcuts', () => {
+    it('binds _execute_action so the shortcut opens the popup itself', () => {
+        const cmd = manifest.commands?._execute_action;
+        expect(cmd).toBeDefined();
+        expect(cmd?.suggested_key?.default).toBe('Ctrl+Shift+X');
+        expect(cmd?.suggested_key?.mac).toBe('Command+Shift+X');
+    });
+
+    it('keeps the in-page search shortcut alongside it', () => {
+        expect(manifest.commands?.open_search?.suggested_key?.default).toBe('Ctrl+Shift+Y');
     });
 });

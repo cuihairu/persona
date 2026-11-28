@@ -23,6 +23,13 @@
     "type": "module"
   },
   "commands": {
+    "_execute_action": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+X",
+        "mac": "Command+Shift+X"
+      },
+      "description": "Open the Persona popup"
+    },
     "open_search": {
       "suggested_key": {
         "default": "Ctrl+Shift+Y",
