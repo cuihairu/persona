@@ -17,10 +17,10 @@
         </svg>
         Persona
       </div>
-      <span class="chip" id="status" title="__MSG_popupBridgeStatusTitle__">__MSG_popupBridgeNotContacted__</span>
-      <span class="chip" id="accountStatus" title="__MSG_popupAccountStatusTitle__">__MSG_popupUnknown__</span>
+      <span class="chip" id="status" title="Bridge status">Bridge not contacted yet</span>
+      <span class="chip" id="accountStatus" title="Account status">Unknown</span>
       <span class="spacer"></span>
-      <button class="iconbtn" id="themeBtn" title="__MSG_popupThemeToggleTitle__" aria-label="__MSG_popupThemeToggleTitle__">
+      <button class="iconbtn" id="themeBtn" title="Toggle theme" aria-label="Toggle theme">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M20 12.5A8 8 0 1 1 11.5 4a6.5 6.5 0 0 0 8.5 8.5Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
       </button>
       <button class="iconbtn" id="consoleBtn" title="Toggle operator console" aria-label="Toggle operator console" aria-pressed="false">
@@ -32,20 +32,20 @@
       <main class="pane-left">
         <div class="searchbox">
           <svg class="glass" width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="11" cy="11" r="7" stroke="currentColor" stroke-width="2"/><path d="m20 20-3.5-3.5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
-          <input id="searchInput" type="text" placeholder="__MSG_popupSearchPlaceholder__" autocomplete="off" spellcheck="false" />
+          <input id="searchInput" type="text" placeholder="Search items and actions" autocomplete="off" spellcheck="false" />
           <kbd>/</kbd>
         </div>
 
         <section class="card">
-          <h2>__MSG_popupForThisSite__ <span class="inline-status" id="autofillStatus">__MSG_popupSuggestionsUnavailable__</span></h2>
+          <h2><span id="titleForThisSite">For this site</span> <span class="inline-status" id="autofillStatus">Suggestions unavailable</span></h2>
           <div class="itemlist" id="suggestions"></div>
         </section>
 
         <section class="card">
-          <h2>__MSG_popupVault__ <span class="inline-status" id="cloudStatus">__MSG_popupNotConnected__</span></h2>
+          <h2><span id="titleVault">Vault</span> <span class="inline-status" id="cloudStatus">Not connected</span></h2>
           <div class="kindbar" id="kindBar" role="group" aria-label="Filter vault by type"></div>
           <div class="itemlist" id="cloudItems"></div>
-          <div class="empty" id="filterEmpty" hidden>__MSG_popupFilterEmpty__</div>
+          <div class="empty" id="filterEmpty" hidden>No items match the current filters.</div>
           <div class="row wrap" style="margin-top:8px;">
             <button id="cloudConnect" class="action secondary">Connect via local bridge</button>
             <button id="cloudRefresh" class="action secondary" disabled>Pull</button>
@@ -54,25 +54,26 @@
         </section>
 
         <section class="card" id="watchtowerCard" hidden>
-          <h2>__MSG_popupWatchtower__</h2>
+          <h2><span id="titleWatchtower">Watchtower</span></h2>
           <div id="watchtowerBody"></div>
         </section>
 
         <section class="card">
-          <h2>__MSG_popupGenerator__</h2>
+          <h2><span id="titleGenerator">Generator</span></h2>
           <div class="row wrap" style="margin-bottom:8px;">
-            <label class="muted">__MSG_popupLength__ <input id="genLength" type="number" min="8" max="128" value="20" style="width:70px;" /></label>
-            <label class="muted">__MSG_popupWords__ <input id="genWords" type="number" min="0" max="20" value="0" style="width:60px;" /></label>
+            <label class="muted"><span id="labelLength">Length</span> <input id="genLength" type="number" min="8" max="128" value="20" style="width:70px;" /></label>
+            <label class="muted"><span id="labelWords">Words</span> <input id="genWords" type="number" min="0" max="20" value="0" style="width:60px;" /></label>
           </div>
           <div class="row wrap" style="margin-bottom:8px;">
             <label class="check"><input id="genUpper" type="checkbox" checked /> AZ</label>
             <label class="check"><input id="genLower" type="checkbox" checked /> az</label>
             <label class="check"><input id="genDigits" type="checkbox" checked /> 09</label>
             <label class="check"><input id="genSymbols" type="checkbox" /> #$%</label>
-            <label class="check"><input id="genPronounceable" type="checkbox" /> __MSG_popupPronounceable__</label>
+            <label class="check"><input id="genPronounceable" type="checkbox" /> <span id="labelPronounceable">Pronounceable</span></label>
           </div>
-          <button id="genGenerate" class="action">__MSG_popupGenerate__</button>
+          <button id="genGenerate" class="action">Generate</button>
           <div class="gen-result" id="genResult">—</div>
+          <button id="genCopy" class="action secondary" hidden title="Copy the generated password (no auto-clear: generated passwords are not vault items)">Copy</button>
           <div class="gen-strength" id="genStrength" hidden>
             <div class="gs-bar"><div class="gs-fill"></div></div>
             <span class="gs-label"></span>
@@ -83,7 +84,7 @@
 
       <aside class="pane-right">
         <div class="detail" id="detailPane">
-          <div class="detail-empty">__MSG_popupDetailEmpty__</div>
+          <div class="detail-empty" id="detailEmpty">Select a credential to see its details.</div>
         </div>
 
         <div class="console" id="consolePane">

@@ -89,6 +89,15 @@
   "popupGenerate": {
     "message": "生成"
   },
+  "popupGenCopy": {
+    "message": "复制"
+  },
+  "popupGenCopied": {
+    "message": "已复制"
+  },
+  "popupGenCopyTitle": {
+    "message": "复制生成的口令（无自动清除：生成口令不是库内条目）"
+  },
   "popupDetailEmpty": {
     "message": "选择一条凭据查看详情。"
   },

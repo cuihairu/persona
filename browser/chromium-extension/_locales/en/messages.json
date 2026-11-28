@@ -89,6 +89,15 @@
   "popupGenerate": {
     "message": "Generate"
   },
+  "popupGenCopy": {
+    "message": "Copy"
+  },
+  "popupGenCopied": {
+    "message": "Copied"
+  },
+  "popupGenCopyTitle": {
+    "message": "Copy the generated password (no auto-clear: generated passwords are not vault items)"
+  },
   "popupDetailEmpty": {
     "message": "Select a credential to see its details."
   },

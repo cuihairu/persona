@@ -51,12 +51,14 @@ describe('referenced keys resolve', () => {
         }
     });
 
-    it('every __MSG_x__ placeholder in popup.html exists in both locales', () => {
+    it('popup.html carries no __MSG_x__ placeholders at all', () => {
+        // Chrome substitutes placeholders in manifest.json and CSS only; in
+        // HTML pages they render as literal __MSG_...__ (verified live
+        // 2026-11-28). Markup ships en defaults; popupI18n.ts applies the
+        // locale strings via getMessage, and popupI18n.test.ts pins that
+        // table against this markup.
         const html = readFileSync(join(root, 'public', 'popup.html'), 'utf8');
-        for (const key of usedKeys(html, /__MSG_([A-Za-z0-9_]+)__/g)) {
-            expect(en[key]).toBeDefined();
-            expect(zh[key]).toBeDefined();
-        }
+        expect(html).not.toMatch(/__MSG_[A-Za-z0-9_]+__/);
     });
 
     it('manifest declares the en default locale', () => {

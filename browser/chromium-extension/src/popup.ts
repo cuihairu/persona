@@ -24,6 +24,12 @@ import {
     type CloudListItem,
     type CloudItemView,
 } from './cloudSync.js';
+import { POPUP_I18N, applyPopupI18n } from './popupI18n.js';
+
+// Localize the markup before anything else: Chrome never substitutes
+// __MSG_x__ in HTML pages, so the en defaults baked into popup.html must be
+// overwritten with the active-locale strings at init.
+applyPopupI18n(document, POPUP_I18N, (key) => chrome.i18n.getMessage(key));
 
 const statusEl = document.getElementById('status');
 const toggleButton = document.getElementById('toggle');
@@ -285,11 +291,23 @@ const genPronounceableEl = document.getElementById('genPronounceable') as HTMLIn
 const genWordsEl = document.getElementById('genWords') as HTMLInputElement | null;
 const genGenerateButton = document.getElementById('genGenerate');
 const genResultEl = document.getElementById('genResult');
+const genCopyButton = document.getElementById('genCopy') as HTMLButtonElement | null;
 const genStrengthEl = document.getElementById('genStrength');
 const genHistoryEl = document.getElementById('genHistory');
 
 // session-scoped: lives only while the popup is open
 let genHistory: string[] = [];
+
+/** Put a generated password in the result slot and expose the copy action. */
+function showGenerated(password: string): void {
+    if (!genResultEl) return;
+    genResultEl.textContent = password;
+    genCopyButton?.removeAttribute('hidden');
+}
+
+function hideGenerated(): void {
+    genCopyButton?.setAttribute('hidden', '');
+}
 
 function renderGenHistory(): void {
     if (!genHistoryEl) return;
@@ -304,8 +322,7 @@ function renderGenHistory(): void {
         row.appendChild(text);
         row.title = 'Restore this generated password';
         row.addEventListener('click', () => {
-            if (!genResultEl) return;
-            genResultEl.textContent = password;
+            showGenerated(password);
             renderGenStrength(password);
         });
         genHistoryEl.appendChild(row);
@@ -332,6 +349,7 @@ if (genGenerateButton) {
         if (!genResultEl) return;
         genGenerateButton.toggleAttribute('disabled', true);
         genResultEl.textContent = 'Generating…';
+        hideGenerated();
         renderGenStrength(null);
         const wordsRaw = genWordsEl?.value?.trim();
         const words = wordsRaw ? Number.parseInt(wordsRaw, 10) : undefined;
@@ -345,15 +363,40 @@ if (genGenerateButton) {
             words
         }).catch((e: unknown) => ({ ok: false, error: String(e) }) as any);
         if (response?.ok && response.payload?.password) {
-            genResultEl.textContent = response.payload.password;
+            showGenerated(response.payload.password);
             renderGenStrength(response.payload.password);
             genHistory = pushRecent(genHistory, response.payload.password);
             renderGenHistory();
         } else {
             genResultEl.textContent = `Error: ${response?.error ?? 'generation failed'}`;
+            hideGenerated();
             renderGenStrength(null);
         }
         genGenerateButton.toggleAttribute('disabled', false);
+    });
+}
+
+// Copy the generated password via the page clipboard. This deliberately does
+// NOT go through the native bridge copy command: that path is vault-item
+// scoped and auto-clears; a generated password is not a vault item, so the
+// copied value stays on the clipboard (the button title says so).
+let genCopyResetTimer: ReturnType<typeof setTimeout> | null = null;
+if (genCopyButton) {
+    genCopyButton.addEventListener('click', async () => {
+        const password = genResultEl?.textContent ?? '';
+        if (!password || password === '—' || password.startsWith('Error:')) return;
+        try {
+            await navigator.clipboard.writeText(password);
+        } catch {
+            return;
+        }
+        genCopyButton.textContent = chrome.i18n.getMessage('popupGenCopied') || 'Copied';
+        if (genCopyResetTimer !== null) clearTimeout(genCopyResetTimer);
+        genCopyResetTimer = setTimeout(() => {
+            if (genCopyButton) {
+                genCopyButton.textContent = chrome.i18n.getMessage('popupGenCopy') || 'Copy';
+            }
+        }, 1500);
     });
 }
 
