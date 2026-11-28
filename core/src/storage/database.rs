@@ -35,13 +35,94 @@ impl Database {
         Self::new("sqlite::memory:").await
     }
 
-    /// Run database migrations
+    /// Run database migrations.
+    ///
+    /// On failure the error carries a two-sided schema fingerprint (what the
+    /// vault has applied vs what this build embeds) plus the provenance stamps
+    /// from the `meta` table, so a checksum/era mismatch between an older or
+    /// newer application build and the vault file is diagnosable from the
+    /// message alone instead of by comparing raw checksums by hand.
     pub async fn migrate(&self) -> Result<()> {
-        sqlx::migrate!("./migrations")
-            .run(&self.pool)
+        let migrator = sqlx::migrate!("./migrations");
+        if let Err(e) = migrator.run(&self.pool).await {
+            let context = Self::migration_failure_context(&self.pool, &migrator).await;
+            return Err(PersonaError::Database(format!("{context}; sqlx: {e}")).into());
+        }
+        self.stamp_app_version().await?;
+        Ok(())
+    }
+
+    /// Record which application build created the vault and which one opened
+    /// it last (`meta` rows `app_version_created` / `app_version_last_open`).
+    /// Only runs after migrations succeeded, so the `meta` table exists.
+    async fn stamp_app_version(&self) -> Result<()> {
+        let version = env!("CARGO_PKG_VERSION");
+        sqlx::query("INSERT INTO meta(key, value) VALUES('app_version_created', ?1) ON CONFLICT(key) DO NOTHING")
+            .bind(version)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| PersonaError::Database(e.to_string()))?;
+        sqlx::query("INSERT INTO meta(key, value) VALUES('app_version_last_open', ?1) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
+            .bind(version)
+            .execute(&self.pool)
             .await
             .map_err(|e| PersonaError::Database(e.to_string()))?;
         Ok(())
+    }
+
+    /// Build the diagnostic context for a failed migration run: the vault's
+    /// applied schema fingerprint (version=checksum pairs from
+    /// `_sqlx_migrations`), this build's embedded fingerprint, and the
+    /// provenance stamps recorded in `meta` when they are available.
+    async fn migration_failure_context(
+        pool: &Pool<Sqlite>,
+        migrator: &sqlx::migrate::Migrator,
+    ) -> String {
+        let vault_rows: Vec<(i64, Vec<u8>)> =
+            sqlx::query_as("SELECT version, checksum FROM _sqlx_migrations ORDER BY version")
+                .fetch_all(pool)
+                .await
+                .unwrap_or_default();
+        let fingerprint = |rows: &[(i64, Vec<u8>)]| -> String {
+            if rows.is_empty() {
+                return "(none)".to_string();
+            }
+            rows.iter()
+                .map(|(v, c)| format!("v{v}={}", hex_prefix(c)))
+                .collect::<Vec<_>>()
+                .join(",")
+        };
+        let mut parts = vec![format!(
+            "vault schema fingerprint [{}]",
+            fingerprint(&vault_rows)
+        )];
+        let app_rows: Vec<(i64, Vec<u8>)> = migrator
+            .iter()
+            .map(|m| (m.version, m.checksum.to_vec()))
+            .collect();
+        parts.push(format!("this build embeds [{}]", fingerprint(&app_rows)));
+        let created = sqlx::query_as::<_, (String,)>(
+            "SELECT value FROM meta WHERE key = 'app_version_created'",
+        )
+        .fetch_optional(pool)
+        .await
+        .ok()
+        .flatten();
+        if let Some((v,)) = created {
+            parts.push(format!("vault created by app {v}"));
+        }
+        let opened = sqlx::query_as::<_, (String,)>(
+            "SELECT value FROM meta WHERE key = 'app_version_last_open'",
+        )
+        .fetch_optional(pool)
+        .await
+        .ok()
+        .flatten();
+        if let Some((v,)) = opened {
+            parts.push(format!("last opened by app {v}"));
+        }
+        parts.push("mismatch between the two fingerprints means the vault and this build come from different build eras; update the application (never edit applied migration files)".to_string());
+        parts.join("; ")
     }
 
     /// Get a reference to the connection pool
@@ -102,6 +183,16 @@ impl Database {
     pub async fn close(self) {
         self.pool.close().await;
     }
+}
+
+/// First 8 bytes of a checksum as 16 lowercase hex chars — short enough for
+/// an error message, long enough to be unambiguous in practice.
+fn hex_prefix(checksum: &[u8]) -> String {
+    checksum
+        .iter()
+        .take(8)
+        .map(|b| format!("{b:02x}"))
+        .collect()
 }
 
 /// Database transaction helper
@@ -172,6 +263,61 @@ mod tests {
             PUBLISHED,
             "migration 21 was modified; existing vaults will refuse to open"
         );
+    }
+
+    #[tokio::test]
+    async fn meta_table_stamps_app_version_provenance() {
+        let db = Database::in_memory().await.unwrap();
+        db.migrate().await.unwrap();
+        let created: (String,) =
+            sqlx::query_as("SELECT value FROM meta WHERE key='app_version_created'")
+                .fetch_one(db.pool())
+                .await
+                .unwrap();
+        let opened: (String,) =
+            sqlx::query_as("SELECT value FROM meta WHERE key='app_version_last_open'")
+                .fetch_one(db.pool())
+                .await
+                .unwrap();
+        assert_eq!(created.0, env!("CARGO_PKG_VERSION"));
+        assert_eq!(opened.0, env!("CARGO_PKG_VERSION"));
+
+        // Re-running migrate keeps the creation stamp and refreshes the
+        // last-open stamp (same value here, but the upsert must not fail).
+        db.migrate().await.unwrap();
+        let created2: (String,) =
+            sqlx::query_as("SELECT value FROM meta WHERE key='app_version_created'")
+                .fetch_one(db.pool())
+                .await
+                .unwrap();
+        assert_eq!(created2.0, created.0);
+    }
+
+    #[tokio::test]
+    async fn migration_checksum_mismatch_error_names_both_fingerprints() {
+        let db = Database::in_memory().await.unwrap();
+        db.migrate().await.unwrap();
+
+        // Corrupt the recorded checksum of migration 21: exactly what a vault
+        // written by a different build era looks like to this binary.
+        sqlx::query("UPDATE _sqlx_migrations SET checksum = zeroblob(48) WHERE version = 21")
+            .execute(db.pool())
+            .await
+            .unwrap();
+
+        let err = db.migrate().await.unwrap_err().to_string();
+        // The vault side shows the (corrupted) recorded fingerprint, the app
+        // side shows the embedded published checksum, and the provenance
+        // stamps from meta are included for era diagnosis.
+        assert!(err.contains("vault schema fingerprint ["), "{err}");
+        assert!(err.contains("this build embeds ["), "{err}");
+        assert!(
+            err.contains("95017139"),
+            "embedded checksum prefix missing: {err}"
+        );
+        assert!(err.contains("vault created by app"), "{err}");
+        assert!(err.contains("last opened by app"), "{err}");
+        assert!(err.contains("different build eras"), "{err}");
     }
 
     #[tokio::test]
