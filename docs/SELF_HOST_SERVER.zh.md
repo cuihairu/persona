@@ -85,9 +85,9 @@ UCI 只存非密路径与开关（`/etc/config/persona`）；令牌规格放在 
 | `PERSONA_SERVER_BACKUP_MAX_VERSIONS`          | `0`（不限）           | 超出删最旧（全局跨设备）                                                                |
 | `PERSONA_SERVER_OPS_RETENTION_DAYS`           | `0`（不清理）         | 同步 oplog 窗口：开窗 = 放弃向离线超窗设备补发历史；窗口须 ≥ 最慢设备的离线周期         |
 | `PERSONA_SERVER_EVENTS_RETENTION_DAYS`        | `0`（不清理）         | 审计事件副本保留，按 SIEM 摘取周期定                                                    |
-| `PERSONA_HERALD_URL`                          | —（未设）             | Herald 网关 base URL（如 `http://127.0.0.1:8080`）；未设 = 登录感知台账照常，通知关闭                 |
-| `PERSONA_HERALD_CHANNELS`                     | `log`                 | 登录 NOTICE/ALERT 外发目标的 Herald 渠道，逗号分隔                                                    |
-| `PERSONA_HERALD_API_KEY`                      | —                     | Herald 开启鉴权时随 `x-api-key` 头发送的 API key                                                      |
+| `PERSONA_HERALD_URL`                          | —（未设）             | Herald 网关 base URL（如 `http://127.0.0.1:8080`）；未设 = 登录感知台账照常，通知关闭   |
+| `PERSONA_HERALD_CHANNELS`                     | `log`                 | 登录 NOTICE/ALERT 外发目标的 Herald 渠道，逗号分隔                                      |
+| `PERSONA_HERALD_API_KEY`                      | —                     | Herald 开启鉴权时随 `x-api-key` 头发送的 API key                                        |
 
 ## 客户端接线
 
