@@ -31,6 +31,7 @@ import { showNotification } from './overlay.js';
 import { refreshOriginDefaults, isDomainAllowedForAutoFill, fetchSuggestions } from './suggestions.js';
 import { requestFill, requestTotp } from './fillRequests.js';
 import { isLikelyTotpInput, showInlineIcon, showGeneratorIcon, showSuggestionsDropdown } from './icons.js';
+import { offerInlineMenuOnFocus } from './inlineMenuFocus.js';
 import { toggleOverlay, hideOverlay } from './overlay.js';
 
 
@@ -193,6 +194,10 @@ export function classifyIdentityInput(input: HTMLInputElement): 'username' | 'em
 export async function maybeAutoFillLogin(trigger: 'load' | 'focus', focusedInput?: HTMLInputElement) {
     if (trigger === 'load' && !state.currentSettings.autoFillLoginOnLoad) return;
     if (trigger === 'focus' && !state.currentSettings.autoFillLoginOnFocus) return;
+    // the inline menu owns focus interaction while it is on (popup disables
+    // this switch then; the gate also covers stale mixed storage): silent
+    // focus fill yields, page-load fill keeps its own switch
+    if (trigger === 'focus' && state.currentSettings.inlineMenuOnFocus) return;
 
     const now = Date.now();
     if (now - state.lastLoginAutofillAttemptAt < 1500) return;
@@ -247,7 +252,8 @@ export async function maybeAutoFillTotp(_trigger: 'focus', focusedInput?: HTMLIn
     const { picked, ambiguous } = selectSuggestionWithDefault('totp', state.currentSettings.minMatchStrengthTotp);
     if (!picked) {
         // multiple candidates and no remembered default: no more silent failure, pop the picker dropdown in place
-        if (ambiguous && focusedInput && !hasValue(focusedInput)) {
+        // (while the inline menu is on it already owns that field — skip the legacy dropdown)
+        if (ambiguous && focusedInput && !hasValue(focusedInput) && !state.currentSettings.inlineMenuOnFocus) {
             state.lastTotpAutofillAttemptAt = now;
             showSuggestionsDropdown(focusedInput, 'totp');
         }
@@ -327,5 +333,8 @@ export function handleInputFocus(event: FocusEvent) {
         showInlineIcon(target, 'totp');
         void maybeAutoFillTotp('focus', target);
     }
+    // inline menu on focus (1Password-style offer, gated by its setting):
+    // candidates only — the menu never fills by itself
+    void offerInlineMenuOnFocus(target);
 }
 

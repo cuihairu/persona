@@ -23,14 +23,12 @@ import { extractSaveProposal, type SaveProposal, type SaveScanInput } from '../s
 import { planLoginStep } from '../loginSteps.js';
 import { mountPersonaUi } from '../shadowUi.js';
 import { isTrustedPasskeyOrigin } from '../passkeyOrigin.js';
-import { renderInlineMenu } from '../inlineMenuUi.js';
+import { openInlineMenu } from './inlineMenuFocus.js';
 
 import { state } from './state.js';
 import type { SuggestionItem, FillCredential, CardFillData, PasskeyCandidate, PasskeyBridgeReply } from './types.js';
 import { fillInput, hasValue } from './util.js';
-import { hideOverlay, toggleOverlay } from './overlay.js';
-import { requestFill, requestTotp } from './fillRequests.js';
-import { maybeRememberDefault } from './suggestions.js';
+import { hideOverlay } from './overlay.js';
 
 // Inline marks matching the product's viewfinder logo family: stroke-drawn,
 // currentColor, so they inherit the shadow-root tokens in both themes.
@@ -313,42 +311,15 @@ export function showGeneratorDropdown(input: HTMLInputElement, genIcon: HTMLElem
     }, 100);
 }
 
-// Show suggestions dropdown near input
+// Show suggestions dropdown near input (icon click path: the whole pool of
+// the kind, no strength floor — the focus path applies that via the model)
 export function showSuggestionsDropdown(input: HTMLInputElement, mode: 'password' | 'totp') {
-    hideOverlay();
-
     const filtered = state.currentSuggestions.filter((s) => (s.credential_type ?? 'password') === mode);
     if (filtered.length === 0) {
         console.debug('[Persona] No suggestions available');
         return;
     }
-
-    const rect = input.getBoundingClientRect();
-    const menu = renderInlineMenu(filtered, {
-        field: {
-            top: rect.top + window.scrollY,
-            bottom: rect.bottom + window.scrollY,
-            left: rect.left + window.scrollX,
-            height: rect.height
-        },
-        mount: mountPersonaUi(document).root,
-        fieldEl: input,
-        onPick: (suggestion) => {
-            if ((suggestion.credential_type ?? 'password') === 'totp') {
-                void maybeRememberDefault('totp', suggestion.item_id);
-                requestTotp(suggestion.item_id, input);
-            } else {
-                void maybeRememberDefault('password', suggestion.item_id);
-                requestFill(suggestion.item_id, input);
-            }
-        }
-    });
-    state.autofillOverlay = menu.el;
-    const previousClose = menu.close;
-    menu.close = () => {
-        previousClose();
-        if (state.autofillOverlay === menu.el) state.autofillOverlay = null;
-    };
+    openInlineMenu(input, filtered);
 }
 
 // Request fill from background

@@ -134,6 +134,12 @@
   "incognitoTag": {
     "message": "Incognito"
   },
+  "popupInlineMenuOnFocus": {
+    "message": "Show login menu on field focus"
+  },
+  "popupInlineMenuNote": {
+    "message": "Inline menu is on: silent fill on focus is unavailable — pick from the menu instead."
+  },
   "popupDetailEmpty": {
     "message": "Select a credential to see its details."
   },

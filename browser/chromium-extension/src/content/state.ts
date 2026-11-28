@@ -31,4 +31,8 @@ export const state = {
     lastPasswordInput: null as HTMLInputElement | null,
     /** this tab is an incognito window (queried from the sender tab once) */
     isIncognito: false as boolean,
+    /** fields the inline menu already offered this session (never re-offers) */
+    inlineMenuShownKeys: new Set<string>(),
+    /** timestamp of the last inline menu opening (debounce window) */
+    lastInlineMenuAt: 0,
 };

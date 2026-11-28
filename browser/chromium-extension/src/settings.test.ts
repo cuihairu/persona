@@ -160,6 +160,17 @@ describe('setAutofillSettings', () => {
         expect(next.minMatchStrengthTotp).toBe(100);
         expect(next.requireTrustedDomain).toBe(false);
     });
+
+    it('defaults inlineMenuOnFocus on and coerces its stored value', async () => {
+        // fresh storage: the 1Password-style default is on
+        expect((await getAutofillSettings()).inlineMenuOnFocus).toBe(true);
+
+        mock.seed(AUTOFILL_SETTINGS_KEY, { inlineMenuOnFocus: 'false' });
+        expect((await getAutofillSettings()).inlineMenuOnFocus).toBe(false);
+
+        mock.seed(AUTOFILL_SETTINGS_KEY, { inlineMenuOnFocus: 'junk' });
+        expect((await getAutofillSettings()).inlineMenuOnFocus).toBe(true);
+    });
 });
 
 describe('onAutofillSettingsChanged', () => {

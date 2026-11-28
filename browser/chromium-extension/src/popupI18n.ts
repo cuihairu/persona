@@ -46,6 +46,8 @@ export const POPUP_I18N: PopupI18nEntry[] = [
     { id: 'genFill', key: 'popupGenFillTitle', attr: 'title' },
     { id: 'genFill', key: 'popupGenFill' },
     { id: 'detailEmpty', key: 'popupDetailEmpty' },
+    { id: 'inlineMenuOnFocusLabel', key: 'popupInlineMenuOnFocus' },
+    { id: 'inlineMenuNote', key: 'popupInlineMenuNote' },
 ];
 
 /**

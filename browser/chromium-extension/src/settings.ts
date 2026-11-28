@@ -1,6 +1,12 @@
 export const AUTOFILL_SETTINGS_KEY = 'persona_autofill_settings_v1';
 
 export interface AutofillSettings {
+    /**
+     * Offer the clickable candidate menu when a login/2FA field is focused
+     * (1Password-style default). While on, the silent focus fill yields —
+     * the popup disables its switch and the content layer gates it too.
+     */
+    inlineMenuOnFocus: boolean;
     autoFillLoginOnFocus: boolean;
     autoFillLoginOnLoad: boolean;
     autoFillTotpOnFocus: boolean;
@@ -13,6 +19,7 @@ export interface AutofillSettings {
 }
 
 export const DEFAULT_AUTOFILL_SETTINGS: AutofillSettings = {
+    inlineMenuOnFocus: true,
     autoFillLoginOnFocus: true,
     autoFillLoginOnLoad: false,
     autoFillTotpOnFocus: true,
@@ -39,6 +46,7 @@ function coerceBoolean(value: unknown, fallback: boolean): boolean {
 function normalizeSettings(value: any): AutofillSettings {
     const raw = value && typeof value === 'object' ? value : {};
     return {
+        inlineMenuOnFocus: coerceBoolean(raw.inlineMenuOnFocus, DEFAULT_AUTOFILL_SETTINGS.inlineMenuOnFocus),
         autoFillLoginOnFocus: coerceBoolean(raw.autoFillLoginOnFocus, DEFAULT_AUTOFILL_SETTINGS.autoFillLoginOnFocus),
         autoFillLoginOnLoad: coerceBoolean(raw.autoFillLoginOnLoad, DEFAULT_AUTOFILL_SETTINGS.autoFillLoginOnLoad),
         autoFillTotpOnFocus: coerceBoolean(raw.autoFillTotpOnFocus, DEFAULT_AUTOFILL_SETTINGS.autoFillTotpOnFocus),

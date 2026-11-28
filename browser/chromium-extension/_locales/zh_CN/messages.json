@@ -134,6 +134,12 @@
   "incognitoTag": {
     "message": "无痕"
   },
+  "popupInlineMenuOnFocus": {
+    "message": "聚焦时显示登录菜单"
+  },
+  "popupInlineMenuNote": {
+    "message": "内联菜单已开启：聚焦静默填充不可用，请从菜单中选择。"
+  },
   "popupDetailEmpty": {
     "message": "选择一条凭据查看详情。"
   },

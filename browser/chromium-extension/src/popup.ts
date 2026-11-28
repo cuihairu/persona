@@ -7,7 +7,7 @@ import { activatableRows, steppedIndex, isNavKey, type NavRow } from './popupNav
 import { KIND_FILTERS, countByFacts, rowVisible, type KindFilter, type RowFacts } from './popupFilter.js';
 import { estimatePasswordStrength, pushRecent } from './genStrength.js';
 import { buildGenRequest, type GenMode } from './genMode.js';
-import { getAutofillSettings, setAutofillSettings } from './settings.js';
+import { getAutofillSettings, setAutofillSettings, type AutofillSettings } from './settings.js';
 import { getAutofillDefaultsForOrigin, setAutofillDefaultsForOrigin, type OriginAutofillDefaults } from './autofillDefaults.js';
 import { contextHintLine, suggestionMetaLine } from './autofillUx.js';
 import {
@@ -51,6 +51,8 @@ const finalizePairingButton = document.getElementById('finalizePairing');
 const autofillStatusEl = document.getElementById('autofillStatus');
 const suggestionsEl = document.getElementById('suggestions');
 
+const inlineMenuOnFocusEl = document.getElementById('inlineMenuOnFocus') as HTMLInputElement | null;
+const inlineMenuNoteEl = document.getElementById('inlineMenuNote') as HTMLElement | null;
 const autoFillLoginOnFocusEl = document.getElementById('autoFillLoginOnFocus') as HTMLInputElement | null;
 const autoFillLoginOnLoadEl = document.getElementById('autoFillLoginOnLoad') as HTMLInputElement | null;
 const autoFillTotpOnFocusEl = document.getElementById('autoFillTotpOnFocus') as HTMLInputElement | null;
@@ -1232,8 +1234,21 @@ function clampMatchStrength(value: number): number {
     return Math.max(0, Math.min(100, Math.round(value)));
 }
 
+/**
+ * Mutual exclusion (1Password semantics): while the inline menu owns field
+ * focus, the silent focus-fill switch is disabled (value preserved) and a
+ * note explains the takeover. Menu off → the old switch comes back.
+ */
+function applySilentFillMutualExclusion(settings: AutofillSettings) {
+    if (inlineMenuOnFocusEl) inlineMenuOnFocusEl.checked = settings.inlineMenuOnFocus;
+    const menuOn = settings.inlineMenuOnFocus;
+    if (autoFillLoginOnFocusEl) autoFillLoginOnFocusEl.disabled = menuOn;
+    if (inlineMenuNoteEl) inlineMenuNoteEl.hidden = !menuOn;
+}
+
 async function refreshSettings() {
     const settings = await getAutofillSettings();
+    applySilentFillMutualExclusion(settings);
     if (autoFillLoginOnFocusEl) autoFillLoginOnFocusEl.checked = settings.autoFillLoginOnFocus;
     if (autoFillLoginOnLoadEl) autoFillLoginOnLoadEl.checked = settings.autoFillLoginOnLoad;
     if (autoFillTotpOnFocusEl) autoFillTotpOnFocusEl.checked = settings.autoFillTotpOnFocus;
@@ -1245,6 +1260,9 @@ async function refreshSettings() {
 }
 
 function bindSettings() {
+    inlineMenuOnFocusEl?.addEventListener('change', async () => {
+        applySilentFillMutualExclusion(await setAutofillSettings({ inlineMenuOnFocus: Boolean(inlineMenuOnFocusEl.checked) }));
+    });
     autoFillLoginOnFocusEl?.addEventListener('change', () => {
         void setAutofillSettings({ autoFillLoginOnFocus: Boolean(autoFillLoginOnFocusEl.checked) });
     });
