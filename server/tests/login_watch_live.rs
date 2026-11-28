@@ -37,13 +37,20 @@ const PASSWORD: &str = "live acceptance password";
 
 fn server_bin() -> Option<PathBuf> {
     let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let bin = manifest.parent().unwrap().join("target/debug/persona-server");
+    let bin = manifest
+        .parent()
+        .unwrap()
+        .join("target/debug/persona-server");
     bin.exists().then_some(bin)
 }
 
 async fn wait_ready(base: &str) {
     for _ in 0..50 {
-        if let Ok(resp) = reqwest::Client::new().get(format!("{base}/health")).send().await {
+        if let Ok(resp) = reqwest::Client::new()
+            .get(format!("{base}/health"))
+            .send()
+            .await
+        {
             if resp.status().is_success() {
                 return;
             }
@@ -94,8 +101,8 @@ async fn login_awareness_live_chain_reaches_herald() {
     let herald_log = std::env::var("PERSONA_LOGIN_WATCH_HERALD_LOG")
         .unwrap_or_else(|_| "/tmp/devalert-live/herald.out".to_string());
     let bin = server_bin().expect("build persona-server first: cargo build -p persona-server");
-    let lan_ip =
-        std::env::var("PERSONA_LOGIN_WATCH_LAN_IP").expect("a second local IP (LAN) for the geo-deviation leg");
+    let lan_ip = std::env::var("PERSONA_LOGIN_WATCH_LAN_IP")
+        .expect("a second local IP (LAN) for the geo-deviation leg");
 
     let dir = tempfile::tempdir().unwrap();
     let db = dir.path().join("live.db");
@@ -121,11 +128,15 @@ async fn login_awareness_live_chain_reaches_herald() {
 
     // Leg 1: first-ever sighting -> INFO bootstrap (nothing delivered).
     register_device(&base, "laptop-lan").await;
-    login(&base, "laptop-lan", PASSWORD).await.expect("leg 1 login");
+    login(&base, "laptop-lan", PASSWORD)
+        .await
+        .expect("leg 1 login");
 
     // Leg 2: NEW device, location already seen -> NOTICE (warning).
     register_device(&base, "phone-lab").await;
-    login(&base, "phone-lab", PASSWORD).await.expect("leg 2 login");
+    login(&base, "phone-lab", PASSWORD)
+        .await
+        .expect("leg 2 login");
     assert!(
         herald_log_contains(&herald_log, "[warning] New device login: phone-lab").await,
         "herald must receive the new-device NOTICE"
@@ -136,7 +147,9 @@ async fn login_awareness_live_chain_reaches_herald() {
     // from the LAN, that location is "seen" and a new device there would
     // only be NOTICE.
     register_device(&lan_base, "stranger-box").await;
-    login(&lan_base, "stranger-box", PASSWORD).await.expect("leg 3 login");
+    login(&lan_base, "stranger-box", PASSWORD)
+        .await
+        .expect("leg 3 login");
     assert!(
         herald_log_contains(
             &herald_log,
@@ -147,9 +160,15 @@ async fn login_awareness_live_chain_reaches_herald() {
     );
 
     // Leg 4: established device, second local IP = a real new location -> NOTICE.
-    login(&lan_base, "laptop-lan", PASSWORD).await.expect("leg 4 login");
+    login(&lan_base, "laptop-lan", PASSWORD)
+        .await
+        .expect("leg 4 login");
     assert!(
-        herald_log_contains(&herald_log, "[warning] Login from a new location: laptop-lan").await,
+        herald_log_contains(
+            &herald_log,
+            "[warning] Login from a new location: laptop-lan"
+        )
+        .await,
         "herald must receive the unusual-location NOTICE"
     );
 
@@ -158,7 +177,11 @@ async fn login_awareness_live_chain_reaches_herald() {
         let _ = login(&base, "laptop-lan", "totally wrong").await;
     }
     assert!(
-        herald_log_contains(&herald_log, "[critical] Alert: repeated login failures (laptop-lan)").await,
+        herald_log_contains(
+            &herald_log,
+            "[critical] Alert: repeated login failures (laptop-lan)"
+        )
+        .await,
         "herald must receive the failure-burst ALERT"
     );
 
@@ -185,13 +208,19 @@ async fn login_awareness_live_chain_reaches_herald() {
         .iter()
         .find(|d| d["device"] == "laptop-lan")
         .expect("laptop-lan entry");
-    assert!(laptop["geo_counts"].as_object().unwrap().len() >= 2, "{laptop}");
+    assert!(
+        laptop["geo_counts"].as_object().unwrap().len() >= 2,
+        "{laptop}"
+    );
     assert!(laptop["fail_count"].as_u64().unwrap() >= 3, "{laptop}");
     let stranger = devices
         .iter()
         .find(|d| d["device"] == "stranger-box")
         .expect("stranger-box entry");
-    assert!(stranger["last_geo"].as_str().unwrap().starts_with("v4-"), "{stranger}");
+    assert!(
+        stranger["last_geo"].as_str().unwrap().starts_with("v4-"),
+        "{stranger}"
+    );
 
     server.kill().await.ok();
 }

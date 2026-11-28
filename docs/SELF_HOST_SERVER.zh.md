@@ -101,7 +101,9 @@ NOTICE（`warning`）；新设备落在全库未见址或失败突增（5 分钟
 ALERT（`critical`）；其余只落台账不外发。台账刻意只在内存：重启后首见判定重新
 武装（对安全信号是保守方向）。设了 `PERSONA_HERALD_URL` 时 NOTICE/ALERT 以
 fire-and-forget 外发到 Herald；通知只带设备/IP/位置/时间/结果，绝不含 vault
-内容，网关不可达绝不阻塞登录。`GET /api/v1/auth/devices`（Bearer）返回设备
+内容，网关不可达绝不阻塞登录。增长有界：设备条目封顶 4096（逐出最久未见）、
+位置标签封顶 4096、事件 deque 封顶 512、同设备通知节流为每 60 秒至多一次
+（事件照常落台账，只抑制投递）。`GET /api/v1/auth/devices`（Bearer）返回设备
 清单：设备名、首末次时间、最近 IP 与位置标签、分位置计数、成功/失败计数。
 对端 IP 取自 socket 地址；反代部署下看到的是代理地址（位置信号退化为设备级
 ——请在威胁模型里登记该部署形态）。空库的首次 sighting 是 INFO 引导：零历史

@@ -147,9 +147,12 @@ async fn main() {
     info!("Persona server listening on {}", addr);
 
     let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
-    // ConnectInfo makes the login-awareness ledger record the real peer
-    // address; reverse-proxy deployments are covered by the
-    // X-Forwarded-For / X-Real-IP fallback inside the server's peer guard.
+    // ConnectInfo is always present in this production entrypoint, so the
+    // login-awareness ledger records the real socket peer address. The
+    // X-Forwarded-For / X-Real-IP fallback inside the peer guard is only
+    // reachable for embedded/test callers without connect info; behind a
+    // reverse proxy the ledger sees the proxy's address (device-level
+    // signal only — degradation registered in THREAT_MODEL.md).
     axum::serve(
         listener,
         build_router(app_state).into_make_service_with_connect_info::<SocketAddr>(),

@@ -127,7 +127,11 @@ registry is in-memory by design: a server restart re-arms first-sighting
 detection (the conservative direction for a security signal). NOTICE/ALERT
 fan out fire-and-forget to a Herald gateway when `PERSONA_HERALD_URL` is
 set; notifications carry device/IP/location/time/outcome only, never vault
-content, and a dead gateway never blocks a login. `GET /api/v1/auth/devices`
+content, and a dead gateway never blocks a login. Growth is bounded: device
+entries cap at 4096 (oldest evicted), location labels cap at 4096, the event
+deque at 512, and per-device notifications are throttled to one per 60 s
+(events still ledger — only delivery is suppressed).
+`GET /api/v1/auth/devices`
 (Bearer) returns the registry: device, first/last sighting, last IP and
 location label, per-location counts, success/failure counters. Peer IP comes
 from the socket address; reverse-proxy deployments see the proxy's address

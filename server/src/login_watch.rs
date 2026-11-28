@@ -48,6 +48,17 @@ const FAILURE_SPIKE_WINDOW_MS: u64 = 5 * 60 * 1000;
 /// failures" granularity but trips earlier so the burst is visible before
 /// the lockout silences it).
 const FAILURE_SPIKE_COUNT: usize = 3;
+/// Registry growth caps: distinct device entries and distinct location
+/// labels are both bounded, so no login pattern — even one holding valid
+/// credentials or sourcing many addresses — can grow server memory without
+/// limit. The ledger stays usable by evicting the least-recently-seen
+/// device and refusing to extend the location set past the cap.
+const MAX_TRACKED_DEVICES: usize = 4096;
+const MAX_TRACKED_GEOS: usize = 4096;
+/// Minimum spacing between Herald fan-outs for the same device: repeated
+/// NOTICE/ALERT-grade events are still ledgered with their tier, only the
+/// delivery is throttled (a login storm must not become a task storm).
+const NOTIFY_THROTTLE_MS: u64 = 60_000;
 /// Herald delivery timeout: the gateway is best-effort by design.
 const HERALD_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -240,6 +251,9 @@ struct Registry {
     /// "unseen location" leg of ALERT).
     seen_geos: HashSet<String>,
     events: VecDeque<LoginEvent>,
+    /// Per-device last fan-out time (the throttle for NOTICE/ALERT
+    /// delivery; key set is bounded by the device cap's eviction).
+    last_notified_ms: HashMap<String, u64>,
 }
 
 /// Login awareness facade held in `AppState` (Arc-shared, clone-cheap).
@@ -291,6 +305,20 @@ impl LoginWatch {
             let mut registry = self.inner.lock().unwrap_or_else(|e| e.into_inner());
 
             let new_device = !registry.devices.contains_key(device);
+            // Device cap: make room before inserting a brand-new entry by
+            // evicting the least-recently-seen device (its throttle marker
+            // goes with it).
+            if new_device && registry.devices.len() >= MAX_TRACKED_DEVICES {
+                if let Some((oldest, _)) = registry
+                    .devices
+                    .iter()
+                    .min_by_key(|(_, r)| r.last_seen_ms)
+                    .map(|(k, r)| (k.clone(), r.last_seen_ms))
+                {
+                    registry.devices.remove(&oldest);
+                    registry.last_notified_ms.remove(&oldest);
+                }
+            }
             let geo_seen_in_registry = registry.seen_geos.contains(&geo);
             // Bootstrap leg: the registry's very first sighting ever.
             let first_sighting_overall = new_device && registry.devices.is_empty();
@@ -340,7 +368,13 @@ impl LoginWatch {
             record.last_ip = ip.to_string();
             record.last_geo = geo.to_string();
             *record.geo_counts.entry(geo.clone()).or_insert(0) += 1;
-            registry.seen_geos.insert(geo.clone());
+            // Location cap: past the cap new labels are not recorded, so the
+            // "unseen location" horizon simply stops extending (a fresh label
+            // keeps classifying as unseen — the conservative reading — and
+            // the resulting fan-out is held in check by the notify throttle).
+            if registry.seen_geos.len() < MAX_TRACKED_GEOS {
+                registry.seen_geos.insert(geo.clone());
+            }
 
             let event = LoginEvent {
                 device: device.to_string(),
@@ -355,7 +389,14 @@ impl LoginWatch {
             while registry.events.len() > EVENT_LOG_CAP {
                 registry.events.pop_front();
             }
-            let notify = tier != Tier::Info;
+            let notify = tier != Tier::Info
+                && registry
+                    .last_notified_ms
+                    .get(device)
+                    .is_none_or(|&t| now.saturating_sub(t) >= NOTIFY_THROTTLE_MS);
+            if notify {
+                registry.last_notified_ms.insert(device.to_string(), now);
+            }
             (event, notify)
         };
 
@@ -731,5 +772,110 @@ mod tests {
         assert_eq!(devices[0].last_ip, "1.2.3.4");
         // Deterministic order: "new" was seen last.
         assert!(devices[0].last_seen_ms > devices[1].last_seen_ms);
+    }
+
+    struct PerIpResolver;
+    impl GeoResolver for PerIpResolver {
+        fn resolve(&self, ip: &str) -> String {
+            format!("geo-{ip}")
+        }
+    }
+
+    #[test]
+    fn device_and_geo_caps_bound_registry_growth() {
+        // Device cap: one more than the cap; the least-recently-seen entry
+        // is evicted so the registry never grows past the bound.
+        let clock = Arc::new(AtomicU64::new(1_000_000));
+        let watch = watch_with_clock(Arc::clone(&clock));
+        for i in 0..MAX_TRACKED_DEVICES {
+            watch.record_login(&format!("dev{i}"), true, "1.2.3.4");
+            clock.fetch_add(1, Ordering::SeqCst);
+        }
+        assert_eq!(watch.snapshot_devices().len(), MAX_TRACKED_DEVICES);
+        watch.record_login("dev-new", true, "1.2.3.4");
+        let devices = watch.snapshot_devices();
+        assert_eq!(devices.len(), MAX_TRACKED_DEVICES, "device cap holds");
+        assert!(devices.iter().all(|d| d.device != "dev0"), "oldest evicted");
+        assert!(
+            devices.iter().any(|d| d.device == "dev4095"),
+            "recent survivor kept"
+        );
+        assert!(
+            devices.iter().any(|d| d.device == "dev-new"),
+            "newest present"
+        );
+
+        // Geo cap: past the cap new location labels are not recorded, so a
+        // second device arriving at the same fresh location still classifies
+        // as unseen-location ALERT (the conservative reading) and the label
+        // set stops growing.
+        let clock2 = Arc::new(AtomicU64::new(2_000_000));
+        let watch2 = LoginWatch::with_parts(
+            None,
+            Arc::new(PerIpResolver),
+            Box::new(move || clock2.load(Ordering::SeqCst)),
+        );
+        for i in 0..MAX_TRACKED_GEOS {
+            watch2.record_login(&format!("gd{i}"), true, &format!("10.{i}.0.1"));
+        }
+        // The late legs use an IP outside the loop's "10.{i}.0.1" family so
+        // their label is genuinely fresh (10.999.0.1 itself is one of the
+        // loop labels at i=999).
+        watch2.record_login("late-a", true, "172.31.200.7"); // unseen geo, cap full -> refused
+        watch2.record_login("late-b", true, "172.31.200.7"); // same geo, still unseen
+        let events = watch2.recent_events();
+        assert_eq!(events[0].device, "late-b");
+        assert_eq!(
+            events[0].tier,
+            Tier::Alert,
+            "geo cap: fresh label stays unseen"
+        );
+        assert_eq!(events[1].device, "late-a");
+        assert_eq!(events[1].tier, Tier::Alert);
+    }
+
+    #[tokio::test]
+    async fn notify_throttle_suppresses_repeat_fanout_within_window() {
+        let (herald, _addr) = spawn_capture(200).await;
+        let clock = Arc::new(AtomicU64::new(1_000_000));
+        let value = Arc::clone(&clock);
+        let watch = LoginWatch::with_parts(
+            Some(Arc::new(HeraldNotifier::new(
+                &herald.url,
+                vec!["log".to_string()],
+                None,
+            ))),
+            Arc::new(StaticResolver),
+            Box::new(move || value.load(Ordering::SeqCst)),
+        );
+        watch.record_login("laptop", true, "1.2.3.4"); // INFO bootstrap, silent
+                                                       // Three wrong proofs: the third fires the burst ALERT and stamps the throttle.
+        for _ in 0..3 {
+            watch.record_login("laptop", false, "1.2.3.5");
+        }
+        // Further failures inside the window stay ledgered as ALERT but deliver nothing.
+        watch.record_login("laptop", false, "1.2.3.5");
+        watch.record_login("laptop", false, "1.2.3.5");
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        assert_eq!(
+            herald.seen.lock().unwrap().len(),
+            1,
+            "only the first burst ALERT delivers inside the throttle window"
+        );
+        // Past the window the next ALERT delivers again.
+        advance(&clock, NOTIFY_THROTTLE_MS + 1_000);
+        watch.record_login("laptop", false, "1.2.3.5");
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        assert_eq!(
+            herald.seen.lock().unwrap().len(),
+            2,
+            "post-window ALERT delivers"
+        );
+        // Every failure was ledgered regardless of delivery suppression
+        // (3 burst + 2 suppressed + 1 post-window).
+        assert_eq!(
+            watch.recent_events().iter().filter(|e| !e.success).count(),
+            6
+        );
     }
 }

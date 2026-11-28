@@ -78,6 +78,11 @@ pub async fn payload_size_guard(req: Request, next: Next) -> Response {
 #[derive(Clone, Debug)]
 pub struct PeerIp(pub std::sync::Arc<String>);
 
+/// Socket address first (spoof-proof), then `X-Forwarded-For`/`X-Real-IP`
+/// for callers without connect info (oneshot tests / embedded hosts only —
+/// the production entrypoint always supplies ConnectInfo). The header
+/// fallback is client-controlled whenever it is reachable, so it must never
+/// be enabled as a proxy-IP source without trusting that client.
 pub async fn peer_ip_guard(mut req: Request, next: Next) -> Response {
     let ip = req
         .extensions()
