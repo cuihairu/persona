@@ -260,7 +260,10 @@ export function hideOverlay() {
 export function showNotification(message: string, type: 'success' | 'error') {
     const notification = document.createElement('div');
     notification.className = `p-toast ${type === 'success' ? 'ok' : 'err'}`;
-    notification.textContent = message;
+    // In a private window every action toast carries an explicit marker so
+    // the user can tell which fills happened incognito.
+    const incognitoTag = state.isIncognito ? chrome.i18n.getMessage('incognitoTag') : '';
+    notification.textContent = incognitoTag ? `${message} · ${incognitoTag}` : message;
 
     // The persona-slide-in keyframes + toast classes ship once inside the
     // shadow root (shadowUi.ts) — no stylesheet in document.head.

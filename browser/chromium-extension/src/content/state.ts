@@ -29,4 +29,6 @@ export const state = {
     passkeyOverlayRequestId: null as string | null,
     /** most recent focused password input (genFill target tracking) */
     lastPasswordInput: null as HTMLInputElement | null,
+    /** this tab is an incognito window (queried from the sender tab once) */
+    isIncognito: false as boolean,
 };

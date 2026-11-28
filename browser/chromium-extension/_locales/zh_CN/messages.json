@@ -125,6 +125,15 @@
   "popupModePassphraseTitle": {
     "message": "易记词组（3-10 个词）"
   },
+  "popupIncognitoAllowed": {
+    "message": "无痕窗口权限：已允许——Persona 在私密窗口中运行"
+  },
+  "popupIncognitoNotAllowed": {
+    "message": "无痕窗口权限：未允许——请在 chrome://extensions → Persona →「在无痕模式下启用」开启"
+  },
+  "incognitoTag": {
+    "message": "无痕"
+  },
   "popupDetailEmpty": {
     "message": "选择一条凭据查看详情。"
   },

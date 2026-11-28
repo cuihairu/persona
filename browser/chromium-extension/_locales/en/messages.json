@@ -125,6 +125,15 @@
   "popupModePassphraseTitle": {
     "message": "Memorable word group (3-10 words)"
   },
+  "popupIncognitoAllowed": {
+    "message": "Incognito access: allowed — Persona runs in private windows"
+  },
+  "popupIncognitoNotAllowed": {
+    "message": "Incognito access: not allowed — enable it under chrome://extensions → Persona → \"Allow in Incognito\""
+  },
+  "incognitoTag": {
+    "message": "Incognito"
+  },
   "popupDetailEmpty": {
     "message": "Select a credential to see its details."
   },

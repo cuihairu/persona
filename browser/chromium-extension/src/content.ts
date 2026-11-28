@@ -126,6 +126,20 @@ function init() {
     // Track password fields for the popup generator's fill-into-page target
     document.addEventListener('focusin', trackPasswordFocus, true);
 
+    // Ask the background whether this tab is an incognito window (the
+    // content script cannot see its own tab). Incognito suppresses the
+    // save bar so private-window activity never reaches the profile.
+    void chrome.runtime
+        .sendMessage({ type: 'persona_get_incognito' })
+        .then((response) => {
+            state.isIncognito = Boolean(response?.incognito);
+        })
+        .catch(() => {
+            // Service worker unreachable: default to the permissive path —
+            // fills keep working, save policy falls back to its own gates.
+            state.isIncognito = false;
+        });
+
     // Save/update bar capture (bridge protocol v4). Capture phase so
     // preventDefault()-style SPA handlers can't swallow the signal; the
     // values are read synchronously before the page can clear the fields.

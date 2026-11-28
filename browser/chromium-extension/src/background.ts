@@ -40,6 +40,7 @@ import {
     takePendingSave,
     type PendingSaveEntry
 } from './pendingSave.js';
+import { isIncognitoSender } from './incognito.js';
 import { AUTOFILL_SETTINGS_KEY, DEFAULT_AUTOFILL_SETTINGS } from './settings.js';
 import {
     buildMenuEntries,
@@ -272,6 +273,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     // content script, which writes it into the password field the user
     // focused last. Extension-internal only — the value never leaves the
     // browser process.
+    // Incognito query from content scripts: the tab's own flag decides the
+    // save-bar policy over there (private windows must not offer saves).
+    if (message?.type === 'persona_get_incognito') {
+        sendResponse({ incognito: isIncognitoSender(sender) });
+        return false;
+    }
+
     if (message?.type === 'persona_fill_generated') {
         chrome.tabs.query({ active: true, currentWindow: true }).then(async (tabs) => {
             const tabId = tabs[0]?.id;

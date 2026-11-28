@@ -25,6 +25,7 @@ import { mountPersonaUi } from '../shadowUi.js';
 import { isTrustedPasskeyOrigin } from '../passkeyOrigin.js';
 
 import { state } from './state.js';
+import { shouldSuppressSaveBar } from '../incognito.js';
 import type { SuggestionItem, FillCredential, CardFillData, PasskeyCandidate, PasskeyBridgeReply } from './types.js';
 import { IS_TOP_FRAME, fillInput } from './util.js';
 import { showNotification } from './overlay.js';
@@ -106,9 +107,18 @@ export function collectSaveInputs(scope: Element): SaveScanInput[] {
 
 export async function offerSaveBar(proposal: SaveProposal | null) {
     if (!proposal) return;
-    if (!state.currentSettings.savePromptEnabled) return;
-    // Per-origin "never" from a previous bar interaction.
-    if (state.currentOriginDefaults?.savePromptDisabled) return;
+    // Incognito > global setting > per-origin "never": private windows never
+    // offer saves (the bar and its background stash would persist what the
+    // user typed there).
+    if (
+        shouldSuppressSaveBar({
+            isIncognito: state.isIncognito,
+            savePromptEnabled: state.currentSettings.savePromptEnabled,
+            savePromptDisabled: state.currentOriginDefaults?.savePromptDisabled
+        })
+    ) {
+        return;
+    }
 
     const declined = state.lastDeclinedSave;
     if (
@@ -179,10 +189,16 @@ export async function restorePendingSaveBar() {
     // Top frame only: a same-origin iframe would otherwise claim the stash
     // for the same origin and render a second, duplicate bar.
     if (!IS_TOP_FRAME) return;
-    if (!state.currentSettings.savePromptEnabled) return;
+    if (state.isIncognito) return;
     // Per-origin "never" wins over anything the background still holds.
     await refreshOriginDefaults();
-    if (state.currentOriginDefaults?.savePromptDisabled) {
+    if (
+        shouldSuppressSaveBar({
+            isIncognito: state.isIncognito,
+            savePromptEnabled: state.currentSettings.savePromptEnabled,
+            savePromptDisabled: state.currentOriginDefaults?.savePromptDisabled
+        })
+    ) {
         void chrome.runtime.sendMessage({ type: 'persona_clear_pending_save' }).catch(() => null);
         return;
     }

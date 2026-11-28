@@ -1277,6 +1277,18 @@ function bindSettings() {
 
 bindSettings();
 
+// Incognito access status: the API is callback-based and the answer is
+// runtime state, so it stays out of the static i18n table — the markup
+// carries the en default and this resolves with the active locale.
+const incognitoStatusEl = document.getElementById('incognitoStatus');
+if (incognitoStatusEl) {
+    void new Promise<boolean>((resolve) => chrome.extension.isAllowedIncognitoAccess(resolve)).then((allowed) => {
+        incognitoStatusEl.textContent = chrome.i18n.getMessage(
+            allowed ? 'popupIncognitoAllowed' : 'popupIncognitoNotAllowed'
+        );
+    });
+}
+
 // Keyboard shortcuts hint
 const shortcutsEl = document.getElementById('shortcuts');
 if (shortcutsEl) {
