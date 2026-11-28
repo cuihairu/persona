@@ -149,6 +149,11 @@
 
 * { box-sizing: border-box; }
 
+/* the hidden attribute must win even on elements whose class sets display
+   (.row is flex, button.action is inline-flex): the UA [hidden] rule loses
+   to any author display declaration, so re-assert it globally */
+[hidden] { display: none !important; }
+
 body {
   margin: 0;
   width: 600px;
